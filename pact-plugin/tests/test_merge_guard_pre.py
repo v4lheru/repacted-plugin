@@ -1,0 +1,506 @@
+"""
+Tests for merge_guard_pre._GH_PR_NUMBER_RE — PR-number extraction.
+
+Pins the regex behavior: `_GH_FLAG_TOKENS` restricts BOTH flag-walks (between
+`gh` and `pr`, AND between subcommand and PR number) to flag-shaped tokens
+only (`-x`, `--long`, optionally `--flag value`). The `(?![\\w-])` negative-
+lookahead on the (\\d+) capture rejects suffix matches inside longer
+alphanumeric-or-hyphenated tokens.
+
+Each TRUE-GAIN test below cites the exact OLD-vs-NEW behavioral delta — these
+are the cases that were broken on main (regex captured a non-PR digit token
+from heredoc body / 2>&1 redirect / trailing positional / branch-name suffix)
+and now correctly extract the PR number or return None.
+
+Two previously-xfail-strict cases are now FIXED in this file:
+
+  1. "heredoc body containing a fully-formed `gh pr merge <N>` substring":
+     `_GH_PR_NUMBER_RE` uses the tight `_GH_FLAG_TOKENS` form for BOTH the
+     pre-subcommand AND post-subcommand flag walks (rather than reusing the
+     broad `_GH_GLOBAL_FLAGS` for the pre-subcommand walk). This eliminates
+     the re-anchor-at-second-occurrence authorization-bypass class.
+
+  2. "branch-name suffix `7352-tests`": Python `\\b` IS a word boundary at
+     digit-to-hyphen (word char `2` to non-word char `-`). The earlier spec
+     assumed `\\b` would reject this; that assumption was wrong about Python
+     regex semantics. The fix replaces the trailing `\\b` with `(?![\\w-])`
+     (negative lookahead) — strictly stronger: rejects any continuation that
+     is a word char OR a hyphen.
+
+Both `test_heredoc_body_with_embedded_gh_pr_merge` and
+`test_branch_name_with_digit_prefix_suffix_match` are now regular passing
+tests pinning the fixes; the new `test_authorization_mismatch_attack` test
+pins the end-to-end attack shape that the heredoc-side fix prevents.
+"""
+
+
+
+from merge_guard_pre import _GH_PR_NUMBER_RE  # noqa: E402
+
+
+def _capture(command: str):
+    """Helper: run the regex and return the captured PR number, or None."""
+    m = _GH_PR_NUMBER_RE.search(command)
+    return m.group(1) if m else None
+
+
+# =============================================================================
+# TRUE GAINS — cases broken on main, fixed by the regex tightening
+# =============================================================================
+# Each test in this class documents the OLD-vs-NEW behavioral delta. On main,
+# the regex used the broad `_GH_GLOBAL_FLAGS` for the post-subcommand walk,
+# which greedily consumed tokens past the PR positional and captured the LAST
+# digit reachable. After tightening to `_GH_FLAG_TOKENS`, each of these cases
+# now captures the real positional PR number.
+#
+# Selection criterion: a test belongs in TrueGains iff source-only revert of
+# the regex tightening commit causes the test to FAIL. Cases that pass on
+# both pre-fix and post-fix source belong in NoRegressionCanaries (sibling
+# class below) instead.
+#
+# Counter-test cardinality: source-only revert of the regex tightening
+# (`git checkout <pre-fix-sha> -- pact-plugin/hooks/merge_guard_pre.py`)
+# causes ALL 4 tests in this class to FAIL with the regex capturing the
+# wrong digit. Empirically verified during PR #697 review.
+
+class TestGH_PR_NumberRE_TrueGains:
+    """Cases broken on main, fixed by the regex tightening.
+
+    Each test fails on source-only revert of the fix commit. This is the
+    discriminating criterion: TRUE GAINS cause failures when the fix is
+    reverted. Compare with `TestGH_PR_NumberRE_NoRegressionCanaries`
+    (sibling class) where the cases pass on both pre-fix and post-fix
+    source — those are no-op protection canaries, not behavioral deltas.
+    """
+
+    def test_subject_with_version_digits_captures_pr(self):
+        # OLD captured "7352" (last digit in subject string).
+        # NEW correctly captures the PR positional "663".
+        cmd = 'gh pr merge 663 --squash --subject "v4.1.7 release notes ships 7352 tests"'
+        assert _capture(cmd) == "663"
+
+    def test_body_with_version_digits_captures_pr(self):
+        # OLD captured "7352" (last digit in body content).
+        # NEW correctly captures "663".
+        cmd = (
+            'gh pr merge 663 --squash --subject foo '
+            '--body "v4.1.7 ships 7352 tests passing"'
+        )
+        assert _capture(cmd) == "663"
+
+    def test_stderr_redirect_captures_pr(self):
+        # OLD captured "2" (the "2" of "2>&1" redirect).
+        # NEW correctly captures "663".
+        cmd = "gh pr merge 663 --squash 2>&1"
+        assert _capture(cmd) == "663"
+
+    def test_trailing_positional_text_with_digits(self):
+        # OLD captured "7352" from trailing positional text.
+        # NEW correctly captures "663".
+        cmd = "gh pr merge 663 with 7352 tests passing"
+        assert _capture(cmd) == "663"
+
+
+# =============================================================================
+# NO-REGRESSION CANARIES — cases unchanged by the fix; pinned as protection
+# =============================================================================
+# These tests pass on BOTH pre-fix and post-fix source. They do not demonstrate
+# behavioral gain from the fix; instead they pin currently-correct behavior so
+# a future regex change cannot silently regress these working cases.
+#
+# Selection criterion: a test belongs in NoRegressionCanaries iff source-only
+# revert of the regex tightening commit leaves the test PASSING. The fix is
+# orthogonal to these inputs.
+#
+# Counter-test cardinality: source-only revert of the regex tightening leaves
+# ALL 5 tests in this class PASSING. Empirically verified during PR #697
+# review. If a future regression causes any of these to fail under the
+# current source, the canary fires loudly.
+
+class TestGH_PR_NumberRE_NoRegressionCanaries:
+    """Cases unchanged by the fix — pinned as future-regression tripwires.
+
+    Distinct from `TestGH_PR_NumberRE_TrueGains` (sibling class above)
+    where source-only revert of the fix causes failure: these cases pass
+    regardless of whether the fix is in place. Their value is forward-
+    looking — a future "cleanup" or refactor of the regex that broke any
+    of these inputs would be caught by the canary firing.
+    """
+
+    def test_body_file_with_versioned_path(self):
+        # Empirical probe: OLD captured "663" here (the path's slashes/
+        # hyphens are non-word and `\S+\s+` requires whitespace separation,
+        # so the broad walk consumes the path and backtracks to the
+        # positional). Pinned as a no-op canary so a future regex change
+        # cannot regress this case to capturing "7352".
+        cmd = "gh pr merge 663 --body-file /tmp/release-notes-v4.1.7-7352.md --squash"
+        assert _capture(cmd) == "663"
+
+    def test_simple_squash_unaffected(self):
+        # Simple case: no flags between subcommand and PR positional.
+        cmd = "gh pr merge 663 --squash"
+        assert _capture(cmd) == "663"
+
+    def test_pre_subcommand_flag_unaffected(self):
+        # `--admin` between merge subcommand and PR number.
+        cmd = "gh pr merge --admin 663 --squash"
+        assert _capture(cmd) == "663"
+
+    def test_global_flag_before_subcommand_unaffected(self):
+        # `--repo owner/repo` as a gh global flag (pre-subcommand).
+        cmd = "gh --repo owner/repo pr merge 663 --squash"
+        assert _capture(cmd) == "663"
+
+    def test_close_with_delete_branch_captures_pr(self):
+        # `gh pr close` form with `--delete-branch` (sibling subcommand).
+        cmd = "gh pr close 663 --delete-branch"
+        assert _capture(cmd) == "663"
+
+
+# =============================================================================
+# ACCEPTABLE-NONE — degradation to permissive behavior
+# =============================================================================
+# When the PR number cannot be unambiguously located, the regex returns None.
+# The caller (_token_authorizes_command) treats None as ambiguous and falls
+# back to permissive (returns True). This preserves the existing semantic.
+
+class TestGH_PR_NumberRE_AcceptableNone:
+    """Cases where the regex correctly returns None (permissive degradation)."""
+
+    def test_no_positional_pr_number(self):
+        # gh pr merge --auto has no positional PR number; None is correct.
+        cmd = "gh pr merge --auto"
+        assert _capture(cmd) is None
+
+
+# =============================================================================
+# AUTHORIZATION-BYPASS FIXES — regression-protection for prior xfail cases
+# =============================================================================
+# Two cases that were previously pinned as xfail-strict are now passing
+# tests after the regex tightening:
+#   1. heredoc body containing embedded `gh pr merge <N>` — fixed by tight
+#      flag-walks on BOTH sides of `pr <subcmd>`.
+#   2. branch-name argument with digit prefix (e.g., `7352-tests`) — fixed
+#      by replacing `\b` with `(?![\w-])` (rejects hyphen continuation).
+
+class TestGH_PR_NumberRE_AuthorizationBypassFixed:
+    """Fixed authorization-bypass class — pinned as regression-protection.
+
+    These tests pin the regex tightening that closed an authorization-bypass
+    where a body string containing `gh pr merge <fake_PR>` could re-anchor
+    the regex past the real positional and cause the token-context check
+    to compare against the embedded fake PR rather than the real one.
+    """
+
+    def test_heredoc_body_with_embedded_gh_pr_merge(self):
+        """Body string with embedded `gh pr merge <N>` no longer re-anchors.
+
+        Previously xfail-strict (the regex captured 999 because the broad
+        pre-subcommand flag walk consumed past `663 --body "see also gh `
+        and re-anchored at the second `pr merge`). After tightening BOTH
+        flag-walks to flag-shaped tokens only, the broad walk cannot
+        consume past quoted body content, so the first-occurrence anchor
+        sticks and the real positional is captured.
+        """
+        cmd = 'gh pr merge 663 --body "see also gh pr merge 999 example"'
+        assert _capture(cmd) == "663"
+
+    def test_authorization_mismatch_attack(self):
+        """End-to-end shape of the authorization-bypass attack now blocked.
+
+        Resolves the BLOCKING finding from PR #697 review.
+
+        Attack shape: an attacker (or an honest user with a verbose body)
+        constructs `gh pr merge <real> --body "...gh pr merge <fake>..."`.
+        Pre-fix, the AskUserQuestion authorization issued for `<real>`
+        would be matched against `<fake>` extracted by the regex and
+        REJECTED with "Authorization token exists but does not match this
+        operation" — masking the real merge. Worse, an attacker could craft
+        the body so that the AskUserQuestion-issued token (for `<fake>`,
+        a non-existent PR they mention in the body of a different merge)
+        authorizes the actual `<real>` merge they intended to bypass.
+
+        Post-fix: the regex always extracts the real positional regardless
+        of body content, so the token-context check matches correctly.
+        """
+        cmd = (
+            'gh pr merge 663 --body "$(cat <<EOF\\n'
+            'Fixes #999. See related: gh pr merge 999 --admin\\n'
+            'EOF\\n)" --squash'
+        )
+        assert _capture(cmd) == "663"
+
+
+    def test_branch_name_with_digit_prefix_suffix_match(self):
+        """Branch-name argument with digit prefix no longer captures the digit.
+
+        Previously xfail-strict (Python `\\b` IS a word boundary at
+        digit-to-hyphen, so `\\b` after `(\\d+)` allowed `7352` to match
+        from `7352-tests`). After replacing `\\b` with `(?![\\w-])` the
+        trailing-hyphen continuation is rejected and the regex returns
+        None, which the caller treats as ambiguous-and-permissive (the
+        intended degradation when no clean digit token can be extracted).
+        """
+        cmd = "gh pr merge 7352-tests --squash"
+        assert _capture(cmd) is None
+
+
+# =============================================================================
+# Boundary verification — `\b` semantics that DO work
+# =============================================================================
+# Document what `\b` correctly rejects, complementing the limitation above.
+
+class TestGH_PR_NumberRE_BoundaryCorrect:
+    """The `\\b` boundary correctly rejects alphanumeric suffix matches."""
+
+    def test_no_match_when_followed_by_alpha(self):
+        # `\b` works correctly between digit and letter.
+        cmd = "gh pr merge 7352abc --squash"
+        assert _capture(cmd) is None
+
+
+# =============================================================================
+# The value arm's `[^-\s]` constraint — WHICH DIGIT IS THE PR NUMBER
+# =============================================================================
+# `_GH_FLAG_TOKENS` constrains a flag's optional value to `[^-\s]\S*`, so a
+# dash-initial token cannot be consumed AS A VALUE by that iteration; the outer
+# `(?:...)*` consumes it AS A FLAG on the next one instead.
+#
+# THAT REPARTITIONING CHANGES WHICH DIGIT IS CAPTURED, and the constraint is
+# therefore load-bearing for CORRECTNESS, not only for backtracking. Where the
+# flag run stops decides which token is read as the positional PR number, and
+# the unconstrained predecessor stops in a different place:
+#
+#   gh pr merge --squash -t 2024 42       constrained -> 42   pre-fix -> 2024
+#   gh pr merge --squash --repo 2024 42   constrained -> 42   pre-fix -> 2024
+#
+# The predecessor captures the FLAG'S OWN ARGUMENT as the pull-request number.
+# On a guard that binds an approval to a specific pull request, that is a
+# TARGET-IDENTIFICATION defect: approve one pull request, authorise another.
+#
+# THE EXAMPLES ARE SHORT-FORM AND `--repo` BECAUSE THE LONG FORMS DO NOT SHOW
+# IT. `_extract_pr_number` abstains when the token before the captured digit is
+# in `_GH_PR_VALUE_TAKING_FLAGS`, and the caller then recovers the right target
+# via `_extract_merge_target`. Every member of that frozenset is long-form, so
+# `--subject`/`--body-file` are silently repaired while short aliases and
+# `--repo` are not — see TestExtractPrNumberFlagFormAsymmetry below, which pins
+# both arms. An earlier version of this comment used `--subject` and
+# `--body-file`, so NEITHER of its examples actually misbound: a reader who
+# checked them would have concluded the warning overclaimed.
+#
+# REACHABLE ON GOOD-FAITH COMMANDS, which is what makes it worth pinning: a
+# `-t` subject that is a year, a `-F` body file named `1`. No exotic input is
+# required, only a number in the wrong place.
+#
+# WHY THIS WAS NOT CAUGHT BY THE PROSE THAT CERTIFIED IT: the divergent shape
+# needs a VALUELESS flag followed by a VALUE-TAKING flag before the positional.
+# Hand-picked corpora do not contain it, because an author picks the shapes
+# they are already thinking about. Enumerating the space finds it immediately.
+
+
+class TestGH_PR_NumberRE_DashInitialValues:
+    """A dash-initial VALUE is still consumed and the positional still wins.
+
+    ALL THREE OF THESE PASS ON THE BROADENED FORM TOO, and saying so is the
+    point rather than an apology. They pin the constraint against a NARROWING —
+    that adding `[^-\\s]` did not stop these forms extracting a number at all —
+    and both partitions reach the same digit here, so they cannot witness the
+    capture divergence. The class below is what discriminates the two forms.
+
+    These were the shapes certified in prose, and their agreement is exactly why
+    that prose read as a proof: a corpus of agreeing forms cannot distinguish
+    "the two patterns are equivalent" from "I picked the cases where they
+    agree". Kept, labelled, and no longer load-bearing for equivalence.
+    """
+
+    def test_dash_initial_value_before_the_pr_number(self):
+        assert _capture("gh pr merge --subject -x 42") == "42"
+
+    def test_dash_initial_value_with_a_following_flag(self):
+        assert _capture("gh pr merge --body -weird --auto 99") == "99"
+
+    def test_dash_initial_value_that_is_itself_a_digit_token(self):
+        assert _capture("gh pr merge --body -1 --auto 55") == "55"
+
+
+class TestGH_PR_NumberRE_NumericFlagValueDoesNotStealTheCapture:
+    """A NUMERIC flag argument must never be read as the pull-request number.
+
+    These are the forms where the value arm's constraint actually decides the
+    answer — the unconstrained predecessor returns the flag's argument here.
+    Pinned because a form-pin containing only AGREEING shapes reproduces the
+    sampling error that let the false equivalence stand in the first place.
+    """
+
+    def test_numeric_subject_does_not_become_the_pr_number(self):
+        assert _capture("gh pr merge --squash --subject 2024 42") == "42"
+
+    def test_numeric_body_file_does_not_become_the_pr_number(self):
+        assert _capture("gh pr merge --squash --body-file 1 42") == "42"
+
+    def test_numeric_value_after_an_auto_flag(self):
+        assert _capture("gh pr merge --auto --body 7 1234") == "1234"
+
+    def test_close_verb_is_covered_by_the_same_partition(self):
+        assert _capture("gh pr close --admin --comment 99 42") == "42"
+
+
+# =============================================================================
+# The long-form / short-form asymmetry, at the layer where it exists
+# =============================================================================
+# EVERY TEST ABOVE USES THE RAW REGEX, AND THE RAW REGEX TREATS A SHORT FLAG AND
+# A LONG FLAG IDENTICALLY. The asymmetry lives one layer up, in
+# `_extract_pr_number`, which re-checks the token preceding the captured digit
+# against `_GH_PR_VALUE_TAKING_FLAGS` and abstains on a hit so the caller can
+# recover the target. No test reached that layer, which is why prose was
+# carrying the whole claim.
+#
+# THE ASYMMETRY IS COUNTERFACTUAL, and that is why no green-tree observation
+# exhibits it. On the shipped pattern all of these return "42" and agree — the
+# re-check never even fires, because the shipped capture is already the
+# positional, so the token before it is a value rather than a flag. The
+# frozenset exists to catch a MISBEHAVING pattern. So the only way to observe
+# what it does and does not repair is to supply one, which this class does by
+# swapping the compiled pattern for its unconstrained predecessor.
+#
+# IF YOU ARE ASKING WHY NO EXISTING TEST CAUGHT THIS, THE ANSWER IS STRUCTURAL
+# AND NOT AN OVERSIGHT TO APPORTION: none could have. The claim being guarded is
+# about what a FUTURE change would do, and a property of a change that has not
+# been made is not observable in the tree that has not made it. Every arm here
+# agrees on shipped code — that is the control below, not a weakness. So until
+# someone built the counterfactual the claim had nowhere to live except prose,
+# and prose is the one carrier with no failure mode. That is also why this class
+# looks unusual: a counterfactual claim needs a counterfactual harness.
+
+import re  # noqa: E402
+
+import pytest  # noqa: E402
+
+from shared import merge_guard_common as _mgc  # noqa: E402
+
+_BROAD_FLAG_TOKENS = r"(?:-\S*(?:\s+\S+)?\s+)*"
+
+# Captured at import, before any fixture swaps the module attribute, so a test
+# can compare the two arms within one broadened run.
+_SHIPPED_PR_NUMBER_RE = _mgc._GH_PR_NUMBER_RE
+
+
+class TestExtractPrNumberFlagFormAsymmetry:
+    """What the value-taking-flag re-check repairs, and what it leaves broken."""
+
+    @pytest.fixture
+    def broadened(self, monkeypatch):
+        """Swap in the unconstrained predecessor for the duration of one test.
+
+        Patched on `merge_guard_common` because `_extract_pr_number` reads the
+        module global at call time. `monkeypatch` re-arms per test, so a later
+        module reload cannot silently disarm it mid-run.
+        """
+        broad = re.compile(
+            _mgc._GH_PR_NUMBER_RE.pattern.replace(
+                _mgc._GH_FLAG_TOKENS, _BROAD_FLAG_TOKENS
+            )
+        )
+        assert broad.pattern != _mgc._GH_PR_NUMBER_RE.pattern, (
+            "the arm swap produced an identical pattern, so this fixture is "
+            "inert and both assertions below would describe the shipped form. "
+            "`_GH_FLAG_TOKENS` was renamed or is no longer a literal substring "
+            "of the composed pattern — re-point this, do not delete it."
+        )
+        monkeypatch.setattr(_mgc, "_GH_PR_NUMBER_RE", broad)
+
+    def test_shipped_pattern_binds_correctly_for_both_flag_forms(self):
+        """CONTROL, and it is the reason the class needs the fixture at all:
+        with no broadening there is no asymmetry to see."""
+        assert _mgc._extract_pr_number("gh pr merge --squash --subject 2024 42") == "42"
+        assert _mgc._extract_pr_number("gh pr merge --squash -t 2024 42") == "42"
+
+    def test_long_form_in_the_frozenset_is_neutralised(self, broadened):
+        """A long form IS re-checked, so the extractor abstains and the caller
+        recovers the target. This is why `--subject` cannot demonstrate the
+        defect — it is repaired before anything downstream sees it."""
+        assert _mgc._extract_pr_number("gh pr merge --squash --subject 2024 42") is None
+
+    def test_short_alias_is_not_neutralised_and_misbinds(self, broadened):
+        """A SHORT alias is invisible to the re-check, which is `(--[\\w-]+)$`
+        and can only match a long form. So the extractor returns the FLAG'S
+        argument as the pull-request number.
+
+        ADDING `-t` TO THE FROZENSET WOULD NOT FIX THIS — the re-check would
+        still not match it. That is the half of the mechanism a reader is most
+        likely to get wrong, so it is pinned rather than described."""
+        assert _mgc._extract_pr_number("gh pr merge --squash -t 2024 42") == "2024"
+
+    def test_repo_is_long_form_but_absent_from_the_frozenset(self, broadened):
+        """`--repo` IS visible to the re-check and still misbinds, because it is
+        not a member. Unlike the short aliases, this half WOULD be fixed by
+        extending the frozenset — the two halves have different remedies."""
+        assert "--repo" not in _mgc._GH_PR_VALUE_TAKING_FLAGS
+        assert _mgc._extract_pr_number("gh pr merge --squash --repo 2024 42") == "2024"
+
+    def test_the_split_holds_identically_for_the_close_verb(self, broadened):
+        """The three arms above are merge-only; this is the close half.
+
+        The comment on `_GH_FLAG_TOKENS` claims the split holds on BOTH verbs,
+        and a claim is only pinned where a test exercises it. Long forms in the
+        frozenset neutralise, short aliases and `--repo` misbind — same
+        partition, same remedies, no crossover.
+
+        Close matters independently rather than as a symmetry check: it reaches
+        `_extract_close_target` in the caller, not the merge path, so "merge
+        works" is not evidence about it.
+        """
+        assert _mgc._extract_pr_number("gh pr close --admin --comment 2024 42") is None
+        assert _mgc._extract_pr_number("gh pr close --admin --body 2024 42") is None
+
+        assert _mgc._extract_pr_number("gh pr close --admin -c 2024 42") == "2024"
+        assert _mgc._extract_pr_number("gh pr close --admin -b 2024 42") == "2024"
+        assert _mgc._extract_pr_number("gh pr close --admin --repo 2024 42") == "2024"
+
+    def test_a_single_leading_dash_token_never_diverges(self, broadened):
+        """TWO leading dash-tokens are required before the forms can disagree.
+
+        This is why hand-picked corpora kept missing the defect: an author
+        writes `gh pr merge --subject X 42`, sees both forms agree, and
+        concludes they are equivalent. The divergence needs a VALUELESS flag
+        *followed by* a value-taking one, and that shape does not occur to
+        someone illustrating a single flag.
+
+        Enumerated rather than sampled, over both verbs — which is the point,
+        since sampling is the failure being pinned. Measured: zero divergence
+        across every one-token form, against total divergence at two.
+        """
+        verbs = ("merge", "close")
+        value_flags = ("--subject", "--body", "--body-file", "--comment",
+                       "--author-email", "--match-head-commit",
+                       "-t", "-b", "-F", "-c", "-A", "-R", "--repo")
+        booleans = ("--squash", "--auto", "--admin", "--merge", "--rebase",
+                    "--delete-branch", "-d")
+
+        singles = [f"gh pr {v} {f} {n} 42"
+                   for v in verbs for f in value_flags for n in ("2024", "1", "7")]
+        singles += [f"gh pr {v} {b} 42" for v in verbs for b in booleans]
+
+        # NON-VACUITY: the fixture is active, so a TWO-token form must diverge.
+        # Without this, an inert fixture would make every assertion below pass
+        # for the wrong reason — the shipped pattern agrees with itself.
+        assert _mgc._extract_pr_number("gh pr merge --squash -t 2024 42") == "2024", (
+            "the broadened fixture is not in effect, so the absence of "
+            "divergence below says nothing. Check the fixture, not the claim."
+        )
+
+        for cmd in singles:
+            broad = _mgc._extract_pr_number(cmd)
+            shipped_re = _mgc._GH_PR_NUMBER_RE
+            try:
+                _mgc._GH_PR_NUMBER_RE = _SHIPPED_PR_NUMBER_RE
+                shipped = _mgc._extract_pr_number(cmd)
+            finally:
+                _mgc._GH_PR_NUMBER_RE = shipped_re
+            assert shipped == broad, (
+                f"a SINGLE leading dash-token diverged: {cmd!r} gives "
+                f"shipped={shipped!r} broad={broad!r}. The comment on "
+                f"`_GH_FLAG_TOKENS` states that two are required, and that "
+                f"claim explains why hand-picked corpora missed the defect. "
+                f"If one token now suffices, the explanation is wrong."
+            )

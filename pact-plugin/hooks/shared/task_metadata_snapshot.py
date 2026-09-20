@@ -1,0 +1,532 @@
+#!/usr/bin/env python3
+"""
+Location: pact-plugin/hooks/shared/task_metadata_snapshot.py
+Summary: SSOT substrate for task_metadata_snapshot journal emission — the
+         GC-immune mirror of non-handoff task metadata (the N-key
+         generalization of the single-key dispatch_variety / teachback_ack
+         mirrors). Owns the exclude set, the dual-cap three-stage
+         size-bounding, the content-key hash, the hard-bound marker-namespace
+         wrappers, and the ONE emit routine shared verbatim by every seam.
+         It does NOT own the canonical serialization: that lives in
+         shared/canonical_json.py, shared with the agent_handoff marker
+         family, and is re-exported here as _canonical_bytes.
+Used by: task_lifecycle_gate.py (lead-completion seam + post-completion
+         backstop seam), agent_handoff_emitter.py (teammate-frame
+         TaskCompleted seam), and the substrate unit-test suite.
+
+Why one substrate: the agent_handoff emit paths drifted-by-construction risk
+(divergent marker keys across two files) was closed by centralizing the
+marker atoms in shared/agent_handoff_marker.py. The snapshot inherits that
+lesson structurally: all three seams call emit_task_metadata_snapshot() and
+nothing snapshot-specific lives in the hooks beyond the thin hermetic call.
+
+Eligibility (deliberately DIFFERENT from the agent_handoff chain — do not
+share or wrap that predicate): non-empty post-SNAPSHOT_EXCLUDE payload AND
+journal writable. No signal-task gate (blocker/algedonic HALT context is
+peak durability value; the agent_handoff suppression's basis is reader
+purity of THAT event type and does not transfer), no teachback-subject gate
+(teachback_submit / rejection siblings are load-bearing), no owner
+requirement (signal tasks may be ownerless).
+
+Supersession: multiple snapshots per task are legal — a changed payload
+after completion re-emits under a new content key; an unchanged payload
+never re-emits (the content-keyed O_EXCL marker dedups across all seams).
+The content-key marker claims under the team root, or under the session-dir
+root when team_name is empty (dedup-resolvable ⇔ journal-resolvable — both
+derive from the same session context, so an emit that can reach the journal
+can always claim its dedup marker). Readers take latest-ts within the
+(task_id, occupant) group; the occupant field is the task-id-reuse
+discriminator (platform reuses task ids across arcs within one team).
+
+Size-bounding invariant: key EXISTENCE is never silently lost — worst case
+a key survives name-only in the payload's top-level "_dropped_keys" list.
+Determinism contract: identical input mapping under ANY insertion order
+produces byte-identical canonical payload bytes and therefore an identical
+payload_hash8 (sizing, truncation heads, and hashing all flow through the
+single _canonical_bytes serialization).
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Mapping
+
+from .agent_handoff_marker import (
+    already_emitted,
+    occupant_hash,
+    sanitize_path_component,
+    unclaim,
+)
+
+# RE-EXPORT, not a local definition. The canonical serialization now lives in
+# shared/canonical_json.py so that BOTH marker families compute the same bytes
+# for the same value. This module imports agent_handoff_marker, so the marker
+# family cannot import the serializer back from here without a cycle, and a
+# second json.dumps over there would be two serializations that must agree
+# with nothing that makes them agree. The historical module-private name is
+# kept as the alias because this module and its test files call it by that
+# name; the SHARED name is canonical_bytes and that is the one another module
+# imports. Do NOT re-add a local definition here: a second copy is the exact
+# drift the extraction removes.
+from .canonical_json import canonical_bytes as _canonical_bytes
+from .pact_context import get_session_dir
+from .session_journal import append_event, get_journal_path, make_event
+
+# Keys never mirrored: only entries with equivalent-or-better journal
+# coverage of the FULL value. metadata.handoff is journaled verbatim as its
+# own agent_handoff event; everything else (teachback_submit, variety incl.
+# rationales, ad-hoc analysis keys, lifecycle flags) is mirrored — a missed
+# key is silent institutional loss while a junk key is bounded bytes, so the
+# exclude set stays minimal by design.
+#
+# BEFORE YOU ADD A MEMBER HERE, WRITE THE TEST THAT PROVES THE CARRIER YOU
+# NAME HOLDS THE FULL VALUE. An exclusion is justified by a second carrier,
+# and a justification nobody tested is how each member of this set fails.
+# The test must compare the CARRIED value against a KNOWN SOURCE value, key
+# by key. A check that asks only "does the carrier fire" returns green for a
+# carrier that fires and drops half the value, which is the measured history
+# of this very set.
+SNAPSHOT_EXCLUDE: frozenset[str] = frozenset({"handoff"})
+
+# Keys whose WRITE (TaskCreate/TaskUpdate delta) triggers an immediate
+# whole-payload mirror — the open-task-consumed class that a status-blind
+# whole-store drain destroys while load-bearing (mid-arc readers consume
+# these from the task file while the task is still open). The fire predicate is
+# targeted-key-in-delta; the payload is always the full overlay (never a
+# projection), so cross-seam content-hash dedup stays coherent with the
+# completion-time seams. Disjoint from SNAPSHOT_EXCLUDE by test-pinned
+# invariant. NOT here: "intentional_wait" (rides along in the overlay; a
+# wait-only write is not load-bearing alone).
+#
+# "variety" IS here, and it was NOT before. The removed comment read that
+# variety was covered at its write point by the dispatch_variety emit. THAT
+# COVERAGE CLAIM FAILS AND NOTHING TESTED IT. dispatch_variety PROJECTS to
+# the canonical score keys and DROPS the four *_rationale strings, so the
+# carrier held the numbers and dropped what makes a number checkable. A
+# container task did reach two variety-carrying events, so the defect was
+# never a missing event: it was a missing HALF OF THE VALUE, which reads as
+# covered from the event count alone. A score is DERIVED FROM its rationale,
+# and the rationale is the half a reader of a calibration record needs. The
+# key rides the full overlay here, so this membership carries the rationales.
+#
+# The audit pair is targeted for the same reasons as teachback_submit:
+# audit_summary (the auditor's live verdict) and audit_summary_authored
+# (the overwrite-protection mirror of the authored verdict) are consumed
+# by the lead at CODE-phase close while the audited task is still OPEN,
+# so a status-blind whole-store drain destroys them exactly while
+# load-bearing (a prior drain lost live audit verdicts mid-arc). Both are
+# teammate-written-class keys (the auditor writes from a teammate frame),
+# so they carry the same canonical-frame tmux asymmetry as
+# teachback_submit: in-process frames mirror per-write; a tmux teammate
+# frame defers to the completion seams. audit_summary_authored rides the
+# overlay whenever audit_summary fires (the gate's own writeback lands
+# before the leg's disk read), but stays targeted in its own right so a
+# direct write of the mirror alone is durability-covered too.
+PER_WRITE_MIRROR_KEYS: frozenset[str] = frozenset({
+    "scope_contract",
+    "nesting_depth",
+    "worktree_path",
+    "teachback_submit",
+    "teachback_rejection",
+    "audit_summary",
+    "audit_summary_authored",
+    "variety",
+})
+
+# Size caps on the canonical serialization (see _canonical_bytes). Both are
+# anomaly paths: generous enough to leave observed real payloads whole,
+# bounded enough to protect journal growth.
+#
+# THE TAIL-WINDOW HALF OF THAT SENTENCE DID NOT SURVIVE THE DOUBLING, AND IT
+# IS CORRECTED HERE RATHER THAN CARRIED FORWARD. RE-DERIVED from the three
+# constants: session_journal._TAIL_WINDOW_BYTES is 32 * 1024, PAYLOAD_CAP is
+# 128 * 1024, and PER_VALUE_CAP is 32 * 1024. So PAYLOAD_CAP is FOUR times
+# the window where the value it replaced was two times, and PER_VALUE_CAP
+# EQUALS the window at one times. ONE AT-CAP EVENT IS THEREFORE ENOUGH to
+# make _read_last_event_at miss its fast path, so these caps no longer bound
+# the read to one window and it is incorrect to say that they do.
+# THE BOUND ON THAT, AND IT IS WHY THE CAPS DO NOT MOVE BACK: the tail window
+# is a PERFORMANCE fast path with a documented full-read fallback, so missing
+# it costs a larger read and returns the same answer. It is NOT a correctness
+# defect. NO LATENCY WAS MEASURED, by the reviewer who found this or by me,
+# so the cost is unquantified rather than known to be small. Reducing either
+# cap to restore the ratio would re-open the truncation loss the doubling
+# closed, which is the trade this comment exists to record.
+#
+# EACH CAP IS A DOUBLING OF THE VALUE IT REPLACES, AND THE MULTIPLE IS THE
+# POINT. The prior pair was calibrated against the largest value observed at
+# the time, about 10 KB. The corpus then grew and the per-value cap was
+# overrun: truncation markers fired in production, most of them on one key
+# that had reached nearly twice the cap. A CAP CHOSEN FROM THE CURRENT
+# MAXIMUM CARRIES NO GROWTH HEADROOM, because it is a property of one member
+# of a population that keeps growing, and it erodes the moment the next
+# member lands. So each value here is derived from the SHIPPED value rather
+# than from a measured maximum, which is the one basis that does not erode.
+#
+# DO NOT TIGHTEN EITHER CAP TOWARD THE LARGEST VALUE YOU CAN MEASURE. That
+# is the calibration method that failed, and repeating it re-opens the loss.
+# Raise by doubling again if a marker fires on real content.
+#
+# THE MEASUREMENT, RECORDED SO A LATER READER CAN RE-CHECK IT RATHER THAN
+# RE-DERIVE IT. Largest truncated value: 30339 bytes at the grain below
+# (len of the canonical serialization). Population: 103 truncation-marker
+# instances across the session journals, unit MARKER INSTANCES, read
+# 2026-08-19. 90 of the 103 were cut at the per-value stage and all of them
+# carried one key, the teachback payload. The other 13 sat below the
+# per-value cap and were cut at the payload stage, so a per-value raise
+# alone does not reach them. THE NUMBER IS HERE TO BE CHECKED AND NOT TO BE
+# TARGETED: the sentence above governs it.
+PER_VALUE_CAP: int = 32 * 1024
+PAYLOAD_CAP: int = 128 * 1024
+HEAD_BYTES: int = 1024
+
+# O_EXCL marker directory for snapshot dedup — a SEPARATE namespace from the
+# agent_handoff marker dir so the two event families can never suppress each
+# other. Module constant, never input-derived.
+SNAPSHOT_MARKER_NAMESPACE: str = ".task_metadata_snapshot_emitted"
+
+
+def _snapshot_marker_root(team_name: str) -> str | None:
+    """Marker-root policy for the snapshot family (the ONE place it lives).
+
+    Non-empty team -> None (default team-scoped root, path-identical to
+    the pre-fallback behavior). Empty team -> the session directory, so
+    dedup resolvability is equal-by-construction to journal resolvability
+    (get_journal_path derives from the same get_session_dir); the
+    "empty team + resolvable journal" fail-open gap cannot reopen. An
+    unresolvable session dir returns "" — the resolver treats a falsy
+    root as no-valid-target and fail-opens, which the emit path never
+    reaches (its writability precondition already returned).
+    """
+    if team_name:
+        return None
+    return get_session_dir()
+
+# Marker-dict key set used to recognize truncation markers this module
+# itself produced (stage-2 candidate filtering + stage-3 head emptying).
+_MARKER_KEYS = frozenset({"_truncated", "original_bytes", "head"})
+
+
+def _utf8_safe_head(data: bytes, limit: int) -> str:
+    """Return the longest decodable prefix of ``data[:limit]`` as str.
+
+    Cutting a byte string at an arbitrary offset can bisect a multibyte
+    UTF-8 sequence; decoding the raw slice would then raise (or, with
+    errors="replace", inject U+FFFD noise into the marker head). Backing
+    off to the nearest character boundary keeps the head a clean str so
+    the event line itself is always valid JSON (JSONL-poisoning guard).
+    With the pinned _canonical_bytes (json.dumps default ensure_ascii)
+    the canonical form is pure ASCII and the back-off is a no-op; the
+    boundary guard is defense-in-depth should the serialization ever
+    carry raw multibyte bytes.
+    """
+    head = data[:limit]
+    for _ in range(4):  # a UTF-8 sequence is at most 4 bytes
+        try:
+            return head.decode("utf-8")
+        except UnicodeDecodeError:
+            head = head[:-1]
+    return head.decode("utf-8", errors="ignore")
+
+
+def _truncation_marker(canonical: bytes) -> dict:
+    """Build the marker that replaces an over-cap value.
+
+    ``head`` is a *string field containing* the first HEAD_BYTES of the
+    value's canonical serialization (cut at a UTF-8 character boundary),
+    so the marker — and therefore the whole event line — is always valid
+    JSON regardless of what the original value held.
+    """
+    return {
+        "_truncated": True,
+        "original_bytes": len(canonical),
+        "head": _utf8_safe_head(canonical, HEAD_BYTES),
+    }
+
+
+def _is_marker(value: object) -> bool:
+    """True iff ``value`` has the truncation-marker SHAPE.
+
+    Shape recognition is a TEST/reader oracle only — production marker
+    identity inside build_snapshot_payload is provenance-tracked (the
+    local set of keys that run truncated), never shape-tested, so a
+    caller-supplied lookalike can never be treated as a marker.
+    """
+    return (
+        isinstance(value, dict)
+        and set(value.keys()) == set(_MARKER_KEYS)
+        and value.get("_truncated") is True
+    )
+
+
+def build_snapshot_payload(
+    task_metadata: Mapping[str, object],
+) -> tuple[dict, bool]:
+    """Return ``(payload, truncated)`` — the size-bounded mirror payload.
+
+    READ-ONLY on input: never mutates ``task_metadata`` or any value inside
+    it — a new dict is built, and no value object is ever written in place:
+    stage-3a head emptying REBUILDS the marker (``{**marker, "head": ""}``)
+    instead of assigning into it, so even a caller-supplied value that is
+    already exactly marker-shaped (inserted by reference at stage 1) is
+    never written through. This is load-bearing: at the seams the same
+    metadata object feeds the handoff emit path, and mutating shared state
+    from an "additive" pass is the known silent-regression class on this
+    pipeline.
+
+    Dual-cap three-stage semantics (all sizes = len(_canonical_bytes(x))):
+
+    1. Per-value: each non-excluded value over PER_VALUE_CAP is replaced by
+       the truncation marker (see _truncation_marker).
+    2. Payload: while the whole payload exceeds PAYLOAD_CAP, the LARGEST
+       remaining not-yet-truncated value is replaced by the marker; ties
+       broken by ascending lexicographic key order (pinned). Markers count
+       toward the total; keys this run already truncated are not
+       re-candidates.
+    3. Pathological floor: if the payload still exceeds the cap, set head
+       to "" across this run's markers in descending original_bytes order
+       (same tie-break); if STILL over, keep whole keys in ascending key
+       order while they fit and record the remainder name-only in a
+       top-level "_dropped_keys" list (ascending). Key existence is never
+       silently lost.
+
+    Marker identity is PROVENANCE-tracked, never shape-tested: a local set
+    records which keys THIS run truncated, and stages 2/3 consult that set
+    only. An input value that merely looks marker-shaped is ordinary
+    caller data — a normal eviction candidate (replaced by OUR marker
+    computed from its serialization) and never sorted by stage 3, whose
+    original_bytes sort therefore only ever sees ints (total by
+    construction).
+    """
+    payload: dict = {}
+    truncated = False
+    # Provenance set — the keys whose payload slot THIS run replaced with a
+    # truncation marker. Marker identity is provenance-tracked, never
+    # shape-tested: an input value that merely LOOKS marker-shaped is
+    # ordinary caller data (a normal stage-2 eviction candidate, replaced
+    # by OUR marker computed from ITS serialization), and stage 3a sorts
+    # only keys in this set — whose markers carry int original_bytes by
+    # construction, making the sort total (a caller lookalike's arbitrary
+    # original_bytes value can never reach it).
+    marker_keys: set[str] = set()
+
+    # Stage 1 — per-value cap. Iteration over sorted keys makes the stage
+    # order-independent by construction (the output would be equivalent
+    # anyway — canonical bytes sort keys — but sorted iteration keeps every
+    # intermediate deterministic too).
+    for key in sorted(task_metadata):
+        if key in SNAPSHOT_EXCLUDE:
+            continue
+        value = task_metadata[key]
+        canonical = _canonical_bytes(value)
+        if len(canonical) > PER_VALUE_CAP:
+            payload[key] = _truncation_marker(canonical)
+            marker_keys.add(key)
+            truncated = True
+        else:
+            payload[key] = value
+
+    # Stage 2 — payload cap: evict largest not-yet-truncated values first.
+    # Candidacy is provenance-based (key not in marker_keys), so a caller
+    # lookalike is evicted like any ordinary value.
+    while len(_canonical_bytes(payload)) > PAYLOAD_CAP:
+        candidates = {
+            key: len(_canonical_bytes(value))
+            for key, value in payload.items()
+            if key not in marker_keys
+        }
+        if not candidates:
+            break
+        largest = max(candidates.values())
+        key = min(k for k, size in candidates.items() if size == largest)
+        payload[key] = _truncation_marker(_canonical_bytes(payload[key]))
+        marker_keys.add(key)
+        truncated = True
+
+    # Stage 3a — empty this run's marker heads, biggest originals first.
+    # Provenance-scoped: iterates marker_keys only, so every sorted
+    # original_bytes is an int by construction and no caller object is ever
+    # a target. REBUILD the marker rather than assigning into it — the
+    # structural read-only guarantee (no in-place writes to any payload
+    # value, regardless of provenance) is what keeps the caller's metadata
+    # dict safe even if a future edit widens what reaches this loop; the
+    # seams feed the same object to the handoff path.
+    if len(_canonical_bytes(payload)) > PAYLOAD_CAP:
+        by_size_desc = sorted(
+            marker_keys,
+            key=lambda k: (-payload[k]["original_bytes"], k),
+        )
+        for key in by_size_desc:
+            if len(_canonical_bytes(payload)) <= PAYLOAD_CAP:
+                break
+            if payload[key]["head"]:
+                payload[key] = {**payload[key], "head": ""}
+                truncated = True
+
+    # Stage 3b — name-only survival: greedily keep whole keys in ascending
+    # order; everything else is recorded in _dropped_keys. The trial size
+    # conservatively charges the not-yet-decided remainder to _dropped_keys
+    # so the greedy pass can never overshoot the cap mid-iteration.
+    if len(_canonical_bytes(payload)) > PAYLOAD_CAP:
+        ordered = sorted(payload)
+        kept: dict = {}
+        dropped: list[str] = []
+        for index, key in enumerate(ordered):
+            trial = dict(kept)
+            trial[key] = payload[key]
+            trial["_dropped_keys"] = sorted(dropped + ordered[index + 1:])
+            if len(_canonical_bytes(trial)) <= PAYLOAD_CAP:
+                kept[key] = payload[key]
+            else:
+                dropped.append(key)
+        payload = kept
+        if dropped:
+            payload["_dropped_keys"] = sorted(dropped)
+        truncated = True
+
+    return payload, truncated
+
+
+def payload_hash8(payload: dict) -> str:
+    """Content key: sha256 of the canonical payload bytes, first 8 hex chars.
+
+    Computed AFTER truncation (the caller hashes the built payload, never
+    the raw metadata) so the key is stable for a given emitted content —
+    truncation nondeterminism cannot churn the dedup key because there is
+    none: build_snapshot_payload is deterministic.
+    """
+    return hashlib.sha256(_canonical_bytes(payload)).hexdigest()[:8]
+
+
+def snapshot_eligible(payload: dict) -> bool:
+    """True iff the payload is non-empty.
+
+    (Writability is checked inside emit_task_metadata_snapshot — eligibility
+    is payload-presence only. A handoff-only or empty metadata emits
+    nothing: agent_handoff already covers handoff.)
+    """
+    return bool(payload)
+
+
+def snapshot_already_emitted(
+    team_name: str, task_id: str, content_key: str
+) -> bool:
+    """Test-and-set the snapshot marker — hard-bound to the snapshot namespace.
+
+    Thin wrapper over agent_handoff_marker.already_emitted that HARD-BINDS
+    namespace=SNAPSHOT_MARKER_NAMESPACE. Seam code and this module's emit
+    routine call ONLY this wrapper (and snapshot_unclaim) — never the raw
+    marker functions: a forgotten namespace arg would claim in one dir and
+    no-op-unclaim against the other, leaving a poisoned marker; the wrapper
+    makes that impossible by construction.
+
+    The marker root is likewise hard-bound: it comes from
+    _snapshot_marker_root, the family's single root-policy site, so the
+    claim and the rollback derive the same root by construction.
+    """
+    return already_emitted(
+        team_name,
+        task_id,
+        content_key,
+        namespace=SNAPSHOT_MARKER_NAMESPACE,
+        root_dir=_snapshot_marker_root(team_name),
+    )
+
+
+def snapshot_unclaim(team_name: str, task_id: str, content_key: str) -> None:
+    """Compensating rollback for a claim whose journal write failed.
+
+    Hard-bound twin of snapshot_already_emitted — same namespace constant,
+    same root policy (_snapshot_marker_root), same resolver SSOT underneath,
+    so the claim and the rollback can never reference divergent paths.
+    """
+    unclaim(
+        team_name,
+        task_id,
+        content_key,
+        namespace=SNAPSHOT_MARKER_NAMESPACE,
+        root_dir=_snapshot_marker_root(team_name),
+    )
+
+
+def emit_task_metadata_snapshot(
+    team_name: str,
+    task_id: str,
+    subject: object,
+    owner: object,
+    task_metadata: Mapping[str, object] | None,
+) -> None:
+    """The ONE emit routine, shared verbatim by every seam. Never raises.
+
+    Sequence (each early return is a clean no-emit):
+      1. metadata guard — None → {}; non-mapping → return.
+      2. build payload; empty post-exclude payload → return.
+      3. validate-before-claim: sentinel-substitute a degenerate subject,
+         normalize a degenerate owner to None — every emitted field is
+         schema-valid BEFORE any marker claim (a claim-then-schema-reject
+         would poison the marker for later valid fires).
+      4. writability precondition — an unresolvable frame (e.g. an
+         unpersisted tmux teammate context) DEFERS to a writable seam
+         instead of claiming: no journal path → no claim, no write.
+      5. content-key dedup claim (O_EXCL, snapshot namespace).
+      6. occupant discriminator via the shared occupant_hash SSOT.
+      7. append the event (owner/task_type/truncated only when present).
+      8. compensating unclaim on a failed write so a later valid fire can
+         re-emit instead of being permanently suppressed.
+    """
+    try:
+        metadata = task_metadata or {}
+        if not isinstance(metadata, Mapping):
+            return
+
+        payload, truncated = build_snapshot_payload(metadata)
+        if not snapshot_eligible(payload):
+            return
+
+        if not isinstance(subject, str) or not subject.strip():
+            subject = "(no subject)"
+        if not isinstance(owner, str) or not owner.strip():
+            owner = None
+
+        if not get_journal_path():
+            return
+
+        task_id = sanitize_path_component(str(task_id))
+        content_key = payload_hash8(payload)
+        if snapshot_already_emitted(team_name, task_id, content_key):
+            return
+
+        occupant = occupant_hash(owner or "", subject)
+
+        optional: dict = {}
+        if owner:
+            optional["owner"] = owner
+        # Read from the ORIGINAL metadata — the payload copy may have been
+        # truncation-marked (never in practice for a short type string, but
+        # the original is the semantic source either way).
+        task_type = metadata.get("type")
+        if isinstance(task_type, str) and task_type.strip():
+            optional["task_type"] = task_type
+        if truncated:
+            optional["truncated"] = True
+
+        try:
+            written = append_event(
+                make_event(
+                    "task_metadata_snapshot",
+                    task_id=task_id,
+                    metadata=payload,
+                    subject=subject,
+                    occupant=occupant,
+                    **optional,
+                )
+            )
+        except Exception:
+            written = False
+        if not written:
+            snapshot_unclaim(team_name, task_id, content_key)
+    except Exception:
+        # Hermetic: a snapshot failure must never affect the host hook's
+        # contract (exit-0 suppressOutput, advisory evaluation, or the
+        # handoff emit path).
+        pass

@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "capture_method": "headless-subprocess-additive-settings-dumper (Claude Code 2.1.167, 2026-06-06)",
+    "note": "Real captured UserPromptSubmit stdin, qualified lead spelling (--agent PACT:pact-orchestrator). Replaces the prior synthetic placeholder. NOTE: real UserPromptSubmit frames carry NO 'source' field (source is a SessionStart-only field) and NO agent_name/agent_id/team_name under tmux. Absolute paths sanitized to placeholders; the platform does not deliver the _meta key (tests strip it before feeding the hook)."
+  },
+  "agent_type": "PACT:pact-orchestrator",
+  "cwd": "<cwd>",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "acceptEdits",
+  "prompt": "Reply with the single word: ok",
+  "session_id": "fa92f1e3-756a-4c46-9704-26ae90fecda0",
+  "transcript_path": "<transcript_path>"
+}

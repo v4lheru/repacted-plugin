@@ -1,0 +1,479 @@
+---
+description: Recursive nested PACT cycle for complex sub-tasks
+argument-hint: [backend|frontend|database|prepare|test|architect|devops|security|qa] <sub-task description>
+---
+Run a recursive PACT cycle for this sub-task: $ARGUMENTS
+
+This command initiates a **nested P→A→C→T cycle** for a sub-task that is too complex for simple delegation but should remain part of the current feature work.
+
+**Team behavior**: rePACT spawns sub-scope teammates into the session team (`{team_name}`). The platform provisions the team; rePACT does not create a new one. Use scope-prefixed names (e.g., `backend-coder-auth-scope`) to distinguish sub-scope teammates from parent-scope teammates.
+
+---
+
+## Task Hierarchy
+
+Create a nested Task hierarchy as a child of the current context:
+
+```
+1. `TaskCreate`: Sub-feature task "{verb} {sub-feature}" (child of parent context) — stamp metadata.variety.total (4-16)
+2. `TaskCreate`: Nested phase tasks:
+   - "PREPARE: {sub-feature-slug}"
+   - "ARCHITECT: {sub-feature-slug}"
+   - "CODE: {sub-feature-slug}"
+   - "TEST: {sub-feature-slug}"
+3. `TaskUpdate`: Set dependencies:
+   - Phase-to-phase blockedBy chain (same as orchestrate)
+   - Parent task addBlockedBy = [sub-feature task]
+4. `TaskUpdate`: Sub-feature task status = "in_progress"
+5. Execute nested P→A→C→T cycle (same per-phase lifecycle as orchestrate: create phase task → `in_progress` → dispatch agents → agent tasks `in_progress` → `completed` → phase `completed`)
+6. On completion: Parent task unblocked
+```
+
+**Sub-feature journal event** (after step 1's stamp): write a feature-level `variety_assessed` event keyed on the sub-feature task id (no `scope` field — feature-level is the discriminator's absent value):
+```bash
+set -e
+trap 'rc=$?; echo "[JOURNAL WRITE FAILED] rePACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
+python3 "{plugin_root}/hooks/shared/session_journal.py" write \
+  --type variety_assessed --session-dir '{session_dir}' --stdin <<'JSON'
+{"task_id": "{sub_feature_task_id}", "variety": {"total": N}}
+JSON
+```
+
+**Example structure (standard):**
+```
+[Feature] "Implement user auth" (parent, blockedBy: sub-feature)
+└── [Sub-Feature] "Implement OAuth2 token refresh"
+    ├── [Phase] "PREPARE: oauth2-token-refresh"
+    ├── [Phase] "ARCHITECT: oauth2-token-refresh"
+    ├── [Phase] "CODE: oauth2-token-refresh"
+    └── [Phase] "TEST: oauth2-token-refresh"
+```
+
+**Scope-aware naming** (when scope contract is provided):
+
+When a scope contract provides a `scope_id`, prefix all tasks with `[scope:{scope_id}]`:
+
+```
+[Feature] "Implement user auth" (parent, blockedBy: sub-feature)
+└── [Sub-Feature] "[scope:backend-api] Implement backend API"
+    ├── [Phase] "[scope:backend-api] PREPARE: backend-api"
+    ├── [Phase] "[scope:backend-api] ARCHITECT: backend-api"
+    ├── [Phase] "[scope:backend-api] CODE: backend-api"
+    └── [Phase] "[scope:backend-api] TEST: backend-api"
+```
+
+Include `scope_id` in task metadata: `{ "scope_id": "backend-api" }`. This enables the parent orchestrator to filter tasks by scope when aggregating results.
+
+---
+
+## When to Use rePACT
+
+Use `/PACT:rePACT` when:
+- A sub-task needs full P→A→C→T treatment (prepare, architect, code, test)
+- The sub-task should stay on the current branch (no new branch/PR)
+- You're already within a `/PACT:orchestrate` workflow
+
+**Don't use rePACT when:**
+- Sub-task is simple → use `/PACT:comPACT` instead
+- Sub-task is a top-level feature → use `/PACT:orchestrate` instead
+- You're not in an active orchestration → use `/PACT:orchestrate` instead
+
+---
+
+## Usage Modes
+
+### Single-Domain Nested Cycle
+
+When the sub-task fits within one specialist's domain:
+
+```
+/PACT:rePACT backend "implement OAuth2 token refresh mechanism"
+```
+
+This runs:
+1. **Mini-Prepare**: Backend-focused research (token refresh best practices)
+2. **Mini-Architect**: Backend component design (token storage, refresh flow)
+3. **Mini-Code**: Backend implementation
+4. **Mini-Test**: Smoke tests for the sub-component
+
+### Multi-Domain Nested Cycle
+
+When the sub-task spans multiple specialist domains:
+
+```
+/PACT:rePACT "implement payment processing sub-system"
+```
+
+This runs a mini-orchestration:
+1. **Assess scope**: Determine which specialists are needed
+2. **Mini-Prepare**: Research across relevant domains
+3. **Mini-Architect**: Design the sub-system
+4. **Mini-Code**: Invoke relevant coders (may be parallel)
+5. **Mini-Test**: Smoke tests for the sub-system
+
+---
+
+## Specialist Selection
+
+| Shorthand | Specialist | Use For |
+|-----------|------------|---------|
+| `backend` | pact-backend-coder | Server-side sub-components |
+| `frontend` | pact-frontend-coder | UI sub-components |
+| `database` | pact-database-engineer | Data layer sub-components |
+| `prepare` | pact-preparer | Research-only nested cycles |
+| `test` | pact-test-engineer | Test infrastructure sub-tasks |
+| `architect` | pact-architect | Design-only nested cycles |
+| `devops` | pact-devops-engineer | Infrastructure sub-components |
+| `security` | pact-security-engineer | Security review nested cycles |
+| `qa` | pact-qa-engineer | Runtime verification sub-tasks |
+
+**If no specialist specified**: Assess the sub-task and determine which specialists are needed (multi-domain mode).
+
+---
+
+## Constraints
+
+### Nesting Depth
+
+**Maximum nesting: 1 level**
+
+```
+/PACT:orchestrate (level 0)
+  └── /PACT:rePACT (level 1, max)
+        └── /PACT:rePACT ← NOT ALLOWED
+```
+
+> **Why the limit holds**: scope detection is bypassed within sub-scopes, so a sub-scope cannot trigger further decomposition — level 2 is unreachable rather than merely forbidden.
+
+If you hit the nesting limit:
+- Simplify the sub-task and use `/PACT:comPACT`
+- Or escalate to user for guidance
+
+---
+
+## Output Conciseness
+
+See also: [Communication Charter](../protocols/pact-communication-charter.md) for full plain English, anti-sycophancy, and constructive challenge norms.
+
+**Default: Concise output.** User sees nested cycle start/completion, not mini-phase details.
+
+| Internal (don't show) | External (show) |
+|----------------------|-----------------|
+| Mini-phase transitions | `rePACT: backend "OAuth2 token refresh"` |
+| Nesting depth calculations | `rePACT complete. Continuing parent.` |
+| Phase skip reasoning | (implicit — just proceed) |
+
+**User can always ask** for nested cycle details (e.g., "What phases ran?" or "Show me the mini-architect output").
+
+| Verbose (avoid) | Concise (prefer) |
+|-----------------|------------------|
+| "Starting mini-PREPARE phase for the nested cycle..." | (just do it) |
+| "The nested cycle has completed successfully..." | `rePACT complete. Continuing parent.` |
+
+**Multi-scope aggregation**: When the parent orchestrator runs multiple rePACT sub-scopes, each sub-scope's HANDOFF feeds into parent-level aggregation. The sub-scope should keep its HANDOFF self-contained (no references to sibling state). The parent orchestrator is responsible for comparing fulfillment sections across sub-scopes during the consolidate phase.
+
+---
+
+### Branch Behavior
+
+Branch behavior depends on whether rePACT is invoked with a scope contract:
+
+**Without scope contract** (standard nested cycle):
+- **No new branch**: rePACT stays on the current feature branch
+- **No PR**: Results integrate into the parent task's eventual PR
+- All commits remain part of the current feature work
+
+**With scope contract** (from ATOMIZE phase):
+- **Receives worktree path** from the parent orchestrator (created by parent via `/PACT:worktree-setup`)
+- **Operates in isolated worktree** on a suffix branch (e.g., `feature-X--{scope_id}`)
+- **Pass worktree path to all agent prompts**: Include "You are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree. As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead." in specialist dispatches, consistent with orchestrate.md
+- All commits stay on the suffix branch within the worktree
+- Branch merges back to the feature branch during the CONSOLIDATE phase
+
+---
+
+## Workflow
+
+### Phase 0: Assess
+
+Before starting, verify:
+1. **Nesting depth**: Read the task file's `metadata.nesting_depth` (`TaskGet` does NOT surface metadata) — if > 1, reject (max depth exceeded). If absent, treat as 0.
+2. **Scope contract**: If this rePACT was dispatched from ATOMIZE, read the scope contract from the task file's `metadata.scope_contract` instead of expecting it inline in the prompt. This ensures scope state survives compaction.
+   - **Journal fallback (covers items 1–2)**: If the task file cannot be read (task store drained), recover from the session journal instead: run `python3 "{plugin_root}/hooks/shared/session_journal.py" read --session-dir "{session_dir}" --type task_metadata_snapshot` (prints a JSON array), filter to events whose `task_id` matches this task, take the latest-`ts` event, and read `nesting_depth` / `scope_contract` from its `metadata` (honor `_truncated` / `_dropped_keys` markers if present).
+3. **Scope appropriateness**: Is this truly a sub-task of the parent?
+4. **Domain determination**: Single-domain or multi-domain?
+
+### Phase 1: Mini-Prepare (if needed)
+
+For the sub-task, gather focused context:
+- Research specific to the sub-component
+- May be skipped if parent Prepare phase covered this
+- Output: Notes integrated into parent preparation or separate `-nested` doc
+
+### Phase 2: Mini-Architect (if needed)
+
+Design the sub-component:
+- Component design within the larger architecture
+- Interface contracts with parent components
+- May be skipped for simple sub-tasks
+- Output: Design notes in `-nested` architecture doc or inline
+
+### Phase 3: Mini-Code
+
+Implement the sub-component:
+
+**Session team**: The `{team_name}` team is provisioned automatically by the platform — use it for dispatches; you do not create it.
+
+### Teachback-Gated Dispatch
+
+Each specialist dispatch creates **two tasks**, not one:
+
+- **Task A** — TEACHBACK gate. `subject = "{scope-prefixed-name}: TEACHBACK for {sub-task}"`, owner = specialist.
+- **Task B** — primary work. `subject = "{scope-prefixed-name}: implement {sub-task}"`, owner = specialist, `blockedBy = [<Task A id>]`.
+
+Both are created BEFORE the `Agent(...)` spawn call. The specialist claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review and accept via the two-call atomic pair: `TaskUpdate(A, status="completed")` FIRST, then the wake-signal `SendMessage(to=specialist, ...)` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. On accept, the specialist wakes to claim B.
+
+Nested PACT cycles' inner-cycle dispatches follow the same A+B shape recursively. The `Agent()` `prompt` does NOT change shape.
+
+```
+# A-FIRST ORDERING (required): create Task A (the teachback gate) BEFORE Task B so the gate gets the LOWER id. Creating Task B first — giving the gate the HIGHER id — is WRONG: it inverts the intuitive "lower id = earlier" reading. The blocking wiring below legitimately names both ids because it runs AFTER both tasks exist.
+A_id = TaskCreate(
+    subject="{scope-prefixed-name}: TEACHBACK for {sub-task}",
+    description="DOGFOOD TEACHBACK GATE.\n\n"
+                "Submit TEACHBACK by writing metadata.teachback_submit using the CANONICAL field schema (do NOT improvise key names): understanding, most_likely_wrong, least_confident_item, first_action, variety_acknowledgment (an OBJECT). See the pact-teachback skill for field semantics. "
+                "Then send the notify SendMessage carrying the canonical payload verbatim (pact-teachback Step 2). "
+                "SET intentional_wait{reason=awaiting_lead_completion}. Idle. "
+                "DO NOT mark this task completed — team-lead-only completion.\n\n"
+                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead. Task B stays blocked until the lead accepts this teachback: that is the gate, not a desync.\n\n"
+                "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
+)
+TaskUpdate(A_id, owner="{scope-prefixed-name}")
+B_id = TaskCreate(
+    subject="{scope-prefixed-name}: implement {sub-task}",
+    description="<full mission>\n\nFIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nWrite metadata.handoff whatever the size of the diff — a task whose deliverable is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in the diff.",
+    metadata={
+        "variety": {
+            "novelty":               N,
+            "novelty_rationale":     "<1-sentence: the shape of this dispatch's novelty — never what you expect to find>",
+            "scope":                 N,
+            "scope_rationale":       "<1-sentence: the shape of this dispatch's scope — never what you expect to find>",
+            "uncertainty":           N,
+            "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
+            "risk":                  N,
+            "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
+            # Ignorance-dependent dispatch: stamp all four `*_rationale` as "WITHHELD: ignorance-dependent dispatch" — real scores, no prose.
+            "total":                 N
+        }
+    }
+)
+TaskUpdate(B_id, owner="{scope-prefixed-name}", addBlockedBy=[A_id])
+TaskUpdate(A_id, addBlocks=[B_id])
+```
+
+---
+
+For each specialist needed, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
+
+1. `TaskCreate(subject="{scope-prefixed-name}: TEACHBACK for {sub-task}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
+2. `TaskCreate(subject="{scope-prefixed-name}: implement {sub-task}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema); the wiring write below is denied without it.
+   - Task B's `description` carries the implementation mission: "[full CONTEXT/MISSION/INSTRUCTIONS/GUIDELINES]"
+3. `TaskUpdate(A_id, owner="{scope-prefixed-name}", addBlocks=[B_id])`
+4. `TaskUpdate(B_id, owner="{scope-prefixed-name}", addBlockedBy=[A_id])`
+5. **Journal event**: write one `variety_assessed` event per dispatched Task B before spawning, mirroring that task's `metadata.variety` stamp — the four dimension scores and the total, `*_rationale` strings omitted, and the top-level `"scope": "dispatch"` discriminator present (the feature-level assessment event carries no `scope` field; journal readers key on that difference):
+   ```bash
+   set -e
+   trap 'rc=$?; echo "[JOURNAL WRITE FAILED] rePACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
+   python3 "{plugin_root}/hooks/shared/session_journal.py" write \
+     --type variety_assessed --session-dir '{session_dir}' --stdin <<'JSON'
+   {"task_id": "{taskId}", "scope": "dispatch", "variety": {"novelty": N, "scope": N, "uncertainty": N, "risk": N, "total": N}}
+JSON
+   ```
+6. Spawn the specialist with the canonical dispatch form. The `prompt` MUST lead with the `YOUR PACT ROLE: teammate ({scope-prefixed-name})` marker on its own line (team protocol + teachback content arrive via spawn-time skills frontmatter; the dispatch prompt additionally carries the registration first-action directive):
+
+```
+Agent(
+  name="{scope-prefixed-name}",
+  team_name="{team_name}",
+  subagent_type="pact-{specialist-type}",
+  description="Spawn {scope-prefixed-name} specialist",
+  prompt="YOUR PACT ROLE: teammate ({scope-prefixed-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
+)
+```
+
+For multi-domain: spawn multiple specialists in parallel.
+Apply S2 coordination if parallel work.
+Output: Code + HANDOFF in task metadata (summary via `SendMessage` to team-lead).
+
+### Phase 4: Mini-Test
+
+Verify the sub-component:
+- Smoke tests for the sub-component
+- Verify integration with parent components
+- Output: Test results in HANDOFF
+
+### Phase 5: Integration
+
+Complete the nested cycle:
+1. **Verify**: Sub-component works within parent context
+2. **HANDOFF**: Return control to parent orchestration with summary
+3. **Agreement verification**: Parent orchestrator verifies understanding of nested results before reintegrating into parent scope.
+   - `SendMessage` to each contributing specialist to confirm: "Confirming my understanding of the nested results: [restates key deliverables and decisions]. Correct?"
+   - Background: [pact-ct-teachback.md](../protocols/pact-ct-teachback.md).
+
+---
+
+## Context Inheritance
+
+Nested cycles inherit from parent:
+- Current feature branch
+- Parent task context and requirements
+- Architectural decisions from parent
+- Coding conventions established in parent
+
+Nested cycles produce:
+- Code committed to current branch
+- Handoff summary for parent orchestration
+
+**CT note**: Nested cycles are *conversations within conversations*. The parent scope's understanding provides context for the nested conversation. When the nested conversation completes, its understanding must be verified before reintegrating into the parent. Agreement verification at nested boundaries follows the same mechanism as phase boundaries in orchestrate. Background: [pact-ct-teachback.md](../protocols/pact-ct-teachback.md).
+
+---
+
+## Scope Contract Reception
+
+When the parent orchestrator invokes rePACT with a **scope contract** (from scope detection and decomposition), the nested cycle operates scope-aware. Without a contract, rePACT behaves as described above. Contract presence is the mode switch — there are no explicit "modes" to select.
+
+**When a scope contract is provided:**
+
+1. **Identity**: Use the contract's `scope_id` as the scope identifier for all task naming and metadata (see Task Hierarchy above)
+2. **Deliverables**: Treat contracted deliverables as the success criteria for Mini-Code and Mini-Test
+3. **Interfaces**: Use `imports` to understand what sibling scopes provide; use `exports` to ensure this scope exposes what siblings expect
+4. **Shared files constraint**: Do NOT modify files listed in the contract's `shared_files` — these are owned by sibling scopes. Communicate this constraint to all dispatched specialists.
+5. **Conventions**: Apply any `conventions` from the contract in addition to inherited parent conventions
+6. **HANDOFF**: Include a Contract Fulfillment section in the completion HANDOFF (see After Completion below)
+
+**When no scope contract is provided:** Standard rePACT behavior. No scope-aware naming, no contract fulfillment tracking, no shared file constraints.
+
+See [pact-scope-contract.md](../protocols/pact-scope-contract.md) for the contract format specification.
+
+---
+
+## Relationship to Specialist Autonomy
+
+Specialists can invoke nested cycles autonomously (see [Autonomy Charter](../protocols/pact-s1-autonomy.md#autonomy-charter)).
+`/PACT:rePACT` is for **orchestrator-initiated** nested cycles.
+
+| Initiator | Mechanism |
+|-----------|-----------|
+| Specialist discovers complexity | Uses Autonomy Charter (declares, executes, reports) |
+| Orchestrator identifies complex sub-task | Uses `/PACT:rePACT` command |
+
+The two share the P→A→C→T *shape*, not this document's task mechanics. A specialist's nested cycle is a mini-cycle inside its own work, reported through its HANDOFF — the Autonomy Charter defines no `TaskCreate`, no `TaskUpdate`, and no dispatch wiring, so do NOT create or wire Task A / Task B pairs from a specialist. Creating a nested team and wiring dispatches is the orchestrator's path, via `/PACT:rePACT`.
+
+If a specialist's sub-task genuinely needs its own dispatched teammates, that is a cross-domain escalation to the orchestrator, not a nested cycle to run in place.
+
+---
+
+## Examples
+
+### Example 1: Single-Domain Backend Sub-Task
+
+```
+/PACT:rePACT backend "implement rate limiting middleware"
+```
+
+Orchestrator runs mini-cycle:
+- Mini-Prepare: Research rate limiting patterns
+- Mini-Architect: Design middleware structure
+- Mini-Code: Invoke backend coder
+- Mini-Test: Smoke test rate limiting
+
+### Example 2: Multi-Domain Sub-System
+
+```
+/PACT:rePACT "implement audit logging sub-system"
+```
+
+Orchestrator assesses scope:
+- Needs: backend (logging service), database (audit tables), frontend (audit viewer)
+- Runs mini-orchestration with all three domains
+- Coordinates via S2 protocols
+
+### Example 3: Skipping Phases
+
+```
+/PACT:rePACT frontend "implement form validation component"
+```
+
+If parent already has:
+- Validation requirements (skip mini-prepare)
+- Component design (skip mini-architect)
+
+Then just run mini-code and mini-test.
+
+---
+
+## Error Handling
+
+**If nesting limit exceeded:**
+```
+⚠️ NESTING LIMIT: Cannot invoke rePACT at level 2.
+Options:
+1. Simplify sub-task and use comPACT
+2. Escalate to user for guidance
+```
+
+**If sub-task is actually top-level:**
+```
+⚠️ SCOPE MISMATCH: This appears to be a top-level feature, not a sub-task.
+Consider using /PACT:orchestrate instead.
+```
+
+---
+
+## Signal Monitoring
+
+Monitor for blocker/algedonic signals via:
+- **`SendMessage`**: Teammates send blockers and algedonic signals directly to the team-lead
+- **`TaskList`**: Check for tasks with blocker metadata or stalled status
+
+On signal detected, handle via the Signal Task Handling procedure:
+
+When an agent reports a blocker or algedonic signal via `SendMessage`:
+1. Create a signal Task (blocker or algedonic type)
+2. Block the agent's task via `addBlockedBy`
+3. For algedonic signals, amplify scope:
+   - ALERT → block current phase task
+   - HALT → block feature task (stops all work)
+4. Present to user and await resolution
+5. On resolution: mark signal task `completed` (unblocks downstream)
+
+For agent stall detection and recovery, see [Agent Stall Detection](orchestrate.md#agent-stall-detection).
+
+---
+
+## After Completion
+
+When nested cycle completes:
+1. **`TaskUpdate`**: Sub-feature task status = "completed"
+2. **Summarize** what was done in the nested cycle
+3. **Report** any decisions that affect the parent task
+4. **Continue** with parent orchestration (parent task now unblocked)
+
+**Handoff format**: Use the standard handoff structure (Produced, Key decisions, Reasoning chain [recommended], Areas of uncertainty, Integration points, Open questions — 5 required fields, 1 recommended). These are PROSE labels. When you store this same HANDOFF in task metadata, use the canonical `metadata.handoff` keys, in this order: `produced`, `decisions`, `reasoning_chain`, `uncertainty`, `integration`, `open_questions`. Never convert a display label into a key — `Key decisions` is the label, `decisions` is the key.
+
+**Contract-aware HANDOFF** (when scope contract was provided): Append a Contract Fulfillment section after the standard HANDOFF:
+
+```
+Contract Fulfillment:
+  Deliverables:
+    - ✅ {delivered item} → {actual file/artifact}
+    - ❌ {undelivered item} → {reason}
+  Interfaces:
+    exports: {what was actually exposed}
+    imports: {what was actually consumed from siblings}
+  Deviations: {any departures from the contract, with rationale}
+```
+
+The parent orchestrator uses fulfillment sections from all sub-scopes to drive the consolidate phase. Keep the fulfillment section factual and concise — the parent only needs to know what matched, what didn't, and why.
+
+The parent orchestration resumes with the sub-task complete.

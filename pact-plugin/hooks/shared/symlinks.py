@@ -1,0 +1,188 @@
+"""
+Location: pact-plugin/hooks/shared/symlinks.py
+Summary: Plugin symlink management for PACT environment setup.
+Used by: session_init.py during SessionStart hook to create symlinks
+         for @reference resolution in CLAUDE.md.
+
+Creates two types of symlinks:
+1. ~/.claude/protocols/pact-plugin/ -> plugin/protocols/
+   (enables @~/.claude/protocols/pact-plugin/... references)
+2. ~/.claude/agents/pact-*.md -> plugin/agents/pact-*.md
+   (enables non-prefixed agent names like "pact-secretary")
+
+A repoint of an existing link uses an atomic swap, so the destination path
+holds a link at each moment. See _repoint_symlink.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from .failure_cause import failure_cause
+from .paths import get_claude_config_dir
+
+# The status returned when each link is correct and nothing was written. The
+# caller ROUTES ON THIS VALUE, so export it rather than let a second magic
+# string sit beside the "failed" test in session_init. A substring search on
+# free text is what a later reader gets incorrect.
+SYMLINKS_VERIFIED_MESSAGE = "PACT symlinks verified"
+
+# Suffix of the temporary link that the atomic swap builds beside its target.
+# It does NOT end in ".md", so a sweep of the destination directory for
+# "pact-*.md" does not meet it.
+_SWAP_SUFFIX = ".pact-swap-tmp"
+
+
+def _repoint_symlink(dst_file: Path, target: Path) -> None:
+    """Point an EXISTING symlink at a new target, without an empty moment.
+
+    The destination path holds a link at each moment. This function builds the
+    new link at a temporary path in the SAME directory, then moves it onto the
+    destination with os.replace(), which is atomic on POSIX. The temporary path
+    must share the directory, because os.replace across file systems is not
+    atomic.
+
+    WHY THIS REPLACES AN unlink()-THEN-symlink_to() PAIR: that pair left the
+    destination with NO file between the two calls. A reader that resolved the
+    path inside that window got nothing at all.
+
+    CALLER GUARD, AND IT IS LOAD-BEARING. Call this ONLY when
+    dst_file.is_symlink() is true. os.replace() onto a path that holds a REAL
+    FILE succeeds and DESTROYS that file, which is the user-override case.
+    os.replace() gives no protection of its own.
+
+    A crashed process can leave a temporary path behind, so this function
+    removes a stale one first. On an OSError it removes the temporary path and
+    raises. Each caller handles OSError.
+    """
+    tmp = dst_file.with_name(dst_file.name + _SWAP_SUFFIX)
+    try:
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+        tmp.symlink_to(target)
+        os.replace(tmp, dst_file)
+    except OSError:
+        # Leave no temporary path behind for the next run to meet. A failure of
+        # the cleanup itself must not mask the original error.
+        if os.path.lexists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        raise
+
+
+def setup_plugin_symlinks() -> str | None:
+    """
+    Create symlinks for plugin resources to ~/.claude/.
+
+    Creates:
+    1. ~/.claude/protocols/pact-plugin/ -> plugin/protocols/
+       (enables @~/.claude/protocols/pact-plugin/... references in CLAUDE.md)
+    2. ~/.claude/agents/pact-*.md -> plugin/agents/pact-*.md
+       (enables non-prefixed agent names like "pact-secretary")
+
+    Returns:
+        Status message or None if successful
+    """
+    plugin_root_str = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if not plugin_root_str:
+        return None
+
+    plugin_root = Path(plugin_root_str)
+    if not plugin_root.exists():
+        return None
+
+    home_claude = Path.home() / ".claude"
+    config_root = get_claude_config_dir()
+    messages = []
+
+    # 1. Symlink protocols/ directory.
+    # DUAL-LOCATION (#926): the protocols symlink is consumed by a CLAUDE.md
+    # `@~/.claude/protocols/...` import. Whether Claude expands the literal `~`
+    # to $HOME or rewrites it to $CLAUDE_CONFIG_DIR is not knowable here, so we
+    # create the link in BOTH roots when they differ (answer-immune). With the
+    # env unset the two roots are equal and we create exactly once.
+    protocols_src = plugin_root / "protocols"
+    if protocols_src.exists():
+        protocols_roots = [home_claude]
+        if config_root.resolve() != home_claude.resolve():
+            protocols_roots.append(config_root)
+        for root in protocols_roots:
+            protocols_dst = root / "protocols" / "pact-plugin"
+            try:
+                # mkdir INSIDE the try (#926): a pathological config_root
+                # (relative / unwritable / file-in-path) must fail-open per this
+                # function's "returns None/status, never raises" contract, not
+                # propagate to the caller. mode=0o700 applies to the leaf dir
+                # only; parent dirs use umask.
+                protocols_dst.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if protocols_dst.is_symlink():
+                    if protocols_dst.resolve() != protocols_src.resolve():
+                        # is_symlink() above is the guard that protects a user
+                        # override from the swap. See _repoint_symlink.
+                        _repoint_symlink(protocols_dst, protocols_src)
+                        messages.append("protocols updated")
+                elif not protocols_dst.exists():
+                    protocols_dst.symlink_to(protocols_src)
+                    messages.append("protocols linked")
+            except OSError as e:
+                # `failed` IS THE ROUTING TOKEN, and this fragment reaches the
+                # routed return through the `messages` join below, so the
+                # word must survive the join. The prefix stays byte-identical.
+                #
+                # CLOSED VOCABULARY, and the 20-character cut it replaces was
+                # NOT a bound on the leak. MEASURED: the cut hides the path
+                # only when the strerror is long enough to fill the window, so
+                # a PermissionError was clean while `OSError(2, "x", path)`
+                # and a bare `OSError("... /path ...")` each emitted the path.
+                # A cut narrows the leaking SHAPES and does not close the leak.
+                messages.append(f"protocols failed: {failure_cause(e)}")
+
+    # 2. Symlink individual agent files (enables non-prefixed agent names).
+    # Agents FOLLOW the config dir — Claude discovers subagents from
+    # $CLAUDE_CONFIG_DIR/agents/.
+    agents_src = plugin_root / "agents"
+    if agents_src.exists():
+        agents_dst = config_root / "agents"
+        # mode=0o700 applies to the leaf directory only; parent dirs use umask
+        agents_dst.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+        agents_updated = 0
+        agents_created = 0
+        agents_failed = 0
+        for agent_file in agents_src.glob("pact-*.md"):
+            dst_file = agents_dst / agent_file.name
+            try:
+                if dst_file.is_symlink():
+                    if dst_file.resolve() != agent_file.resolve():
+                        # is_symlink() above is the guard that protects a user
+                        # override from the swap. See _repoint_symlink.
+                        _repoint_symlink(dst_file, agent_file)
+                        agents_updated += 1
+                elif not dst_file.exists():
+                    dst_file.symlink_to(agent_file)
+                    agents_created += 1
+                # Skip if real file exists (user override)
+            except OSError:
+                # COUNT the file, then CONTINUE. One bad file must not stop the
+                # loop, and the protocols loop above reports its own failures.
+                # Before this count the agents loop was SILENT: a run that
+                # wrote no agent link at all returned a message that named a
+                # success, and the stale links had no signal of their own.
+                agents_failed += 1
+                continue
+
+        if agents_created:
+            messages.append(f"{agents_created} agents linked")
+        if agents_updated:
+            messages.append(f"{agents_updated} agents updated")
+        if agents_failed:
+            # The word "failed" is a CONTRACT with the caller, which routes on
+            # `"failed" in result.lower()`. Do not reword it away.
+            messages.append(f"{agents_failed} agents failed")
+
+    if not messages:
+        return SYMLINKS_VERIFIED_MESSAGE
+    return "PACT: " + ", ".join(messages)

@@ -1,0 +1,490 @@
+#!/bin/bash
+# scripts/verify-scope-integrity.sh
+# Cross-cutting verification for scope-related protocols and conventions.
+# Checks cross-references between scope contract, task hierarchy, and scope
+# detection protocols; verifies comPACT bypasses scope detection; validates
+# flow ordering consistency.
+
+set -e
+
+echo "=== Scope Integrity Verification ==="
+echo ""
+
+PROTOCOLS_DIR="pact-plugin/protocols"
+COMMANDS_DIR="pact-plugin/commands"
+SKILLS_DIR="pact-plugin/skills"
+HOOKS_DIR="pact-plugin/hooks"
+AGENTS_DIR="pact-plugin/agents"
+SSOT="$PROTOCOLS_DIR/pact-protocols.md"
+
+if [ ! -f "$SSOT" ]; then
+    echo "ERROR: SSOT file $SSOT not found"
+    exit 1
+fi
+
+PASS=0
+FAIL=0
+
+# Helper: check that a file contains a pattern
+check_pattern() {
+    local file="$1"
+    local name="$2"
+    local pattern="$3"
+
+    if [ ! -f "$file" ]; then
+        echo "  ✗ $name: FILE NOT FOUND ($file)"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    if grep -q "$pattern" "$file"; then
+        echo "  ✓ $name"
+        PASS=$((PASS + 1))
+        return 0
+    else
+        echo "  ✗ $name: pattern not found"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+}
+
+# Helper: check that a file does NOT contain a pattern (negative check)
+check_absent() {
+    local file="$1"
+    local name="$2"
+    local pattern="$3"
+
+    if [ ! -f "$file" ]; then
+        echo "  ✗ $name: FILE NOT FOUND ($file)"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    if grep -q "$pattern" "$file"; then
+        echo "  ✗ $name: pattern should NOT be present"
+        FAIL=$((FAIL + 1))
+        return 1
+    else
+        echo "  ✓ $name"
+        PASS=$((PASS + 1))
+        return 0
+    fi
+}
+
+# --- 1. comPACT Negative Check ---
+# comPACT must NOT reference scope contracts, scope_id metadata, or scope detection.
+# It is a single-domain workflow that bypasses scope detection entirely.
+echo "1. comPACT scope bypass:"
+check_absent "$COMMANDS_DIR/comPACT.md" \
+    "comPACT has no scope_id metadata" \
+    '"scope_id"'
+check_absent "$COMMANDS_DIR/comPACT.md" \
+    "comPACT has no scope contract reference" \
+    'scope contract'
+echo ""
+
+# --- 2. Cross-Reference: Scope Contract → Task Hierarchy ---
+# The scope contract protocol must reference scope_id which is the key linking
+# contracts to the task hierarchy naming/metadata conventions.
+echo "2. Cross-references (scope contract ↔ task hierarchy):"
+check_pattern "$PROTOCOLS_DIR/pact-scope-contract.md" \
+    "Scope contract defines scope_id field" \
+    "scope_id"
+# Task hierarchy SSOT must reference scope_id in its scope-aware section
+task_hierarchy_section=$(sed -n '/^## Task Hierarchy/,/^## /p' "$SSOT" | sed '$d')
+if echo "$task_hierarchy_section" | grep -q "scope_id"; then
+    echo "  ✓ Task hierarchy SSOT references scope_id"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ Task hierarchy SSOT does not reference scope_id"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
+
+# --- 3. Cross-Reference: Scope Detection → Scope Contract ---
+# Detection protocol must reference scope contract generation as the post-detection step.
+echo "3. Cross-references (scope detection → scope contract):"
+check_pattern "$PROTOCOLS_DIR/pact-scope-detection.md" \
+    "Scope detection references contract generation" \
+    "Scope Contract"
+check_pattern "$PROTOCOLS_DIR/pact-scope-contract.md" \
+    "Scope contract references detection in lifecycle" \
+    "Detection"
+echo ""
+
+# --- 4. Flow Ordering: Detection → Contract → rePACT → Consolidate ---
+# Verify the expected flow ordering is documented in the scope contract lifecycle.
+echo "4. Flow ordering (detection → contract → rePACT → consolidate):"
+contract_lifecycle=$(sed -n '/^## Scope Contract/,/^## /p' "$SSOT" | sed '$d')
+# Check that the lifecycle section mentions the expected flow stages in order
+flow_ok=true
+for stage in "Detection" "Contracts generated" "rePACT" "Consolidate phase"; do
+    if ! echo "$contract_lifecycle" | grep -q "$stage"; then
+        echo "  ✗ Flow ordering: '$stage' not found in scope contract lifecycle"
+        FAIL=$((FAIL + 1))
+        flow_ok=false
+    fi
+done
+if [ "$flow_ok" = true ]; then
+    echo "  ✓ Flow ordering: all stages present in scope contract lifecycle"
+    PASS=$((PASS + 1))
+fi
+echo ""
+
+# --- 5. rePACT Scope Contract Reception ---
+# rePACT must document how it receives and operates on scope contracts.
+echo "5. rePACT scope contract reception:"
+check_pattern "$COMMANDS_DIR/rePACT.md" \
+    "rePACT documents scope contract reception" \
+    "scope contract"
+check_pattern "$COMMANDS_DIR/rePACT.md" \
+    "rePACT references contract fulfillment in handoff" \
+    "Contract Fulfillment"
+echo ""
+
+# --- 6. Scope Naming Consistency ---
+# The naming convention [scope:{scope_id}] must appear in both SSOT task hierarchy
+# and rePACT command file to ensure consistency.
+echo "6. Scope naming consistency:"
+if echo "$task_hierarchy_section" | grep -q '\[scope:'; then
+    echo "  ✓ SSOT task hierarchy uses [scope:] naming prefix"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ SSOT task hierarchy missing [scope:] naming prefix"
+    FAIL=$((FAIL + 1))
+fi
+check_pattern "$COMMANDS_DIR/rePACT.md" \
+    "rePACT uses [scope:] naming prefix" \
+    '\[scope:'
+echo ""
+
+# --- 7. ATOMIZE and CONSOLIDATE phases in orchestrate.md ---
+# orchestrate.md must document both scoped phases (or reference them via extract).
+# Phase sections exist with either full content or summary + protocol reference.
+echo "7. ATOMIZE and CONSOLIDATE phases in orchestrate.md:"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "ATOMIZE phase section exists" \
+    "ATOMIZE Phase (Scoped Orchestration Only)"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "CONSOLIDATE phase section exists" \
+    "CONSOLIDATE Phase (Scoped Orchestration Only)"
+# Check that orchestrate.md references the extracted protocol OR contains full content
+# (summaries reference the protocol, so check for that)
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "ATOMIZE references protocol or contains dispatch logic" \
+    "pact-scope-phases.md\|Invoke.*rePACT"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "CONSOLIDATE references protocol or contains delegation" \
+    "pact-scope-phases.md\|pact-architect.*contract"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "Consolidation failure routes through imPACT" \
+    "imPACT"
+echo ""
+
+# --- 7b. Full ATOMIZE/CONSOLIDATE content in pact-scope-phases.md ---
+# The extracted protocol must contain the full phase details.
+echo "7b. Full ATOMIZE/CONSOLIDATE content in pact-scope-phases.md:"
+check_pattern "$PROTOCOLS_DIR/pact-scope-phases.md" \
+    "ATOMIZE phase has dispatch logic" \
+    "Invoke.*rePACT"
+check_pattern "$PROTOCOLS_DIR/pact-scope-phases.md" \
+    "CONSOLIDATE delegates to architect" \
+    "pact-architect.*contract"
+check_pattern "$PROTOCOLS_DIR/pact-scope-phases.md" \
+    "CONSOLIDATE delegates to test engineer" \
+    "pact-test-engineer.*cross-scope"
+check_pattern "$PROTOCOLS_DIR/pact-scope-phases.md" \
+    "Consolidation failure routes through imPACT" \
+    "imPACT"
+echo ""
+
+# --- 8. ATOMIZE behavioral checks ---
+# ATOMIZE phase must dispatch sub-scopes via rePACT.
+echo "8. ATOMIZE behavioral checks:"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "ATOMIZE dispatches via rePACT" \
+    "rePACT"
+echo ""
+
+# --- 9. decomposition_active skip reason ---
+echo "9. decomposition_active skip reason:"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "decomposition_active skip reason documented" \
+    "decomposition_active"
+echo ""
+
+# --- 10. Executor interface bidirectional cross-references ---
+echo "10. Executor interface cross-references:"
+check_pattern "$PROTOCOLS_DIR/pact-scope-contract.md" \
+    "Scope contract references rePACT command" \
+    "rePACT.md"
+check_pattern "$COMMANDS_DIR/rePACT.md" \
+    "rePACT references scope contract protocol" \
+    "pact-scope-contract.md"
+echo ""
+
+# --- 11. Detection bypass within sub-scopes ---
+echo "11. Detection bypass within sub-scopes:"
+check_pattern "$PROTOCOLS_DIR/pact-scope-detection.md" \
+    "Detection bypass within sub-scopes documented" \
+    "does not re-evaluate detection"
+echo ""
+
+# --- 12. Scoped phase task hierarchy ---
+# The task hierarchy in orchestrate.md must include ATOMIZE and CONSOLIDATE phase tasks.
+echo "12. Scoped phase task hierarchy:"
+task_hierarchy_orchestrate=$(sed -n '/^## Task Hierarchy/,/^## /p' "$COMMANDS_DIR/orchestrate.md" | sed '$d')
+if echo "$task_hierarchy_orchestrate" | grep -q "ATOMIZE"; then
+    echo "  ✓ orchestrate.md task hierarchy includes ATOMIZE phase"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ orchestrate.md task hierarchy missing ATOMIZE phase"
+    FAIL=$((FAIL + 1))
+fi
+if echo "$task_hierarchy_orchestrate" | grep -q "CONSOLIDATE"; then
+    echo "  ✓ orchestrate.md task hierarchy includes CONSOLIDATE phase"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ orchestrate.md task hierarchy missing CONSOLIDATE phase"
+    FAIL=$((FAIL + 1))
+fi
+# TEST Phase exists (PACT acronym provides sequencing)
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "TEST Phase exists" \
+    "### TEST Phase"
+echo ""
+
+# --- 13. Nesting Limit Value Assertions ---
+# The canonical nesting limit must be "1 level" (not "2 levels") across all key files.
+# This prevents a coordinated regression that changes the value back in all files.
+echo "13. Nesting limit value assertions:"
+
+# Positive checks: canonical files must contain "1 level" nesting limit
+check_pattern "$COMMANDS_DIR/rePACT.md" \
+    "rePACT has 1-level nesting limit" \
+    "Maximum nesting: 1 level"
+check_pattern "$PROTOCOLS_DIR/pact-s1-autonomy.md" \
+    "S1 autonomy has 1-level nesting limit" \
+    "Nesting limit.*1 level"
+check_pattern "$PROTOCOLS_DIR/pact-protocols.md" \
+    "SSOT S1 extract has 1-level nesting limit" \
+    "Nesting limit.*1 level"
+# Implementation agents must have "Max nesting: 1 level".
+# The excluded agents do not carry a nesting limit, for two different causes:
+#  - pact-qa-engineer, pact-security-engineer, pact-auditor review and observe.
+#    They do not implement code, so the nesting limit does not apply to them.
+#  - pact-orchestrator is the lead persona, not an S1 specialist. It dispatches
+#    a nested cycle; it does not run one, so it carries no nesting limit.
+# Keep this list explicit. A new agent file fails this check until a human
+# rules it an implementation agent or not, which is the intent.
+for agent_file in "$AGENTS_DIR"/*.md; do
+    agent_name=$(basename "$agent_file" .md)
+    case "$agent_name" in
+        pact-qa-engineer|pact-security-engineer|pact-auditor) continue ;;
+        pact-orchestrator) continue ;;
+    esac
+    check_pattern "$agent_file" \
+        "$agent_name has 1-level nesting limit" \
+        "Max nesting: 1 level"
+done
+
+# Negative checks: old 2-level nesting limit must not appear anywhere
+echo ""
+echo "13b. Nesting limit negative checks (old values absent):"
+check_absent "$COMMANDS_DIR/rePACT.md" \
+    "rePACT has no 2-level nesting reference" \
+    "Max nesting: 2"
+check_absent "$PROTOCOLS_DIR/pact-s1-autonomy.md" \
+    "S1 autonomy has no 2-level nesting reference" \
+    "2 levels maximum"
+check_absent "$PROTOCOLS_DIR/pact-protocols.md" \
+    "SSOT has no 2-level nesting reference" \
+    "2 levels maximum"
+echo ""
+
+# --- 14. Worktree integration (Phase E) ---
+# Cross-cutting checks that worktree lifecycle is wired into workflow commands.
+# These complement the dedicated verify-worktree-protocol.sh with scope-integrity
+# perspective checks (structural cross-references, not behavioral verification).
+echo "14. Worktree integration (Phase E):"
+check_pattern "$SKILLS_DIR/worktree-setup/SKILL.md" \
+    "worktree-setup skill exists" \
+    "worktree-setup"
+check_pattern "$SKILLS_DIR/worktree-cleanup/SKILL.md" \
+    "worktree-cleanup skill exists" \
+    "worktree-cleanup"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "orchestrate.md references worktree-setup" \
+    "worktree-setup"
+check_pattern "$COMMANDS_DIR/comPACT.md" \
+    "comPACT.md references worktree-setup" \
+    "worktree-setup"
+check_pattern "$COMMANDS_DIR/peer-review.md" \
+    "peer-review.md delegates post-merge to wrap-up" \
+    "wrap-up"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "orchestrate.md propagates worktree path to agents" \
+    "worktree_path"
+check_pattern "$PROTOCOLS_DIR/pact-scope-phases.md" \
+    "ATOMIZE phase references worktree isolation" \
+    "worktree"
+echo ""
+
+# --- 15. Memory hooks baseline ---
+# Verify that core memory hook files exist and contain expected entry points.
+# These hooks are critical infrastructure; baseline checks catch accidental
+# deletion or function signature changes.
+# Note: memory_enforce.py was removed in the memory architecture redesign
+# (PR #275). Memory saves now happen via HANDOFF curation through the
+# secretary, not via a SubagentStop enforcement hook.
+# Note: memory_prompt.py was also removed in PR #275. Its PACT_AGENTS
+# constant moved to hooks/shared/constants.py.
+echo "15. Memory hooks baseline:"
+check_pattern "$HOOKS_DIR/shared/constants.py" \
+    "constants.py has PACT_AGENTS list" \
+    "PACT_AGENTS"
+check_pattern "$HOOKS_DIR/staleness.py" \
+    "staleness.py has detect_stale_entries function" \
+    "def detect_stale_entries"
+check_pattern "$HOOKS_DIR/staleness.py" \
+    "staleness.py has apply_staleness_markings function" \
+    "def apply_staleness_markings"
+echo ""
+
+# --- 16. Executor interface ---
+# Verify that the executor interface in pact-scope-contract.md documents
+# the Agent Teams mapping and maintains backend-agnostic design.
+echo "16. Executor interface:"
+check_pattern "$PROTOCOLS_DIR/pact-scope-contract.md" \
+    "Scope contract has Agent Teams section" \
+    "Agent Teams"
+check_pattern "$PROTOCOLS_DIR/pact-scope-contract.md" \
+    "Scope contract is backend-agnostic" \
+    "Backend-agnostic"
+echo ""
+
+# --- 17. Agent persistent memory ---
+# All 8 agent definition files must have memory: user in their frontmatter.
+# This was added in D3 to enable cross-project domain expertise accumulation.
+echo "17. Agent persistent memory (memory: user in all agents):"
+for agent_file in "$AGENTS_DIR"/*.md; do
+    agent_name=$(basename "$agent_file" .md)
+    check_pattern "$agent_file" \
+        "$agent_name has memory: user" \
+        "memory: user"
+done
+echo ""
+
+# --- 18. Scope detection heuristics ---
+# Verify that the scope detection protocol contains the expected scoring
+# system: threshold value, point weights, and activation tiers.
+echo "18. Scope detection heuristics:"
+check_pattern "$PROTOCOLS_DIR/pact-scope-detection.md" \
+    "Detection threshold is 3" \
+    "Score >= 3"
+check_pattern "$PROTOCOLS_DIR/pact-scope-detection.md" \
+    "Strong signals worth 2 points" \
+    "Strong (2 pts)"
+check_pattern "$PROTOCOLS_DIR/pact-scope-detection.md" \
+    "Three activation tiers documented" \
+    "Autonomous"
+echo ""
+
+# --- 19. Completeness signals ---
+# Verify that the SSOT completeness section documents 7 incompleteness signals.
+echo "19. Completeness signals:"
+check_pattern "$SSOT" \
+    "SSOT documents 7 incompleteness signals" \
+    "7 incompleteness signals"
+echo ""
+
+# --- 20. Agent Teams documentation (post-D2) ---
+# (TeamCreate and SendMessage checks removed — Future Executor section consolidated in v3.13.0)
+echo ""
+
+# --- 21. plan-mode inline checklist sync ---
+# Verify that plan-mode.md's inline incompleteness checklist has the same number
+# of signal items as pact-completeness.md's Signal Definitions table.
+echo "21. plan-mode inline checklist sync:"
+COMPLETENESS_COUNT=$(grep -c '^| [0-9]' "$PROTOCOLS_DIR/pact-completeness.md" 2>/dev/null || echo 0)
+# The plan-mode checklist lives inside "Build Unified Roadmap" step — count only those lines
+PLANMODE_CHECKLIST_COUNT=$(sed -n '/Check each phase.*incompleteness signals/,/Any signal present/p' "$COMMANDS_DIR/plan-mode.md" | grep -c '^ *- \[ \]' 2>/dev/null || echo 0)
+if [ "$COMPLETENESS_COUNT" -eq "$PLANMODE_CHECKLIST_COUNT" ] && [ "$COMPLETENESS_COUNT" -gt 0 ]; then
+    echo "  ✓ plan-mode checklist ($PLANMODE_CHECKLIST_COUNT items) matches completeness signals ($COMPLETENESS_COUNT signals)"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ plan-mode checklist ($PLANMODE_CHECKLIST_COUNT items) does not match completeness signals ($COMPLETENESS_COUNT signals)"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
+
+# --- 22. AskUserQuestion merge authorization mandate ---
+# Verify that the AskUserQuestion mandate for irreversible actions appears in all
+# key governance files. Catches accidental removal of the merge authorization
+# strengthening introduced in PR #219 (issue #217).
+echo "22. AskUserQuestion merge authorization mandate:"
+# This check named pact-plugin/CLAUDE.md until that file was removed from the
+# repository. The rule did not go away with it: the orchestrator persona now
+# carries the SACROSANCT Non-Negotiables section and the same mandate. No other
+# check in this block covers the persona, so the check moves to it.
+check_pattern "$AGENTS_DIR/pact-orchestrator.md" \
+    "orchestrator persona SACROSANCT table mandates AskUserQuestion" \
+    'Irreversible.*AskUserQuestion'
+check_pattern "$COMMANDS_DIR/peer-review.md" \
+    "peer-review.md merge step uses AskUserQuestion" \
+    'AskUserQuestion.*merge authorization'
+check_pattern "$PROTOCOLS_DIR/pact-s5-policy.md" \
+    "pact-s5-policy.md Merge Authorization requires AskUserQuestion" \
+    'AskUserQuestion.*verified interaction channel'
+check_pattern "$PROTOCOLS_DIR/algedonic.md" \
+    "algedonic.md Message Authenticity references AskUserQuestion" \
+    'AskUserQuestion.*verified interaction channel'
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "orchestrate.md merge step references AskUserQuestion" \
+    'AskUserQuestion.*merge authorization'
+check_pattern "$COMMANDS_DIR/comPACT.md" \
+    "comPACT.md merge decision references AskUserQuestion" \
+    'AskUserQuestion'
+echo ""
+
+# --- 23. 3-layer phase-skip protection ---
+# Verify that the phase-skip tightening concepts are present in orchestrate.md:
+# structured_gate_passed as valid skip reason, variety hard gate thresholds,
+# Variety Hard Gates section, and absence of deprecated skip reasons.
+echo "23. 3-layer phase-skip protection:"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "structured_gate_passed is a valid skip reason" \
+    "structured_gate_passed"
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "Hard gate threshold present" \
+    '≥ 3'
+check_pattern "$COMMANDS_DIR/orchestrate.md" \
+    "Variety Hard Gates section exists" \
+    "Variety Hard Gates"
+check_absent "$COMMANDS_DIR/orchestrate.md" \
+    "No deprecated approved_plan_exists skip reason" \
+    "approved_plan_exists"
+check_absent "$COMMANDS_DIR/orchestrate.md" \
+    "No deprecated requirements_explicit skip reason" \
+    "requirements_explicit"
+check_absent "$COMMANDS_DIR/orchestrate.md" \
+    "No deprecated trivial_change skip reason" \
+    "trivial_change"
+check_absent "$COMMANDS_DIR/orchestrate.md" \
+    "No deprecated existing_docs_cover_scope skip reason" \
+    "existing_docs_cover_scope"
+echo ""
+
+# --- Summary ---
+echo "=== Summary ==="
+echo "Passed: $PASS"
+echo "Failed: $FAIL"
+echo ""
+
+if [ $FAIL -gt 0 ]; then
+    echo "VERIFICATION FAILED"
+    exit 1
+else
+    echo "VERIFICATION PASSED"
+    exit 0
+fi

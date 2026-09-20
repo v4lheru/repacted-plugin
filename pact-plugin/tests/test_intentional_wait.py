@@ -1,0 +1,1435 @@
+"""
+Tests for shared.intentional_wait — validate_wait, wait_stale, canonical_since,
+SELF_COMPLETE_EXEMPT_AGENT_TYPES, _is_exempt_agent_type, is_self_complete_exempt.
+
+Coverage targets:
+- validate_wait: non-dict inputs, missing/empty required keys, malformed since,
+  tz-naive since (must reject), unknown keys (forward-compat), trailing Z vs +00:00,
+  non-UTC offsets.
+- wait_stale: fresh / stale / boundary / missing / malformed / future-dated,
+  custom threshold, non-UTC offset age parity.
+- canonical_since: shape and round-trip through validate_wait + wait_stale.
+- SELF_COMPLETE_EXEMPT_AGENT_TYPES: shape, immutability, expected membership.
+- _is_exempt_agent_type: positive match by team-config agentType lookup,
+  fail-closed on every error path.
+- is_self_complete_exempt: surface 1 (team-config agentType, requires
+  team_name) and surface 2 (signal-task pattern, independent of team_name).
+"""
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+
+# --- helpers ---------------------------------------------------------------
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat(timespec="seconds")
+
+
+def _fresh_wait(**overrides):
+    payload = {
+        "reason": "awaiting_teachback_approved",
+        "expected_resolver": "lead",
+        "since": _iso(datetime.now(timezone.utc)),
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _write_team_config(teams_dir, team_name, members):
+    """Writes a minimal team config with the given members[] list and
+    returns the teams_dir path as a string for passing to
+    _is_exempt_agent_type / is_self_complete_exempt.
+    """
+    team_dir = Path(teams_dir) / team_name
+    team_dir.mkdir(parents=True, exist_ok=True)
+    (team_dir / "config.json").write_text(
+        json.dumps({"team_name": team_name, "members": members}),
+        encoding="utf-8",
+    )
+    return str(teams_dir)
+
+
+@pytest.fixture
+def teams_dir(tmp_path):
+    """Per-test temp teams directory."""
+    d = tmp_path / "teams"
+    d.mkdir()
+    return str(d)
+
+
+# --- validate_wait ---------------------------------------------------------
+
+class TestValidateWait:
+    def test_fresh_payload_accepted(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait()) is True
+
+    def test_none_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(None) is False
+
+    def test_non_dict_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait([]) is False
+        assert validate_wait("string") is False
+        assert validate_wait(42) is False
+
+    def test_missing_reason_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        payload = _fresh_wait()
+        del payload["reason"]
+        assert validate_wait(payload) is False
+
+    def test_empty_reason_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(reason="")) is False
+        assert validate_wait(_fresh_wait(reason="   ")) is False
+
+    def test_non_string_reason_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(reason=42)) is False
+
+    def test_missing_resolver_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        payload = _fresh_wait()
+        del payload["expected_resolver"]
+        assert validate_wait(payload) is False
+
+    def test_empty_resolver_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(expected_resolver="")) is False
+
+    def test_custom_resolver_accepted(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(expected_resolver="custom-orchestrator")) is True
+
+    def test_missing_since_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        payload = _fresh_wait()
+        del payload["since"]
+        assert validate_wait(payload) is False
+
+    def test_non_string_since_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(since=1234567890)) is False
+
+    def test_unparseable_since_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(since="yesterday")) is False
+        assert validate_wait(_fresh_wait(since="2026-13-99")) is False
+
+    def test_tz_naive_since_rejected(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(since="2026-04-21T15:30:00")) is False
+
+    def test_trailing_z_accepted(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(since="2026-04-21T15:30:00Z")) is True
+
+    def test_plus_00_accepted(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(since="2026-04-21T15:30:00+00:00")) is True
+
+    def test_non_utc_offset_accepted(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(since="2026-04-21T15:30:00-04:00")) is True
+
+    def test_unknown_keys_preserved(self):
+        from shared.intentional_wait import validate_wait
+
+        assert validate_wait(_fresh_wait(correlation_id="abc", peer_name="architect")) is True
+
+
+# --- wait_stale ------------------------------------------------------------
+
+class TestWaitStale:
+    def test_fresh_is_not_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        assert wait_stale(_fresh_wait()) is False
+
+    def test_none_is_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        assert wait_stale(None) is True
+
+    def test_malformed_is_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        assert wait_stale({"reason": "x"}) is True
+        assert wait_stale({"foo": "bar"}) is True
+
+    def test_unparseable_since_is_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        assert wait_stale(_fresh_wait(since="not a date")) is True
+
+    def test_tz_naive_since_is_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        assert wait_stale(_fresh_wait(since="2026-04-21T15:30:00")) is True
+
+    def test_over_threshold_is_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        now = datetime(2026, 4, 21, 16, 0, 0, tzinfo=timezone.utc)
+        since = now - timedelta(minutes=31)
+        payload = _fresh_wait(since=_iso(since))
+        assert wait_stale(payload, _now=now) is True
+
+    def test_under_threshold_is_not_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        now = datetime(2026, 4, 21, 16, 0, 0, tzinfo=timezone.utc)
+        since = now - timedelta(minutes=29)
+        payload = _fresh_wait(since=_iso(since))
+        assert wait_stale(payload, _now=now) is False
+
+    def test_boundary_exactly_at_threshold_is_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        # >= comparison — exactly-threshold is stale
+        now = datetime(2026, 4, 21, 16, 0, 0, tzinfo=timezone.utc)
+        since = now - timedelta(minutes=30)
+        payload = _fresh_wait(since=_iso(since))
+        assert wait_stale(payload, _now=now) is True
+
+    def test_future_since_is_not_stale(self):
+        from shared.intentional_wait import wait_stale
+
+        # Clock drift / tampering: future-dated since → negative age → not stale
+        now = datetime(2026, 4, 21, 16, 0, 0, tzinfo=timezone.utc)
+        since = now + timedelta(hours=2)
+        payload = _fresh_wait(since=_iso(since))
+        assert wait_stale(payload, _now=now) is False
+
+    def test_custom_threshold_override(self):
+        from shared.intentional_wait import wait_stale
+
+        now = datetime(2026, 4, 21, 16, 0, 0, tzinfo=timezone.utc)
+        since = now - timedelta(minutes=10)
+        payload = _fresh_wait(since=_iso(since))
+        # 10 min elapsed; threshold=5 → stale; threshold=15 → fresh
+        assert wait_stale(payload, threshold_minutes=5, _now=now) is True
+        assert wait_stale(payload, threshold_minutes=15, _now=now) is False
+
+    def test_non_utc_offset_age_parity(self):
+        from shared.intentional_wait import wait_stale
+
+        now = datetime(2026, 4, 21, 16, 0, 0, tzinfo=timezone.utc)
+        # 15 min ago in UTC, expressed as -04:00 offset wall-clock
+        utc_since = now - timedelta(minutes=15)
+        offset_str = utc_since.astimezone(timezone(timedelta(hours=-4))).isoformat(timespec="seconds")
+        payload = _fresh_wait(since=offset_str)
+        # 15 min < 30 min default → not stale; age computation must normalize tz
+        assert wait_stale(payload, _now=now) is False
+
+
+# --- canonical_since -------------------------------------------------------
+
+class TestCanonicalSince:
+    def test_returns_string(self):
+        from shared.intentional_wait import canonical_since
+
+        assert isinstance(canonical_since(), str)
+
+    def test_is_tz_aware_iso(self):
+        from shared.intentional_wait import canonical_since
+
+        value = canonical_since()
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        assert parsed.tzinfo is not None
+
+    def test_seconds_precision_no_microseconds(self):
+        from shared.intentional_wait import canonical_since
+
+        value = canonical_since()
+        assert "." not in value  # timespec="seconds" drops microseconds
+
+    def test_round_trips_through_validate_wait(self):
+        from shared.intentional_wait import canonical_since, validate_wait
+
+        payload = {
+            "reason": "awaiting_teachback_approved",
+            "expected_resolver": "lead",
+            "since": canonical_since(),
+        }
+        assert validate_wait(payload) is True
+
+    def test_round_trips_through_wait_stale_as_fresh(self):
+        """First-tick defense: auto-set payload must NOT be stale at emission."""
+        from shared.intentional_wait import canonical_since, wait_stale
+
+        payload = {
+            "reason": "awaiting_teachback_approved",
+            "expected_resolver": "lead",
+            "since": canonical_since(),
+        }
+        assert wait_stale(payload) is False
+
+
+# --- module constants ------------------------------------------------------
+
+class TestModuleConstants:
+    def test_default_threshold_is_30(self):
+        from shared.intentional_wait import DEFAULT_THRESHOLD_MINUTES
+
+        assert DEFAULT_THRESHOLD_MINUTES == 30
+
+    def test_known_reasons_is_frozenset(self):
+        from shared.intentional_wait import KNOWN_REASONS
+
+        assert isinstance(KNOWN_REASONS, frozenset)
+        assert "awaiting_teachback_approved" in KNOWN_REASONS
+
+    def test_known_resolvers_is_frozenset(self):
+        from shared.intentional_wait import KNOWN_RESOLVERS
+
+        assert isinstance(KNOWN_RESOLVERS, frozenset)
+        assert {"lead", "peer", "user", "external"} <= KNOWN_RESOLVERS
+
+    def test_reexports_from_shared_package(self):
+        # Top-level re-export: only the staleness predicate is on the
+        # shared package's public API. Vocabulary + format helpers stay
+        # module-only to keep the shared package namespace small.
+        from shared import wait_stale  # noqa: F401
+        from shared.intentional_wait import DEFAULT_THRESHOLD_MINUTES
+        from shared.intentional_wait import (  # noqa: F401  # re-export probe: import IS the test — names must stay importable module-only
+            canonical_since,
+            validate_wait,
+            KNOWN_REASONS,
+            KNOWN_RESOLVERS,
+        )
+        assert DEFAULT_THRESHOLD_MINUTES == 30
+
+
+# --- prose-vs-code drift pin ----------------------------------------------
+
+class TestSkillMdProseSnippetConformance:
+    """Drift-pin: the SKILL.md prose snippet for `since` must stay in lockstep
+    with code semantics. If prose says "use datetime.now(timezone.utc).isoformat(
+    timespec='seconds')" but validate_wait later rejects that output (or
+    wait_stale classifies it stale), teammates will follow the prose and hit
+    silent nag-resume. Execute the prose snippet verbatim and assert.
+    """
+
+    def test_prose_snippet_output_is_fresh_and_valid(self):
+        from shared.intentional_wait import validate_wait, wait_stale
+
+        # Verbatim the SKILL.md "Intentional Waiting" prose snippet:
+        since_value = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        payload = {
+            "reason": "awaiting_teachback_approved",
+            "expected_resolver": "lead",
+            "since": since_value,
+        }
+        assert validate_wait(payload) is True
+        assert wait_stale(payload) is False
+
+
+# --- self-complete exemption -----------------------------------------------
+
+class TestKnownReasonsCompletionAddition:
+    def test_awaiting_lead_completion_in_known_reasons(self):
+        from shared.intentional_wait import KNOWN_REASONS
+
+        assert "awaiting_lead_completion" in KNOWN_REASONS
+
+    def test_awaiting_lead_completion_passes_validate_wait(self):
+        from shared.intentional_wait import validate_wait
+
+        payload = _fresh_wait(reason="awaiting_lead_completion")
+        assert validate_wait(payload) is True
+
+
+class TestSelfCompleteExemptAgentTypesConstant:
+    def test_is_frozenset(self):
+        from shared.intentional_wait import SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+        assert isinstance(SELF_COMPLETE_EXEMPT_AGENT_TYPES, frozenset)
+
+    def test_contains_pact_secretary(self):
+        from shared.intentional_wait import SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+        # Single canonical agentType — `secretary` was a name-alias and is
+        # no longer canonical; the carve-out keys on team-config agentType.
+        assert "pact-secretary" in SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+    def test_does_not_contain_auditor(self):
+        # Auditor exemption is signal-task pattern, NOT agentType.
+        from shared.intentional_wait import SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+        assert "auditor" not in SELF_COMPLETE_EXEMPT_AGENT_TYPES
+        assert "pact-auditor" not in SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+
+class TestIsExemptAgentType:
+    """Direct unit tests on _is_exempt_agent_type — the shared helper that
+    backs is_self_complete_exempt.
+    """
+
+    def test_owner_with_pact_secretary_agenttype_is_exempt(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        assert _is_exempt_agent_type("session-secretary", "test-team", teams_dir) is True
+
+    def test_owner_with_arbitrary_spawn_name_is_exempt(self, teams_dir):
+        # Spawn-name freedom: any name reaches the carve-out as long as
+        # the team config records its agentType. This is the central
+        # behavioral change of #682.
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "secretary-from-mars", "agentType": "pact-secretary"},
+        ])
+        assert _is_exempt_agent_type("secretary-from-mars", "test-team", teams_dir) is True
+
+    def test_owner_with_non_secretary_agenttype_not_exempt(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "backend-coder-1", "agentType": "pact-backend-coder"},
+        ])
+        assert _is_exempt_agent_type("backend-coder-1", "test-team", teams_dir) is False
+
+    def test_owner_not_in_team_config_not_exempt(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        # Different owner — no member match, fail-closed.
+        assert _is_exempt_agent_type("ghost-agent", "test-team", teams_dir) is False
+
+    def test_empty_team_name_returns_false(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        # Fail-closed when team_name is empty — surface 1 cannot resolve.
+        assert _is_exempt_agent_type("session-secretary", "", teams_dir) is False
+
+    def test_empty_owner_returns_false(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        assert _is_exempt_agent_type("", "test-team", teams_dir) is False
+
+    def test_non_string_owner_returns_false(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        for bad in (None, 42, [], {}, True):
+            assert _is_exempt_agent_type(bad, "test-team", teams_dir) is False  # type: ignore[arg-type]
+
+    def test_non_string_team_name_returns_false(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        for bad in (None, 42, [], {}, True):
+            assert _is_exempt_agent_type("session-secretary", bad, teams_dir) is False  # type: ignore[arg-type]
+
+    def test_missing_team_config_fails_closed(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        # No config written — _iter_members returns []; no match; fail-closed.
+        assert _is_exempt_agent_type("session-secretary", "ghost-team", teams_dir) is False
+
+    def test_malformed_team_config_fails_closed(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        team_dir = Path(teams_dir) / "bad-team"
+        team_dir.mkdir(parents=True)
+        (team_dir / "config.json").write_text("not valid json {{{", encoding="utf-8")
+        assert _is_exempt_agent_type("session-secretary", "bad-team", teams_dir) is False
+
+    def test_missing_agenttype_field_fails_closed(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        # Member entry without agentType key — fail-closed.
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary"},
+        ])
+        assert _is_exempt_agent_type("session-secretary", "test-team", teams_dir) is False
+
+    def test_empty_agenttype_value_fails_closed(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        # agentType="" is not in SELF_COMPLETE_EXEMPT_AGENT_TYPES → False.
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": ""},
+        ])
+        assert _is_exempt_agent_type("session-secretary", "test-team", teams_dir) is False
+
+    def test_non_string_agenttype_fails_closed(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": 42},
+        ])
+        assert _is_exempt_agent_type("session-secretary", "test-team", teams_dir) is False
+
+
+class TestIsSelfCompleteExempt:
+    def test_owner_with_pact_secretary_agenttype_is_exempt(self, teams_dir):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        task = {"owner": "session-secretary", "metadata": {}}
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is True
+
+    def test_secretary_spawn_name_freedom(self, teams_dir):
+        # The behavioral change of #682: spawn name no longer determines
+        # exemption — agentType in team config does.
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "team-secretary", "agentType": "pact-secretary"},
+        ])
+        task = {"owner": "team-secretary", "metadata": {}}
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is True
+
+    def test_backend_coder_is_not_exempt(self, teams_dir):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "backend-coder-1", "agentType": "pact-backend-coder"},
+        ])
+        task = {"owner": "backend-coder-1", "metadata": {}}
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is False
+
+    def test_owner_named_secretary_without_agenttype_not_exempt(self, teams_dir):
+        # Critical behavioral change: a teammate spoofing owner="secretary"
+        # cannot self-promote without the team config recording the
+        # privileged agentType. Fail-closed on missing-from-config.
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "backend-coder-1", "agentType": "pact-backend-coder"},
+        ])
+        task = {"owner": "secretary", "metadata": {}}
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is False
+
+    def test_missing_team_name_falls_through_surface_1(self, teams_dir):
+        # team_name="" short-circuits surface 1 to False (fail-closed),
+        # but surface 2 (signal-task) still evaluates.
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        task = {"owner": "session-secretary", "metadata": {}}
+        assert is_self_complete_exempt(task) is False  # team_name="" default
+        # Surface 2 still works without team_name.
+        sig = {"owner": "anyone", "metadata": {"completion_type": "signal", "type": "blocker"}}
+        assert is_self_complete_exempt(sig) is True
+
+    def test_signal_task_blocker_is_exempt(self):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        task = {
+            "owner": "auditor-1",
+            "metadata": {"completion_type": "signal", "type": "blocker"},
+        }
+        assert is_self_complete_exempt(task) is True
+
+    def test_signal_task_algedonic_is_exempt(self):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        task = {
+            "owner": "any-agent",
+            "metadata": {"completion_type": "signal", "type": "algedonic"},
+        }
+        assert is_self_complete_exempt(task) is True
+
+    def test_signal_task_other_type_is_not_exempt(self):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        task = {
+            "owner": "any-agent",
+            "metadata": {"completion_type": "signal", "type": "progress"},
+        }
+        assert is_self_complete_exempt(task) is False
+
+    def test_completion_type_without_signal_marker_not_exempt(self):
+        # type=blocker alone (without completion_type=signal) is NOT a signal-task.
+        from shared.intentional_wait import is_self_complete_exempt
+
+        task = {"owner": "any-agent", "metadata": {"type": "blocker"}}
+        assert is_self_complete_exempt(task) is False
+
+    def test_malformed_input_no_raise_returns_false(self):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        assert is_self_complete_exempt(None) is False
+        assert is_self_complete_exempt("not a dict") is False
+        assert is_self_complete_exempt([]) is False
+        assert is_self_complete_exempt({}) is False
+        assert is_self_complete_exempt({"metadata": "not a dict"}) is False
+        assert is_self_complete_exempt({"owner": 42, "metadata": {}}) is False
+
+
+class TestIsSelfCompleteExemptMalformedTaskShapes:
+    """Edge cases for malformed task dicts — defensive defaults must hold."""
+
+    def test_no_metadata_key_returns_false(self):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        # `metadata` key absent entirely. owner is non-exempt.
+        assert is_self_complete_exempt({"owner": "backend-coder"}) is False
+
+    def test_metadata_explicit_none_returns_false(self):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        # metadata=None coalesces to {} via `metadata = task.get("metadata") or {}`.
+        # Owner is non-exempt → returns False.
+        assert is_self_complete_exempt({"owner": "backend-coder", "metadata": None}) is False
+
+    def test_metadata_none_with_exempt_agenttype_still_exempt(self, teams_dir):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        # Surface 1 (team-config agentType) still triggers even with
+        # metadata=None — the predicate guards against non-dict metadata
+        # before the agentType lookup.
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        task = {"owner": "session-secretary", "metadata": None}
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is True
+
+    def test_self_completion_with_corrupted_metadata_for_secretary(self, teams_dir):
+        """Pin is_self_complete_exempt's metadata-shape-gate behavior for a
+        secretary task with corrupted (non-dict-truthy) metadata.
+
+        `is_self_complete_exempt` (intentional_wait.py) runs the
+        metadata-shape gate FIRST: a secretary task with `metadata="garbage"`
+        returns False (NOT exempt → the self_completion advisory will fire).
+        This is a false-positive (the advisory is noisy for a secretary
+        task), but it leans CONSERVATIVE — noisy, not unsafe — and the
+        advisory is non-blocking.
+
+        Operationally: a secretary task with corrupted metadata is rare
+        (metadata is harness-written; corruption requires explicit teammate
+        action or disk corruption).
+
+        This test PINS the current behavior so a future predicate refactor
+        (e.g., hoisting the agentType carve-out ABOVE the metadata-shape
+        gate) cannot silently change it without updating this test alongside
+        the refactor. If the hoist is later changed, update this test's
+        expected result from False to True and add a cross-reference to the
+        alignment commit.
+        """
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        # Non-dict-truthy metadata: bypasses the `metadata = ... or {}`
+        # coalescion (because "garbage" is truthy) but fails the
+        # subsequent isinstance(metadata, dict) gate. The agentType
+        # lookup is never reached.
+        task = {"owner": "session-secretary", "metadata": "garbage"}
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is False, (
+            "Pinned current behavior: is_self_complete_exempt returns False "
+            "(NOT exempt) for a secretary task with non-dict-truthy "
+            "metadata, because the metadata-shape gate fires before the "
+            "agentType lookup. If a future refactor hoists the agentType "
+            "carve-out ABOVE the metadata-shape gate, update this test's "
+            "expected result and add a cross-reference to the alignment "
+            "commit."
+        )
+
+    def test_owner_none_returns_false(self):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        # owner=None is not a string → isinstance check fails → no exemption.
+        assert is_self_complete_exempt({"owner": None, "metadata": {}}) is False
+
+    def test_owner_empty_string_returns_false(self, teams_dir):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        # Empty string fails the owner-shape check inside _is_exempt_agent_type.
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        task = {"owner": "", "metadata": {}}
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is False
+
+
+class TestIsSelfCompleteExemptDualCarveOutIndependence:
+    """Both exemption surfaces must work independently AND together.
+
+    Surface 1: SELF_COMPLETE_EXEMPT_AGENT_TYPES membership via team-config
+               agentType lookup (requires team_name).
+    Surface 2: signal-task pattern (completion_type=signal + type in
+               {blocker, algedonic}). Independent of team_name.
+
+    Reverting EITHER surface in production must surface as independent test failures.
+    """
+
+    def test_only_signal_task_path_no_exempt_agenttype(self, teams_dir):
+        # Auditor signal-task: agentType NOT exempt, but signal pattern exempts.
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "pact-auditor", "agentType": "pact-auditor"},
+        ])
+        task = {
+            "owner": "pact-auditor",
+            "metadata": {"completion_type": "signal", "type": "algedonic"},
+        }
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is True
+
+    def test_only_exempt_agenttype_path_no_signal_task(self, teams_dir):
+        # Secretary memory-save: agentType in exempt set, no signal-task metadata.
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        task = {"owner": "session-secretary", "metadata": {"completion_type": "regular"}}
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is True
+
+    def test_both_paths_match_still_exempt(self, teams_dir):
+        # Defense-in-depth: secretary on a signal-task is exempt via either surface.
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        task = {
+            "owner": "session-secretary",
+            "metadata": {"completion_type": "signal", "type": "blocker"},
+        }
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is True
+
+    def test_neither_path_matches_not_exempt(self, teams_dir):
+        # Backend-coder doing regular work is NOT exempt via either surface.
+        from shared.intentional_wait import is_self_complete_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "backend-coder-1", "agentType": "pact-backend-coder"},
+        ])
+        task = {
+            "owner": "backend-coder-1",
+            "metadata": {"completion_type": "regular", "type": "feature"},
+        }
+        assert is_self_complete_exempt(task, "test-team", teams_dir) is False
+
+
+class TestSelfCompleteExemptAgentTypesImmutability:
+    """frozenset chosen specifically to prevent accidental mutation; pin that."""
+
+    def test_add_raises_attribute_error(self):
+        from shared.intentional_wait import SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+        with pytest.raises(AttributeError):
+            SELF_COMPLETE_EXEMPT_AGENT_TYPES.add("new-agent-type")
+
+    def test_remove_raises_attribute_error(self):
+        from shared.intentional_wait import SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+        with pytest.raises(AttributeError):
+            SELF_COMPLETE_EXEMPT_AGENT_TYPES.remove("pact-secretary")
+
+    def test_clear_raises_attribute_error(self):
+        from shared.intentional_wait import SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+        with pytest.raises(AttributeError):
+            SELF_COMPLETE_EXEMPT_AGENT_TYPES.clear()
+
+    def test_known_reasons_immutable(self):
+        # KNOWN_REASONS must also be frozen — same accidental-mutation concern.
+        from shared.intentional_wait import KNOWN_REASONS
+
+        with pytest.raises(AttributeError):
+            KNOWN_REASONS.add("awaiting_something_new")
+
+
+class TestTeachbackExemptAgentTypesConstant:
+    """Second agentType-keyed carve-out frozenset, parallel structure to
+    SELF_COMPLETE_EXEMPT_AGENT_TYPES. Membership:
+    {pact-secretary}. Surface: teachback-gated dispatch (Task A skipped).
+    """
+
+    def test_is_frozenset(self):
+        from shared.intentional_wait import TEACHBACK_EXEMPT_AGENT_TYPES
+
+        assert isinstance(TEACHBACK_EXEMPT_AGENT_TYPES, frozenset)
+
+    def test_contains_pact_secretary(self):
+        from shared.intentional_wait import TEACHBACK_EXEMPT_AGENT_TYPES
+
+        assert "pact-secretary" in TEACHBACK_EXEMPT_AGENT_TYPES
+
+    @pytest.mark.parametrize("agent_type", [
+        "pact-architect",
+        "pact-auditor",
+        "pact-backend-coder",
+        "pact-frontend-coder",
+        "pact-test-engineer",
+        "pact-security-engineer",
+        "pact-database-engineer",
+        "pact-preparer",
+        "pact-orchestrator",
+        "pact-devops-engineer",
+        "pact-n8n",
+        "pact-qa-engineer",
+    ])
+    def test_excludes_other_agent_types(self, agent_type):
+        """Exclusivity invariant pinned over the full canonical PACT roster
+        (everyone except pact-secretary). A future agentType addition that
+        accidentally widens the exempt set surfaces as a parametrize-row
+        failure, not silent privilege drift.
+        """
+        from shared.intentional_wait import TEACHBACK_EXEMPT_AGENT_TYPES
+
+        assert agent_type not in TEACHBACK_EXEMPT_AGENT_TYPES
+
+
+class TestTeachbackExemptAgentTypesImmutability:
+    """frozenset chosen specifically to prevent accidental mutation; pin that."""
+
+    def test_add_raises_attribute_error(self):
+        from shared.intentional_wait import TEACHBACK_EXEMPT_AGENT_TYPES
+
+        with pytest.raises(AttributeError):
+            TEACHBACK_EXEMPT_AGENT_TYPES.add("new-agent-type")
+
+    def test_remove_raises_attribute_error(self):
+        from shared.intentional_wait import TEACHBACK_EXEMPT_AGENT_TYPES
+
+        with pytest.raises(AttributeError):
+            TEACHBACK_EXEMPT_AGENT_TYPES.remove("pact-secretary")
+
+    def test_clear_raises_attribute_error(self):
+        from shared.intentional_wait import TEACHBACK_EXEMPT_AGENT_TYPES
+
+        with pytest.raises(AttributeError):
+            TEACHBACK_EXEMPT_AGENT_TYPES.clear()
+
+
+class TestTwoFrozensetsAreSeparateObjects:
+    """Phantom-green guard: the module docstring forbids aliasing the two
+    agentType-keyed carve-out frozensets (`SELF_COMPLETE_EXEMPT_AGENT_TYPES`,
+    `TEACHBACK_EXEMPT_AGENT_TYPES`) because each governs an independent
+    operational surface (self-completion, dispatch). Same-contents aliasing
+    — e.g. `TEACHBACK_EXEMPT_AGENT_TYPES = SELF_COMPLETE_EXEMPT_AGENT_TYPES`
+    — is a silent-recouple defect: membership and immutability tests stay
+    GREEN because the alias preserves contents; the docstring prohibition
+    has no CI teeth. This test pins the two as separate objects via `is not`
+    identity checks so a future aliasing refactor fails loudly.
+
+    When divergence lands (one frozenset gains a member the other doesn't),
+    contents-based tests will catch it. But during the equal-contents
+    window — which is the current state — only identity checks discriminate.
+    """
+
+    def test_two_frozensets_are_separate_objects(self):
+        from shared.intentional_wait import (
+            SELF_COMPLETE_EXEMPT_AGENT_TYPES,
+            TEACHBACK_EXEMPT_AGENT_TYPES,
+        )
+
+        assert TEACHBACK_EXEMPT_AGENT_TYPES is not SELF_COMPLETE_EXEMPT_AGENT_TYPES
+
+
+class TestIsTeachbackExempt:
+    """Direct unit tests on is_teachback_exempt — the public predicate that
+    backs task_lifecycle_gate.work_addblockedby_missing carve-out. Parallel
+    structure to TestIsExemptAgentType; fail-closed on every error path.
+    """
+
+    def test_secretary_owner_is_exempt(self, teams_dir):
+        from shared.intentional_wait import is_teachback_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "secretary", "agentType": "pact-secretary"},
+        ])
+        assert is_teachback_exempt("secretary", "test-team", teams_dir) is True
+
+    def test_non_canonical_spawn_name_with_secretary_agenttype_is_exempt(self, teams_dir):
+        """Resolution via team-config agentType, NOT spawn name."""
+        from shared.intentional_wait import is_teachback_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        assert is_teachback_exempt("session-secretary", "test-team", teams_dir) is True
+
+    def test_non_secretary_agenttype_not_exempt(self, teams_dir):
+        from shared.intentional_wait import is_teachback_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "coder", "agentType": "pact-backend-coder"},
+        ])
+        assert is_teachback_exempt("coder", "test-team", teams_dir) is False
+
+    def test_empty_owner_fails_closed(self, teams_dir):
+        from shared.intentional_wait import is_teachback_exempt
+
+        assert is_teachback_exempt("", "test-team", teams_dir) is False
+
+    def test_empty_team_name_fails_closed(self, teams_dir):
+        from shared.intentional_wait import is_teachback_exempt
+
+        assert is_teachback_exempt("secretary", "", teams_dir) is False
+
+    def test_missing_team_config_fails_closed(self, teams_dir):
+        from shared.intentional_wait import is_teachback_exempt
+
+        # No config written — _iter_members returns []; no match; fail-closed.
+        assert is_teachback_exempt("secretary", "ghost-team", teams_dir) is False
+
+    def test_owner_not_in_members_fails_closed(self, teams_dir):
+        from shared.intentional_wait import is_teachback_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "other", "agentType": "pact-secretary"},
+        ])
+        assert is_teachback_exempt("secretary", "test-team", teams_dir) is False
+
+    def test_empty_agent_type_field_fails_closed(self, teams_dir):
+        from shared.intentional_wait import is_teachback_exempt
+
+        _write_team_config(teams_dir, "test-team", [
+            {"name": "secretary", "agentType": ""},
+        ])
+        assert is_teachback_exempt("secretary", "test-team", teams_dir) is False
+
+    def test_non_string_inputs_fail_closed(self, teams_dir):
+        from shared.intentional_wait import is_teachback_exempt
+
+        assert is_teachback_exempt(None, "test-team", teams_dir) is False  # type: ignore[arg-type]
+        assert is_teachback_exempt("secretary", None, teams_dir) is False  # type: ignore[arg-type]
+        assert is_teachback_exempt(123, "test-team", teams_dir) is False  # type: ignore[arg-type]
+
+
+class TestKnownReasonsLiteralRegressionGuard:
+    """Pin the exact set of known reasons. Any silent removal/rename must fail loudly.
+
+    This is a documentation-in-code test: the contract published to teammates
+    via the pact-agent-teams skill names these strings. Silent renaming would
+    break in-flight teammate metadata writes without surfacing a build error.
+    """
+
+    EXPECTED_REASONS = {
+        "awaiting_teachback_approved",
+        "awaiting_lead_commit",
+        "awaiting_amendment_review",
+        "awaiting_post_handoff_decision",
+        "awaiting_peer_response",
+        "awaiting_user_decision",
+        "awaiting_blocker_resolution",
+        "awaiting_lead_completion",
+        "awaiting_lead_takeover",
+    }
+
+    def test_exact_set(self):
+        from shared.intentional_wait import KNOWN_REASONS
+
+        assert set(KNOWN_REASONS) == self.EXPECTED_REASONS
+
+    @pytest.mark.parametrize("reason", sorted(EXPECTED_REASONS))
+    def test_each_reason_validates(self, reason):
+        from shared.intentional_wait import validate_wait
+
+        payload = _fresh_wait(reason=reason)
+        assert validate_wait(payload) is True
+
+    def test_awaiting_lead_completion_is_present(self):
+        # Specifically pin the new addition — guards against revert.
+        from shared.intentional_wait import KNOWN_REASONS
+
+        assert "awaiting_lead_completion" in KNOWN_REASONS
+
+
+class TestIsExemptAgentTypeDefaultTeamsDir:
+    """teams_dir=None default-path coverage: when the override is omitted,
+    `_iter_members` must resolve via Path.home()/.claude/teams/. The 12-case
+    TestIsExemptAgentType class above passes teams_dir explicitly; this
+    class exercises the production default path so a future regression that
+    bypasses `_iter_members` (e.g. inlines its own path) fails loudly.
+    """
+
+    def test_default_teams_dir_resolves_via_path_home(self, tmp_path, monkeypatch):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team_dir = tmp_path / ".claude" / "teams" / "default-path-team"
+        team_dir.mkdir(parents=True)
+        (team_dir / "config.json").write_text(
+            json.dumps({"team_name": "default-path-team", "members": [
+                {"name": "session-secretary", "agentType": "pact-secretary"},
+            ]}),
+            encoding="utf-8",
+        )
+        # teams_dir omitted → exercises _iter_members default branch.
+        assert _is_exempt_agent_type(
+            "session-secretary", "default-path-team"
+        ) is True
+
+    def test_default_teams_dir_missing_config_fails_closed(
+        self, tmp_path, monkeypatch
+    ):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        # Path.home() points to tmp_path with no .claude/teams set up.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # Default-path resolution must fail-closed without raising.
+        assert _is_exempt_agent_type(
+            "session-secretary", "ghost-team"
+        ) is False
+
+    def test_is_self_complete_exempt_default_teams_dir(
+        self, tmp_path, monkeypatch
+    ):
+        from shared.intentional_wait import is_self_complete_exempt
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team_dir = tmp_path / ".claude" / "teams" / "default-path-team"
+        team_dir.mkdir(parents=True)
+        (team_dir / "config.json").write_text(
+            json.dumps({"team_name": "default-path-team", "members": [
+                {"name": "session-secretary", "agentType": "pact-secretary"},
+            ]}),
+            encoding="utf-8",
+        )
+        # Both teams_dir omitted; `team_name` provided.
+        task = {"owner": "session-secretary", "metadata": {}}
+        assert is_self_complete_exempt(task, "default-path-team") is True
+
+
+class TestIsTeachbackExemptDefaultTeamsDir:
+    """teams_dir=None default-path coverage for is_teachback_exempt: when
+    the override is omitted, the underlying `_iter_members` must resolve
+    via Path.home()/.claude/teams/. TestIsTeachbackExempt above passes
+    teams_dir explicitly; this class exercises the production default path
+    so a future regression that bypasses `_iter_members` (e.g. inlines its
+    own path) fails loudly.
+
+    Mirror of TestIsExemptAgentTypeDefaultTeamsDir for the self-complete
+    surface — same shape, different predicate.
+    """
+
+    def test_default_teams_dir_resolves_via_path_home(self, tmp_path, monkeypatch):
+        from shared.intentional_wait import is_teachback_exempt
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team_dir = tmp_path / ".claude" / "teams" / "default-path-team"
+        team_dir.mkdir(parents=True)
+        (team_dir / "config.json").write_text(
+            json.dumps({"team_name": "default-path-team", "members": [
+                {"name": "session-secretary", "agentType": "pact-secretary"},
+            ]}),
+            encoding="utf-8",
+        )
+        # teams_dir omitted → exercises _iter_members default branch.
+        assert is_teachback_exempt(
+            "session-secretary", "default-path-team"
+        ) is True
+
+    def test_default_teams_dir_missing_config_fails_closed(
+        self, tmp_path, monkeypatch
+    ):
+        from shared.intentional_wait import is_teachback_exempt
+
+        # Path.home() points to tmp_path with no .claude/teams set up.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # Default-path resolution must fail-closed without raising.
+        assert is_teachback_exempt(
+            "session-secretary", "ghost-team"
+        ) is False
+
+    def test_default_teams_dir_non_exempt_agent_type(
+        self, tmp_path, monkeypatch
+    ):
+        from shared.intentional_wait import is_teachback_exempt
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        team_dir = tmp_path / ".claude" / "teams" / "default-path-team"
+        team_dir.mkdir(parents=True)
+        (team_dir / "config.json").write_text(
+            json.dumps({"team_name": "default-path-team", "members": [
+                {"name": "backend-coder-1", "agentType": "pact-backend-coder"},
+            ]}),
+            encoding="utf-8",
+        )
+        # Default-path resolves member but agentType is non-exempt.
+        assert is_teachback_exempt(
+            "backend-coder-1", "default-path-team"
+        ) is False
+
+
+class TestIsExemptAgentTypeMixedTeamConfig:
+    """Multi-member team config: the predicate must match BY name AND verify
+    THAT member's agentType. A team with both secretary and non-secretary
+    members must not exempt the non-secretary owner just because the team
+    config records an exempt agentType somewhere.
+    """
+
+    def test_only_matching_member_drives_exemption(self, teams_dir):
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "mixed-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+            {"name": "backend-coder-1", "agentType": "pact-backend-coder"},
+            {"name": "test-engineer-1", "agentType": "pact-test-engineer"},
+        ])
+        assert _is_exempt_agent_type(
+            "session-secretary", "mixed-team", teams_dir
+        ) is True
+        assert _is_exempt_agent_type(
+            "backend-coder-1", "mixed-team", teams_dir
+        ) is False
+        assert _is_exempt_agent_type(
+            "test-engineer-1", "mixed-team", teams_dir
+        ) is False
+
+    def test_first_member_match_wins_when_duplicate_names(self, teams_dir):
+        # Pathological config (should never happen in production, but pin
+        # the defensive behavior): if two members share a name, the first
+        # match short-circuits via _iter_members iteration order. Pin
+        # current behavior so a future _iter_members refactor surfaces
+        # any iteration-order change.
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        _write_team_config(teams_dir, "dup-team", [
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+            {"name": "session-secretary", "agentType": "pact-backend-coder"},
+        ])
+        # First match wins — first member has exempt agentType.
+        assert _is_exempt_agent_type(
+            "session-secretary", "dup-team", teams_dir
+        ) is True
+
+    def test_silent_first_wins_symmetric_under_reverse_order(self, teams_dir):
+        """Silent-first-wins adversarial counter-test (TE-M3).
+
+        Sibling of test_first_member_match_wins_when_duplicate_names.
+        That test pins the secretary-first ordering produces True. This
+        test pins the SYMMETRIC case: with the SAME pair of duplicate
+        names but with the non-secretary entry FIRST, the predicate
+        returns False — proving the behavior is genuinely
+        first-match-wins, not "any-match-wins".
+
+        Without this counter-test, an alternative-but-incorrect
+        implementation that returned True if ANY duplicate matched the
+        exempt set would pass the secretary-first test and silently
+        permit non-secretary teammates to self-complete by colliding on
+        a privileged name. The pair of tests together pin the
+        order-sensitivity of `_iter_members` iteration as a
+        load-bearing invariant.
+
+        Pathological config (should never happen in production); this
+        pins defensive behavior so a future _iter_members refactor that
+        normalizes/dedupes member entries (e.g., a `set()` collapse)
+        surfaces as an explicit test failure rather than silent
+        privilege drift.
+        """
+        from shared.intentional_wait import _is_exempt_agent_type
+
+        # Reverse order: non-secretary first, secretary second. Same
+        # name on both. First match wins → predicate returns False
+        # (first member's agentType is NOT in the exempt set).
+        _write_team_config(teams_dir, "dup-team-reversed", [
+            {"name": "session-secretary", "agentType": "pact-backend-coder"},
+            {"name": "session-secretary", "agentType": "pact-secretary"},
+        ])
+        assert _is_exempt_agent_type(
+            "session-secretary", "dup-team-reversed", teams_dir
+        ) is False, (
+            "Reverse-order duplicate-name config should resolve to the "
+            "FIRST member's agentType (pact-backend-coder, NOT exempt). "
+            "If this returns True, the predicate is doing 'any-match-wins' "
+            "rather than 'first-match-wins' — a privilege-drift defect."
+        )
+
+
+class TestDocSurfaceStalenessSweep:
+    """Doc-staleness regression pin (lead-approved per #682 TEST phase).
+
+    The OLD constant name `SELF_COMPLETE_EXEMPT_AGENTS` (sans `_TYPES`
+    suffix) must NOT appear in any agent-facing doc surface
+    (agents/, commands/, protocols/) AS A LIVE INSTRUCTIONAL REFERENCE.
+    Manual sweep via `rg "SELF_COMPLETE_EXEMPT_AGENTS\\b" pact-plugin/`
+    was the architect's risk-mitigation; this test converts it to
+    automated regression coverage.
+
+    Three context exclusions are honored so legitimate deprecation
+    notices and historical references don't false-positive:
+
+    1. Markdown blockquote deprecation marker — a line beginning with
+       `> Deprecated:` (with surrounding whitespace tolerated).
+       Documents intentional historical references like
+       `> Deprecated: see SELF_COMPLETE_EXEMPT_AGENTS in v3.x`.
+    2. HTML comment with `old name:` prefix — anywhere in the line.
+       Allows `<!-- old name: SELF_COMPLETE_EXEMPT_AGENTS -->` style
+       cross-reference annotations.
+    3. Inside fenced code blocks — content between ```...``` fences
+       (any language hint). Snippets quoting old code are documentation,
+       not live instruction.
+
+    Counter-tested by both directions:
+    - `test_genuine_staleness_pattern_caught` — bare-prose mention DOES fire.
+    - `test_deprecation_blockquote_skipped` — `> Deprecated:` line does NOT.
+    - `test_old_name_html_comment_skipped` — `<!-- old name: ... -->` does NOT.
+    - `test_fenced_code_block_skipped` — content inside ```...``` does NOT.
+
+    If a future refactor genuinely needs to rename
+    SELF_COMPLETE_EXEMPT_AGENT_TYPES, update this test alongside the
+    rename.
+    """
+    import re
+
+    OLD_NAME_PATTERN = re.compile(r"\bSELF_COMPLETE_EXEMPT_AGENTS\b")
+    # Preventive guard for the dispatch-exemption frozenset: forbid the
+    # `_TYPES`-less typo variant of TEACHBACK_EXEMPT_AGENT_TYPES. Currently
+    # zero occurrences exist; this pattern catches a future rename-typo
+    # before it lands in agent-facing instruction.
+    TEACHBACK_OLD_NAME_PATTERN = re.compile(r"\bTEACHBACK_EXEMPT_AGENTS\b")
+    # All patterns scanned for staleness — extended via tuple so adding a
+    # third constant-rename guard is a one-line change.
+    ALL_OLD_NAME_PATTERNS = (OLD_NAME_PATTERN, TEACHBACK_OLD_NAME_PATTERN)
+    # `> Deprecated:` blockquote marker, leading whitespace tolerated.
+    DEPRECATION_BLOCKQUOTE_PATTERN = re.compile(r"^\s*>\s*Deprecated:")
+    # `<!-- old name:` HTML comment marker (case-insensitive on `old name`),
+    # may appear anywhere in the line; handles `<!--old name:` (no space) too.
+    OLD_NAME_COMMENT_PATTERN = re.compile(r"<!--\s*old name:", re.IGNORECASE)
+    # Markdown fenced-code-block delimiter — three+ backticks at line start
+    # (after optional whitespace), with optional language hint.
+    FENCE_PATTERN = re.compile(r"^\s*```")
+
+    def _doc_root(self) -> Path:
+        # tests/ → pact-plugin/
+        return Path(__file__).resolve().parent.parent
+
+    def _skipped_line(self, line: str, in_fence: bool) -> bool:
+        """Return True iff this line should be skipped for staleness
+        detection — fenced-code-block content, deprecation blockquote,
+        or HTML `old name:` cross-reference comment.
+        """
+        if in_fence:
+            return True
+        if self.DEPRECATION_BLOCKQUOTE_PATTERN.search(line):
+            return True
+        if self.OLD_NAME_COMMENT_PATTERN.search(line):
+            return True
+        return False
+
+    @pytest.mark.parametrize("subdir", ["agents", "commands", "protocols"])
+    def test_no_old_name_in_doc_surface(self, subdir):
+        root = self._doc_root() / subdir
+        assert root.is_dir(), f"Expected doc directory {root} to exist"
+        violations = []
+        for md_path in root.rglob("*.md"):
+            content = md_path.read_text(encoding="utf-8")
+            in_fence = False
+            for line_no, line in enumerate(content.splitlines(), start=1):
+                # Track fenced-code-block state. A line that IS a fence
+                # delimiter toggles the state; that line itself is treated
+                # as inside-fence (snippets like ```python with the OLD
+                # constant in the same line shouldn't false-positive).
+                if self.FENCE_PATTERN.search(line):
+                    in_fence = not in_fence
+                    continue
+                if self._skipped_line(line, in_fence):
+                    continue
+                for pattern in self.ALL_OLD_NAME_PATTERNS:
+                    if pattern.search(line):
+                        violations.append(
+                            f"{md_path.relative_to(root.parent)}:{line_no}: "
+                            f"[{pattern.pattern}] {line.strip()}"
+                        )
+        assert not violations, (
+            "Stale typo-variant references found in doc surface — must be "
+            "retargeted to the canonical `_AGENT_TYPES`-suffixed name:\n"
+            + "\n".join(violations)
+        )
+
+    # ---- B1 narrowed-regex counter-tests ----
+
+    def _scan_lines(self, lines: list[str]) -> list[int]:
+        """Replicate the production scan logic on an in-memory line list.
+        Returns the 1-indexed line numbers that would be flagged as
+        violations (i.e., live OLD-name references not skipped by a
+        context-exclusion rule).
+        """
+        violations: list[int] = []
+        in_fence = False
+        for line_no, line in enumerate(lines, start=1):
+            if self.FENCE_PATTERN.search(line):
+                in_fence = not in_fence
+                continue
+            if self._skipped_line(line, in_fence):
+                continue
+            if any(p.search(line) for p in self.ALL_OLD_NAME_PATTERNS):
+                violations.append(line_no)
+        return violations
+
+    def test_genuine_staleness_pattern_caught(self):
+        # Bare prose mention of OLD constant in a plain doc line MUST fire.
+        lines = [
+            "## Self-completion carve-out",
+            "",
+            "Owners listed in SELF_COMPLETE_EXEMPT_AGENTS bypass the advisory.",
+        ]
+        assert self._scan_lines(lines) == [3]
+
+    def test_deprecation_blockquote_skipped(self):
+        # `> Deprecated:` blockquote referencing the OLD name is a
+        # legitimate historical pointer — must NOT fire.
+        lines = [
+            "## Self-completion carve-out",
+            "",
+            "> Deprecated: SELF_COMPLETE_EXEMPT_AGENTS (v3.x). See "
+            "SELF_COMPLETE_EXEMPT_AGENT_TYPES below.",
+            "",
+            "Carve-out is keyed on agentType.",
+        ]
+        assert self._scan_lines(lines) == []
+
+    def test_old_name_html_comment_skipped(self):
+        # `<!-- old name: ... -->` HTML cross-reference annotation is
+        # legitimate — must NOT fire.
+        lines = [
+            "## Self-completion carve-out",
+            "",
+            "<!-- old name: SELF_COMPLETE_EXEMPT_AGENTS, retired in #682 -->",
+            "",
+            "Carve-out is keyed on agentType.",
+        ]
+        assert self._scan_lines(lines) == []
+
+    def test_fenced_code_block_skipped(self):
+        # Content inside ```...``` fences quoting old code is
+        # documentation, not live instruction — must NOT fire.
+        lines = [
+            "## Migration",
+            "",
+            "Pre-#682 the carve-out was keyed on owner name:",
+            "",
+            "```python",
+            "if owner in SELF_COMPLETE_EXEMPT_AGENTS:",
+            "    return True",
+            "```",
+            "",
+            "Post-#682 it keys on team-config agentType.",
+        ]
+        assert self._scan_lines(lines) == []
+
+    def test_fence_state_toggles_correctly(self):
+        # Two separate fenced blocks; OLD name only inside the first.
+        # No live mention before/between/after — must NOT fire.
+        lines = [
+            "```",
+            "SELF_COMPLETE_EXEMPT_AGENTS",
+            "```",
+            "Outside.",
+            "```",
+            "another snippet",
+            "```",
+        ]
+        assert self._scan_lines(lines) == []
+
+    def test_live_mention_after_closed_fence_caught(self):
+        # If a fenced block closes and a later line has a bare mention,
+        # the fence-state must be False by then; the mention MUST fire.
+        lines = [
+            "```",
+            "old code",
+            "```",
+            "Live: SELF_COMPLETE_EXEMPT_AGENTS still mentioned in prose.",
+        ]
+        assert self._scan_lines(lines) == [4]
+
+    def test_skip_predicates_do_not_mask_new_name_baseline(self):
+        # Sanity: a doc line containing ONLY the NEW name (no exclusion
+        # context) must not be flagged. Guards against an inverted
+        # predicate accidentally suppressing the NEW name.
+        lines = [
+            "Reference SELF_COMPLETE_EXEMPT_AGENT_TYPES in shared module.",
+        ]
+        assert self._scan_lines(lines) == []
+
+    # ---- TEACHBACK_EXEMPT_AGENTS typo-variant counter-tests ----
+
+    def test_teachback_typo_variant_caught(self):
+        # Bare prose mention of the TEACHBACK typo variant in a plain
+        # doc line MUST fire. Currently zero occurrences exist in the
+        # repo; this pin catches a future rename-typo before it lands.
+        lines = [
+            "## Dispatch carve-out",
+            "",
+            "Owners listed in TEACHBACK_EXEMPT_AGENTS skip the gate.",
+        ]
+        assert self._scan_lines(lines) == [3]
+
+    def test_teachback_typo_in_deprecation_blockquote_skipped(self):
+        # Same exclusion logic applies to the new pattern.
+        lines = [
+            "## Dispatch carve-out",
+            "",
+            "> Deprecated: TEACHBACK_EXEMPT_AGENTS (pre-rename). See "
+            "TEACHBACK_EXEMPT_AGENT_TYPES below.",
+            "",
+            "Carve-out is keyed on agentType.",
+        ]
+        assert self._scan_lines(lines) == []
+
+    def test_teachback_typo_in_fenced_block_skipped(self):
+        # Snippets quoting historical-typo code inside fences must NOT fire.
+        lines = [
+            "```python",
+            "if owner in TEACHBACK_EXEMPT_AGENTS:",
+            "    return True",
+            "```",
+        ]
+        assert self._scan_lines(lines) == []
+
+    def test_new_name_present_in_at_least_one_canonical_doc(self):
+        # Counter-pin: at least one of the 5 known doc surfaces must
+        # mention the new constant name. Guards against a refactor that
+        # silently drops the doc references entirely.
+        root = self._doc_root()
+        canonical_surfaces = [
+            root / "agents" / "pact-orchestrator.md",
+            root / "agents" / "pact-secretary.md",
+            root / "commands" / "comPACT.md",
+            root / "commands" / "orchestrate.md",
+            root / "protocols" / "pact-completion-authority.md",
+        ]
+        new_name = "SELF_COMPLETE_EXEMPT_AGENT_TYPES"
+        hits = [
+            p for p in canonical_surfaces
+            if p.is_file() and new_name in p.read_text(encoding="utf-8")
+        ]
+        assert hits, (
+            f"None of the 5 canonical doc surfaces references "
+            f"`{new_name}`; doc-surface drift suspected."
+        )

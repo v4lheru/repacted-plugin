@@ -1,0 +1,697 @@
+---
+description: Multi-agent planning consultation (no implementation)
+argument-hint: [e.g., add user authentication with JWT]
+---
+Create a comprehensive implementation plan for: $ARGUMENTS
+
+**This is PLANNING ONLY** — no code changes, no git branches, no implementation.
+
+---
+
+## Task Hierarchy
+
+Create a planning Task hierarchy:
+
+```
+1. `TaskCreate`: Planning task "Plan: {feature}"
+2. `TaskUpdate`: Planning task status = "in_progress"
+3. Analyze: Which specialists to consult?
+4. `TaskCreate`: Consultation task(s) — one per specialist
+5. `TaskUpdate`: Consultation tasks status = "in_progress"
+6. `TaskUpdate`: Planning task addBlockedBy = [consultation IDs]
+7. Dispatch specialists in parallel (planning-only mode)
+8. Monitor until consultations complete
+9. `TaskUpdate`: Consultation tasks status = "completed" (as each completes)
+10. Synthesize → write plan document
+11. `TaskUpdate`: Planning task status = "completed", metadata.artifact = plan path
+```
+
+**Example structure:**
+```
+[Planning] "Plan: user authentication"      (blockedBy: consult1, consult2, consult3)
+├── [Consult] "preparer: research auth patterns"
+├── [Consult] "architect: design auth service"
+└── [Consult] "test-engineer: testing strategy"
+```
+
+---
+
+## S4 Intelligence Function
+
+This command is the primary **S4 (Intelligence)** activity in PACT. While `/PACT:orchestrate` operates mainly in S3 mode (execution), `plan-mode` operates entirely in S4 mode:
+
+- **Outside focus**: What does the environment require? What are the constraints?
+- **Future focus**: What approach will lead to long-term success?
+- **Strategic thinking**: What are the risks? What could change?
+
+The output—an approved plan—bridges S4 intelligence to S3 execution. When `/PACT:orchestrate` runs, it shifts to S3 mode while referencing the S4 plan.
+
+**S4 Questions to Hold Throughout**:
+- Are we solving the right problem?
+- What could invalidate this approach?
+- What are we assuming that might be wrong?
+- How might requirements change?
+
+---
+
+## Variety Context
+
+plan-mode is the recommended entry point for **high-variety tasks** (variety score 11-14). It builds understanding before committing to execution.
+
+If variety assessment suggests:
+- **Low/Medium variety (4-10)**: Consider recommending `/PACT:comPACT` or direct `/PACT:orchestrate` instead
+- **Extreme variety (15-16)**: Consider recommending a research spike first (run PREPARE phase alone)
+
+See [pact-variety.md](../protocols/pact-variety.md) for the Variety Management assessment protocol.
+
+---
+
+## Your Workflow
+
+### Phase 0: Orchestrator Analysis
+
+Using extended thinking, analyze the task:
+- What is the full scope of this task?
+- Which PACT phases are involved?
+- Which specialists should be consulted?
+- What are the key planning questions for each specialist?
+- What's the estimated complexity (Low/Medium/High/Very High)?
+
+Determine which specialists to invoke based on the task:
+- **📚 pact-preparer**: Always include for research/context needs
+- **🏛️ pact-architect**: Include for any structural or design decisions
+- **💻 pact-backend-coder**: Include if server-side work is involved
+- **🎨 pact-frontend-coder**: Include if client-side work is involved
+- **🗄️ pact-database-engineer**: Include if data layer work is involved
+- **🔧 pact-devops-engineer**: Include if CI/CD, Docker, infrastructure, or build system work is involved
+- **🧪 pact-test-engineer**: Always include for testing strategy
+- **🛡️ pact-security-engineer**: Include if auth, security, or sensitive data handling is involved
+- **🔍 pact-qa-engineer**: Include if project has a runnable app and UI/user-facing behavior is affected
+
+Skip specialists clearly not relevant (e.g., skip database engineer for pure UI work).
+
+**Derive the feature slug** for the plan filename:
+- Convert task to lowercase kebab-case
+- Keep it concise (3-5 words max)
+- Examples:
+  - "Add user authentication with JWT" → `user-auth-jwt`
+  - "Refactor payment processing module" → `refactor-payment-processing`
+  - "Fix dashboard loading performance" → `fix-dashboard-performance`
+
+### Phase 1: Parallel Specialist Consultation
+
+**Session team**: The `{team_name}` team is provisioned automatically by the platform — use it for dispatches; you do not create it.
+
+Dispatch relevant specialists **in parallel**, each in **planning-only mode**.
+
+**Use this prompt template for each specialist:**
+
+```
+PLANNING CONSULTATION ONLY — No implementation, no code changes.
+
+Task: {task description}
+
+As the {role} specialist, provide your planning perspective:
+
+1. SCOPE IN YOUR DOMAIN
+   - What work is needed in your area of expertise?
+   - What's the estimated effort (Low/Medium/High)?
+
+2. DEPENDENCIES & INTERFACES
+   - What dependencies exist with other domains?
+   - What interfaces or contracts need definition?
+   - What do you need from other specialists?
+
+3. KEY DECISIONS & TRADE-OFFS
+   - What are the important decisions in your domain?
+   - What are the options and trade-offs?
+   - What's your recommendation?
+
+4. RISKS & CONCERNS
+   - What could go wrong?
+   - What unknowns need investigation?
+   - What assumptions are you making?
+
+5. RECOMMENDED APPROACH
+   - What's your suggested approach?
+   - What sequence of steps do you recommend?
+   - What should be done first?
+
+Output your analysis with clear headers matching the 5 sections above.
+Do NOT implement anything — planning consultation only.
+```
+
+**Domain-specific additions to the template:**
+
+For **📚 pact-preparer**, also ask:
+- What documentation/research is needed before implementation?
+- What external APIs or libraries need investigation?
+- What stakeholder clarifications are needed?
+
+For **🏛️ pact-architect**, also ask:
+- What components/modules are affected or needed?
+- What design patterns should be applied?
+- What interface contracts need definition?
+
+For **coders** (backend/frontend/database/devops), also ask:
+- What files need modification or creation?
+- What existing patterns in the codebase should be followed?
+- What's the implementation sequence?
+
+For **🧪 pact-test-engineer**, also ask:
+- What test scenarios are critical (happy path, errors, edge cases)?
+- What coverage targets make sense?
+- What test data or fixtures are needed?
+
+For **🛡️ pact-security-engineer**, also ask:
+- What threat vectors are relevant to this feature?
+- What auth/authorization patterns need consideration?
+- What input validation or data protection requirements exist?
+
+For **🔍 pact-qa-engineer**, also ask:
+- What user flows need runtime verification?
+- What pages or interactions are affected?
+- What runtime edge cases should be explored (empty states, error states)?
+
+**Handling incomplete or missing responses**:
+
+If a specialist provides minimal, incomplete, or off-topic output:
+1. Note the gap — record which specialist and which sections are missing
+2. Proceed with synthesis — use the inputs you have
+3. Flag in the plan — add to "Limitations" section with specific gaps identified
+4. Do NOT re-invoke — avoid infinite loops; missing input is data for the plan
+
+If a specialist fails entirely (timeout, error):
+1. Log the failure in synthesis notes
+2. Proceed without that perspective
+3. Flag prominently in "Open Questions" that this domain was not consulted
+4. Recommend the user consider re-running plan-mode or consulting that specialist manually
+
+### Teachback-Gated Dispatch
+
+Each consultant dispatch creates **two tasks**, not one:
+
+- **Task A** — TEACHBACK gate. `subject = "{specialist}: TEACHBACK for plan consultation on {feature}"`, owner = consultant. Description: lightweight understanding-confirm of the consultation scope.
+- **Task B** — primary consultation. `subject = "{specialist}: plan consultation for {feature}"`, owner = consultant, `blockedBy = [<Task A id>]`.
+
+Both are created BEFORE the `Agent(...)` spawn call. The consultant claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review and accept via the two-call atomic pair: `TaskUpdate(A, status="completed")` FIRST, then the wake-signal `SendMessage(to=consultant, ...)` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. On accept, the consultant wakes to claim B and produce the consultation HANDOFF. The consultant writes the HANDOFF and signals stage-ready, then idles — **you (the lead) complete Task B**, not the consultant. Lead-side completion is what reliably journals the consultation HANDOFF; a consultant self-completing their own Task B can leave the HANDOFF unrecorded.
+
+```
+# A-FIRST ORDERING (required): create Task A (the teachback gate) BEFORE Task B so the gate gets the LOWER id. Creating Task B first — giving the gate the HIGHER id — is WRONG: it inverts the intuitive "lower id = earlier" reading. The blocking wiring below legitimately names both ids because it runs AFTER both tasks exist.
+A_id = TaskCreate(
+    subject="{specialist}: TEACHBACK for plan consultation on {feature}",
+    description="DOGFOOD TEACHBACK GATE.\n\n"
+                "Submit TEACHBACK by writing metadata.teachback_submit (per pact-teachback skill). "
+                "Then send the notify SendMessage carrying the canonical payload verbatim (pact-teachback Step 2). "
+                "SET intentional_wait{reason=awaiting_lead_completion}. Idle. "
+                "DO NOT mark this task completed — team-lead-only completion.\n\n"
+                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead. Task B stays blocked until the lead accepts this teachback: that is the gate, not a desync.\n\n"
+                "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
+)
+TaskUpdate(A_id, owner="{specialist-name}")
+B_id = TaskCreate(
+    subject="{specialist}: plan consultation for {feature}",
+    description="<consultation mission>\n\nWrite metadata.handoff whatever the size of the deliverable — a consultation whose product is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in any diff.",
+    metadata={
+        "variety": {
+            "novelty":               N,
+            "novelty_rationale":     "<1-sentence: the shape of this dispatch's novelty — never what you expect to find>",
+            "scope":                 N,
+            "scope_rationale":       "<1-sentence: the shape of this dispatch's scope — never what you expect to find>",
+            "uncertainty":           N,
+            "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
+            "risk":                  N,
+            "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
+            # Ignorance-dependent dispatch: stamp all four `*_rationale` as "WITHHELD: ignorance-dependent dispatch" — real scores, no prose.
+            "total":                 N
+        }
+    }
+)
+TaskUpdate(B_id, owner="{specialist-name}", addBlockedBy=[A_id])
+TaskUpdate(A_id, addBlocks=[B_id])
+```
+
+The teachback gate is lightweight ("understanding-confirm" with no implementation gate consequence) — plan-mode dispatches are read-mostly. The `Agent()` `prompt` does NOT change shape.
+
+---
+
+**Dispatch each consultant** — for each consultant, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
+
+1. `TaskCreate(subject="{specialist}: TEACHBACK for plan consultation on {feature}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
+2. `TaskCreate(subject="{specialist}: plan consultation for {feature}", description=<see below>, metadata=<see below>)` — Task B. `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema); the wiring write below is denied without it.
+   - Task B's `description` is "PLANNING CONSULTATION ONLY — No implementation.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before beginning the consultation — pre-assigned to you but still pending; you flip it, not the lead.\n\nTask: {task description}\n\n[full template content from above]\n\nIf upstream context is referenced, read the upstream task file first — `TaskGet` does NOT surface metadata."
+3. `TaskUpdate(A_id, owner="{specialist-name}", addBlocks=[B_id])`
+4. `TaskUpdate(B_id, owner="{specialist-name}", addBlockedBy=[A_id])`
+5. **Journal event**: write one `variety_assessed` event per dispatched Task B before spawning, mirroring that task's `metadata.variety` stamp — the four dimension scores and the total, `*_rationale` strings omitted, and the top-level `"scope": "dispatch"` discriminator present (the feature-level assessment event carries no `scope` field; journal readers key on that difference):
+   ```bash
+   set -e
+   trap 'rc=$?; echo "[JOURNAL WRITE FAILED] plan-mode.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
+   python3 "{plugin_root}/hooks/shared/session_journal.py" write \
+     --type variety_assessed --session-dir '{session_dir}' --stdin <<'JSON'
+   {"task_id": "{taskId}", "scope": "dispatch", "variety": {"novelty": N, "scope": N, "uncertainty": N, "risk": N, "total": N}}
+JSON
+   ```
+6. Spawn the consultant with the canonical dispatch form:
+
+```
+Agent(
+  name="{specialist-name}",
+  team_name="{team_name}",
+  subagent_type="pact-{specialist-type}",
+  description="Spawn {specialist-name} specialist",
+  prompt="YOUR PACT ROLE: teammate ({specialist-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
+)
+```
+
+NOTE: Spawn all consultants in parallel.
+
+### Phase 2: Orchestrator Synthesis
+
+After collecting all specialist outputs, use extended thinking to synthesize:
+
+1. **Identify Agreements**
+   - Where do specialists align?
+   - What's the consensus approach?
+
+2. **Identify and Classify Conflicts**
+
+   Where do specialists disagree? Classify each conflict:
+
+   | Severity | Definition | Action |
+   |----------|------------|--------|
+   | **Minor** | Different approaches, either works | Orchestrator chooses, documents rationale |
+   | **Major** | Fundamental disagreement affecting design | Flag for user decision with options |
+   | **Blocking** | Cannot proceed without resolution | Escalate immediately (see below) |
+
+   **Blocking conflict escalation**:
+   If a conflict prevents meaningful synthesis (e.g., two specialists propose mutually exclusive architectures):
+   1. Stop synthesis
+   2. Present partial plan with explicit "BLOCKED" status
+   3. Clearly describe the conflict and why it blocks progress
+   4. Ask user to resolve before continuing
+   5. User may re-run plan-mode after providing direction
+
+3. **Determine Sequencing**
+   - What's the optimal order of phases?
+   - What can be invoked concurrently?
+   - What are the dependencies?
+
+4. **Assess Cross-Cutting Concerns**
+   - Security implications?
+   - Performance implications?
+   - Accessibility implications? (if frontend)
+   - Observability/logging needs?
+
+5. **Build Unified Roadmap**
+   - Create step-by-step implementation plan
+   - Map steps to specialists
+   - Identify the commit sequence
+   - Populate "Phase Requirements" section based on completeness analysis:
+     - Check each phase's plan section for these incompleteness signals:
+       - [ ] Unchecked research items (`- [ ]`)
+       - [ ] TBD values in decision tables
+       - [ ] `⚠️ Handled during {PHASE_NAME}` forward references
+       - [ ] Unchecked questions to resolve
+       - [ ] Empty/placeholder sections
+       - [ ] Unresolved open questions
+       - [ ] Research/investigation tasks in implementation plan (go/no-go items, feasibility studies, audit tasks)
+     - **Any signal present** → mark phase as REQUIRED
+       - For more details on incompleteness signals, see [pact-completeness.md](../protocols/pact-completeness.md)
+
+6. **Risk Assessment**
+   - Aggregate risks from all specialists
+   - Assess overall project risk
+   - Identify mitigation strategies
+
+7. **Synthesis Validation Checkpoint**
+
+   Before proceeding to Phase 3, verify:
+   - [ ] At least 2 specialists contributed meaningful input
+   - [ ] No blocking conflicts remain unresolved
+   - [ ] All mandatory plan sections can be populated
+   - [ ] Cross-cutting concerns have been considered
+
+   If validation fails:
+   - For insufficient specialist input → Flag in "Limitations", proceed with available data
+   - For unresolved blocking conflict → Present partial plan with BLOCKED status
+   - For missing mandatory sections → Populate with "TBD - requires {specific input}"
+
+### Synthesis Agreement Verification
+
+After synthesis passes validation, verify each specialist agrees with the synthesis of their perspective.
+
+**Mechanism**: `SendMessage` to each specialist who contributed to verify:
+> "My synthesis of your perspective: [summary of their input as represented in the plan]. Does this accurately represent your input? Did I resolve conflicts involving your domain correctly?"
+
+**Handling responses**:
+- **Confirmed**: Proceed to Phase 3
+- **Correction provided**: Update synthesis, re-verify with the correcting specialist only. If the correction affects other specialists' sections (e.g., a changed interface), re-verify those specialists too.
+- **Specialist unavailable** (shut down): Treat synthesis as accepted for that perspective, note in plan's Limitations section
+
+This verifies the orchestrator's understanding matches what specialists actually recommended — preventing the plan from misrepresenting specialist input. Same agreement verification pattern as orchestrate phase boundaries. Background: [pact-ct-teachback.md](../protocols/pact-ct-teachback.md).
+
+### Phase 3: Plan Output
+
+**`TaskUpdate`**: Planning task completed with artifact path:
+```
+TaskUpdate(
+  taskId=planning_task_id,
+  status="completed",
+  metadata={
+    "artifact": "docs/plans/{feature-slug}-plan.md",
+    "summary": "Planning complete. Awaiting user approval."
+  }
+)
+```
+
+Save the synthesized plan to `docs/plans/{feature-slug}-plan.md`.
+
+**Plan-doc self-check**: after writing the plan, confirm `docs/plans/{feature-slug}-plan.md` exists on disk and is non-empty before continuing. An empty or missing plan doc is a failure to investigate (the synthesis did not land), not a no-op — resolve it before completing the planning task.
+
+**Emit `artifact_paths`**: write a path-only `artifact_paths` journal event pointing at the plan doc so it (and the consultation work it synthesizes) is recoverable after garbage-collection independently of any HANDOFF. The plan doc is the lead's own product, so the lead knows its absolute path directly — enumerate it here, not from any HANDOFF.
+
+```bash
+set -e
+trap 'rc=$?; echo "[JOURNAL WRITE FAILED] plan-mode.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
+SJ="{plugin_root}/hooks/shared/session_journal.py"
+python3 "$SJ" write --type artifact_paths --session-dir '{session_dir}' --stdin <<'JSON'
+{"workflow": "plan-mode", "feature": "{feature-slug}", "paths": ["{absolute_plan_doc_path}"]}
+JSON
+```
+
+**Trigger a harvest** (consult-only durability): plan-mode is a consultation-only flow with no later CODE/peer-review boundary to trigger memory harvest, so the plan doc and the consultation HANDOFFs would otherwise never reach pact-memory. Create a secretary harvest task after writing the plan so the `artifact_paths` event resolves and the consultation HANDOFFs distill into institutional memory:
+
+```
+TaskCreate(subject="secretary: harvest plan-mode consultation",
+  description="Harvest HANDOFFs and artifact_paths for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill, resolving artifact_paths events to read the plan doc and any consultation artifacts off disk. Report summary when done.")
+TaskUpdate(taskId, owner="secretary")
+```
+
+**Handling existing plans**:
+
+If a plan already exists for this feature slug:
+1. Check the existing plan's status and use `AskUserQuestion` tool when user input is needed:
+   - **PENDING APPROVAL**: Ask user with options: "Overwrite existing plan" / "Rename new plan" / "Cancel"
+   - **APPROVED**: Ask user with options: "Overwrite (plan not yet started)" / "Cancel"
+   - **IN_PROGRESS**: Warn that implementation is underway, ask with options: "Overwrite anyway" / "Cancel"
+   - **IMPLEMENTED**: Previous version completed; create new version with date suffix (no question needed)
+   - **SUPERSEDED**: Safe to overwrite (no question needed)
+2. If creating a new version:
+   - First attempt: `{feature-slug}-plan-{YYYY-MM-DD}.md`
+   - If that exists: `{feature-slug}-plan-{YYYY-MM-DD}-v2.md` (increment as needed)
+3. Update the old plan's status to SUPERSEDED if overwriting
+
+**Use this structure:**
+
+```markdown
+# Implementation Plan: {Feature Name}
+
+> Generated by `/PACT:plan-mode` on {YYYY-MM-DD}
+> Status: PENDING APPROVAL
+
+<!-- Status Lifecycle:
+     PENDING APPROVAL → APPROVED → IN_PROGRESS → IMPLEMENTED
+                    ↘ SUPERSEDED (if replaced by newer plan)
+                    ↘ BLOCKED (if unresolved conflicts)
+
+     Transition Ownership:
+     - PENDING APPROVAL → APPROVED: User (explicit approval)
+     - APPROVED → IN_PROGRESS: Orchestrator (when /PACT:orchestrate starts)
+     - IN_PROGRESS → IMPLEMENTED: Orchestrator (after successful completion)
+     - Any → SUPERSEDED: plan-mode (when creating replacement plan)
+     - Any → BLOCKED: plan-mode (when unresolved blocking conflicts)
+-->
+
+<!-- Forward Reference Convention:
+     When deferring work to a later phase, use the standardized format:
+     "⚠️ Handled during {PHASE_NAME}" (e.g., "⚠️ Handled during PREPARE")
+     This format is detected by the orchestrator's phase-skip completeness check.
+     Do NOT use informal variants like "deferred to", "will be addressed in", etc.
+-->
+
+## Summary
+
+{2-3 sentence overview of what will be implemented and the high-level approach}
+
+<!-- If there are limitations or gaps, add this callout: -->
+> **Limitations**: This plan has gaps due to incomplete specialist input. See [Limitations](#limitations) section before approving.
+
+---
+
+## Specialist Perspectives
+
+### 📋 Preparation Phase
+**Effort**: {Low/Medium/High}
+
+#### Research Needed
+<!-- Use checkboxes for all research items. Check [x] when complete, leave [ ] when pending.
+     The orchestrator's skip logic checks for unchecked items to determine phase requirements. -->
+- [ ] {Research item}
+
+#### Dependencies to Map
+- {Dependency}
+
+#### Questions to Resolve
+- [ ] {Question}
+
+#### Research Tasks
+<!-- Go/no-go items, feasibility studies, and audit tasks that require PREPARE-phase runtime execution.
+     The orchestrator's skip logic checks for unchecked items here (Signal 7) to determine phase requirements. -->
+- [ ] {Task description} — {go/no-go criteria}
+
+---
+
+### 🏗️ Architecture Phase
+**Effort**: {Low/Medium/High}
+
+#### Components Affected
+| Component | Change Type | Impact |
+|-----------|-------------|--------|
+| {Name} | New/Modify | {Description} |
+
+#### Design Approach
+{Description of architectural approach}
+
+#### Key Decisions
+<!-- Use "TBD" explicitly for unresolved decisions. Resolved decisions should have concrete values.
+     The orchestrator's skip logic checks for TBD language to determine phase requirements. -->
+| Decision | Options | Recommendation | Rationale |
+|----------|---------|----------------|-----------|
+| {Decision} | {A, B, C} | {B} | {Why} |
+
+#### Interface Contracts
+{Interface definitions or descriptions}
+
+---
+
+### 💻 Code Phase
+**Effort**: {Low/Medium/High}
+
+#### Files to Modify
+| File | Changes |
+|------|---------|
+| {path} | {description} |
+
+#### Files to Create
+| File | Purpose |
+|------|---------|
+| {path} | {description} |
+
+#### Implementation Sequence
+1. {Step}
+2. {Step}
+
+---
+
+### 🧪 Test Phase
+**Effort**: {Low/Medium/High}
+
+#### Test Scenarios
+| Scenario | Type | Priority |
+|----------|------|----------|
+| {Scenario} | Unit/Integration/E2E | P0/P1/P2 |
+
+#### Coverage Targets
+- Critical path: {X}%
+- Overall target: {Y}%
+
+#### Test Data Needs
+- {Requirement}
+
+---
+
+## Synthesized Implementation Roadmap
+
+### Phase Sequence
+{Visual or textual representation of the workflow}
+
+### Commit Sequence (Proposed)
+
+> **Note**: This sequence represents the intended final git history order, **not** the execution order. Independent commits may be implemented in parallel even if numbered sequentially here. The orchestrator must analyze actual dependencies to determine execution strategy.
+
+1. `{type}: {description}` — {what this commit does}
+2. `{type}: {description}` — {what this commit does}
+
+---
+
+## Cross-Cutting Concerns
+
+| Concern | Status | Notes |
+|---------|--------|-------|
+| Security | {Ready/Needs attention/N/A} | {Notes} |
+| Performance | {Ready/Needs attention/N/A} | {Notes} |
+| Accessibility | {Ready/Needs attention/N/A} | {Notes} |
+| Observability | {Ready/Needs attention/N/A} | {Notes} |
+
+---
+
+## Open Questions
+
+### Require User Decision
+- [ ] **{Question}**: {Context and options for user to decide}
+
+### Require Further Research
+- [ ] **{Question}**: {What needs investigation during Prepare phase}
+
+---
+
+## Risk Assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| {Risk} | Low/Med/High | Low/Med/High | {Strategy} |
+
+---
+
+## Limitations
+
+<!-- Include this section if any specialists provided incomplete input or failed -->
+
+| Gap | Impact | Recommendation |
+|-----|--------|----------------|
+| {Missing perspective or incomplete section} | {How this affects the plan} | {Suggested action} |
+
+---
+
+## Scope Assessment
+
+- **Overall Complexity**: {Low/Medium/High/Very High}
+- **Estimated Files**: {N} modified, {M} new
+- **Specialists Required**: {List}
+- **External Dependencies**: {Yes/No — details}
+
+---
+
+## Phase Requirements
+
+> Auto-populated based on plan content. The orchestrator uses this section to determine which phases to run.
+
+<!-- Re-derive this table whenever plan content changes after initial synthesis (e.g., user decisions in Phase 4).
+     The "any signal = REQUIRED" default is conservative, but stale rationale text can mislead the orchestrator. -->
+
+| Phase | Required? | Rationale |
+|-------|-----------|-----------|
+| PREPARE | {Yes/No} | {e.g., "Yes — 3 unchecked research items remain" or "No — all research complete, no TBD items"} |
+| ARCHITECT | {Yes/No} | {e.g., "Yes — interface contracts marked TBD" or "No — all design decisions resolved"} |
+| CODE | Yes | Always required |
+| TEST | {Yes/No} | {e.g., "Yes — integration tests needed" or "No — trivial change, no test scenarios"} |
+
+---
+
+## Next Steps
+
+To implement this plan after approval:
+```
+/PACT:orchestrate {task description}
+```
+
+The orchestrator should reference this plan during execution.
+```
+
+---
+
+## Signal Monitoring
+
+Monitor for blocker/algedonic signals via:
+- **`SendMessage`**: Teammates send blockers and algedonic signals directly to the team-lead
+- **`TaskList`**: Check for tasks with blocker metadata or stalled status
+
+On signal detected, handle via the Signal Task Handling procedure:
+
+When an agent reports a blocker or algedonic signal via `SendMessage`:
+1. Create a signal Task (blocker or algedonic type)
+2. Block the agent's task via `addBlockedBy`
+3. For algedonic signals, amplify scope:
+   - ALERT → block current phase task
+   - HALT → block feature task (stops all work)
+4. Present to user and await resolution
+5. On resolution: mark signal task `completed` (unblocks downstream)
+
+---
+
+## Output Conciseness
+
+See also: [Communication Charter](../protocols/pact-communication-charter.md) for full plain English, anti-sycophancy, and constructive challenge norms.
+
+**Default: Concise output.** User sees plan summary and decision points, not synthesis process.
+
+| Internal (don't show) | External (show) |
+|----------------------|-----------------|
+| Specialist consultation reasoning | `Consulting: preparer, architect, backend, test` |
+| Conflict resolution analysis | Summary in plan document |
+| Synthesis process details | `Plan saved to docs/plans/{slug}-plan.md` |
+
+**User can always ask** for details (e.g., "What did the architect recommend?" or "Show me the conflicts").
+
+| Verbose (avoid) | Concise (prefer) |
+|-----------------|------------------|
+| "The plan has been created. Let me walk you through..." | `Plan saved. Complexity: Medium. 3 decisions need your input.` |
+| "I'm now synthesizing the specialist perspectives..." | (just do it, present result) |
+
+---
+
+### Phase 4: Present and Resolve
+
+After saving the plan:
+
+1. Present a concise summary to the user
+2. Note the **overall complexity and scope**
+
+**Resolve open questions before exiting plan mode:**
+
+3. If there are items under **"Open Questions > Require User Decision"**:
+   - Use `AskUserQuestion` to resolve each decision point
+   - Update the plan file with the user's decisions (move resolved items to the appropriate sections, e.g., "Key Decisions")
+   - Repeat until no "Require User Decision" items remain
+
+4. Once all decision-requiring questions are resolved:
+   - Re-derive the Phase Requirements table based on updated plan content (incompleteness signals may have changed after user decisions)
+   - Highlight any remaining **"Require Further Research"** items (these are addressed during the Prepare phase of implementation)
+   - Explain that after approval, they can run `/PACT:orchestrate` to implement
+
+**Do NOT exit plan mode** while "Require User Decision" items remain unresolved.
+
+**Do NOT proceed to implementation** — await user approval or feedback.
+
+---
+
+## When to Recommend Alternative Commands
+
+If during Phase 0 analysis you determine:
+
+- **Task is trivial** (typo, config change, single-line fix) → Recommend `/PACT:comPACT` instead
+- **Task is unclear** → Ask clarifying questions before proceeding with planning
+- **Task requires immediate research first** → Recommend running preparation phase alone first
+
+---
+
+## Integration with /PACT:orchestrate
+
+After the user approves the plan:
+
+1. User runs `/PACT:orchestrate {same task}`
+2. Orchestrator should check for existing plan in `docs/plans/`
+3. If plan exists, use it as the implementation specification
+4. Specialists receive relevant sections of the plan as context
+
+**Task Linkage**: When `/PACT:orchestrate` runs, it checks for a completed Planning task matching the feature. If found, the plan artifact path from `metadata.artifact` is used to locate and reference the approved plan automatically.

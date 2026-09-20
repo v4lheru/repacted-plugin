@@ -1,0 +1,695 @@
+"""
+Stale-team/store-mismatch self-diagnosis at dispatch_gate deny sites.
+
+Cheap-win (PR 1 of the restart/persistence cluster): when a Claude Code
+restart/fork leaves PACT's persisted team_name/session_id stale, this gate
+resolves an orphaned task store while Task* tools write the live one, so every
+pact-* spawn is denied with a MISLEADING message ("no Task assigned…" /
+"team_name unavailable") that never names the real cause. This change surfaces
+the EXISTING shared.stale_session.detect_stale_session_block detection at the
+two restart-symptom deny sites (rule ⑥ team_name_unavailable, rule ⑧
+no_task_assigned), MESSAGE-ONLY.
+
+SCOPE NOTE — what "unaugmented" means in this file. These tests assert the
+absence of the STALE-DIAGNOSIS markers, and nothing more. They do NOT assert
+that the emitted deny equals the rule's base message: on rule ⑧ the composer
+appends a cause enumeration whenever the stale detector does not fire, so the
+"no mismatch" legs below emit MORE than the base text while still correctly
+carrying no stale-diagnosis. Coverage of the enumeration itself lives in
+test_dispatch_gate_cause_enumeration.py.
+
+Worth stating plainly because the suite cannot catch it: every "falls back to
+the original message" test here asserts marker-ABSENCE, never message-equality,
+so all of them stayed green when the composer started appending. A fully green
+run proves nothing about whether these docstrings are accurate.
+
+What this file pins:
+  - BOTH-MODES MATRIX (in-process session_id==leadSessionId AND tmux
+    session_id!=leadSessionId): on a stale-team mismatch the augmented
+    self-diagnosis appears at BOTH deny sites; on no mismatch NO stale
+    diagnosis is added. The augmentation is mode-agnostic, so the
+    matrix is an INVARIANCE proof (same outcome both modes).
+  - NON-VACUITY via PAIRED ENABLE/DISABLE (mismatch-present vs mismatch-absent
+    inputs), not git-revert: the augmentation marker is present iff a mismatch
+    is detected. A test would FAIL if the augmentation were removed.
+  - DECISION UNCHANGED: the gate still DENYs (exit 2) on exactly the same
+    inputs; only the message text changes.
+  - DEFENSIVE never-raises: if the detector raises, the deny still fires with
+    no stale diagnosis attached and no exception escapes. (On rule ⑧ the
+    composer then appends the cause enumeration — a detector failure degrades
+    INTO the generic diagnosis, not into silence.)
+
+Reuses the in-process harness from test_dispatch_gate.py (_run_main / _full_setup
+/ _seed_team) so the both-modes setup matches the rest of the gate's suite.
+"""
+
+import json
+
+import pytest
+
+from test_dispatch_gate import (  # noqa: E402 — sibling harness reuse
+    _make_input,
+    _run_main,
+    _full_setup,
+    _seed_team,
+    _TEAM,
+)
+
+# Pre-existing production symbol. Imported so the liveness pin below checks the
+# LIVE constant rather than a copy of it, and so this file keeps working under a
+# revert of any change that only touches the cause enumeration.
+from dispatch_gate import _STALE_REALIGN_HINT  # noqa: E402
+
+# A marker substring unique to the augmentation — asserting on it proves the
+# net-new self-diagnosis text is present without coupling to exact wording.
+_AUGMENT_MARKER = "STALE-TEAM/STORE MISMATCH"
+# NOT the context filename: the rule-⑧ cause enumeration's cause (2) now
+# names pact-session-context.json too (both texts deliberately name the same
+# measured recovery), so on every leg where the enumeration legitimately
+# appends the filename appears WITHOUT this hint and a filename marker would
+# false-fail the absence cells. "Working recovery" is unique to the hint's
+# remedy block; the enumeration says only "Recovery:".
+_REALIGN_MARKER = "Working recovery"
+
+
+def test_stale_markers_are_live_and_ascii():
+    """Both markers are asserted ABSENT in ~10 places in this file; an absence
+    assertion on a literal that cannot match is vacuous forever, silently.
+
+    Today those absence assertions are safe only INCIDENTALLY: both markers are
+    also used in POSITIVE assertions here, and a green baseline on an ``in``
+    check is itself proof the literal matches. That protection lasts exactly as
+    long as the last positive assertion does — delete those and all ~10 absence
+    assertions go vacuous with nothing to notice. This converts the incidental
+    safety into designed safety, sibling to
+    ``test_load_failure_marker_is_live`` in test_dispatch_gate_cause_enumeration.
+
+    Checked against the LIVE ``_STALE_REALIGN_HINT`` rather than a source-text
+    scan: a substring can survive in the file (a comment, a docstring, a dead
+    branch) after it has stopped being part of the emitted text, and it is the
+    EMITTED text these markers are asserted against.
+
+    The ASCII conjunct guards the transcription slip specifically: a marker
+    spanning a non-ASCII character invites an eyeball copy that substitutes a
+    hyphen for U+2014, after which the ``not in`` check can never fail.
+
+    HONEST LIMIT ON THAT CONJUNCT — it is a FORWARD guard, not an independently
+    proven one. ``_STALE_REALIGN_HINT`` is currently pure ASCII, so any marker
+    that fails the ASCII check also fails the substring check below it: the two
+    cannot be falsified separately today, and a non-vacuity run will show them
+    co-firing. It is kept because the constant is PROSE and the prose in this
+    codebase routinely carries em-dashes — ``_CAUSE_ENUMERATION`` already does,
+    which is exactly why the sibling meta-test there IS independently
+    meaningful. The day this constant gains one mid-marker, this conjunct is the
+    only thing between a ``not in`` assertion and permanent silent vacuity.
+    Do not delete it for being redundant; it is redundant only while the
+    constant stays ASCII, and nothing enforces that.
+    """
+    for name, marker in (
+        ("_AUGMENT_MARKER", _AUGMENT_MARKER),
+        ("_REALIGN_MARKER", _REALIGN_MARKER),
+    ):
+        assert marker.isascii(), (
+            f"{name} is not ASCII-only: {marker!r}. A marker that spans a "
+            "non-ASCII character invites a transcription that substitutes a "
+            "hyphen for U+2014, after which it can never fail."
+        )
+        assert marker in _STALE_REALIGN_HINT, (
+            f"{name} ({marker!r}) is no longer a substring of the live "
+            "_STALE_REALIGN_HINT — every absence assertion using it in this "
+            "file is now vacuous. Re-derive the marker from the production "
+            "constant; do not re-type it."
+        )
+
+# =============================================================================
+# The REMEDY the hint names — the measured manual repoint, not a pointer at
+# the bootstrap ritual. Completing bootstrap does NOT rewrite the persisted
+# team records, so the earlier pointer ("Completing /PACT:bootstrap also
+# rewrites those records.") sent the operator to a ritual that changed
+# nothing for this denial; the measured working recovery is a manual edit.
+# =============================================================================
+
+# Elements of the measured recovery. Each is ASCII-only and typed once; the
+# positive assertions below are their own liveness check (a marker absent
+# from the live constant fails the test, not silently passes).
+_RECOVERY_MARKERS = (
+    "OLD session",
+    "pact-session-context.json",
+    "teams/session-*/config.json",
+    "session_id",
+    "journal",
+)
+
+# The falsified claim, in the constructions already seen. A phrase denylist
+# over free prose cannot be complete — its job is to force a human to look
+# when the known-bad construction returns, exactly like the sibling
+# tripwires in test_dispatch_gate_cause_enumeration.py.
+_FORBIDDEN_INERT_REMEDIES = (
+    "bootstrap ritual rewrites",
+    "bootstrap also rewrites",
+    "rewrites those records",
+    "bootstrap will rewrite",
+)
+
+
+def test_hint_names_the_measured_manual_repoint_not_a_bootstrap_pointer(
+    tmp_path, monkeypatch, capsys
+):
+    """COUPLED PAIR IN ONE BODY: the recovery elements PRESENT and the inert
+    bootstrap-pointer phrasings ABSENT, asserted against the SAME emitted
+    deny. Either half alone is vacuous — absence-only passes on a hint
+    emptied of any remedy at all; presence-only passes with the inert
+    pointer still appended after the real recovery.
+
+    The recovery pinned here is the MEASURED one: edit
+    pact-session-context.json in the OLD session's directory, set team_name
+    to the LIVE team, and leave session_id + the journal dir untouched
+    (journal continuity). "OLD session" is the load-bearing element — after
+    a resume there are two session dirs and only the OLD one holds the
+    records this gate reads.
+    """
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(tmp_path, _TEAM, _LIVE_SESSION_ID)
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2, "stale-mismatch deny must still fire, else vacuous"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _AUGMENT_MARKER in reason, "precondition: the hint actually appended"
+
+    for marker in _RECOVERY_MARKERS:
+        assert marker.isascii(), f"recovery marker not ASCII-only: {marker!r}"
+        assert marker in reason, (
+            f"measured-recovery element missing from the hint: {marker!r}"
+        )
+    # Scoped to the HINT constant, not the emitted reason: the shared
+    # detector's stale-block — legitimately prepended on this leg — carries
+    # its own "completing bootstrap will rewrite the CLAUDE.md session
+    # records" claim, which is a different sentence from a different
+    # module and not this tripwire's subject.
+    for phrase in _FORBIDDEN_INERT_REMEDIES:
+        assert phrase not in _STALE_REALIGN_HINT, (
+            f"inert bootstrap-pointer remedy reintroduced into the hint: "
+            f"{phrase!r}. Completing bootstrap does not rewrite these "
+            "records."
+        )
+
+
+# session_id values for the both-modes matrix.
+_LIVE_SESSION_ID = "test-session"          # the stdin session_id _make_input uses
+_RECORDED_STALE_ID = "0000dead-beef-4000-8000-000000000000"  # != live → stale
+_RECORDED_HEALTHY_ID = _LIVE_SESSION_ID    # == live → healthy (no mismatch)
+
+
+def _write_project_claude_md(monkeypatch, tmp_path, recorded_session_id):
+    """Create a project CLAUDE.md with a '- Resume:' line carrying
+    ``recorded_session_id`` and point CLAUDE_PROJECT_DIR at it, so
+    detect_stale_session_block can compare recorded-vs-live.
+    """
+    project_dir = tmp_path / "claudemd_project"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "CLAUDE.md").write_text(
+        "# Project\n\n## Current Session\n"
+        f"- Resume: `claude --resume {recorded_session_id}`\n"
+        f"- Team: `{_TEAM}`\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+    return project_dir
+
+
+def _seed_team_with_lead(home, team_name, lead_session_id, members=(), tasks=()):
+    """_seed_team variant that also stamps leadSessionId on config.json — the
+    STRUCTURAL mode discriminator (in-process: lead==live; tmux: lead!=live).
+    The augmentation does not key on this, so it is recorded to make the
+    both-modes matrix faithful, not to drive behavior.
+    """
+    _seed_team(home, team_name=team_name, members=members, tasks=tasks)
+    cfg = home / ".claude" / "teams" / team_name / "config.json"
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    data["leadSessionId"] = lead_session_id
+    cfg.write_text(json.dumps(data), encoding="utf-8")
+
+
+# Mode matrix: (mode_label, leadSessionId). in-process == live id; tmux != live.
+_MODES = [
+    ("in_process", _LIVE_SESSION_ID),
+    ("tmux", "ffff9999-1111-4000-8000-000000000000"),
+]
+
+
+# =============================================================================
+# Rule ⑧ — no_task_assigned deny site
+# =============================================================================
+
+
+@pytest.mark.parametrize("mode_label,lead_id", _MODES)
+def test_no_task_assigned_deny_augmented_on_stale_mismatch(
+    mode_label, lead_id, tmp_path, monkeypatch, capsys
+):
+    """ENABLE leg: a stale recorded-vs-live session_id mismatch augments the
+    rule-⑧ 'no Task assigned' deny with the self-diagnosis, in BOTH modes."""
+    # Seed a team with a task owned by SOMEONE ELSE so has_task_assigned(name)
+    # is False → rule ⑧ DENY fires for _NAME.
+    plugin_root = _full_setup(
+        monkeypatch, tmp_path, tasks=(("someone-else", "pending"),)
+    )
+    _seed_team_with_lead(
+        tmp_path, _TEAM, lead_id, tasks=(("someone-else", "pending"),)
+    )
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2, f"[{mode_label}] decision must still be DENY (exit 2)"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no Task assigned" in reason, f"[{mode_label}] original deny preserved"
+    assert _AUGMENT_MARKER in reason, f"[{mode_label}] self-diagnosis augmented"
+    assert _REALIGN_MARKER in reason, f"[{mode_label}] re-align steps present"
+
+
+@pytest.mark.parametrize("mode_label,lead_id", _MODES)
+def test_no_task_assigned_deny_unaugmented_when_no_mismatch(
+    mode_label, lead_id, tmp_path, monkeypatch, capsys
+):
+    """DISABLE leg: when recorded==live (healthy), the rule-⑧ deny carries NO
+    stale diagnosis. Paired with the ENABLE test above this is the non-vacuity
+    proof (stale marker present IFF mismatch).
+
+    The deny is NOT byte-identical to the base message here — the composer
+    appends the cause enumeration precisely because the stale detector did not
+    fire. That is asserted in test_dispatch_gate_cause_enumeration.py; this leg
+    owns only the stale-marker-absence cell."""
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(
+        tmp_path, _TEAM, lead_id, tasks=(("someone-else", "pending"),)
+    )
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_HEALTHY_ID)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2, f"[{mode_label}] decision unchanged (DENY)"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no Task assigned" in reason
+    assert _AUGMENT_MARKER not in reason, f"[{mode_label}] NOT augmented (healthy)"
+    assert _REALIGN_MARKER not in reason
+
+
+# =============================================================================
+# Rule ⑥ — team_name_unavailable deny site
+# =============================================================================
+
+
+def _setup_empty_team_name(monkeypatch, tmp_path):
+    """Force rule ⑥ (team_name_unavailable) by writing an EMPTY context
+    team_name — get_team_name() short-circuits empty → DENY fail-closed."""
+    plugin_root = _full_setup(monkeypatch, tmp_path)
+    # Overwrite the context file with an empty team_name (the fail-closed
+    # signal) while keeping plugin_root resolvable so we reach rule ⑥.
+    import shared.pact_context as ctx_module
+    ctx_path = tmp_path / "pact-session-context.json"
+    ctx_path.write_text(
+        json.dumps({
+            "team_name": "",
+            "session_id": _LIVE_SESSION_ID,
+            "project_dir": str(tmp_path / "project"),
+            "plugin_root": str(plugin_root),
+            "started_at": "2026-01-01T00:00:00Z",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ctx_module, "_context_path", ctx_path)
+    monkeypatch.setattr(ctx_module, "_cache", None)
+    monkeypatch.setattr(ctx_module, "_aligned_cache", None)
+    return plugin_root
+
+
+@pytest.mark.parametrize("mode_label,lead_id", _MODES)
+def test_team_name_unavailable_deny_augmented_on_stale_mismatch(
+    mode_label, lead_id, tmp_path, monkeypatch, capsys
+):
+    """ENABLE leg: the rule-⑥ team_name_unavailable deny is also augmented on a
+    stale mismatch, in BOTH modes."""
+    _setup_empty_team_name(monkeypatch, tmp_path)
+    _seed_team_with_lead(tmp_path, _TEAM, lead_id)
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2, f"[{mode_label}] DENY"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "team_name is unavailable" in reason or "team_name" in reason
+    assert _AUGMENT_MARKER in reason, f"[{mode_label}] self-diagnosis augmented"
+
+
+@pytest.mark.parametrize("mode_label,lead_id", _MODES)
+def test_team_name_unavailable_deny_unaugmented_when_no_mismatch(
+    mode_label, lead_id, tmp_path, monkeypatch, capsys
+):
+    """DISABLE leg: healthy recorded==live → rule ⑥ keeps original message."""
+    _setup_empty_team_name(monkeypatch, tmp_path)
+    _seed_team_with_lead(tmp_path, _TEAM, lead_id)
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_HEALTHY_ID)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _AUGMENT_MARKER not in reason, f"[{mode_label}] NOT augmented (healthy)"
+
+
+def test_team_name_unavailable_teammate_deny_carries_no_stale_hint(
+    tmp_path, monkeypatch, capsys
+):
+    """A registered teammate in its own process never matches the lead session
+    recorded in CLAUDE.md, so a stale hint on its rule-⑥ deny would always be false."""
+    _setup_empty_team_name(monkeypatch, tmp_path)
+    _seed_team_with_lead(tmp_path, _TEAM, _MODES[1][1], members=("tmux-subject",))
+    registry = tmp_path / ".claude" / "pact-sessions" / ".teammate-registry.jsonl"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    line = {"session_id": _LIVE_SESSION_ID, "value": f"tmux-subject@{_TEAM}"}
+    registry.write_text(json.dumps(line) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+    frame = {**_make_input(), "agent_type": "pact-test-engineer"}
+
+    code, out = _run_main(frame, capsys)
+
+    assert code == 2
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _AUGMENT_MARKER not in reason
+    assert _REALIGN_MARKER not in reason
+    assert "spawned by the team-lead" in reason
+
+
+# =============================================================================
+# Non-symptom deny rules are NOT augmented (avoid misdirecting recovery)
+# =============================================================================
+
+
+def test_non_symptom_deny_not_augmented_even_under_mismatch(
+    tmp_path, monkeypatch, capsys
+):
+    """A name-validation deny (rule ④, not a restart symptom) must NOT receive
+    the stale-team note even when a CLAUDE.md mismatch exists — it would
+    misdirect recovery."""
+    _full_setup(monkeypatch, tmp_path)
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+
+    # An invalid name triggers rule ④ (name_invalid_regex), which is NOT in
+    # _STALE_DIAGNOSABLE_RULES.
+    code, out = _run_main(_make_input(name="Bad Name!"), capsys)
+
+    assert code == 2
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _AUGMENT_MARKER not in reason
+    assert _REALIGN_MARKER not in reason
+
+
+# =============================================================================
+# Defensive never-raises: detector exception → original message, no escape
+# =============================================================================
+
+
+@pytest.mark.parametrize("mode_label,lead_id", _MODES)
+def test_detector_exception_falls_back_to_original_message(
+    mode_label, lead_id, tmp_path, monkeypatch, capsys
+):
+    """If detect_stale_session_block raises, the deny still fires with no stale
+    diagnosis attached and the gate still exits 2 — no exception escapes
+    dispatch. On this rule-⑧ input the composer then appends the cause
+    enumeration, so the raise degrades INTO the generic diagnosis rather than
+    into silence; this leg owns the stale-marker-absence cell only."""
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(
+        tmp_path, _TEAM, lead_id, tasks=(("someone-else", "pending"),)
+    )
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+
+    import dispatch_gate
+
+    def _boom(_input_data):
+        raise RuntimeError("detector blew up")
+
+    # Patch the name the augmentation helper resolves (module global imported
+    # into dispatch_gate), the same seam the helper's never-raises wrap guards.
+    monkeypatch.setattr(dispatch_gate, "detect_stale_session_block", _boom)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2, f"[{mode_label}] deny still fires despite detector raise"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no Task assigned" in reason, f"[{mode_label}] original message preserved"
+    assert _AUGMENT_MARKER not in reason, f"[{mode_label}] no partial augmentation"
+
+
+# =============================================================================
+# Helper-direct unit coverage (clean seam the lead's Q1 ruling created)
+# =============================================================================
+
+
+def test_augment_helper_passes_through_non_diagnosable_rule():
+    import dispatch_gate
+    out = dispatch_gate._augment_deny_with_stale_diagnosis(
+        "name_required", "ORIGINAL", {"session_id": "x"}
+    )
+    assert out == "ORIGINAL"
+
+
+def test_augment_helper_passes_through_non_dict_input():
+    import dispatch_gate
+    out = dispatch_gate._augment_deny_with_stale_diagnosis(
+        "no_task_assigned", "ORIGINAL", None
+    )
+    assert out == "ORIGINAL"
+
+
+def test_augment_helper_never_raises_on_detector_error(monkeypatch):
+    import dispatch_gate
+    monkeypatch.setattr(
+        dispatch_gate,
+        "detect_stale_session_block",
+        lambda _d: (_ for _ in ()).throw(ValueError("boom")),
+    )
+    out = dispatch_gate._augment_deny_with_stale_diagnosis(
+        "no_task_assigned", "ORIGINAL", {"session_id": "x"}
+    )
+    assert out == "ORIGINAL"
+
+
+def test_augment_helper_appends_on_detected_mismatch(monkeypatch):
+    import dispatch_gate
+    monkeypatch.setattr(
+        dispatch_gate,
+        "detect_stale_session_block",
+        lambda _d: "\n\nWARNING — stale session block: ...",
+    )
+    out = dispatch_gate._augment_deny_with_stale_diagnosis(
+        "team_name_unavailable", "ORIGINAL", {"session_id": "x"}
+    )
+    assert out.startswith("ORIGINAL")
+    assert _AUGMENT_MARKER in out
+    assert _REALIGN_MARKER in out
+
+
+# =============================================================================
+# Both-modes INVARIANCE pinned DIRECTLY: the in-process and tmux legs must
+# produce the SAME deny reason for the same input. The augmentation is
+# mode-agnostic (leadSessionId is read nowhere in the detection / rule-⑥/⑧
+# path), so both legs run the same code today — this assertion turns that
+# documented design property into a guard: a future change that made the
+# augmentation mode-DEPENDENT (keying on leadSessionId) would diverge the two
+# reason strings and fail here. Without it the matrix only proves "each leg
+# augments," not "the two legs agree."
+# =============================================================================
+
+
+def _augmented_reason_for_lead_id(lead_id, tmp_path, monkeypatch, capsys):
+    """Run the rule-⑧ stale-mismatch deny under a given leadSessionId and
+    return the deny reason string."""
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(
+        tmp_path, _TEAM, lead_id, tasks=(("someone-else", "pending"),)
+    )
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+    code, out = _run_main(_make_input(), capsys)
+    assert code == 2
+    return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_both_modes_produce_identical_reason_string(
+    tmp_path, monkeypatch, capsys
+):
+    """INVARIANCE: the augmented deny reason is byte-identical across the
+    in-process (lead==live) and tmux (lead!=live) topologies for the same
+    input. Pins mode-independence directly — a mode-dependent regression
+    would diverge these and fail.
+
+    Each leg gets its own tmp_path subdir + monkeypatch context via the
+    helper so the two runs do not contaminate each other (fresh HOME,
+    fresh pact_context cache reset inside _full_setup/_setup_session).
+    """
+    in_process_lead = _MODES[0][1]   # == _LIVE_SESSION_ID
+    tmux_lead = _MODES[1][1]         # != live
+    assert in_process_lead != tmux_lead, "matrix legs must differ structurally"
+
+    reason_in_process = _augmented_reason_for_lead_id(
+        in_process_lead, tmp_path / "leg_in_process", monkeypatch, capsys
+    )
+    reason_tmux = _augmented_reason_for_lead_id(
+        tmux_lead, tmp_path / "leg_tmux", monkeypatch, capsys
+    )
+
+    assert reason_in_process == reason_tmux, (
+        "augmentation must be mode-INVARIANT: the in-process and tmux legs "
+        "produced different deny reasons, implying the augmentation now keys "
+        "on leadSessionId (the forbidden mode discriminator)"
+    )
+    # And it is the augmented (not the plain) reason that is invariant.
+    assert _AUGMENT_MARKER in reason_in_process
+
+
+# =============================================================================
+# GATE-SITE graceful-degradation integration tests (drive main() end-to-end,
+# not just the detector unit): on a degraded detection input the ORIGINAL
+# deny message stands verbatim — no augmentation, decision unchanged.
+# =============================================================================
+
+
+def test_gate_site_claude_md_absent_falls_back_to_original_message(
+    tmp_path, monkeypatch, capsys
+):
+    """M2: when the project CLAUDE.md is ABSENT (the worktree/gitignored case
+    the PR leans on), the detector returns None → the rule-⑧ deny carries NO
+    stale diagnosis, end-to-end through dispatch_gate.main(). (The composer
+    appends the cause enumeration on this path; that cell is owned by
+    test_dispatch_gate_cause_enumeration.py.)
+
+    Distinct from the healthy-recorded==live disable leg: there NO file is
+    written at all, and CLAUDE_PROJECT_DIR points at a dir with no CLAUDE.md
+    (neither .claude/CLAUDE.md nor ./CLAUDE.md), exercising the
+    `content is None` branch rather than the recorded==actual branch.
+    """
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(
+        tmp_path, _TEAM, _LIVE_SESSION_ID, tasks=(("someone-else", "pending"),)
+    )
+    # Point CLAUDE_PROJECT_DIR at an empty dir — NO CLAUDE.md on either path.
+    empty_project = tmp_path / "no_claude_md_project"
+    empty_project.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(empty_project))
+    assert not (empty_project / "CLAUDE.md").exists()
+    assert not (empty_project / ".claude" / "CLAUDE.md").exists()
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2, "decision unchanged (DENY) when CLAUDE.md absent"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no Task assigned" in reason, "original deny preserved"
+    assert _AUGMENT_MARKER not in reason, "no augmentation without a CLAUDE.md to compare"
+    assert _REALIGN_MARKER not in reason
+
+
+def test_gate_site_unset_project_dir_falls_back_to_original_message(
+    tmp_path, monkeypatch, capsys
+):
+    """M2 sibling: CLAUDE_PROJECT_DIR UNSET → detector returns None (cannot
+    locate CLAUDE.md) → rule-⑧ deny with NO stale diagnosis, end-to-end. (The
+    composer appends the cause enumeration on this path.)"""
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(
+        tmp_path, _TEAM, _LIVE_SESSION_ID, tasks=(("someone-else", "pending"),)
+    )
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no Task assigned" in reason
+    assert _AUGMENT_MARKER not in reason
+
+
+@pytest.mark.parametrize(
+    "bad_session_id",
+    ["", "   ", "unknown-abcd1234", "good\nbad"],
+    ids=["empty", "whitespace_only", "unknown_sentinel", "control_char"],
+)
+def test_gate_site_bad_session_id_falls_back_to_original_message(
+    bad_session_id, tmp_path, monkeypatch, capsys
+):
+    """M3: an invalid/sentinel/control-char stdin session_id makes the detector
+    return None (per _is_unknown_or_missing_session — an unvalidated id must
+    never be interpolated into the warning) → the rule-⑧ deny carries NO stale
+    diagnosis, even though a stale-recorded CLAUDE.md is present. (The composer
+    appends the cause enumeration on this path.)
+
+    The CLAUDE.md records a DIFFERENT id, so were the bad id naively compared
+    it would 'mismatch' and wrongly augment; the predicate gate must suppress
+    that. Drives main() end-to-end with a hand-built input carrying the bad
+    session_id (the shared _make_input hardcodes a valid one).
+    """
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(
+        tmp_path, _TEAM, _LIVE_SESSION_ID, tasks=(("someone-else", "pending"),)
+    )
+    _write_project_claude_md(monkeypatch, tmp_path, _RECORDED_STALE_ID)
+
+    bad_input = _make_input()
+    bad_input["session_id"] = bad_session_id
+
+    code, out = _run_main(bad_input, capsys)
+
+    assert code == 2, "decision unchanged (DENY) under a bad session_id"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no Task assigned" in reason, "original deny preserved"
+    assert _AUGMENT_MARKER not in reason, (
+        "a bad/sentinel session_id must NOT be compared or interpolated → "
+        "no augmentation"
+    )
+
+
+# =============================================================================
+# Bounded deny-message length (SEC): a pathologically long recorded/actual
+# session_id must NOT be reflected verbatim into the deny message. Written
+# tolerantly of the exact cap locus (devops owns the hook-side cap) — asserts
+# the full long id is NOT present AND the augmented region is length-bounded.
+# =============================================================================
+
+
+def test_deny_message_bounds_oversized_recorded_session_id(
+    tmp_path, monkeypatch, capsys
+):
+    """SEC: when the CLAUDE.md Resume line records an absurdly long session_id,
+    the augmented deny message must not echo it in full (a cap bounds the
+    reflected id). Robust to the exact cap value/locus: asserts the raw
+    300-char id does not appear verbatim, while the augmentation still fires
+    (a real mismatch is detected).
+
+    The recorded id is hex-shaped (matches _RESUME_LINE_RE's [0-9a-f-]+) so the
+    detector genuinely sees a mismatch vs the live 'test-session'.
+    """
+    oversized = "a" * 300  # hex-class, far exceeds any reasonable id length
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    _seed_team_with_lead(
+        tmp_path, _TEAM, _LIVE_SESSION_ID, tasks=(("someone-else", "pending"),)
+    )
+    _write_project_claude_md(monkeypatch, tmp_path, oversized)
+
+    code, out = _run_main(_make_input(), capsys)
+
+    assert code == 2
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    # Augmentation fired (a genuine mismatch was detected)...
+    assert _AUGMENT_MARKER in reason, "oversized id is still a real mismatch"
+    # ...but the raw oversized id is NOT reflected verbatim — it is capped.
+    assert oversized not in reason, (
+        "the full oversized recorded session_id must not be echoed into the "
+        "deny message (it must be length-capped)"
+    )
+    # Defense-in-depth, tolerant of the exact cap value: devops's stated cap is
+    # 64, so a contiguous run far above it must not survive. Allow generous
+    # slack (100) so this is not brittle to the precise locus while still
+    # failing on a verbatim 300-char echo.
+    assert "a" * 100 not in reason, "no ~100-char raw-id run should survive the cap"

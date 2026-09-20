@@ -1,0 +1,59 @@
+{
+  "name": "PACT",
+  "version": "4.8.1",
+  "description": "Orchestration harness that turns Claude Code into a coordinated team of specialist AI agents",
+  "author": {
+    "name": "Synaptic-Labs-AI",
+    "url": "https://github.com/Synaptic-Labs-AI/PACT-Plugin"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/Synaptic-Labs-AI/PACT-Plugin",
+  "homepage": "https://github.com/Synaptic-Labs-AI/PACT-Plugin",
+  "keywords": [
+    "pact",
+    "vsm",
+    "viable-system-model",
+    "agents",
+    "orchestration",
+    "development",
+    "architecture",
+    "testing",
+    "multi-agent",
+    "n8n",
+    "workflow",
+    "telegram",
+    "conversation-theory"
+  ],
+  "commands": [
+    "./commands/bootstrap.md",
+    "./commands/orchestrate.md",
+    "./commands/comPACT.md",
+    "./commands/rePACT.md",
+    "./commands/imPACT.md",
+    "./commands/peer-review.md",
+    "./commands/plan-mode.md",
+    "./commands/wrap-up.md",
+    "./commands/pause.md",
+    "./commands/refresh.md",
+    "./commands/next.md",
+    "./commands/pin-memory.md",
+    "./commands/telegram-setup.md",
+    "./commands/prune-memory.md"
+  ],
+  "agents": [
+    "./agents/pact-architect.md",
+    "./agents/pact-auditor.md",
+    "./agents/pact-backend-coder.md",
+    "./agents/pact-database-engineer.md",
+    "./agents/pact-devops-engineer.md",
+    "./agents/pact-frontend-coder.md",
+    "./agents/pact-n8n.md",
+    "./agents/pact-orchestrator.md",
+    "./agents/pact-preparer.md",
+    "./agents/pact-qa-engineer.md",
+    "./agents/pact-secretary.md",
+    "./agents/pact-security-engineer.md",
+    "./agents/pact-test-engineer.md"
+  ],
+  "skills": "./skills/"
+}

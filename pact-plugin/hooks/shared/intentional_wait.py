@@ -1,0 +1,411 @@
+"""
+Location: pact-plugin/hooks/shared/intentional_wait.py
+Summary: `intentional_wait` metadata schema — the teammate-facing contract
+         for signalling a legitimate wait on an in_progress task (teachback
+         approval, inter-commit hold, peer reply, etc.). Also the canonical
+         self-complete-exemption predicate for team-lead-side task-file inspection
+         and audit tooling.
+Used by: teammate-authored metadata on Task records, team-lead inspection,
+         audit tooling, and the PostToolUse advisory gate
+         `task_lifecycle_gate.py`. The exemption predicate
+         (is_self_complete_exempt) is a pure function read by that advisory
+         gate (advisory-only — it cannot DENY; it emits a `self_completion`
+         advisory + a `completion_disputed` writeback when a non-exempt
+         teammate self-completes) as well as by team-lead instructions and
+         audit consumers. No hook BLOCKS on it; the exemption is not enforced
+         (it stays instruction-level). See skills/pact-agent-teams/SKILL.md
+         and agents/pact-orchestrator.md for the contract.
+
+Contract: pure functions; never raise. Malformed flags fail loud — e.g.
+`wait_stale` returns True on any parse error so a broken flag cannot
+silently be interpreted as a fresh wait. is_self_complete_exempt defaults
+to False on malformed input (conservative: never silently exempt).
+
+Public surface:
+- KNOWN_REASONS / KNOWN_RESOLVERS — vocabulary hints (free-form strings
+  still accepted by validate_wait).
+- DEFAULT_THRESHOLD_MINUTES — staleness horizon (30 min).
+- SELF_COMPLETE_EXEMPT_AGENT_TYPES — agentType tokens whose owners may
+  self-complete (memory-save, etc.). Companion predicate:
+  is_self_complete_exempt. Resolution is via team-config lookup
+  (member.agentType), NOT owner name — secretaries spawned under any
+  name (e.g. session-secretary) reach the carve-out as long as their
+  agentType is in this set.
+- TEACHBACK_EXEMPT_AGENT_TYPES — agentType tokens whose owners are
+  exempt from the teachback-gated dispatch pattern (no Task A
+  teachback gate; single-task dispatch). Consumed by
+  task_lifecycle_gate.work_addblockedby_missing via is_teachback_exempt.
+  Same team-config agentType lookup as the prior constant.
+- canonical_since() — ISO-8601 UTC timestamp helper for the `since` field.
+- validate_wait(wait_metadata) — True iff the flag is well-formed.
+- wait_stale(wait_metadata) — True iff the flag has aged past threshold.
+- is_self_complete_exempt(task, team_name="", teams_dir=None) — True iff
+  the task is exempt from the team-lead-only-completion rule (by
+  team-config-resolved agentType, or signal-task pattern).
+- is_teachback_exempt(owner, team_name="", teams_dir=None) — True iff
+  the owner's team-config agentType is in TEACHBACK_EXEMPT_AGENT_TYPES.
+  Consumed by task_lifecycle_gate.work_addblockedby_missing.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+import shared.pact_context as pact_context
+
+
+# Reason vocabulary — frozenset, not Enum, so teammates can include custom
+# reasons when instrumentation hasn't caught up. validate_wait only checks
+# non-empty string; reasons are for humans and audit logs.
+KNOWN_REASONS = frozenset({
+    "awaiting_teachback_approved",
+    "awaiting_lead_commit",
+    "awaiting_amendment_review",
+    "awaiting_post_handoff_decision",
+    "awaiting_peer_response",
+    "awaiting_user_decision",
+    "awaiting_blocker_resolution",
+    "awaiting_lead_completion",
+    "awaiting_lead_takeover",
+})
+
+KNOWN_RESOLVERS = frozenset({"lead", "peer", "user", "external"})
+
+DEFAULT_THRESHOLD_MINUTES = 30
+
+
+# AgentType tokens whose owners may self-complete because the team-lead
+# has no acceptance criteria to judge. Exemption is narrow by design: each
+# entry must have a documented rationale.
+#
+# `pact-secretary` (memory-save tasks): purely internal bookkeeping.
+#   The secretary writes a HANDOFF describing what was saved; the team-lead
+#   has no acceptance criteria — judging memory-save quality is the
+#   secretary's domain. Lead-as-gate would add 12-18 transitions per
+#   session with zero quality signal.
+#
+# Resolution is by team-config agentType lookup (see
+# `_is_exempt_agent_type` below + `_iter_members` upstream), NOT owner
+# name. A secretary spawned under any name (`session-secretary`,
+# `team-secretary`, etc.) still reaches the carve-out as long as the
+# team-config records its agentType as `pact-secretary`.
+#
+# Auditor signal-tasks are NOT in this set — they self-complete via
+# `metadata.completion_type == "signal"` + `metadata.type in {"blocker",
+# "algedonic"}` (the same inline-literal pattern used in task_utils and
+# session_resume). Two distinct exemption surfaces:
+# - SELF_COMPLETE_EXEMPT_AGENT_TYPES: by team-config agentType lookup.
+# - signal-task pattern: by task metadata, applies to any agent.
+SELF_COMPLETE_EXEMPT_AGENT_TYPES: frozenset = frozenset({
+    "pact-secretary",
+})
+
+
+# AgentType tokens whose owners are exempt from the teachback-gated
+# dispatch pattern. Semantically distinct from the prior surface:
+# - SELF_COMPLETE_EXEMPT_AGENT_TYPES answers "may this owner self-complete?"
+# - TEACHBACK_EXEMPT_AGENT_TYPES answers "should the team-lead dispatch this
+#   owner via the Task A (teachback) + Task B (work) pair, or skip Task A?"
+#
+# `pact-secretary` is included because the secretary's task-system work
+# is uniformly rote and skill-defined (session briefing at spawn, HANDOFF
+# harvest at fixed workflow boundaries per pact-handoff-harvest skill,
+# memory saves). The teachback round-trip catches no real misunderstanding
+# for these workflows; the ceremony is overhead.
+#
+# Resolution is by team-config agentType lookup (see
+# `_is_teachback_exempt_agent_type` below + `_iter_members` upstream), NOT
+# owner name. A secretary spawned under any name (`session-secretary`,
+# `team-secretary`, etc.) still reaches the carve-out as long as the
+# team-config records its agentType as `pact-secretary`.
+#
+# Future divergence is supported: a hypothetical rote-only agentType
+# joins the set with a one-line change. Two frozensets, two operational
+# surfaces, fully decoupled — DO NOT recouple by aliasing to the prior
+# constant.
+TEACHBACK_EXEMPT_AGENT_TYPES: frozenset = frozenset({
+    "pact-secretary",
+})
+
+
+def _is_exempt_agent_type(
+    owner: str,
+    team_name: str,
+    teams_dir: str | None = None,
+) -> bool:
+    """Return True iff the team-config member matching `owner` has an
+    agentType in SELF_COMPLETE_EXEMPT_AGENT_TYPES.
+
+    Fail-closed: returns False on every error path (empty owner, empty
+    team_name, missing/malformed config, member not found, missing or
+    empty agentType field, non-string inputs). Conservative posture —
+    never silently exempt. This matches the existing predicate semantics
+    on malformed input: a non-exempt teammate that gets falsely exempted
+    via a corrupt config could self-complete tasks the lead needed to
+    inspect, exactly the failure mode lead-only-completion authority
+    defends against.
+
+    Pure-after-I/O. Reads the team config via `_iter_members`, which is
+    itself fail-open `[]` on every error path (missing file, OSError,
+    JSONDecodeError, non-dict members, etc.). The fail-open of the
+    upstream becomes fail-closed for this predicate because we require
+    a positive match.
+
+    NOT a hook predicate — pure helper for
+    shared.intentional_wait.is_self_complete_exempt.
+    Parameter shape is owner-or-role + team_name + teams_dir override, with
+    upstream-config-read delegation to `_iter_members`. The error semantics
+    deliberately fail-CLOSE (return False to deny exemption) rather than
+    fail-OPEN: denying exemption on a missing/malformed config is the
+    conservative choice for this consumer — see the docstring header.
+
+    Args:
+        owner: Task owner name (matched against member.name).
+        team_name: Team name for config path. Empty string returns False.
+        teams_dir: Override teams directory (for testing). When omitted,
+                   _iter_members uses ``~/.claude/teams/``.
+    """
+    if not isinstance(owner, str) or not owner:
+        return False
+    if not isinstance(team_name, str) or not team_name:
+        return False
+    for member in pact_context._iter_members(team_name, teams_dir):
+        if member.get("name") == owner:
+            agent_type = member.get("agentType")
+            return (
+                isinstance(agent_type, str)
+                and agent_type in SELF_COMPLETE_EXEMPT_AGENT_TYPES
+            )
+    return False
+
+
+def _is_teachback_exempt_agent_type(
+    owner: str,
+    team_name: str,
+    teams_dir: str | None = None,
+) -> bool:
+    """Return True iff the team-config member matching `owner` has an
+    agentType in TEACHBACK_EXEMPT_AGENT_TYPES.
+
+    Parallel to `_is_exempt_agent_type` but keyed on a different
+    constant so the dispatch-exemption policy can diverge from the
+    self-completion policy without coupling. See the
+    TEACHBACK_EXEMPT_AGENT_TYPES constant docstring for the semantic
+    distinction.
+
+    Same fail-closed semantics as the sibling predicates: returns False
+    on every error path. Conservative posture — a non-exempt owner
+    falsely exempted via a corrupt config would skip the teachback
+    round-trip the team-lead might genuinely have wanted.
+
+    Consumed by `task_lifecycle_gate.evaluate_lifecycle` via the public
+    `is_teachback_exempt` predicate.
+
+    NOT a hook predicate — pure helper.
+
+    Args:
+        owner: Task owner name (matched against member.name).
+        team_name: Team name for config path. Empty string returns False.
+        teams_dir: Override teams directory (for testing). When omitted,
+                   _iter_members uses ``~/.claude/teams/``.
+    """
+    if not isinstance(owner, str) or not owner:
+        return False
+    if not isinstance(team_name, str) or not team_name:
+        return False
+    for member in pact_context._iter_members(team_name, teams_dir):
+        if member.get("name") == owner:
+            agent_type = member.get("agentType")
+            return (
+                isinstance(agent_type, str)
+                and agent_type in TEACHBACK_EXEMPT_AGENT_TYPES
+            )
+    return False
+
+
+def is_teachback_exempt(
+    owner: str,
+    team_name: str = "",
+    teams_dir: str | None = None,
+) -> bool:
+    """Return True iff this owner is exempt from teachback-gated dispatch.
+
+    Single exemption surface: team-config agentType lookup. Unlike
+    `is_self_complete_exempt(task, team_name)`, there is no signal-task
+    analog for the dispatch surface — dispatch is a per-spawn decision
+    keyed on agentType only.
+
+    Resolution via `_is_teachback_exempt_agent_type(owner, team_name,
+    teams_dir)`. Fail-closed on every error path.
+
+    Used by `task_lifecycle_gate.evaluate_lifecycle` to suppress the
+    `work_addblockedby_missing` advisory when the work task's owner is
+    teachback-exempt.
+
+    Args:
+        owner: Task owner name (matched against team-config member.name).
+        team_name: Team name for config path. Empty string returns False.
+        teams_dir: Override teams directory (for testing).
+    """
+    return _is_teachback_exempt_agent_type(owner, team_name, teams_dir)
+
+
+def canonical_since() -> str:
+    """
+    Return the canonical ISO-8601 UTC `since` timestamp used by auto-set
+    sites and the manual-set convention.
+
+    Round-trip guarantee: the return value parses cleanly via the same
+    `fromisoformat(s.replace("Z", "+00:00"))` path validate_wait uses.
+    timespec="seconds" drops microseconds for stable equality across
+    cross-system timestamps and avoids platform-specific formatting drift.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def validate_wait(wait_metadata: Any) -> bool:
+    """
+    Return True iff wait_metadata is a well-formed intentional_wait dict.
+
+    Required keys: reason (non-empty str), expected_resolver (non-empty str —
+    KNOWN_RESOLVERS preferred but any non-empty string accepted), since
+    (tz-aware ISO-8601 timestamp parseable by datetime.fromisoformat, with
+    a trailing 'Z' accepted as UTC).
+
+    Unknown keys are preserved (forward-compat).
+    """
+    if not isinstance(wait_metadata, dict):
+        return False
+
+    reason = wait_metadata.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return False
+
+    resolver = wait_metadata.get("expected_resolver")
+    if not isinstance(resolver, str) or not resolver.strip():
+        return False
+
+    since = wait_metadata.get("since")
+    if not isinstance(since, str):
+        return False
+
+    try:
+        parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+
+    # Reject tz-naive timestamps. A naive timestamp from a non-UTC teammate
+    # could be hours off real UTC, producing silently wrong age computations.
+    # Instrumentation always emits tz-aware via canonical_since(), so a naive
+    # value is always a teammate bug — surface it fast rather than paper over.
+    if parsed.tzinfo is None:
+        return False
+
+    return True
+
+
+def wait_stale(
+    wait_metadata: Any,
+    threshold_minutes: int = DEFAULT_THRESHOLD_MINUTES,
+    _now: datetime | None = None,
+) -> bool:
+    """
+    Return True iff the intentional_wait flag is stale (wait should be
+    treated as expired; fresh SET needed to keep the semantic).
+
+    Stale when:
+    - wait_metadata fails validation (malformed flag → fail loud), OR
+    - elapsed time since `since` is >= threshold_minutes.
+
+    Future-dated `since` (clock drift or tampering) yields a negative age
+    and is treated as NOT stale — conservative: don't treat a teammate
+    whose clock skewed forward as stale. The threshold still re-triggers
+    once wall-clock catches up.
+
+    Callers carrying an injected clock pass it as _now.
+    """
+    if not validate_wait(wait_metadata):
+        return True
+
+    since = datetime.fromisoformat(wait_metadata["since"].replace("Z", "+00:00"))
+    now = _now or datetime.now(timezone.utc)
+    age_minutes = (now - since).total_seconds() / 60
+    return age_minutes >= threshold_minutes
+
+
+def is_self_complete_exempt(
+    task: Any,
+    team_name: str = "",
+    teams_dir: str | None = None,
+) -> bool:
+    """
+    Return True iff this task is exempt from the team-lead-only-completion rule.
+
+    Two exemption surfaces (OR-combined):
+    1. By team-config agentType: task.owner names a team member whose
+       agentType is in SELF_COMPLETE_EXEMPT_AGENT_TYPES. Resolution
+       happens via `_is_exempt_agent_type(owner, team_name, teams_dir)`,
+       which reads the team config (harness-managed SSOT). Secretaries
+       spawned under any name (`session-secretary`, `team-secretary`,
+       etc.) reach this surface as long as their agentType matches.
+       Requires `team_name`; with `team_name=""` (the default) this
+       surface short-circuits to False (fail-closed).
+    2. By signal-task metadata: task.metadata.completion_type == "signal" AND
+       task.metadata.type in {"blocker", "algedonic"}. Mirrors the inline
+       literal in agent_handoff_emitter / task_utils / session_resume.
+       Independent of `team_name`.
+
+    Pure function; never raises on plain dicts (PACT task representation
+    via json.loads); defaults to False on missing or malformed fields
+    (conservative — never silently exempt).
+
+    Read by the PostToolUse advisory gate `task_lifecycle_gate.py` (the
+    `self_completion` advisory) as well as team-lead-side task-file inspection,
+    audit tooling, and future consumers. That gate is advisory-only — it
+    cannot DENY; on a non-exempt self-completion it emits an advisory + a
+    `completion_disputed` writeback. No hook BLOCKS on it and the exemption
+    is not enforced (nothing forces an exempt teammate to self-complete —
+    that remains instruction-level), so reading it here introduces no
+    livelock-capable hook surface.
+
+    TRUST BOUNDARY: `owner` is teammate-writable via TaskUpdate(owner=...),
+    BUT exemption now requires the team config to record that owner with
+    a privileged agentType — the team config is harness-managed and never
+    teammate-writable. The carve-out is bounded by both
+    SELF_COMPLETE_EXEMPT_AGENT_TYPES being a curated short list
+    (currently `pact-secretary` only) AND the team-config-as-SSOT
+    requirement. A non-exempt teammate cannot self-promote by spoofing
+    `owner`: the team-config lookup must independently confirm the
+    privileged agentType. No in-plugin consumer reads this predicate at
+    runtime — instructions and audit tooling are the defense. Future
+    extensions adding new agentTypes to SELF_COMPLETE_EXEMPT_AGENT_TYPES
+    must re-evaluate this boundary.
+
+    Args:
+        task: Task dict (from json.loads of a task record).
+        team_name: Team name used for the agentType lookup. Empty string
+                   (default) short-circuits surface 1 to False; surface 2
+                   still applies.
+        teams_dir: Override teams directory (for testing). Threaded to
+                   `_iter_members`.
+    """
+    if not isinstance(task, dict):
+        return False
+
+    metadata = task.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return False
+
+    # Surface 1: owner's team-config agentType is in the exempt set.
+    owner = task.get("owner")
+    if isinstance(owner, str) and _is_exempt_agent_type(owner, team_name, teams_dir):
+        return True
+
+    # Surface 2: signal-task pattern (inline-literal mirror).
+    if metadata.get("completion_type") == "signal":
+        signal_type = metadata.get("type")
+        if signal_type in ("blocker", "algedonic"):
+            return True
+
+    return False
