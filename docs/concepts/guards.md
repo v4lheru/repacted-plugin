@@ -10,10 +10,14 @@ A [guard](../glossary.md#guard) is a hook that reads a tool call before it runs.
 | [`output_secret_scan`](../glossary.md#output-secret-scan) | Replaces a secret value in Bash output with `[REDACTED:...]`. |
 | `egress_guard` | A credential leaving your machine through `curl`, `gh`, `scp`, an MCP tool, WebFetch or an Artifact. |
 | `git_commit_check` | A commit whose added lines hold a secret. |
-| `write_checks` | A commit message with AI attribution, a body, or more than one sentence. |
+| `write_checks` | A commit message with AI attribution, a body, or more than one sentence, once you turn the rule on (see below). |
 | [`merge_guard_pre`, `merge_guard_post`](../glossary.md#merge-guard) | A merge, PR close, force-push, branch delete or push to main, until you approve it. |
 | `process_table_guard` | Reads such as `ps aux` that print other processes' command lines, which can hold tokens. |
 | `worktree_guard` | Edits outside the active [worktree](worktrees.md). |
+
+## The commit-message rule
+
+The commit-message rule ships off: set `modes.commit_rule` to `"gate"` in `bin/checks.json` to refuse commits with AI attribution, a body or more than one sentence, and list any words to refuse in `commit_rule.deny_words` (an empty list checks none).
 
 ## What a refusal looks like
 

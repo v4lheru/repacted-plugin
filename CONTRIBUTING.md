@@ -26,13 +26,13 @@ This repository is built from two sources, and a pull request takes a different 
 
 **Public-owned paths** are written here, in this repository:
 
-- `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`
+- `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`
 - `docs/`
 - `.github/workflows/`, `.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`
 
 A pull request on these paths is reviewed and merged here, as usual.
 
-**Export-owned paths** are everything else: the plugin in `pact-plugin/`, `.claude-plugin/`, `LICENSE`, `NOTICE.md`, `dev/`, `scripts/`, `testing/` and the other root files. A script exports them from the maintainer's source repository on each release. A commit made here on one of these paths would be overwritten by the next export, so it is not merged here.
+**Export-owned paths** are everything else: the plugin in `pact-plugin/` (with its `CHANGELOG.md` and `NOTICE.md`), `.claude-plugin/`, `.cursor/`, `dev/`, `scripts/`, `testing/`, `upstream/`, `.github/ownership.json`, `LICENSE` and the other root files. `.github/ownership.json` holds the exact list of both kinds. A script exports them from the maintainer's source repository on each release. A commit made here on one of these paths would be overwritten by the next export, so it is not merged here.
 
 Instead, the maintainer imports your pull request into the source repository, and your change ships in the next release. The pull request is then closed, not merged. The imported commit carries a `Co-authored-by:` line with your name, so you keep the credit.
 
@@ -61,7 +61,7 @@ Add one regression test for each bug you fix or behaviour you change.
 ## Style
 
 - Write plain English: short sentences, no marketing words.
-- A commit message is one sentence, with no body. The plugin's own commit check refuses other shapes.
+- A commit message is one sentence, with no body. The plugin's commit check, when you turn it on, refuses other shapes.
 
 ## Code of conduct
 

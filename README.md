@@ -102,7 +102,7 @@ The retired setting is blunt: it stops the remote configuration channel of Claud
 
 ## Requirements
 
-- The Claude Code CLI. Version 2.1.302 is tested. Other Claude Code apps are not tested.
+- The Claude Code CLI. Version 2.1.288 is tested in CI. Other Claude Code apps are not tested.
 - Python 3.9 or newer, as `python3` on your `PATH`, and git.
 - macOS (tested) or Linux (expected to work). On Windows, use WSL (expected to work, not tested). Native Windows is not supported: the hooks need POSIX file locks.
 - Optional: Telegram updates from agents. They are off until you run `/repacted:telegram-setup`.
