@@ -108,10 +108,11 @@ rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/repacted"     # lock files for CLA
 - [Concepts](docs/concepts/index.md): the lead, teammates, tasks, guards and memory.
 - [Glossary](docs/glossary.md): every word and key in one table.
 - [Troubleshooting](docs/troubleshooting.md): one section for each rule id.
+- [Knowledge base](docs/kb.md): distill lessons, review them and share them with your team.
 
-## Coming next
+## Build a knowledge base
 
-This release has an early knowledge-base distiller, `repact-distill`, off by default (`distill.enabled`). It turns notes the agents already wrote into proposed lessons for a folder you own, and you review each one. Next: distilling from session transcripts, reviewing proposals in batches, and a guide to building your knowledge base. No dates yet.
+From 1.8.0, `repact-distill` turns notes the agents already wrote, and if you allow it your lead session transcripts, into proposed lessons for a folder you own. It is off by default (`distill.enabled`). A dry run shows what it would read and cost and sends nothing. It can send through `claude -p`, the Anthropic API or the Batch API. You or the lead review the proposals one at a time or 20 at a time, and you can promote accepted lessons into a repository for your team. Read the [knowledge base guide](docs/kb.md) first: it covers privacy, cost and what to check before you distill work sessions.
 
 ## Contributing, security, license
 

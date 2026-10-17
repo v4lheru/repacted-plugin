@@ -7,10 +7,12 @@ Each row gives the plain word, the key or file name you see in rePACTed, and one
 | <a id="agent-memory"></a>agent memory | `~/.claude/agent-memory/<agent>/MEMORY.md` | Notes that one agent type keeps across sessions. Only the top of the index loads. | [Memory](concepts/memory.md) |
 | <a id="agent-teams-flag"></a>Agent Teams flag | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` in `settings.json` | The Claude Code setting that lets one session start teammates. `/repacted:init` turns it on. | [Lead and teammates](concepts/lead-and-teammates.md) |
 | <a id="amendment"></a>amendment | `metadata.amend_<n>`, `repact-amend` | A change to a brief that the lead writes on the task after the teammate started. | [Task files and waits](concepts/task-files-and-waits.md) |
+| <a id="auto-accept-bar"></a>auto-accept bar | the `bar:` line of `kb-note queue` | A class of KB proposals may skip review once people accepted at least 90% of them unedited over at least 50 decisions. | [Knowledge base](kb.md#the-auto-accept-bar) |
 | <a id="bootstrap"></a>bootstrap | `/repacted:bootstrap` | The lead's first step in a session: find the team and show paused work. Spawns are refused until it ran. | [Lead and teammates](concepts/lead-and-teammates.md) |
 | <a id="compact"></a>comPACT | `/repacted:comPACT` | Send one or more specialists on a small, self-contained task, with no phases. | [Lead and teammates](concepts/lead-and-teammates.md) |
 | <a id="config-folder"></a>config folder | `$CLAUDE_CONFIG_DIR`, else `~/.claude` | Where Claude Code and rePACTed keep settings, teams, tasks, sessions and memory. | [Task files and waits](concepts/task-files-and-waits.md) |
 | <a id="digest"></a>digest | 12 hex characters in a `stored on #<id>` line | A short fingerprint of a stored teachback or HANDOFF. The lead checks the notify against it. | [HANDOFF](concepts/handoff.md) |
+| <a id="distiller"></a>distiller | `repact-distill`, `distill` in `profile.json` | Reads notes the agents wrote, and optionally lead transcripts, and asks a model for proposed lessons. Off by default. | [Knowledge base](kb.md) |
 | <a id="distill-pass"></a>distill pass | `distill-inbox` | At wrap-up, the lead moves new lessons from the inboxes into skills or docs. | [Memory](concepts/memory.md) |
 | <a id="doctor"></a>doctor | `repact-doctor` | A health check: one line per check, then the mode line. | [Guards](concepts/guards.md) |
 | <a id="env-get"></a>env-get | `env-get FILE KEY -- <cmd>` | Runs a command with one value from a `.env` file, without printing the file. | [Guards](concepts/guards.md) |
@@ -18,9 +20,11 @@ Each row gives the plain word, the key or file name you see in rePACTed, and one
 | <a id="guard"></a>guard | a hook such as `env_guard` | A check that reads a tool call before it runs and refuses it or rewrites its output. | [Guards](concepts/guards.md) |
 | <a id="guards-only-mode"></a>guards-only mode | `mode: guards-only (Agent Teams flag off)` | The guards work, but the lead cannot start teammates. | [Guards](concepts/guards.md) |
 | <a id="handoff"></a>HANDOFF | `metadata.handoff` | A teammate's final report on its work task. | [HANDOFF](concepts/handoff.md) |
+| <a id="held-item"></a>held item | `[held: <reasons>; the user decides]` in `kb-note queue` | A distilled lesson the checks flagged. Only you can accept or edit it, at your own terminal. | [Knowledge base](kb.md#4-review-the-proposals) |
 | <a id="inbox"></a>inbox | `MEMORY-inbox.md` | The file where an agent adds each new lesson as one line. | [Memory](concepts/memory.md) |
 | <a id="init"></a>init | `/repacted:init`, `repact-init` | One setup command for your machine and, with `--repo`, the current repository. | [Quickstart](quickstart.md) |
-| <a id="kb"></a>knowledge base (KB) | `paths.kb` in `~/.config/repacted/profile.json` | An optional folder of notes you own. It is off until you set the path. | [Memory](concepts/memory.md) |
+| <a id="kb"></a>knowledge base (KB) | `paths.kb` in `~/.config/repacted/profile.json` | An optional folder of notes you own. It is off until you set the path. | [Knowledge base](kb.md) |
+| <a id="kb-gate"></a>KB-GATE | `<kb>/_kb/queue/`, `kb-note queue`, `kb-note drain` | The review queue every new KB lesson waits in until someone decides it. | [Knowledge base](kb.md#4-review-the-proposals) |
 | <a id="lead"></a>lead | `repacted:pact-orchestrator` | The agent in your main session. It plans, hands out tasks, checks results and completes tasks. | [Lead and teammates](concepts/lead-and-teammates.md) |
 | <a id="managed-block"></a>managed block | the project `CLAUDE.md` | The part of `CLAUDE.md` that rePACTed keeps up to date: session pointers, pins and working memory. | [Memory](concepts/memory.md) |
 | <a id="merge-guard"></a>merge guard | `merge_guard_pre`, `merge_guard_post` | Refuses a merge, force-push, branch delete or push to main until you approve it. | [Guards](concepts/guards.md) |
@@ -29,6 +33,7 @@ Each row gives the plain word, the key or file name you see in rePACTed, and one
 | <a id="pact-memory"></a>pact-memory | `~/.claude/pact-memory/memory.db`, skill `repacted:pact-memory` | A searchable store of decisions and lessons that every agent and session shares. | [Memory](concepts/memory.md) |
 | <a id="phase"></a>phase | `PREPARE`, `ARCHITECT`, `CODE`, `TEST` | The steps of `/repacted:orchestrate`. Each phase is a task. | [Lead and teammates](concepts/lead-and-teammates.md) |
 | <a id="pin"></a>pin | `/repacted:pin-memory`, `/repacted:prune-memory` | Context you keep in `CLAUDE.md` on purpose, so every session sees it. | [Memory](concepts/memory.md) |
+| <a id="promote"></a>promote | `repact-distill promote`, `<repo>/.repacted/kb/<id>.md` | Copy an accepted KB lesson into a repository, one confirmed lesson at a time. | [Knowledge base](kb.md#5-promote-lessons-into-a-repository) |
 | <a id="refusal"></a>refusal | `<check>: <reason> → <instead> [rule: <id>]` | The line a guard prints when it stops a tool call. | [Guards](concepts/guards.md) |
 | <a id="rejection"></a>rejection | `metadata.teachback_rejection`, `metadata.handoff_rejection` | The lead's note on what to fix. The teammate revises on the same task. | [Teachback](concepts/teachback.md) |
 | <a id="repact-explain"></a>explain | `repact-explain` | Shows the last refusals with the rule id, the way through and the help page anchor. | [Guards](concepts/guards.md) |

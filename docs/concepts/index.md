@@ -16,6 +16,7 @@ Read the pages in this order. Each one is short and has one small example.
 | [Worktrees](worktrees.md) | How each feature gets its own checkout and branch |
 | [Guards](guards.md) | What the hooks refuse, and how to get past a refusal the right way |
 | [Memory](memory.md) | What the team remembers between sessions, and where |
+| [Knowledge base guide](../kb.md) | How to distill lessons from your sessions, review them and share them |
 
 A typical round, in one picture:
 

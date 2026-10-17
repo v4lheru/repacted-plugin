@@ -7,7 +7,7 @@ rePACTed keeps what is worth keeping in a few places. Each one has one job.
 | [pact-memory](../glossary.md#pact-memory), `~/.claude/pact-memory/memory.db` | Decisions, lessons and named parts of your system, searchable | agents, through the `repacted:pact-memory` skill | The newest few, as Working Memory in `CLAUDE.md` |
 | [Agent memory](../glossary.md#agent-memory), `~/.claude/agent-memory/<agent>/` | Craft notes for one agent type, such as a framework habit | each agent | Only the top of `MEMORY.md` |
 | The [managed block](../glossary.md#managed-block) in your project `CLAUDE.md` | Session pointers, [pins](../glossary.md#pin) and Working Memory | rePACTed and the pin commands | All of it, every session |
-| Your [knowledge base](../glossary.md#kb), optional | Notes you own and read | you, and agents through a gate (`kb-note`) | Nothing; it is off until you set `paths.kb` |
+| Your [knowledge base](../glossary.md#kb), optional | Notes you own and read | you, and agents through a gate (`kb-note`) | Nothing; it is off until you set `paths.kb`. See the [knowledge base guide](../kb.md) |
 
 ## What goes where
 
