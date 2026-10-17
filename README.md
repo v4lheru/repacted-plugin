@@ -18,7 +18,7 @@ From a shell, the same two steps are `claude plugin marketplace add v4lheru/repa
 **Pin a version.** `/plugin marketplace add` has no option for a tag. Clone a release tag (named `repacted--v<version>`) and add the folder instead:
 
 ```
-git clone --branch repacted--v1.7.1 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
+git clone --branch repacted--v1.7.2 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
 claude plugin marketplace add ~/repacted-plugin
 claude plugin install repacted@repacted
 ```
