@@ -394,10 +394,11 @@ class TestTrackFilesErrorOutput:
 # =============================================================================
 
 class TestGitCommitCheckErrorOutput:
-    """git_commit_check.py uses _SUPPRESS_OUTPUT on happy path, hook_error_json on error."""
+    """git_commit_check.py uses _SUPPRESS_OUTPUT on the happy path and, since ENV-GUARD-2
+    amend_2, a fail-CLOSED deny on error (it was a fail-open hook_error_json)."""
 
-    def test_exception_outputs_json_with_system_message(self, capsys):
-        """Error path: should output JSON with systemMessage, NOT _SUPPRESS_OUTPUT."""
+    def test_exception_fails_closed_with_a_deny(self, capsys):
+        """Error path: a deny envelope and exit 2, NOT _SUPPRESS_OUTPUT and not an allow."""
         from git_commit_check import main
 
         input_data = json.dumps({
@@ -405,16 +406,17 @@ class TestGitCommitCheckErrorOutput:
         })
 
         with patch("sys.stdin", io.StringIO(input_data)), \
-             patch("git_commit_check.get_staged_files",
+             patch("git_commit_check.committed_files",
                    side_effect=RuntimeError("test error")):
             with pytest.raises(SystemExit) as exc_info:
                 main()
 
-        assert exc_info.value.code == 0
+        assert exc_info.value.code == 2
         captured = capsys.readouterr()
-        _assert_error_json(captured.out, "git_commit_check")
-        # Must NOT contain suppressOutput in the error path
         parsed = _parse_stdout_json(captured.out)
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "git_commit_check" in parsed["hookSpecificOutput"]["permissionDecisionReason"]
+        # Must NOT contain suppressOutput in the error path
         assert "suppressOutput" not in parsed
 
     def test_exception_preserves_stderr(self, capsys):
@@ -425,7 +427,7 @@ class TestGitCommitCheckErrorOutput:
         })
 
         with patch("sys.stdin", io.StringIO(input_data)), \
-             patch("git_commit_check.get_staged_files",
+             patch("git_commit_check.committed_files",
                    side_effect=RuntimeError("boom")):
             with pytest.raises(SystemExit):
                 main()
@@ -471,7 +473,7 @@ class TestMergeGuardPostErrorOutput:
         from merge_guard_post import main
 
         with patch("sys.stdin", io.StringIO(self._make_merge_input())), \
-             patch("merge_guard_post._mint_context_from_bundle",
+             patch("merge_guard_post._mint_contexts_from_bundle",
                    side_effect=RuntimeError("test error")):
             with pytest.raises(SystemExit) as exc_info:
                 main()
@@ -488,7 +490,7 @@ class TestMergeGuardPostErrorOutput:
         from merge_guard_post import main
 
         with patch("sys.stdin", io.StringIO(self._make_merge_input())), \
-             patch("merge_guard_post._mint_context_from_bundle",
+             patch("merge_guard_post._mint_contexts_from_bundle",
                    side_effect=RuntimeError("boom")):
             with pytest.raises(SystemExit):
                 main()
@@ -663,7 +665,7 @@ class TestModuleExport:
 
     def test_importable_from_shared(self):
         """hook_error_json should be importable from shared package."""
-        from shared import hook_error_json as fn
+        from shared.error_output import hook_error_json as fn
         assert callable(fn)
 
     def test_importable_from_error_output(self):
@@ -671,10 +673,11 @@ class TestModuleExport:
         from shared.error_output import hook_error_json as fn
         assert callable(fn)
 
-    def test_in_shared_all(self):
-        """hook_error_json should be listed in shared.__all__."""
+    def test_not_re_exported_by_the_package(self):
+        """The package is a docstring (layering pass): the name lives in error_output only."""
         import shared
-        assert "hook_error_json" in shared.__all__
+        assert not hasattr(shared, "__all__")
+        assert not hasattr(shared, "hook_error_json")
 
 
 # =============================================================================
@@ -956,16 +959,15 @@ class TestSessionInitSuppressOutput:
 
         input_data = json.dumps({"source": "startup", "session_id": "test123"})
         with patch("sys.stdin", io.StringIO(input_data)), \
-             patch("session_init.check_additional_directories", return_value=None), \
-             patch("session_init.setup_plugin_symlinks", return_value=None), \
-             patch("session_init.ensure_project_memory_md", return_value=None), \
-             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("shared.session_init_common.check_additional_directories", return_value=None), \
+             patch("shared.session_init_common.setup_plugin_symlinks", return_value=None), \
+             patch("shared.session_init_common.ensure_project_memory_md", return_value=None), \
              patch("session_init.generate_team_name", return_value="pact-test123"), \
              patch("pathlib.Path.exists", return_value=False), \
-             patch("session_init.update_session_info", return_value=None), \
+             patch("shared.session_init_lead.update_session_info", return_value=None), \
              patch("session_init.get_task_list", return_value=None), \
-             patch("session_init.restore_last_session", return_value=None), \
-             patch("session_init.check_resume_state", return_value=None), \
+             patch("shared.session_init_lead.restore_last_session", return_value=None), \
+             patch("shared.session_init_lead.check_resume_state", return_value=None), \
              patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(tmp_path)}, clear=False):
             with pytest.raises(SystemExit) as exc_info:
                 main()

@@ -913,7 +913,8 @@ class TestTheAgentIdShapeDecidesBeforeTheTypeChecks:
                                   ast.unparse(passed) if passed is not None else None))
         assert sorted(p for p, _ in sites) == [
             "peer_inject.py", "shared/background_work.py",
-            "shared/background_work.py", "shared/turn_end_gate.py",
+            "shared/background_work.py", "shared/dispatch_helpers.py", "shared/turn_end_gate.py",
+            "task_claim_gate.py",
         ], sites
         assert all(v == "input_data.get('agent_id')" for _, v in sites), sites
 

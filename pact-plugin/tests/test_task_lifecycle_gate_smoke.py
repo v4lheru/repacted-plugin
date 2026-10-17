@@ -6,7 +6,7 @@ NOT comprehensive coverage — that is TEST-phase scope. These cases lock
 the load-bearing decisions in place so a future regression surfaces fast:
 
   S1. teachback_addblocks_missing advisory: TEACHBACK Task owner-wiring TaskUpdate
-      lands without paired addBlocks and task_a has no pre-existing blocks
+      lands without addBlocks and the hook cannot pair it (two open work tasks)
   S2. work_addblockedby_missing advisory: pact-* Task created without addBlockedBy
   S3. RETIRED — the handoff_missing / handoff_schema_invalid completion advisories
       (dormant is_work_task branch) were retired; their smoke case was removed
@@ -61,20 +61,19 @@ def test_teachback_wiring_update_without_addblocks(tmp_path, monkeypatch, pact_c
     pact_context(team_name="test-team", session_id="test-session")
     tasks_dir = tmp_path / ".claude" / "tasks" / "test-team"
     tasks_dir.mkdir(parents=True)
-    (tasks_dir / "A.json").write_text(
-        json.dumps({
-            "id": "A",
-            "subject": "preparer: TEACHBACK for foo",
-            "status": "pending",
-            "blocks": [],
-        }),
-        encoding="utf-8",
-    )
+    # Two open work tasks for one owner: the hook cannot pair A, so it keeps the advisory.
+    for task in (
+        {"id": "A", "subject": "preparer: TEACHBACK for foo", "blocks": []},
+        {"id": "B1", "subject": "preparer: foo"},
+        {"id": "B2", "subject": "preparer: bar"},
+    ):
+        task.update(status="pending", owner="preparer")
+        (tasks_dir / f"{task['id']}.json").write_text(json.dumps(task), encoding="utf-8")
     payload = {
         "tool_name": "TaskUpdate",
         "tool_input": {
             "taskId": "A",
-            "owner": "pact-preparer",
+            "owner": "preparer",
             # addBlocks deliberately omitted
         },
         "tool_response": {},
@@ -210,3 +209,22 @@ def test_load_failure_emits_advisory_exit_0(capsys):
     assert "additionalContext" in hso
     assert "task_lifecycle_gate" in hso["additionalContext"]
     assert "ImportError" in hso["additionalContext"]
+
+
+# ─── S7: the lead's completion lifts a dispute, so a disputed teachback can unblock ───
+
+
+def test_lead_completion_clears_completion_disputed(tmp_path, monkeypatch, pact_context):
+    pact_context(team_name="test-team", session_id="test-session")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tasks_dir = tmp_path / ".claude" / "tasks" / "test-team"
+    tasks_dir.mkdir(parents=True)
+    task = {"id": "7", "subject": "coder: TEACHBACK for foo", "owner": "coder", "status": "completed",
+            "metadata": {"completion_disputed": True, "gate_writeback": True}}
+    (tasks_dir / "7.json").write_text(json.dumps(task), encoding="utf-8")
+    tlg.evaluate_lifecycle({"tool_name": "TaskUpdate", "session_id": "test-session",
+                            "tool_input": {"taskId": "7", "status": "completed"},
+                            "tool_response": {"task": {**task, "metadata": {}}}})
+    written = json.loads((tasks_dir / "7.json").read_text(encoding="utf-8"))
+    assert "completion_disputed" not in written["metadata"]

@@ -1,5 +1,7 @@
 """
 Location: pact-plugin/tests/test_merge_guard_1037_narrow.py
+Folded 2026-10-04 (refactor shell lane): its row tests are decision-table rows now
+         (tests/fixtures/shell/decisions/fold_manifest.json); the mechanism tests stay.
 Summary: Regression canaries for the NARROW gh-comment carrier-strip (#1037) — the
          doubly-anchored step-7 `_gh_carrier_span` extension that adds
          `gh issue comment` + `gh pr comment` to the carrier verb alternation.
@@ -47,15 +49,6 @@ class TestNarrowGhCommentCarrierStripAllow:
         "gh issue comment 7 --body 'note: gh pr merge 3 later'",  # single-quoted body
     ]
 
-    @pytest.mark.parametrize("command", ALLOW)
-    def test_comment_body_naming_dangerous_op_now_allows(self, command):
-        from merge_guard_pre import (
-            is_dangerous_command,
-            is_compound_destructive_command,
-        )
-
-        assert not is_dangerous_command(command)
-        assert not is_compound_destructive_command(command)
 
     def test_carrier_strip_neutralizes_the_body(self):
         # mechanism (exclusion-guard, #933): the comment carrier-strip BLANKS the
@@ -66,32 +59,6 @@ class TestNarrowGhCommentCarrierStripAllow:
         assert "gh pr merge" not in stripped
         assert "STRIPPED" in stripped
         assert stripped.startswith("gh pr comment 5")
-
-    @pytest.mark.parametrize(
-        "carrier,sibling",
-        [
-            (
-                'gh pr comment 5 --body "ref gh pr merge 5"',
-                'gh pr review 5 --body "ref gh pr merge 5"',
-            ),
-            (
-                'gh pr comment 8 --body "ref git push --force origin main"',
-                'gh pr review 8 --body "ref git push --force origin main"',
-            ),
-        ],
-    )
-    def test_comment_verb_membership_is_load_bearing(self, carrier, sibling):
-        # non-vacuity (proof-class P): the comment verb being IN the alternation is
-        # what flips these. The identical --body under a NON-carrier sibling verb
-        # (`gh pr review`, absent from the pr alternation — #1129 R2 added `pr edit`
-        # to the carrier set, so `review` is now the discriminating non-carrier sibling)
-        # is NOT stripped and BLOCKs.
-        # This is the runnable equivalent of reverting the comment verbs from
-        # `_gh_carrier_span` (build-time measured: {5 of 5 ALLOW flip to BLOCK}).
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(carrier)  # carrier verb -> stripped -> ALLOW
-        assert is_dangerous_command(sibling)  # non-carrier verb -> survives -> BLOCK
 
 
 class TestNarrowGhCommentCarrierStripBlock:
@@ -121,16 +88,6 @@ class TestNarrowGhCommentCarrierStripBlock:
         assert not is_compound_destructive_command(outside)  # one destructive leg -> not >=2-compound
         assert "gh pr merge 5" in _strip_non_executable_content(outside)  # op survives
 
-    def test_op_after_body_andand_blocks(self):
-        # Honest-mistake ≥2: `gh pr comment 5 --body "x" && gh pr merge 9` is ONE
-        # destructive leg (merge 9; the comment carrier is benign) → NOT >=2-compound,
-        # but the merge survives the carrier strip and STILL BLOCKS via the single-op
-        # is_dangerous gate.
-        from merge_guard_pre import is_dangerous_command, is_compound_destructive_command
-
-        cmd = 'gh pr comment 5 --body "x" && gh pr merge 9'
-        assert is_dangerous_command(cmd)  # op after && -> BLOCK (single-op gate)
-        assert not is_compound_destructive_command(cmd)  # one destructive leg
 
     def test_command_substitution_in_body_blocks(self, monkeypatch):
         # non-vacuity (proof-class C): the dq inner-strip PRESERVES a $()/backtick
@@ -156,33 +113,6 @@ class TestNarrowGhCommentCarrierStripBlock:
         assert is_dangerous_command(cmd)
         assert "gh pr merge 5" in _strip_non_executable_content(cmd)
 
-    def test_close_delete_branch_blocks(self):
-        # `gh pr close` is NOT a carrier verb (absent from the alternation BY
-        # CONSTRUCTION); `--delete-branch` is the deny trigger -> BLOCK.
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 5 --delete-branch")
-
-    def test_python_dash_c_blocks(self):
-        # python -c EXECUTES its arg; not a carrier verb -> not stripped -> BLOCK.
-        # `print('...')` style per the security ratification (an `x='...'` form would
-        # be removed by the pre-existing var-assignment carrier and is a weaker canary).
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('python3 -c "print(' + _SQ + "gh pr merge 42" + _SQ + ')"')
-
-    def test_general_grep_papercut_now_closed(self):
-        # The `grep "...op..."` over-block papercut this #1037 NARROW fix deliberately left
-        # OUT OF SCOPE (only gh-comment) is CLOSED by the #1178 general inert-default positional
-        # strip — "the proper fix" this pin previously guarded against a suppressor faking. grep
-        # is an unrecognized head, so its quoted pattern is POSIX-argv-inert (never executed);
-        # carrier 10 strips it exactly like the echo carrier-strip -> ALLOW is CORRECT (a
-        # faithful `grep "gh pr merge 5" file` no longer gates). Flipped from block to allow when
-        # #1178 landed; the general strip is the general fix the papercut awaited.
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('grep "gh pr merge 5" file')
-
 
 class TestNarrowGhCommentInertAllow:
     """Ratified INERT-ALLOW: an escaped quote INSIDE a dq --body value is a literal
@@ -202,23 +132,6 @@ class TestNarrowGhCommentInertAllow:
         )
         assert not is_dangerous_command(cmd)
         assert "gh pr merge" not in _strip_non_executable_content(cmd)
-
-
-class TestNarrowGhCarrierCreateEditUnchanged:
-    """Regression guard: the narrow change only ADDED comment to the alternation;
-    create/edit carrier behavior is unchanged."""
-
-    CREATE_EDIT = [
-        'gh issue create --title "regression: gh pr merge 5 in title"',
-        'gh pr create --body "do not git push --force origin main"',
-        'gh issue edit 4 --body "ref gh pr merge 2"',
-    ]
-
-    @pytest.mark.parametrize("command", CREATE_EDIT)
-    def test_create_edit_carrier_still_allows(self, command):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(command)
 
 
 class TestNarrowGhCommentSecurityAnchoringCanaries:

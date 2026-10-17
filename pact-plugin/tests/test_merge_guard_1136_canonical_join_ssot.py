@@ -41,6 +41,7 @@ import pytest  # noqa: E402
 import merge_guard_post  # noqa: E402
 import merge_guard_pre  # noqa: E402
 import shared.merge_guard_common as mgc  # noqa: E402
+from merge_guard_repo_fixture import take_out_typed  # noqa: E402
 from merge_guard_post import main as post_main  # noqa: E402
 from merge_guard_pre import main as pre_main  # noqa: E402
 
@@ -237,7 +238,7 @@ class TestUnderBlockClosure:
         assert _execute(_HASH_3, tmp_path) == DENY
 
     @requires_history
-    def test_base_encoder_through_real_gate_cross_authorizes(self, tmp_path):
+    def test_base_encoder_through_real_gate_cross_authorizes(self, tmp_path, monkeypatch):
         # DIRECT gate-level non-vacuity for the two closure rows above: patch the BAKED BASE
         # encoder (loaded from 9256c93c) into the ONE SSOT both mint and read derive from, and
         # the collision CROSS-AUTHORIZES at the REAL mint->execute gate — a 2-set token ALLOWs
@@ -248,7 +249,11 @@ class TestUnderBlockClosure:
         for name, two, three in [("comma", _COMMA_2, _COMMA_3), ("hash", _HASH_2, _HASH_3)]:
             d = tmp_path / name
             d.mkdir()
-            with patch.object(mgc, "_extract_mass_delete_target", MT_BASE):
+            # 1.4.1 U13's checkout/remote binding and the word-for-word binding are taken out
+            # so the encoder stays the closer.
+            take_out_typed(monkeypatch)
+            with patch.object(mgc, "_extract_mass_delete_target", MT_BASE), \
+                    patch.object(mgc, "_git_binding", lambda ctx, cmd, start=None: ctx):
                 assert _mint(two, d) == 1, "%s: base 2-set must mint through the gate" % name
                 assert _execute(three, d) == ALLOW, \
                     "%s: base collision must cross-authorize at the gate (else HEAD row is vacuous)" % name
@@ -292,12 +297,17 @@ class TestOverBlockSelfMatchCorpus:
         assert _execute(cmd, tmp_path) == ALLOW, "%s: faithful click must self-authorize (over-block=cardinal)" % label
 
     def test_reorder_still_matches(self, tmp_path):
+        # The target identity is order-independent; the approval covers the command word
+        # for word, so the reordered text is another command.
+        assert MT(PUSH + "origin " + DEL + "a b c") == MT(PUSH + "origin " + DEL + "c a b")
         assert _mint(PUSH + "origin " + DEL + "a b c", tmp_path) == 1
-        assert _execute(PUSH + "origin " + DEL + "c a b", tmp_path) == ALLOW
+        assert _execute(PUSH + "origin " + DEL + "c a b", tmp_path) == DENY
+        assert _execute(PUSH + "origin " + DEL + "a b c", tmp_path) == ALLOW
 
     def test_branch_reorder_still_matches(self, tmp_path):
         assert _mint("git branch " + self._D + " aa bb cc", tmp_path) == 1
-        assert _execute("git branch " + self._D + " cc aa bb", tmp_path) == ALLOW
+        assert _execute("git branch " + self._D + " cc aa bb", tmp_path) == DENY
+        assert _execute("git branch " + self._D + " aa bb cc", tmp_path) == ALLOW
 
 
 # ===========================================================================
@@ -352,18 +362,20 @@ class TestSentinelDedupAndColonEdge:
         assert "9:\x00implicit" in implicit and "8:implicit" in real
 
     def test_dedup_collapses_duplicate_ref(self, tmp_path):
-        # `--delete a a b` == `--delete a b` (a duplicate ref is the SAME target). mint==read
-        # symmetry: a token for {a,b} authorizes the duplicate form and vice-versa; and it does
-        # NOT authorize a DIFFERENT set {a,b,c}.
+        # `--delete a a b` == `--delete a b` as a target (a duplicate ref is the SAME target),
+        # but the approval covers the command word for word: only the text approved passes,
+        # and never a DIFFERENT set {a,b,c}.
         assert MT(PUSH + "origin " + DEL + "a a b") == MT(PUSH + "origin " + DEL + "a b")
         assert _mint(PUSH + "origin " + DEL + "a a b", tmp_path) == 1
-        assert _execute(PUSH + "origin " + DEL + "a b", tmp_path) == ALLOW
+        assert _execute(PUSH + "origin " + DEL + "a b", tmp_path) == DENY
+        assert _execute(PUSH + "origin " + DEL + "a a b", tmp_path) == ALLOW
         assert _execute(PUSH + "origin " + DEL + "a b c", tmp_path) == DENY  # NOT outside the set
 
     def test_colon_force_delete_aliases_same_ref(self, tmp_path):
-        # `+:a` (force empty-source push = delete) aliases `:a`; a token for it authorizes ONLY
-        # the same-ref delete, not a different ref.
+        # `+:a` (force empty-source push = delete) aliases `:a` as a target; a token for it
+        # authorizes ONLY the text approved, not the alias and not a different ref.
         assert MT(PUSH + "origin +:a :b") == MT(PUSH + "origin :a :b")
         assert _mint(PUSH + "origin +:a :b", tmp_path) == 1
-        assert _execute(PUSH + "origin :a :b", tmp_path) == ALLOW
+        assert _execute(PUSH + "origin :a :b", tmp_path) == DENY
+        assert _execute(PUSH + "origin +:a :b", tmp_path) == ALLOW
         assert _execute(PUSH + "origin :a :c", tmp_path) == DENY

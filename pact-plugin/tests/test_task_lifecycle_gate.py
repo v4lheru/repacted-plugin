@@ -131,24 +131,22 @@ def test_silent_when_owner_wiring_carries_addblocks(tmp_path, monkeypatch, pact_
 
 
 def test_fires_on_wiring_update_without_addblocks(tmp_path, monkeypatch, pact_context):
-    """Positive: the canonical owner-wiring TaskUpdate lands without paired
-    addBlocks AND task_a has no pre-existing blocks → advisory fires.
+    """Positive: an owner-only write to Task A that the hook cannot pair (two
+    open teachback tasks for one owner) leaves A unwired → advisory fires.
+    The unpairable-but-unambiguous rows live in test_teachback_pair_wiring.py.
     """
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     pact_context(team_name="test-team", session_id="test-session")
-    _seed_task_a(
-        tmp_path,
-        "test-team",
-        "A",
-        subject="preparer: TEACHBACK for foo",
-        status="pending",
-        blocks=[],
-    )
+    for tid, subject in (("A", "preparer: TEACHBACK for foo"),
+                         ("A2", "preparer: TEACHBACK for bar"),
+                         ("B", "preparer: foo")):
+        _seed_task_a(tmp_path, "test-team", tid, subject=subject,
+                     status="pending", owner="preparer", blocks=[])
     payload = {
         "tool_name": "TaskUpdate",
         "tool_input": {
             "taskId": "A",
-            "owner": "pact-preparer",
+            "owner": "preparer",
             # no addBlocks
         },
         "tool_response": {},
@@ -498,19 +496,16 @@ def test_teachback_addblocks_missing_still_fires_for_stray_secretary_teachback(
         }),
         encoding="utf-8",
     )
-    _seed_task_a(
-        tmp_path,
-        "test-team",
-        "A",
-        subject="secretary: TEACHBACK for some task",
-        status="pending",
-        blocks=[],
-    )
+    # Two open work tasks: the hook cannot pair A, so the advisory is the signal.
+    for tid, subject in (("A", "secretary: TEACHBACK for some task"),
+                         ("B1", "secretary: some task"), ("B2", "secretary: other task")):
+        _seed_task_a(tmp_path, "test-team", tid, subject=subject,
+                     status="pending", owner="secretary", blocks=[])
     payload = {
         "tool_name": "TaskUpdate",
         "tool_input": {
             "taskId": "A",
-            "owner": "pact-secretary",
+            "owner": "secretary",
             # no addBlocks
         },
         "tool_response": {},
@@ -962,6 +957,27 @@ def test_advisory_when_owner_named_secretary_without_agenttype(
     assert any(rule == "self_completion" for rule, _ in advisories)
 
 
+def test_self_completion_says_unmarked_when_the_dispute_write_fails(
+    tmp_path, monkeypatch, pact_context
+):
+    """rv4 MED-2: the advisory claimed 'Task marked completion_disputed' even when the write
+    returned False (task lock held past its wait)."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    pact_context(team_name="test-team", session_id="test-session")
+    team_dir = tmp_path / ".claude" / "teams" / "test-team"
+    team_dir.mkdir(parents=True)
+    (team_dir / "config.json").write_text(json.dumps({"team_name": "test-team", "members": [
+        {"name": "coder", "agentType": "pact-backend-coder"}]}), encoding="utf-8")
+    monkeypatch.setattr(tlg, "_writeback_dispute", lambda task_id: False)
+    advisories = dict(tlg.evaluate_lifecycle({
+        "tool_name": "TaskUpdate", "agent_id": "coder@test-team",
+        "tool_input": {"taskId": "9", "status": "completed"},
+        "tool_response": {"task": {"id": "9", "subject": "x", "owner": "coder", "metadata": {}}},
+    }))
+    assert "could NOT be written" in advisories["self_completion"]
+    assert "Task marked" not in advisories["self_completion"]
+
+
 def test_silent_when_signal_task_self_completes(pact_context):
     """Signal task (metadata.completion_type='signal' AND
     metadata.type in {'blocker','algedonic'}) is exempted by
@@ -996,27 +1012,16 @@ def test_silent_when_signal_task_self_completes(pact_context):
     assert not any(rule == "self_completion" for rule, _ in advisories)
 
 
-def test_skips_when_actor_unresolvable(
+def test_disputes_when_actor_unresolvable(
     pact_context,
 ):
-    """Documents an intentional deviation from architect §5.3: that
-    spec says when ``trustworthy_actor_name`` returns None (no
-    agent_id, or no ``@`` in agent_id), the gate should still emit a
-    self-completion advisory.
-
-    The CURRENT implementation (task_lifecycle_gate.py condition
-    ``actor is not None``) skips the advisory in that case.
-
-    This test encodes the CURRENT skip behavior so a future change
-    surfaces the deviation deliberately. Resolution tracked in a
-    follow-up issue (filed at stage-ready). DO NOT 'fix' the gate to
-    satisfy this test — fix the test only if the architect §5.3
-    reconciliation lands.
-    """
+    """Architect §5.3, landed with shared/actor.py: a frame nobody can name (no agent_id,
+    no agent_type, not the lead's session) completing an owned task is disputed. The lead's
+    own session (the context's session_id) is the lead and is not."""
     pact_context(team_name="test-team", session_id="test-session")
     payload = {
         "tool_name": "TaskUpdate",
-        # No agent_id at all → trustworthy_actor_name returns None.
+        "session_id": "some-other-session",
         "tool_input": {"taskId": "7", "status": "completed"},
         "tool_response": {
             "task": {
@@ -1036,13 +1041,10 @@ def test_skips_when_actor_unresolvable(
             }
         },
     }
-    advisories = tlg.evaluate_lifecycle(payload)
-    # Architect §5.3 would expect a self_completion advisory; current impl skips. Assert SKIP.
-    assert not any(rule == "self_completion" for rule, _ in advisories), (
-        "If self_completion fired here, the gate has been changed to match architect "
-        "§5.3 (advisory-emit on unresolvable actor). Confirm the change "
-        "was intentional and update this test + close the follow-up issue."
-    )
+    advisories = dict(tlg.evaluate_lifecycle(payload))
+    assert "cannot name (unknown)" in advisories["self_completion"]
+    payload["session_id"] = "test-session"           # the lead's own session
+    assert "self_completion" not in dict(tlg.evaluate_lifecycle(payload))
 
 
 # =============================================================================
@@ -3211,14 +3213,15 @@ class TestValidateTeachbackSubmitSchema:
 def test_variety_ack_schema_invalid_at_write_time_fires_on_string(
     tmp_path, monkeypatch, pact_context,
 ):
-    """variety_acknowledgment as a free-text STRING instead of OBJECT →
-    fires at write-time (not just completion-time)."""
+    """variety_acknowledgment as a STRING the write gate cannot repair (a bare
+    "no" carries no concern text) → fires at write-time (not just
+    completion-time). Free text is repaired instead: see the next test."""
     pact_context(team_name="test-team", session_id="test-session")
     _setup_blocks_pair(
         tmp_path, monkeypatch, "test-team", "1", "2", variety_total=8,
     )
     tb = _well_formed_teachback_submit(
-        variety_acknowledgment="I think the scoring is fine",
+        variety_acknowledgment="no",
     )
     payload = {
         "tool_name": "TaskUpdate",
@@ -3233,6 +3236,28 @@ def test_variety_ack_schema_invalid_at_write_time_fires_on_string(
         rule == "variety_acknowledgment_schema_invalid_at_write_time"
         for rule, _ in advisories
     ), f"expected write-time schema advisory, got: {advisories}"
+
+
+def test_a_free_text_variety_ack_is_judged_as_repaired(
+    tmp_path, monkeypatch, pact_context,
+):
+    """1.5.0, D3: handoff_ordering_gate wraps a free-text acknowledgment into
+    the object before the write lands; whichever input PostToolUse carries,
+    this gate judges the repaired object and draws no shape advisory."""
+    pact_context(team_name="test-team", session_id="test-session")
+    _setup_blocks_pair(
+        tmp_path, monkeypatch, "test-team", "1", "2", variety_total=8,
+    )
+    tb = _well_formed_teachback_submit(
+        variety_acknowledgment="I think the scoring is fine",
+    )
+    payload = {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"taskId": "1", "metadata": {"teachback_submit": tb}},
+        "tool_response": {},
+    }
+    rules = [rule for rule, _ in tlg.evaluate_lifecycle(payload)]
+    assert "variety_acknowledgment_schema_invalid_at_write_time" not in rules
 
 
 def test_variety_ack_schema_invalid_at_write_time_fires_on_invalid_enum(
@@ -3715,7 +3740,7 @@ def test_multi_rule_concurrent_emission_three_rules_fire_together(
         tmp_path, monkeypatch, "test-team", "1", "2", variety_total=8,
     )
     tb = _well_formed_teachback_submit(
-        variety_acknowledgment="I think the scoring is fine",
+        variety_acknowledgment="no",  # a bare "no" is not repaired (1.5.0, D3)
         reasoning_reconstruction={
             "what-I-learned": "x",
             "falsification-attempts": "y",
@@ -3807,7 +3832,7 @@ def test_multi_rule_concurrent_emission_all_four_advisory_rules_fire_together(
         tmp_path, monkeypatch, "test-team", "1", "2", variety_total=8,
     )
     tb = _well_formed_teachback_submit(
-        variety_acknowledgment="I think the scoring is fine",
+        variety_acknowledgment="no",  # a bare "no" is not repaired (1.5.0, D3)
         reasoning_reconstruction={
             "what-I-learned": "x",
             "falsification-attempts": "y",
@@ -4816,3 +4841,25 @@ def test_bounded_error_text_genuine_str_name_unchanged_by_cycle4():
         "_HostileStrError: <exception str() raised>"
     )
     assert tlg._bounded_error_text(_IntNameError("msg")) == "exception: msg"
+
+
+def test_lifecycle_decision_written_only_for_advisories(monkeypatch):
+    """Journal diet: a silent allow writes no lifecycle_decision row (it was
+    25,570 of 26,395 rows and no reader used it); a decision with advisories
+    still writes one, verdict advisory, rules and messages intact."""
+    written: list[dict] = []
+    monkeypatch.setattr(
+        tlg, "append_event_checked",
+        lambda event, what, *a, **k: written.append(event) or True,
+    )
+    tlg._journal_lifecycle_decision({"tool_name": "TaskUpdate"}, [])
+    assert written == []
+    tlg._journal_lifecycle_decision(
+        {"tool_name": "TaskUpdate"}, [("rule_x", "message x")]
+    )
+    assert len(written) == 1
+    assert written[0]["type"] == "lifecycle_decision"
+    assert written[0]["verdict"] == "advisory"
+    assert written[0]["advisories_count"] == 1
+    assert written[0]["rules"] == ["rule_x"]
+    assert written[0]["advisories"] == ["message x"]

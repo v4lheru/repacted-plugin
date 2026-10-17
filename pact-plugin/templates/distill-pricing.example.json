@@ -1,0 +1,11 @@
+{
+  "note": "Copy this file, fill every null from your provider's current price page (per million tokens), set asof to the date you read it, and point distill.pricing_source in profile.json at your copy. While any price is null, repact-distill dry-run says 'cost: not computed'.",
+  "asof": null,
+  "currency": "USD",
+  "output_ratio": null,
+  "models": {
+    "haiku": {"input_per_mtok": null, "output_per_mtok": null},
+    "sonnet": {"input_per_mtok": null, "output_per_mtok": null},
+    "opus": {"input_per_mtok": null, "output_per_mtok": null}
+  }
+}

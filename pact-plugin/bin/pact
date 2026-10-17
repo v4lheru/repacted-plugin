@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # pact — PACT-loaded Claude Code session launcher.
 #
-# Wraps `claude --agent PACT:pact-orchestrator "$@"` so that PACT's
+# Wraps `claude --agent repacted:pact-orchestrator "$@"` so that PACT's
 # orchestrator persona is loaded automatically. Pass through any
 # additional flags claude accepts (e.g., --resume, --plugin-dir,
 # --print, --debug) and they are forwarded unchanged.
 #
 # Installation (manual symlink — there is no install automation):
-#   ln -s "$HOME/.claude/plugins/cache/pact-plugin/PACT/<version>/pact-plugin/bin/pact" \
+#   ln -s "<rePACT checkout>/repacted/pact-plugin/bin/pact" \
 #         "$HOME/.local/bin/pact"
 #
 # Or any other directory on your PATH (~/bin, /usr/local/bin, etc.).
@@ -18,4 +18,10 @@
 # placeholder for one.
 
 set -e
-exec claude --agent PACT:pact-orchestrator "$@"
+# Inside a repact session (REPACTED_LAUNCH is set by bin/repact) this launcher would start a
+# session without repact's memory swap, so it refuses there, like repacted-memdir --confirm-live.
+if [ -n "${REPACTED_LAUNCH:-}" ]; then
+  echo "pact: REFUSED: REPACTED_LAUNCH is set, so this runs inside a repact session; start pact from a plain terminal" >&2
+  exit 2
+fi
+exec claude --agent repacted:pact-orchestrator "$@"

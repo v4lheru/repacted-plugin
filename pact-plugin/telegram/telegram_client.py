@@ -26,7 +26,7 @@ from typing import Any
 
 import httpx
 
-from telegram.content_filter import filter_and_truncate, sanitize_inbound
+from telegram.content_filter import OutboundFilterError, filter_and_truncate, filter_outbound, sanitize_inbound
 
 logger = logging.getLogger("pact-telegram.client")
 
@@ -177,8 +177,11 @@ class TelegramClient:
         Raises:
             TelegramAPIError: On API errors.
         """
-        # Security: filter outbound content
-        filtered_text = filter_and_truncate(text)
+        # Security: filter outbound content; a filter that cannot run sends nothing
+        try:
+            filtered_text = filter_and_truncate(text)
+        except OutboundFilterError as error:
+            raise TelegramAPIError(f"Message not sent: {error}") from error
 
         params: dict[str, Any] = {
             "chat_id": self._chat_id,
@@ -225,8 +228,13 @@ class TelegramClient:
         Returns:
             The sent Message object from Telegram API.
         """
+        # Labels leave the machine too, so they get the same filter as the text
+        try:
+            labels = [filter_outbound(label) for label in buttons]
+        except OutboundFilterError as error:
+            raise TelegramAPIError(f"Message not sent: {error}") from error
         inline_keyboard = [
-            [{"text": label, "callback_data": label} for label in buttons]
+            [{"text": label, "callback_data": label} for label in labels]
         ]
         reply_markup = {"inline_keyboard": inline_keyboard}
 

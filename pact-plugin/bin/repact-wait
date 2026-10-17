@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""repact-wait: block until a task file changes, then print one line. Read-only.
+
+Location: pact-plugin/bin/repact-wait (1.5.0). A teammate that ends its turn costs the
+lead an idle notice, a full lead turn. A teammate that runs this in the FOREGROUND instead stays
+in its turn and sends none: it wakes when the lead writes the task file (acceptance is the
+status, rejection is metadata.*_rejection, an amendment is an amend_<n> key). A SendMessage sent
+meanwhile is not delivered until the turn ends, so everything the waiter acts on is on disk.
+
+It polls the file's stat every 2 s (no busy loop) and prints the time, the status, blockedBy and
+the metadata KEYS added, changed or removed since it started. It never prints a metadata value.
+When the task it returns on holds an open rejection or an undisposed amend_<n>, whatever --until
+named, a second line names the command that reads the value: next: repact-payload <id> --team
+<team> --key rejection (or --key amend). The team is the one this run waited on, so the reader
+opens the same file.
+
+--until completed,rejection,amend (any subset): first check the task as it is now and return at
+once when one condition already holds, so a transition that landed between the notify and the
+wait is not slept through; otherwise wait as without it. completed: status completed. rejection:
+a *_rejection the teammate has not answered yet (a handoff_rejection whose rev is not below
+handoff.rev; else one whose revision_number is not below metadata.revision_number, default 1).
+amend: an amend_<n> key that handoff.amendments does not dispose. A stale record never holds; an
+unreadable one does (wake early rather than sleep through). The rejection test is
+hooks/shared/amendments.open_rejection, the one bin/repact-payload reads with.
+
+Team: --team, else this session's team that holds the task (the labelling registry's, then the
+session context's). Two such teams, or none, is never guessed: exit 2 naming the teams that hold
+the task id.
+
+Exit codes: 0 changed; 2 usage or team not resolved; 3 timeout, nothing changed; 4 task file
+missing or gone.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+BIN_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BIN_DIR))
+sys.path.insert(0, str(BIN_DIR.parent / "hooks"))
+from shared import evidence as ev  # noqa: E402
+from _repact_common import teammate_label  # noqa: E402
+from shared.amendments import open_rejection  # noqa: E402
+
+EXAMPLE = "repact-wait 34"
+EXAMPLES = (
+    "examples:\n"
+    f"  {EXAMPLE}\n"
+    "  repact-wait 34 --team session-5a318e14 --timeout 300\n"
+    "  repact-wait 34 --until completed,rejection,amend\n"
+    "Run it in the foreground with the Bash timeout at 600000.\n"
+    "exit: 0 changed, 2 usage or team not resolved, 3 timeout, 4 task file missing or gone."
+)
+DEFAULT_TIMEOUT = 560          # under the 600 s Bash cap
+POLL_SECONDS = 2.0
+_UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f]")
+_AMEND_KEY = re.compile(r"amend_\d+")
+CONDITIONS = ("completed", "rejection", "amend")
+READ_KEYS = ("rejection", "amend")      # the conditions whose value repact-payload --key prints
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}\n\n  {EXAMPLE}", file=sys.stderr)
+        sys.exit(2)
+
+
+def build_parser() -> Parser:
+    parser = Parser(
+        prog="repact-wait", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Wait until a task file changes, then print one line: the time, the status, "
+                    "blockedBy and the metadata keys that changed (never a value). Read-only.",
+        epilog=EXAMPLES)
+    parser.add_argument("task", help="task id")
+    parser.add_argument("--team", help="team name (default: this session's team that holds the task)")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
+                        help=f"seconds to wait (default {DEFAULT_TIMEOUT})")
+    parser.add_argument("--until", type=conditions, default=(),
+                        help="comma list of completed, rejection, amend: return at once if one "
+                             "already holds, else wait for a change")
+    parser.add_argument("--interval", type=float, default=POLL_SECONDS, help=argparse.SUPPRESS)
+    return parser
+
+
+def conditions(text: str) -> tuple[str, ...]:
+    names = tuple(dict.fromkeys(part.strip() for part in text.split(",")))
+    if not names or any(name not in CONDITIONS for name in names):
+        raise argparse.ArgumentTypeError(f"pick from {', '.join(CONDITIONS)}, comma separated")
+    return names
+
+
+def holding(task: dict, until: tuple[str, ...]) -> list[str]:
+    """The --until conditions the task already meets, in the order given."""
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    handoff = metadata.get("handoff") if isinstance(metadata.get("handoff"), dict) else {}
+    disposed = handoff.get("amendments") if isinstance(handoff.get("amendments"), dict) else {}
+    met = {
+        "completed": task.get("status") == "completed",
+        "rejection": any(open_rejection(key, value, metadata) for key, value in metadata.items()
+                         if isinstance(key, str) and key.endswith("_rejection") and value),
+        "amend": any(isinstance(key, str) and _AMEND_KEY.fullmatch(key) and key not in disposed
+                     for key in metadata),
+    }
+    return [name for name in until if met[name]]
+
+
+def next_line(task_id: str, task: dict, team: str) -> Optional[str]:
+    """The command that reads what the task holds for its owner (an open rejection, an
+    undisposed amendment), or None. It names keys and ids only, never a value, and always the
+    team this run waited on, so the reader cannot resolve a different one."""
+    commands = [f"repact-payload {task_id} --team {team} --key {name}"
+                for name in holding(task, READ_KEYS)]
+    return "next: " + "; ".join(commands) if commands else None
+
+
+def resolve(task_id: str) -> tuple[Optional[str], list[str]]:
+    """(team, []) for one session team holding the task; else (None, the teams that hold it)."""
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    named = (teammate_label(session_id)[1], ev.team_from_session(session_id))
+    session_teams = [team for team in dict.fromkeys(named)
+                     if isinstance(team, str) and ev.PATH_SEGMENT.fullmatch(team)
+                     and (ev.task_path(team, task_id) or Path("/nonexistent")).exists()]
+    if len(session_teams) == 1:
+        return session_teams[0], []
+    if session_teams:
+        return None, session_teams
+    return None, ev.task_store().teams_holding(task_id)
+
+
+def signature(path: Path) -> Optional[tuple]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size, stat.st_ino
+
+
+def read_task(path: Path, attempts: int = 5) -> Optional[dict]:
+    """The task, retried briefly: a write can be caught half-done."""
+    for attempt in range(attempts):
+        task = ev.load_task(path)
+        if task is not None or not path.exists():
+            return task
+        time.sleep(0.2 * (attempt + 1))
+    return None
+
+
+def shown(key) -> str:
+    return _UNPRINTABLE.sub("?", str(key))
+
+
+def summary(task_id: str, before: dict, after: dict) -> str:
+    old = before.get("metadata") if isinstance(before.get("metadata"), dict) else {}
+    new = after.get("metadata") if isinstance(after.get("metadata"), dict) else {}
+    added = [shown(key) for key in new if key not in old]
+    changed = [shown(key) for key in new if key in old and new[key] != old[key]]
+    removed = [shown(key) for key in old if key not in new]
+    status = shown(after.get("status"))
+    if after.get("status") != before.get("status"):
+        status += f" (was {shown(before.get('status'))})"
+    blocked = ", ".join(shown(item) for item in after.get("blockedBy") or []) or "none"
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return (f"{stamp} #{task_id} changed: status {status}; blockedBy {blocked}; "
+            f"metadata added: {', '.join(added) or 'none'}; changed: {', '.join(changed) or 'none'}; "
+            f"removed: {', '.join(removed) or 'none'}")
+
+
+def report(line: str, task_id: str, task: dict, team: str) -> int:
+    """Print the one-line summary, then the next: line when the task holds something to read."""
+    print(line)
+    following = next_line(task_id, task, team)
+    if following:
+        print(following)
+    return 0
+
+
+def wait(path: Path, task_id: str, team: str, timeout: float, interval: float,
+         until: tuple = ()) -> int:
+    start = signature(path)
+    before = read_task(path) if start else None
+    if start is None or before is None:
+        print(f"repact-wait: task file for #{task_id} missing or unreadable: {path}")
+        return 4
+    met = holding(before, until)
+    if met:
+        blocked = ", ".join(shown(item) for item in before.get("blockedBy") or []) or "none"
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return report(f"{stamp} #{task_id} already holds {', '.join(met)}: status "
+                      f"{shown(before.get('status'))}; blockedBy {blocked}", task_id, before, team)
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print(f"repact-wait: no change to #{task_id} in {timeout:g} s; run it again")
+            return 3
+        time.sleep(min(interval, remaining))
+        now = signature(path)
+        if now is None:
+            print(f"repact-wait: task file for #{task_id} is gone: {path}")
+            return 4
+        if now != start:
+            after = read_task(path)
+            if after is None:
+                print(f"repact-wait: task file for #{task_id} is gone or unreadable: {path}")
+                return 4
+            return report(summary(task_id, before, after), task_id, after, team)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    task_id = str(args.task)
+    if not ev.PATH_SEGMENT.fullmatch(task_id) or (args.team and not ev.PATH_SEGMENT.fullmatch(args.team)):
+        parser.error("a task id or team name is letters, digits, '_', '-' and '.' only")
+    if not 0 < args.timeout or not 0 < args.interval:
+        parser.error("--timeout and the poll interval must be positive")
+    team = args.team
+    if not team:
+        team, holders = resolve(task_id)
+        if not team:
+            named = ", ".join(holders) if holders else "none"
+            print(f"repact-wait: no single team of this session holds #{task_id}; "
+                  f"pass --team (teams holding #{task_id}: {named})", file=sys.stderr)
+            return 2
+    path = ev.task_path(team, task_id)
+    if path is None:
+        print(f"repact-wait: #{task_id} in team {team!r} names no task file", file=sys.stderr)
+        return 2
+    try:
+        return wait(path, task_id, team, args.timeout, args.interval, args.until)
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

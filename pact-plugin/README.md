@@ -1,113 +1,23 @@
-# PACT — Orchestration Harness for Claude Code
+# rePACTed plugin
 
-> **Version**: 4.8.1
+This folder is the plugin that `/plugin install repacted@repacted` installs (version 1.7.0). Setup and a first run are in the repository [README](https://github.com/v4lheru/repacted-plugin#readme) and the [quickstart](https://github.com/v4lheru/repacted-plugin/blob/main/docs/quickstart.md).
 
-Turn a single Claude Code session into a managed team of specialist AI agents that prepare, design, build, and test your code systematically.
+## What is here
 
-> **Breaking change in v4.0:** PACT now delivers the orchestrator persona via the `--agent PACT:pact-orchestrator` flag (or settings.json / `pact` script convention) instead of CLAUDE.md routing. See the [v4.0 upgrade guide](https://github.com/Synaptic-Labs-AI/PACT-Plugin#upgrading-from-v3x-to-v40) for details — also requires [Agent Teams enabled](https://github.com/Synaptic-Labs-AI/PACT-Plugin#enabling-agent-teams) per v3.0+.
+| Folder | What it holds |
+|---|---|
+| `hooks/` | The guards and the other hooks. `hooks/hooks.json` registers them. |
+| `agents/` | The lead and the specialist agents. |
+| `commands/` | The `/repacted:...` commands, such as `init`, `comPACT` and `orchestrate`. |
+| `skills/` | Skills that agents load for a kind of work. |
+| `bin/` | Command-line tools such as `repact-doctor`, `repact-explain` and `env-get`. |
+| `protocols/`, `reference/`, `templates/` | Shared rules and reference files that agents read. |
+| `telegram/` | The optional Telegram bridge. It is off until you run `/repacted:telegram-setup`. |
 
-## Install in 30 Seconds
+## Check your install
 
-```bash
-/plugin marketplace add Synaptic-Labs-AI/PACT-Plugin
-/plugin install PACT@pact-plugin
-cp ~/.claude/plugins/cache/pact-plugin/PACT/*/CLAUDE.md ~/.claude/CLAUDE.md
-```
-
-Then add `~/.claude/teams` and `~/.claude/pact-sessions` to your `additionalDirectories` and PACT allow rules in `~/.claude/settings.json` to prevent permission prompts during agent operations:
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
-  },
-  "permissions": {
-    "additionalDirectories": [
-      "~/.claude/teams",
-      "~/.claude/pact-sessions"
-    ],
-    "allow": [
-      "Write(~/.claude/agent-memory/**)",
-      "Read(~/.claude/agent-memory/**)",
-      "Edit(~/.claude/agent-memory/**)",
-      "Write(~/.claude/pact-sessions/**)",
-      "Read(~/.claude/pact-sessions/**)",
-      "Edit(~/.claude/pact-sessions/**)",
-      "Write(~/.claude/pact-memory/**)",
-      "Read(~/.claude/pact-memory/**)",
-      "Edit(~/.claude/pact-memory/**)",
-      "Write(~/.claude/pact-telegram/**)",
-      "Read(~/.claude/pact-telegram/**)",
-      "Edit(~/.claude/pact-telegram/**)"
-    ]
-  }
-}
-```
-
-> **Note:** Bash allow rules are intentionally omitted — they are [fragile](https://docs.anthropic.com/en/docs/claude-code/settings#permission-settings) for commands with arguments. When agents run `mkdir` or `rm` in `~/.claude/` paths, select **"Yes, and always allow from this project"** to add the rule automatically.
-
-The two `env` values are prerequisites and they gate different things: Agent Teams, and the task tools PACT must have to bootstrap. If specialists will not spawn, see [If specialist agents will not spawn](https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn).
-
-Then restart Claude Code. Requires [Agent Teams enabled](https://github.com/Synaptic-Labs-AI/PACT-Plugin#enabling-agent-teams) and the `--agent` flag wired up — see [Loading PACT at session start](https://github.com/Synaptic-Labs-AI/PACT-Plugin#upgrading-from-v3x-to-v40) for the three convenience patterns (per-project `.claude/settings.json`, the `pact` shell wrapper, or manual `claude --agent PACT:pact-orchestrator`).
-
-## What You Get
-
-- **12 Specialist Agents** — Preparer, Architect, Backend/Frontend/Database/DevOps Coders, n8n, Test/Security/QA Engineers, Auditor (concurrent observation during CODE), Secretary
-- **12 Commands** — From full orchestration (`/PACT:orchestrate`) to quick single-specialist fixes (`/PACT:comPACT`), plus pause/resume (`/PACT:pause`) and pin-memory management (`/PACT:pin-memory`, `/PACT:prune-memory`)
-- **20 Skills** — On-demand domain knowledge for architecture, coding, testing, security, n8n, plus operational skills (agent teams, teachback, handoff harvest, memory, worktree)
-- **Persistent Memory** — SQLite + vector embeddings for cross-session learning; additive list merge so lessons grow monotonically
-- **Durable Workflow State** — Append-only session journal (`~/.claude/pact-sessions/`) survives compaction, task GC, and crashes
-- **Adaptive Complexity** — Light process for simple tasks, full ceremony for complex ones; calibration data feeds back into variety scoring (Bateson's Learning II)
-- **Safety Discipline** — Harness-Origin Distinction (harness-origin text ≠ user consent), two-call atomic acceptance pair, structural verification against `git diff` ground truth
-
-## Quick Start
-
-```
-/PACT:orchestrate <task>          # Full multi-agent workflow
-/PACT:comPACT <domain> <task>     # Self-contained tasks, no PACT phases
-/PACT:plan-mode <task>            # Strategic planning before implementation
-/PACT:pause                       # Consolidate memory, persist state, shut down teammates
-```
-
-## What's New in v4.0+
-
-- **`--agent` flag persona delivery**: Orchestrator persona ships at the system-prompt tier via `--agent PACT:pact-orchestrator`, durable under context compaction (replaces v3.x CLAUDE.md routing)
-- **Lazy-load protocols**: Persona body cross-references protocols on demand instead of bootstrapping them all up front, reducing baseline token cost
-- **Restored session-start ritual** (v4.1): Scaled-down `/PACT:bootstrap` command + `bootstrap_gate.py` injection re-establish the first-turn ritual under the new delivery model
-- **Communication Charter**: Async-at-idle-boundary delivery model formalized for inter-agent `SendMessage` mechanics
-- **Concurrent Audit** (v4.2): Auditor agent observes CODE phase via `git diff` rather than messaging — catches architecture drift before it compounds, with structural verification discipline against ground truth
-
-## Configuration
-
-Environment variables that tune PACT behavior. Full detail — types, precedence, and the two `settings.json` gotchas — is in [reference/config.md](reference/config.md).
-
-| Variable | Default | Allowed values | Effect |
-|---|---|---|---|
-| `PACT_PR_GREEDY_FIX` | `0` (off) | `1` / `0` | When on, peer-review greedily auto-delegates **all** minor + future reviewer findings as reversible fixes; `merge` / `close` / `push` stay user-gated and SACROSANCT is never overridden. Off = the default per-finding review gate. |
-| `PACT_AUTONOMOUS_SCOPE_DETECTION` | `0` (off) | `1` / `0` | When on, scope detection may auto-decompose without user confirmation when all strong signals fire. Off = the Confirmed tier (proposes; user confirms). Replaces the retired `autonomous-scope-detection: enabled` CLAUDE.md marker. |
-| `PACT_DISPATCH_INLINE_MISSION_MODE` | `warn` | `warn` / `deny` / `shadow` | Disposition of the dispatch-gate inline-mission heuristic (flags dispatchers inlining mission text into `prompt=` instead of using the canonical "check `TaskList`" form). `warn` emits an advisory `additionalContext`; `deny` blocks the spawn (flip only after empirically confirming `additionalContext` injection is reliable under PreToolUse — see `pact-plugin/hooks/dispatch_gate.py` for the matcher-fidelity discussion); `shadow` journals only — the trigger is observable but neither WARNs nor DENYs (calibration / first-session safety net). The other dispatch-gate rules (name/team presence, name validation, specialist registry, session-team match, member uniqueness, task-assignment) are unaffected by this env-var. Unknown values fall back to `warn`. |
-| `PACT_DISPATCH_VARIETY_MODE` | `deny` | `warn` / `deny` / `shadow` | Disposition of the handoff-ordering dispatch-variety enforcement — the one option that ships ENFORCING: a dispatch-wiring `TaskUpdate` whose Task B carries no resolvable `metadata.variety` is blocked. Set `warn` (advisory `additionalContext`) or `shadow` (journal only) to opt down. An UNSET variable enforces; an UNRECOGNIZED one falls back to `warn` (the row's declared `invalid_fallback`) with a stderr line naming what it resolved to — absence is consent to the shipped posture, an unparseable value is not. |
-
-Bool options parse `1` / `true` / `yes` / `on` → on; everything else (including `0` and unset) → off.
-
-## Full Documentation
-
-For installation options, detailed features, examples, and technical reference:
-**[github.com/Synaptic-Labs-AI/PACT-Plugin](https://github.com/Synaptic-Labs-AI/PACT-Plugin)**
-
-## Reference
-
-- [Protocols](protocols/) — 22 coordination protocols (scope detection, algedonic signals, audit, state recovery)
-- [Algedonic Signals](protocols/algedonic.md) — Emergency escalation protocol
-- [Communication Charter](protocols/pact-communication-charter.md) — Async-at-idle-boundary inter-agent delivery model
-- [Completion Authority](protocols/pact-completion-authority.md) — Lead-only completion + Task A+B dispatch shape
-- [Concurrent Audit](protocols/pact-audit.md) — Auditor observation cycles and structural verification discipline
-- [State Recovery](protocols/pact-state-recovery.md) — Resume + recovery semantics across sessions
-- [S5 Policy](protocols/pact-s5-policy.md) — Non-negotiable rules layer (security, quality, ethics, integrity)
-- [S4 Tension](protocols/pact-s4-tension.md) — Strategic-vs-operational tension management
-- [VSM Glossary](reference/vsm-glossary.md) — Viable System Model terminology in PACT context
+Ask Claude to run `repact-doctor`. It prints one line per check, then `mode: guards-only (Agent Teams flag off)` or `mode: full (Agent Teams on)`. If teammates will not spawn, see [If specialist agents will not spawn](https://github.com/v4lheru/repacted-plugin#if-specialist-agents-will-not-spawn).
 
 ## License
 
-MIT — See [LICENSE](../LICENSE)
+MIT. rePACTed is an independent fork of PACT-Plugin v4.8.1 by Synaptic Labs, not affiliated with Synaptic Labs. See [LICENSE](LICENSE) and [NOTICE](NOTICE.md).

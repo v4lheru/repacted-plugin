@@ -1,154 +1,109 @@
 ---
-description: Set up Telegram notifications for PACT
+description: Set up Telegram updates from agents
 argument-hint:
+disable-model-invocation: true
 ---
 # pact-telegram Setup
 
-Walk the user through configuring the pact-telegram bridge. This is an interactive setup -- use `AskUserQuestion` at each step and Bash for automation.
+<!-- Maintainers: the pact-telegram config path below matches a default-root pin in code; do not migrate it to the config-dir seam. -->
 
-**Security**: NEVER echo, log, or display bot tokens or API keys in any tool output. Store values in variables only. All curl commands must use `-s` (silent mode).
+Walk the user through configuring the pact-telegram bridge. Use `AskUserQuestion` at each step and Bash for automation.
 
----
+**Tell the user first**: the bridge connects Claude Code sessions to a Telegram bot they own. Sessions notify them on finish or blocker, ask questions and wait for a text or voice reply. It is opt-in: nothing starts or installs until this setup ends, and it can be switched off (Step 10).
+
+**Security**: NEVER echo, log, or display a bot token or API key, and never ask the user to paste one into the chat. The user writes secrets into the config file; read them only through `ENV_GET`, which hands a key to one command without printing it. Curl always runs with `-s`.
+
+Below, `ENV_GET` is `"${CLAUDE_PLUGIN_ROOT}/bin/env-get"`, `TG_ENV` is `~/.claude/pact-telegram/.env` and `DEPS` is `PYTHONPATH="${CLAUDE_PLUGIN_ROOT}" python3 -m telegram.deps`.
 
 ## Step 1: Check Existing Configuration
 
-Check if `~/.claude/pact-telegram/.env` (matches a default-root pin in code — do not migrate) already exists:
-
 ```bash
-test -f ~/.claude/pact-telegram/.env && echo "EXISTS" || echo "MISSING"  # matches a default-root pin in code — do not migrate
+test -f ~/.claude/pact-telegram/.env && echo "EXISTS" || echo "MISSING"
 ```
 
-- If **EXISTS**: Tell the user "pact-telegram is already configured." Use `AskUserQuestion` to ask: "Would you like to (A) reconfigure from scratch, (B) test the existing setup, or (C) cancel?"
-  - A: Continue to Step 2 (will overwrite existing config)
-  - B: Skip to Step 9 (send test notification)
-  - C: Stop -- tell user setup cancelled
-- If **MISSING**: Continue to Step 2.
+- **EXISTS**: ask "(A) reconfigure from scratch, (B) test the existing setup, or (C) cancel?" A: `mv TG_ENV TG_ENV.bak`, go to Step 2. B: Step 9. C: stop.
+- **MISSING**: Step 2.
 
-## Step 2: Create a Telegram Bot
+## Step 2: Create a Bot and Store Its Token
 
-1. Tell the user: "Open Telegram and message **@BotFather**. Send `/newbot`, follow the prompts to name your bot, then paste the **bot token** here. It looks like `123456789:ABCdefGHIjklMNOpqrsTUVwxyz_0123456`."
-2. Use `AskUserQuestion` to collect the bot token.
-3. Store the token -- do NOT echo or log it.
+1. Create the file, empty and private:
+   ```bash
+   mkdir -p ~/.claude/pact-telegram && touch ~/.claude/pact-telegram/.env && chmod 600 ~/.claude/pact-telegram/.env
+   ```
+2. Tell the user: "Message **@BotFather** in Telegram, send `/newbot` and follow the prompts. Do not paste the token here: open `~/.claude/pact-telegram/.env` in your editor, add `TELEGRAM_BOT_TOKEN=<token>` and save."
+3. Confirm with `AskUserQuestion`.
 
 ## Step 3: Validate Token Format
 
-Validate the token matches the pattern `\d+:[A-Za-z0-9_-]{35}`:
-
 ```bash
-echo "$TOKEN" | grep -qE '^\d+:[A-Za-z0-9_-]{35}$'
+ENV_GET TG_ENV TELEGRAM_BOT_TOKEN -- python3 -c 'import os, re, sys; sys.exit(0 if re.fullmatch(r"\d+:[A-Za-z0-9_-]{35}", os.environ["TELEGRAM_BOT_TOKEN"]) else 1)' && echo VALID || echo INVALID
 ```
 
-- If **valid**: Continue to Step 4.
-- If **invalid**: Tell the user the format looks wrong and ask them to paste it again (`AskUserQuestion`). Retry up to 2 more times, then give up with an error message.
+INVALID or a missing key: ask the user to fix the line; retry up to 2 more times, then stop with an error.
 
 ## Step 4: Detect Chat ID
 
-1. Tell the user: "Now send `/start` (or any message) to your new bot in Telegram. I will detect your chat ID automatically."
-2. Use `AskUserQuestion` to confirm the user has sent the message.
-3. Call the Telegram getUpdates API:
+1. Ask the user to send `/start` to the bot, and confirm (`AskUserQuestion`).
+2. Read the chat IDs (only they are printed):
    ```bash
-   curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates"
+   ENV_GET TG_ENV TELEGRAM_BOT_TOKEN -- sh -c 'curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates"' | python3 -c 'import json, sys; d = json.load(sys.stdin); print(sorted({u["message"]["chat"]["id"] for u in d.get("result", []) if "message" in u}))'
    ```
-4. Parse the JSON response to extract `result[0].message.chat.id`.
-5. If no updates found, ask the user to send another message and retry (up to 3 attempts with a 3-second wait between each).
-6. Once detected, show the chat ID and ask the user to confirm: "Detected chat ID: **{chat_id}**. Is this correct?" (`AskUserQuestion`)
+3. Empty list: ask for another message and retry (3 attempts, 3 s apart). Then ask: "Detected chat ID: **{chat_id}**. Is this correct?"
 
 ## Step 5: Optional Voice Transcription
 
-1. Tell the user: "**Optional**: To enable voice note transcription, paste your OpenAI API key. This uses the Whisper API (~$0.006/min). Leave blank to skip."
-2. Use `AskUserQuestion` to collect the key (or empty to skip).
-3. If provided, validate it starts with `sk-`. If invalid format, warn and offer to re-enter or skip.
-4. Store the key if provided -- do NOT echo or log it.
+Offer: "To transcribe voice notes (Whisper API, ~$0.006/min), add `OPENAI_API_KEY=<key>` to the same file. Skip if not wanted." If added, check it without printing:
+
+```bash
+ENV_GET TG_ENV OPENAI_API_KEY -- python3 -c 'import os, sys; sys.exit(0 if os.environ["OPENAI_API_KEY"].startswith("sk-") else 1)' && echo VALID || echo INVALID
+```
 
 ## Step 6: Write Configuration
 
-Create the config file with secure permissions:
+```bash
+printf 'TELEGRAM_CHAT_ID=%s\nPACT_TELEGRAM_MODE=passive\n' '<chat_id>' >> TG_ENV && chmod 600 TG_ENV && ENV_GET --keys TG_ENV
+git -C ~/.claude/pact-telegram rev-parse 2>/dev/null
+```
 
-1. Create directory:
-   ```bash
-   mkdir -p ~/.claude/pact-telegram  # matches a default-root pin in code — do not migrate
-   ```
-
-2. Write `~/.claude/pact-telegram/.env` (matches a default-root pin in code — do not migrate) with the collected values:
-   ```
-   TELEGRAM_BOT_TOKEN=<token from step 2>
-   TELEGRAM_CHAT_ID=<chat_id from step 4>
-   OPENAI_API_KEY=<key from step 5, or omit this line entirely if skipped>
-   PACT_TELEGRAM_MODE=passive
-   ```
-
-3. Set permissions:
-   ```bash
-   chmod 600 ~/.claude/pact-telegram/.env  # matches a default-root pin in code — do not migrate
-   ```
-
-4. Verify the file is NOT inside a git repository:
-   ```bash
-   git -C ~/.claude/pact-telegram rev-parse 2>/dev/null  # matches a default-root pin in code — do not migrate
-   ```
-   If exit code is 0 (inside a git repo), warn: "Your pact-telegram config directory is inside a git repository. Credentials could be accidentally committed. Consider moving it or adding it to .gitignore."
+Expect each key name once. If `git` exits 0, warn that the config directory is inside a git repository and credentials could be committed.
 
 ## Step 7: Install Python Dependencies
 
-Install the MCP server dependencies:
-
-```bash
-python3 -c "
-import sys; sys.path.insert(0, '${CLAUDE_PLUGIN_ROOT}')
-from telegram.deps import check_dependencies, install_dependencies
-missing = check_dependencies()
-if not missing:
-    print('All dependencies already installed.')
-    sys.exit(0)
-print(f'Installing missing packages: {missing}')
-ok, msg = install_dependencies(quiet=True)
-print(msg)
-sys.exit(0 if ok else 1)
-"
-```
-
-- If installation fails, show the error and suggest manual installation: `pip install mcp httpx`
+`DEPS install` installs `mcp` and `httpx` (pinned in `telegram/requirements.txt`): to the user site-packages when the plugin declares the server, else to `${CLAUDE_PLUGIN_DATA}/telegram-deps`, which survives plugin updates. On failure show the error and suggest `pip install mcp httpx`.
 
 ## Step 8: Enable MCP Server
 
-1. First, check if the user has an old user-scope MCP registration from a previous setup:
+Run `DEPS mode`.
+
+**`plugin`** (the plugin declares the server):
+1. Check for an old user-scope registration:
    ```bash
    claude mcp list 2>/dev/null | grep -q "pact-telegram" && echo "OLD_REGISTRATION" || echo "CLEAN"
    ```
-   If **OLD_REGISTRATION**: Tell the user: "You have an old pact-telegram MCP registration from a previous setup. Remove it to avoid running duplicate servers:" and run `claude mcp remove pact-telegram`.
+   If **OLD_REGISTRATION**: tell the user it would run a duplicate server and run `claude mcp remove pact-telegram`.
+2. Tell the user: "Run `/plugin`, find **PACT** in the Installed list, expand it, and toggle **pact-telegram MCP** on. You can toggle it off from the same view."
+3. Confirm with `AskUserQuestion`.
 
-2. Tell the user: "The pact-telegram MCP server is bundled with the PACT plugin. To enable it, run `/plugin`, find **PACT** in the Installed list, expand it, and toggle **pact-telegram MCP** on. You can toggle it off anytime from the same view."
-
-3. Use `AskUserQuestion` to confirm the user has enabled the MCP server before proceeding.
+**`user`** (opt-in install, the plugin starts no server):
+1. `DEPS register` registers the server at user scope through `"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/protocols/pact-plugin"`, the link each session start keeps on the current plugin version, so it survives updates. If it reports the link missing, ask for a new session and rerun.
+2. Verify: `claude mcp get pact-telegram 2>&1 | grep -E 'Scope|Status'` shows `✔ Connected`; if not, rerun Step 7.
+3. Tell the user the tools appear after a restart.
 
 ## Step 9: Send Test Notification
 
-Verify the setup works by sending a test message:
-
 ```bash
-curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-  -H "Content-Type: application/json" \
-  -d '{"chat_id": "${CHAT_ID}", "text": "pact-telegram setup complete! You will receive session notifications here.", "parse_mode": "Markdown"}'
+ENV_GET TG_ENV TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID -- sh -c 'curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\": \"${TELEGRAM_CHAT_ID}\", \"text\": \"pact-telegram setup complete!\"}"' | python3 -c 'import json, sys; print("ok" if json.load(sys.stdin).get("ok") else "failed")'
 ```
 
-1. Check the API response for `"ok": true`.
-2. Ask the user: "Did you receive the test message in Telegram?" (`AskUserQuestion`)
-3. If **yes**: Continue to Step 10.
-4. If **no**: Troubleshoot -- check token, chat ID, internet connectivity. Offer to retry or reconfigure.
+Expect `ok`, then ask whether the message arrived. If not, check token, chat ID and connectivity; offer to retry or reconfigure.
 
 ## Step 10: Finalize
 
 Tell the user:
 
-> **Setup complete!** The pact-telegram MCP server is enabled and ready to use.
->
-> - **Passive mode** (default): You will receive a Telegram notification when a Claude Code session ends, summarizing what was accomplished.
-> - **Active mode**: The orchestrator can send you questions via Telegram and wait for your reply. Enable by changing `PACT_TELEGRAM_MODE=active` in `~/.claude/pact-telegram/.env` (matches a default-root pin in code — do not migrate).
-> - **MCP tools**: The tools `telegram_notify`, `telegram_ask`, `telegram_check_replies`, and `telegram_status` are available to agents.
-> - **Multi-session support**: Each message includes the project name so you can tell which Claude Code instance sent it. When replying to questions, use swipe-reply (mobile) or click-reply (desktop) to route your answer to the correct session.
-> - **Toggle**: You can enable/disable the MCP server anytime via `/plugin` → PACT → pact-telegram MCP.
->
-> **Restart Claude Code now** to activate the pact-telegram MCP server.
-
-Configuration file: `~/.claude/pact-telegram/.env` (matches a default-root pin in code — do not migrate)
-To reconfigure later: `/PACT:telegram-setup`
+> **Setup complete!**
+> - **Passive mode** (default): a notification when a session ends, summarizing what was done.
+> - **Active mode**: the orchestrator can ask you questions and wait for your reply. Set `PACT_TELEGRAM_MODE=active` in `~/.claude/pact-telegram/.env`.
+> - **MCP tools**: `telegram_notify`, `telegram_ask`, `telegram_check_replies`, `telegram_status`.
+> - **Multi-session**: each message names its project; swipe-reply (mobile) or click-reply (desktop) so the answer reaches the right session.
+> - **Toggle**: plugin-declared server: `/plugin` → PACT → pact-telegram MCP. Opt-in registration: `claude mcp remove pact-telegram -s user` to stop, rerun this setup to restart.

@@ -79,3 +79,17 @@ When adding a new hook that consumes stdin, follow the same pattern:
   pins the forward-compat fallback path (stdin lacks `hook_event_name`).
 - `pact-plugin/tests/test_emitter_happy_and_gates.py::TestProductionShapeMetadataOnly` —
   pins production-shape behavior including the handoff-presence gate.
+
+## Registration: one dispatcher process per hook call
+
+hooks.json runs `hooks/dispatch.py <event> [<group>]`, and the host matches one such entry
+per call; the checks it runs, their matchers and their order live in
+`hooks/dispatch_registry.py` (`REGISTRY`). A tool event has one entry per tool group plus
+one for every other tool (`dispatch_entries`), so the group, not stdin, says which tool the
+host matched. A new check is a row in `REGISTRY`; then regenerate hooks.json with
+`rebuild_hooks_json` (its docstring has the one-liner), since a new matcher or timeout moves
+the entries (test_dispatch fails until hooks.json matches it). A script check keeps its stdin/stdout/exit contract, and a native
+check follows the interface in the `dispatch_registry` docstring. Only async hooks stay
+separate hooks.json entries. Every refusal and every check failure is journaled
+by the dispatcher (`gate_refusal`, `check_failure`); `dispatch.py`'s docstring states how
+results combine.

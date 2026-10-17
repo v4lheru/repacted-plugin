@@ -1,42 +1,25 @@
 ---
-description: Mid-workstream context checkpoint — harvest, persist, shut down teammates, stand by for /compact + /PACT:bootstrap
+description: Save progress and stop helper agents mid-task so you can run /compact
+disable-model-invocation: true
 ---
 # PACT Refresh Protocol
 
-Reset the context window mid-workstream without losing state. Refresh harvests pending knowledge, persists a resumable checkpoint to the session journal, shuts down teammates, and stands by for the user to run `/compact` (canonical) and then `/PACT:bootstrap`. The workstream CONTINUES after the reset — nothing is closed, merged, or cleaned up.
-
-> **Cross-reference**: For a PR-open pause with later resumption, see [pause.md](pause.md). For end-of-session cleanup and close, see [wrap-up.md](wrap-up.md).
-
----
-
-## When to Use / When NOT
-
-| Command | Purpose | Workstream state after |
-|---------|---------|------------------------|
-| `/PACT:pause` | PR open, resume the review later | Paused (PR open) |
-| `/PACT:wrap-up` | End-of-session cleanup + close | Ended |
-| `/PACT:refresh` | Mid-workstream context checkpoint | **Active — continues after `/compact` + `/PACT:bootstrap`** |
-
-Use refresh when the context window is near exhaustion while work is still mid-flight — for example CODE complete but TEST pending, a live HALT/algedonic signal, or worktrees holding unmerged commits. No orchestration retrospective runs (the arc is mid-flight, not ending); `/PACT:pin-memory` is optional; the harvest and its drain confirmation are MANDATORY.
-
----
+Reset context mid-workstream without losing state; the workstream CONTINUES (nothing closed, merged or cleaned). PR-open pause: [pause.md](pause.md); session end: [wrap-up.md](wrap-up.md). The harvest and its drain confirmation are MANDATORY.
 
 ## Constraints (apply to every step)
 
-- **LEAD-FRAME-ONLY**: every step that spawns, stops, or messages teammates runs in the lead frame. The team roster is flat — teammates cannot spawn or stop teammates.
-- **Never clean worktrees, branches, or commits.** Verification is read-only; the workstream continues after the reset.
-- **Never complete or delete tasks** — the feature task, phase tasks, and any HALT/algedonic signal tasks must survive for resume.
-- **Never write under `{config_dir}/pact-refresh/`.** That directory is legacy state from a removed subsystem; checkpoint state lives ONLY in the session journal. `{config_dir}` is this session's Claude config root — the value of `$CLAUDE_CONFIG_DIR` when set and non-empty, otherwise `$HOME/.claude`. Read it off an absolute path the platform already injected into your context — your plugin root is `{config_dir}/plugins/…` — rather than shelling out for the variable. Substitute it before running any command; never assume `~/.claude`.
-
----
+- **LEAD-FRAME-ONLY**: spawn, stop and message teammates from the lead frame.
+- **Never clean worktrees, branches, or commits.** Verification is read-only.
+- **Never complete or delete tasks**: feature, phase and HALT/algedonic tasks must survive.
+- **Never write under `{config_dir}/pact-refresh/`** (legacy; `{config_dir}` = `$CLAUDE_CONFIG_DIR` or `$HOME/.claude`); state lives ONLY in the journal.
 
 ## Steps
 
-> **CRITICAL ordering**: HARVEST (step 2) MUST be drain-confirmed complete BEFORE the shutdown (step 5). The secretary must be alive to process HANDOFFs.
+> **CRITICAL**: step 2 drain-confirmed BEFORE step 5. Ensure the secretary first: see the on-demand secretary step in [bootstrap.md](bootstrap.md#step-2--on-demand-secretary) (TaskCreate → TaskUpdate(owner="secretary") → spawn if absent → SendMessage).
 
 ### 1. Preflight — degenerate case
 
-Scan `TaskList` for an in_progress feature task. If NONE exists, tell the user refresh will proceed as harvest-only and `/PACT:wrap-up` may fit better; on their confirm, CONTINUE. Once proceeding, the journal write in step 4 is unconditional — the degenerate case writes a minimal event carrying the two required fields only.
+No in_progress feature task? Say refresh runs harvest-only (`/repacted:wrap-up` may fit better); on confirm, write the minimal step-4 event.
 
 ### 2. HARVEST — memory consolidation (Pass 2)
 
@@ -46,105 +29,32 @@ TaskCreate(subject="secretary: session consolidation (Pass 2)",
 TaskUpdate(taskId, owner="secretary")
 ```
 
-**Drain-confirmation gate (MUST)**: before ANY shutdown step, verify the consolidation task's status is `completed` by READING the task (`TaskGet`, or the raw task JSON on disk) — an explicit completion check, not ordering prose. Not completed ⇒ wait or nudge the secretary; do not proceed to step 5.
+**Drain-confirmation gate (MUST)**: READ the task (`TaskGet` or its JSON) and confirm `completed` before any shutdown; else wait or nudge.
 
 ### 3. PERSIST/VERIFY — read-only state check + payload computation
 
-For each active worktree, run `git status --porcelain` and report any uncommitted changes to the user — never clean, never commit on their behalf.
-
-Then compute the checkpoint payload:
-
-- `halt_active` + `halt_task_ids`: scan `TaskList` for tasks with `metadata.type` in {`blocker`, `algedonic`} and status not `completed`. Always computable — `false` and omit the ids when none are live.
-- `feature_task_id` / `feature_subject`: from the in_progress feature task (omit both in the degenerate case).
-- `team_name`: the active session team's name — the same value bootstrap reads from the Current Session block at resume, giving it an identity cross-check.
-- `next_phase`: from the phase-task state. Bounded vocabulary, writer-enforced (the journal validator does not check enums): `prepare|architect|code|test|peer-review|deploy`.
-- `worktrees`: JSON list of ABSOLUTE paths of the active worktrees.
-- `pr_number`: only when a PR is open — informational surface data; it never gates anything.
+Per worktree, `git status --porcelain`; report uncommitted changes, never clean or commit. Compute the checkpoint fields step 4 lists (HALT/algedonic tasks, feature task, `team_name`, `next_phase`, worktrees, open PR).
+Task log: note each active task's state (`repact-task set <ref> --note`), then `repact-task commit` (with the task-log question of bootstrap step 5 declined or left open, skip both).
 
 ### 4. Write the checkpoint to the session journal
 
-Emit `session_consolidated` only when step 2's consolidation actually completed, then write the `session_refreshed` checkpoint. The flag is **shell-clamped** via a three-branch `case`: `true` emits, `false` is a no-op, anything else fails fast as a template-substitution bug. Pass the literal string `true` or `false` for `{true_or_false}`.
-
-```bash
-set -e
-trap 'rc=$?; echo "[JOURNAL WRITE FAILED] refresh.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
-case '{true_or_false}' in
-  true)
-    python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-      --type session_consolidated --session-dir '{session_dir}' --stdin <<'JSON'
-{"pass": 2, "task_count": {task_count}, "memories_saved": {memories_saved}}
-JSON
-    ;;
-  false)
-    ;;  # intentional no-op
-  *)
-    echo "[refresh.md] invalid {true_or_false} flag: '{true_or_false}' (expected literal 'true' or 'false')" >&2
-    exit 1
-    ;;
-esac
-python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-  --type session_refreshed --session-dir '{session_dir}' --stdin <<'JSON'
-{"consolidation_completed": {true_or_false}, "halt_active": {halt_active}, "halt_task_ids": {halt_task_ids}, "feature_task_id": "{feature_task_id}", "feature_subject": "{feature_subject}", "team_name": "{team_name}", "next_phase": "{next_phase}", "worktrees": {worktrees}, "pr_number": {pr_number}}
-JSON
-```
-
-**Degenerate case** (no active workstream): omit every optional field — write the two required fields only:
-
-```bash
-python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-  --type session_refreshed --session-dir '{session_dir}' --stdin <<'JSON'
-{"consolidation_completed": {true_or_false}, "halt_active": false}
-JSON
-```
-
-> ⚠️ **Heredoc-stdin contract**: the writes use `--stdin <<'JSON' ... JSON` (quoted delimiter), so an apostrophe in a substituted value cannot close the shell quote and silently drop the event. The orchestrator must still produce JSON-valid string content (escape `\"`, `\\`, and control chars).
-
-**Event fields**:
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `consolidation_completed` | boolean | yes | Whether the step 2 harvest completed |
-| `halt_active` | boolean | yes | Whether any HALT/algedonic signal task is live at refresh time |
-| `halt_task_ids` | list of strings | no | Ids of the live signal tasks (diagnostic — the live task store is the SSOT at resume) |
-| `feature_task_id` | string | no | The in_progress feature task id |
-| `feature_subject` | string | no | The in_progress feature task subject |
-| `team_name` | string | no | The active session team's name — resume-time identity cross-check |
-| `next_phase` | string | no | Bounded vocabulary above |
-| `worktrees` | list of strings | no | Absolute paths of active worktrees |
-| `pr_number` | integer | no | Open PR number — surface-only, never gates surfacing |
-
-The timestamp (`ts`) is set automatically by the journal writer and becomes the checkpoint's claim id — bootstrap's consumption write binds to it.
+**Load [reference/refresh/checkpoint.md](../reference/refresh/checkpoint.md) and run its shell-clamped template as written.**
 
 ### 5. SHUTDOWN teammates
 
-Shut down each active teammate **by name**, staggered 1 teammate per turn. `TaskStop("{teammate_name}")` is the termination primitive and the only call this loop makes: do NOT send a `shutdown_request` first.
-
+Stop each active teammate **by name**, 1 per turn; no `shutdown_request` first:
 ```
 For each active teammate:
   TaskStop("{teammate_name}")
 ```
-
-Treat a `TaskStop` not-found / already-exited error as already-stopped success and CONTINUE the loop — never abort mid-iteration; an abort strands later teammates unstopped.
-
-EXPECTED post-state: each stop removes that member's roster entry — the config FILE and the team IDENTITY survive; a lead-only roster is the correct post-refresh state, not corruption. Do NOT add a synchronous confirmation step — verify by a disk re-read of the team config, or simply proceed. Do NOT delete the team.
+A not-found error is already-stopped success: CONTINUE. EXPECTED post-state: a lead-only roster. Do NOT delete the team.
 
 ### 6. STANDBY
 
-Report to the user:
+Report: "Context checkpoint complete. Run /compact now, then /repacted:bootstrap to resume mid-flight." Until bootstrap runs:
 
-```
-"Context checkpoint complete. Run /compact now, then /PACT:bootstrap to resume mid-flight."
-```
+- **FORBID new dispatches**.
+- **RESPAWN-BEFORE-SEND**: messaging a pre-refresh name (the secretary too) resurrects its stale transcript.
+- **Expect and IGNORE stragglers**: a late pre-stop message is not a live teammate; never reply.
 
-Until bootstrap runs:
-
-- **FORBID new dispatches** — no TaskCreate-and-assign, no specialist spawns.
-- **RESPAWN-BEFORE-SEND**: messaging ANY pre-refresh teammate name resurrects its stale transcript and re-adds the member — bootstrap must respawn a fresh process under that name first. This includes the secretary.
-- **Expect and IGNORE stragglers**: messages a teammate generated BEFORE its stop can deliver minutes later during standby. A straggler is NOT evidence the teammate survived; do not reply and do not re-engage — any reply triggers the resume-on-send hazard above.
-- `/clear` is tolerated but non-canonical (no compact summary is written; the bootstrap gate re-engages either way); `/compact` is the canonical path.
-
-If the Telegram bridge is active, send a notification:
-
-```
-telegram_notify("Context checkpoint complete. Run /compact, then /PACT:bootstrap to resume mid-flight.")
-```
+Telegram bridge active: `telegram_notify` the same line.

@@ -107,24 +107,25 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from helpers import effective_hooks_config  # noqa: E402
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 HOOK_PATH = PLUGIN_ROOT / "hooks" / "wait_filler_gate.py"
 HOOKS_JSON = PLUGIN_ROOT / "hooks" / "hooks.json"
-ORCHESTRATOR = PLUGIN_ROOT / "agents" / "pact-orchestrator.md"
+LEAD_REFERENCE = PLUGIN_ROOT / "protocols" / "lead-reference.md"
 
 DENY_REASON_ANCHOR = "Passive waiting is the protocol"
 
 
 def _persona_watcher_template() -> str:
-    """The watcher template fenced bash block from persona §5. A11 asserts
-    the hook never gates the remedy the persona teaches (triad coherence),
-    so the allow arm reads the template's exact loop shape from the persona
-    itself — a template edit and this arm cannot drift apart. The anchor is
-    the watcher rule's own bold lead ('**Instrument the wait.**'), not the
-    §5 section heading: a future earlier bash fence in §5 would otherwise
-    re-point the extraction silently while the arm stayed green."""
-    text = ORCHESTRATOR.read_text(encoding="utf-8")
+    """The watcher template fenced bash block the persona §5 points at, in
+    lead-reference.md §Wait Instruments. A11 asserts the hook never gates the
+    remedy the persona teaches (triad coherence), so the allow arm reads the
+    template's exact loop shape from that file — a template edit and this arm
+    cannot drift apart. The anchor is the watcher rule's own bold lead
+    ('**Instrument the wait.**'), not the section heading: an earlier bash
+    fence would otherwise re-point the extraction silently."""
+    text = LEAD_REFERENCE.read_text(encoding="utf-8")
     anchor = text.index("**Instrument the wait.**")
     fence_open = text.index("```bash\n", anchor) + len("```bash\n")
     fence_close = text.index("```", fence_open)
@@ -340,7 +341,7 @@ def test_s2_registered_under_pretooluse_bash_no_async():
     entry, and neither the entry nor the hook carries async:true (a deny
     hook must be synchronous — test_hooks_json.py's MUST_BE_SYNC entry is
     the sibling pin)."""
-    config = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
+    config = effective_hooks_config()
     entries = [
         e for e in config["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"
     ]
@@ -423,7 +424,7 @@ def test_s3_shared_loads_only_for_a_teammate_background_launch(tmp_path):
     launch = {"command": "echo hi", "run_in_background": True}
     plain = {"command": "echo hi"}
     teammate = {"agent_type": "probe-coder", "session_id": "sid", "tool_name": "Bash"}
-    lead = {"agent_type": "PACT:pact-orchestrator", "session_id": "sid", "tool_name": "Bash"}
+    lead = {"agent_type": "repacted:pact-orchestrator", "session_id": "sid", "tool_name": "Bash"}
 
     assert _shared_loaded_for({**teammate, "tool_input": launch}, tmp_path) is True, (
         "positive control: a teammate background launch did not load `shared`, "

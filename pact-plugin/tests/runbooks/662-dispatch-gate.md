@@ -62,7 +62,7 @@ processes an `Agent()` tool call.
 
 **Steps**:
 
-1. In a fresh session with `/PACT:bootstrap` complete (so a team is
+1. In a fresh session with `/repacted:bootstrap` complete (so a team is
    resident), provoke a name_required-trip dispatch — `Agent(subagent_type="pact-backend-coder")`
    with no `name=` and no `team_name=`.
 2. Expect: tool call denied with `permissionDecisionReason` mentioning
@@ -116,7 +116,7 @@ rejected by `is_marker_set`'s SHA256 content-fingerprint check.
 
 **Steps**:
 
-1. In a fresh session, BEFORE invoking `/PACT:bootstrap`, inspect the
+1. In a fresh session, BEFORE invoking `/repacted:bootstrap`, inspect the
    session-dir path that the bootstrap_gate would consult:
    ```
    python3 -c "import shared.pact_context as p; p.init({}); print(p.get_session_dir())"
@@ -149,7 +149,7 @@ if bootstrap completed.
 ```
 rm ~/.claude/pact-sessions/<project>/<sid>/bootstrap-complete
 ```
-Then run `/PACT:bootstrap` to install a properly-stamped marker for the
+Then run `/repacted:bootstrap` to install a properly-stamped marker for the
 remainder of the runbook.
 
 ### 2.1 Variant — malformed JSON

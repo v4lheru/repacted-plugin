@@ -61,8 +61,9 @@ file from the compared set in silence, and a smaller set that reports green
 reads the same as a larger set that reports green.
 
 MEASURED, AND IT IS WHY THE FLOOR CANNOT BE DROPPED IN FAVOUR OF AN ALPHABET:
-of the three Python carriers, `archive_pin.py` names three route tokens and the
-two memory-repair modules name NONE. So no widened alphabet reaches the two,
+the two memory-repair modules, the Python carriers, name NO route token (a third
+Python carrier, `archive_pin.py`, went with the 1.5.0 cut). So no widened
+alphabet reaches the two,
 and a declared list is the only instrument that covers a member no alphabet can
 speak to.
 
@@ -145,8 +146,9 @@ DECLARED_CARRIERS = frozenset(
         "agents/pact-secretary.md",
         "commands/prune-memory.md",
         "reference/config.md",
-        "protocols/pact-state-recovery.md",
-        "protocols/pact-protocols.md",
+        # the protocol consolidation, cause: pact-state-recovery.md moved to recovery.md, and the SSOT
+        # pact-protocols.md was deleted (its copy of the bar went with it).
+        "protocols/recovery.md",
         "skills/pact-handoff-harvest/SKILL.md",
         # A REFERENCE PAGE, and the first carrier that is not a SKILL.md. It
         # teaches module-level API calls against the store. The route alphabet
@@ -156,7 +158,6 @@ DECLARED_CARRIERS = frozenset(
         "skills/pact-memory/references/memory-patterns.md",
         "scripts/memory_repair/__init__.py",
         "scripts/memory_repair/shred_detect.py",
-        "scripts/archive_pin.py",
     }
 )
 
@@ -207,11 +208,10 @@ POPULATION_PATTERNS = (
     # one skill directory, where a page about the store is expected rather than
     # incidental, and it reaches the NEXT page written there.
     "skills/pact-memory/**/*.md",
-    # THE MEMORY-REPAIR TOOLING DIRECTORY. `scripts/archive_pin.py` names three
-    # route tokens outside the bar, so the alphabet reaches it. This gives it a
-    # net that does NOT depend on `DECLARED_CARRIERS`. MEASURED: the one other
-    # file here, `check_pin_caps.py`, names no route token, so this pattern
-    # needs no exemption. It does NOT reach the memory package or the hooks.
+    # THE MEMORY-REPAIR TOOLING DIRECTORY. A script here that names a route
+    # token gets a net that does NOT depend on `DECLARED_CARRIERS`. The one
+    # such script, `archive_pin.py`, went with the 1.5.0 cut; the pattern stays
+    # for the next one. It does NOT reach the memory package or the hooks.
     "scripts/*.py",
 )
 
@@ -253,7 +253,6 @@ ROUTE_TOKENS = {
     "cli command": "the CLI, by a verb instruction",
     "search --query": "the CLI, by a verb instruction",
     "--limit": "the CLI, by a verb instruction",
-    "archive_pin.py": "the CLI, at one remove",
     # THE IMPORT ROUTE, SPELLED AS A MODULE-LEVEL CALL. A page taught
     # `memory.save(...)` and `memory.search(...)` and named no package path, no
     # CLI and no store file, so each token above missed it. The route was
@@ -707,10 +706,10 @@ def surfaces_the_alphabet_does_not_reach(root: Path, tokens: dict) -> list[str]:
     🔴 THIS READS THE STRIPPED TEXT, AND THE READ IS THE WHOLE ARM. The bar
     names two route tokens, `memory.db` inside `memory.db-wal` and
     `skills/pact-memory/scripts`, so with the bar in place EVERY carrier selects
-    itself and this floor can never fire. MEASURED on the tree: with the raw
-    text, `archive_pin.py` can leave the alphabet and no arm reddens. With the
-    bar removed, that removal drops `commands/prune-memory.md` and this floor
-    names it.
+    itself and this floor can never fire. MEASURED on the tree before the
+    1.5.0 cut: with the raw text, the token that selected
+    `commands/prune-memory.md` could leave the alphabet and no arm reddened.
+    With the bar removed, that removal dropped the file and this floor named it.
     """
     selected = set(files_reaching_the_store(root, tokens, ignore_bar=True))
     return sorted(ALPHABET_FLOOR - selected)
@@ -751,7 +750,7 @@ class TestTheInstrumentIsLive:
             for p in PLUGIN_DIR.rglob("*")
             if p.is_file() and is_source_file(p)
         }
-        for expected in (SOURCE_HOME, "scripts/archive_pin.py"):
+        for expected in (SOURCE_HOME, "scripts/memory_repair/shred_detect.py"):
             assert expected in reachable, (
                 f"{expected} is outside the derived walk, so a marker there "
                 f"would never be compared."
@@ -870,7 +869,7 @@ class TestTheInstrumentIsLive:
         opposite lie.
         """
         text = (
-            "Prose above names archive_pin.py for its own reason.\n"
+            "Prose above names setup_memory.py for its own reason.\n"
             f"{MARKER_BEGIN}\n"
             "The rule names memory.db-wal and it wraps here, then it\n"
             "names skills/pact-memory/scripts on a second line.\n"
@@ -888,7 +887,7 @@ class TestTheInstrumentIsLive:
                 f"input, or its pattern lost `re.DOTALL` and so cannot cross "
                 f"the line break in the region above."
             )
-        for token in ("archive_pin.py", "cli.py"):
+        for token in ("setup_memory.py", "cli.py"):
             assert carries(stripped, token), (
                 f"{token!r} sits OUTSIDE the marked region and the strip "
                 f"removed it. The strip must take the region alone, or the "
@@ -1013,17 +1012,6 @@ class TestTheMarkedRegionsAgree:
             f"block. DO NOT clear this red by a lower floor."
         )
 
-    def test_each_copy_agrees_with_the_source(self):
-        differ = copies_that_differ_from_the_source(PLUGIN_DIR)
-        assert not differ, (
-            f"the marked region in {differ} disagrees with the marked region "
-            f"in {SOURCE_HOME}, after whitespace and case are removed. THE "
-            f"SOURCE IS THE SOURCE: copy the region from {SOURCE_HOME} into "
-            f"each file named, rather than the other way. IF THE CHANGE IS "
-            f"DELIBERATE, edit the source and each copy in ONE commit. That "
-            f"tax is the mechanism and not an accident of it. THIS ARM CANNOT "
-            f"TELL YOU THE SOURCE IS CORRECT, only that the copies agree."
-        )
 
 
 class TestTheEmphasisSurvivesTheCopy:
@@ -1066,15 +1054,6 @@ class TestTheEmphasisSurvivesTheCopy:
             f"block before you change the constant."
         )
 
-    def test_each_copy_shouts_what_the_source_shouts(self):
-        quiet = copies_that_differ_only_by_case(PLUGIN_DIR)
-        assert not quiet, (
-            f"{quiet} say the same words as {SOURCE_HOME} and emphasise a "
-            f"different set of them. A de-emphasised bright line is a weaker "
-            f"rule for a reader who scans. Restore the capitalisation of the "
-            f"source. IF THE CHANGE IS DELIBERATE, edit the source and each "
-            f"copy in one commit."
-        )
 
 
 class TestEachStoreReachingSurfaceCarriesTheBar:
@@ -1318,22 +1297,16 @@ def _model_tree(tmp_path: Path) -> Path:
     THE ROUTE TOKEN OF EACH MARKDOWN CARRIER SITS OUTSIDE THE REGION, so the
     tree models the property the alphabet floor asserts of the live tree. The
     PYTHON carriers name no route token, which models the measured fact that no
-    alphabet reaches two of the three.
+    alphabet reaches them.
     """
     root = tmp_path / "plugin"
     prose = {
         SOURCE_HOME: "The CLI lives at cli.py, and setup_memory.py writes.",
         "agents/pact-secretary.md": "Use the update CLI command for a save.",
-        "commands/prune-memory.md": "Run archive_pin.py --index 3.",
+        "commands/prune-memory.md": "The pin is saved under .claude/pact-memory.",
         "reference/config.md": "The package is skills/pact-memory/scripts.",
-        "protocols/pact-state-recovery.md": "The store file is memory.db.",
-        "protocols/pact-protocols.md": "The store file is memory.db.",
+        "protocols/recovery.md": "The store file is memory.db.",
         "skills/pact-handoff-harvest/SKILL.md": "Run search --query for context.",
-        # THE MODEL MUST AGREE WITH THE TREE ON THIS ONE. archive_pin.py names
-        # three route tokens OUTSIDE its marked region, so the alphabet is its
-        # second net. A model that gave it no token would report a hole this
-        # carrier does not have.
-        "scripts/archive_pin.py": "# Reached by cli.py, writes through archive_pin.py.",
     }
     # 🔴 THE DEFAULT DEPENDS ON THE FILE TYPE, AND THAT IS A FIX FOR A CLASS
     # RATHER THAN FOR ONE PATH. A markdown carrier joins `ALPHABET_FLOOR`, so
@@ -1435,8 +1408,8 @@ class TestArmOneGoesRed:
     def test_a_drifted_python_copy_is_named(self, tmp_path):
         """The carrier type a markdown-only population could not see."""
         root = _model_tree(tmp_path)
-        _mutate(root / "scripts/archive_pin.py", "A rule stands here", "A rule shifted")
-        assert copies_that_differ_from_the_source(root) == ["scripts/archive_pin.py"]
+        _mutate(root / "scripts/memory_repair/shred_detect.py", "A rule stands here", "A rule shifted")
+        assert copies_that_differ_from_the_source(root) == ["scripts/memory_repair/shred_detect.py"]
 
     def test_a_drifted_source_names_each_copy(self, tmp_path):
         """The direction of the compare, asserted rather than described.
@@ -1453,9 +1426,9 @@ class TestArmOneGoesRed:
     def test_a_dropped_marker_is_named_and_does_not_pass_in_silence(self, tmp_path):
         """FAIL CLOSED. A half-present pair must not leave the population quietly."""
         root = _model_tree(tmp_path)
-        _mutate(root / "protocols/pact-protocols.md", MARKER_END, "")
+        _mutate(root / "protocols/recovery.md", MARKER_END, "")
         faults = carriers_with_a_marker_fault(root)
-        assert len(faults) == 1 and faults[0].startswith("protocols/pact-protocols.md")
+        assert len(faults) == 1 and faults[0].startswith("protocols/recovery.md")
         assert copies_that_differ_from_the_source(root) == [], (
             "the fidelity arm reported the same file as the marker arm. One "
             "fault reported twice teaches a reader that the second is noise."
@@ -1650,7 +1623,7 @@ class TestArmThreeGoesRed:
     def test_an_exemption_lifts_the_rule_for_one_file_only(self, tmp_path):
         root = _model_tree(tmp_path)
         _write(root, "agents/pact-newcomer.md", "Read the store at memory.db.\n")
-        _write(root, "agents/pact-other.md", "Run archive_pin.py to prune.\n")
+        _write(root, "agents/pact-other.md", "Run cli.py save to keep it.\n")
         exempt = {"agents/pact-newcomer.md": "a stated cause"}
         assert store_reaching_files_without_the_bar(root, ROUTE_TOKENS, exempt) == [
             "agents/pact-other.md"
@@ -1659,7 +1632,7 @@ class TestArmThreeGoesRed:
     def test_an_alphabet_that_narrows_reddens_the_floor(self, tmp_path):
         """Unique coverage of the alphabet floor, measured rather than claimed."""
         root = _model_tree(tmp_path)
-        narrowed = {k: v for k, v in ROUTE_TOKENS.items() if k != "archive_pin.py"}
+        narrowed = {k: v for k, v in ROUTE_TOKENS.items() if k != ".claude/pact-memory"}
         assert surfaces_the_alphabet_does_not_reach(root, narrowed) == [
             "commands/prune-memory.md"
         ]

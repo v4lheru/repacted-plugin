@@ -1,0 +1,21 @@
+{"base": "38f76965", "blob_id": "745cbfe8adb4c303e83402fa5e2093fd51d718ed", "captured_from": "3f27b2c6", "rows": 20, "sha256": "23cbc150a5351b602fe48daf173e6e15ef3392011e0d1da8a57f495025b3f3db"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "_split_into_legs", "callable": true}
+{"attr": "detect_command_operation_type", "callable": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["_split_into_legs", ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], {}], "result": ["gh api repos/o/r/pulls/5/merge -X GET -q 'STRIPPED' r\" && gh api \"x/y\" -X POST -f a='STRIPPED'"]}
+{"call": ["detect_command_operation_type", ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], {}], "result": "merge"}
+{"call": ["is_dangerous_command", ["gh api --hostname=merge.example.com -f q=x repos/o/r/pulls/1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api -f q=x --preview=merge-info repos/o/r/pulls/1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api graphql -f query=x --jq=.mergeable"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api graphql -f query=x -q.mergeable"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api graphql -f query=x -q=.mergeable"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/git/refs/heads/x -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/merges --input b.json -q .a+\" \"+.b && gh api \"repos/o/r\" -X GET"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/merges --input b.json -q x\"y z\" && gh api \"repos/o/r\" -X GET"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/merges --input b.json -t {{.n}}\" \"{{.t}} && gh api \"repos/o/r\" -X GET"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/merges -f k=x\"y z\" && gh api \"o/r\" -X GET"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/pulls/1 -f q=x --header=X-merge:1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/pulls/1 -f q=x --template=.mergeable"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], {}], "result": true}

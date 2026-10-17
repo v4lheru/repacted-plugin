@@ -2,7 +2,7 @@
 Structural guard for the bundled bin/pact launcher script.
 
 v4.0.0 ships a ready-to-symlink shell script at pact-plugin/bin/pact that
-wraps `claude --agent PACT:pact-orchestrator "$@"`. The script is the
+wraps `claude --agent repacted:pact-orchestrator "$@"`. The script is the
 recommended global-use installation pattern documented in README
 §"Loading PACT at session start" (alongside the per-project
 .claude/settings.json convention) and README §"Upgrading from v3.x to
@@ -67,7 +67,12 @@ def _executable_lines(text):
 
 EXPECTED_EXECUTABLE_LINES = [
     "set -e",
-    'exec claude --agent PACT:pact-orchestrator "$@"',
+    'if [ -n "${REPACTED_LAUNCH:-}" ]; then',
+    'echo "pact: REFUSED: REPACTED_LAUNCH is set, so this runs inside a repact session; '
+    'start pact from a plain terminal" >&2',
+    "exit 2",
+    "fi",
+    'exec claude --agent repacted:pact-orchestrator "$@"',
 ]
 
 
@@ -99,3 +104,52 @@ def test_bin_pact_executable_lines_match_expected():
         f"prepended/postpended content, comment-out attacks, and silent "
         f"weakening of the canonical PACT-launcher contract."
     )
+
+
+# --- inside a repact session, bin/pact refuses (backlog: it is on PATH there) ---------------------
+
+import subprocess  # noqa: E402
+
+import pytest  # noqa: E402
+
+STUB_CLAUDE = '#!/bin/sh\nprintf "%s\\n" "$@" > "$CLAUDE_ARGS_FILE"\n'
+
+
+@pytest.fixture
+def stub_claude(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(STUB_CLAUDE)
+    stub.chmod(0o755)
+    args_file = tmp_path / "claude-args.txt"
+    env = {k: v for k, v in os.environ.items() if k != "REPACTED_LAUNCH"}
+    env.update(PATH=f"{bin_dir}:/usr/bin:/bin", CLAUDE_ARGS_FILE=str(args_file))
+    return env, args_file
+
+
+def run_pact(env, *args):
+    return subprocess.run([str(BIN_PACT), *args], env=env, capture_output=True, text=True, timeout=30)
+
+
+@pytest.mark.parametrize("value", ["alternate", "installed"])
+def test_bin_pact_refuses_inside_a_repact_session(stub_claude, value):
+    env, args_file = stub_claude
+    result = run_pact({**env, "REPACTED_LAUNCH": value}, "--resume")
+    assert result.returncode == 2, result.stderr
+    assert "REPACTED_LAUNCH" in result.stderr
+    assert not args_file.exists(), "claude must not start"
+
+
+def test_bin_pact_launches_the_orchestrator_outside_a_repact_session(stub_claude):
+    env, args_file = stub_claude
+    result = run_pact(env, "--resume", "x y")
+    assert result.returncode == 0, result.stderr
+    assert args_file.read_text().splitlines() == ["--agent", "repacted:pact-orchestrator", "--resume", "x y"]
+
+
+def test_bin_pact_treats_an_empty_repacted_launch_as_unset(stub_claude):
+    """Same truthiness as repacted-memdir's inside-session check: only a non-empty value refuses."""
+    env, args_file = stub_claude
+    assert run_pact({**env, "REPACTED_LAUNCH": ""}).returncode == 0
+    assert args_file.exists()

@@ -143,11 +143,12 @@ def is_background_launch(input_data) -> bool:
         return False
 
 
-# The lead's `agent_type` spellings. Mirrors `shared.pact_context.LEAD_AGENT_TYPES`,
+# The lead's `agent_type` spellings. Mirrors `shared.pact_context.LEAD_AGENT_TYPES`
+# (built from `shared.plugin_identity.NAMESPACE`),
 # which is the source of truth; held locally because this hook runs before every
 # Bash call and imports only the standard library until a teammate-shaped frame
 # launches background work.
-_LEAD_AGENT_TYPES = frozenset({"PACT:pact-orchestrator", "pact-orchestrator"})
+_LEAD_AGENT_TYPES = frozenset({"repacted:pact-orchestrator", "pact-orchestrator"})
 
 
 def is_teammate_frame(input_data) -> bool:

@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""rtk-probe: run a command as the rtk hook would AND raw, and compare (repacted:shell-tooling-traps).
+
+Location: pact-plugin/bin/rtk-probe (on the Bash PATH while the plugin is enabled).
+Use it when output from a Bash call looks too short, too clean or wrong: rtk may have
+rewritten the command (`rtk rewrite`), and a rewritten command can drop lines, turn a
+failure into exit 0, or change a flag's meaning. This is the measurement every rtk lesson
+prescribes before reasoning from the output.
+
+Contract
+  rtk-probe [--timeout SEC] [--show N] [--] <cmd> [args...]
+
+  - hooked: asks `rtk rewrite "<cmd>"` what the hook would run, then runs that string
+    with the user's shell (-c). If rtk does not rewrite it, the hooked run is the raw one.
+  - raw: runs `rtk proxy <cmd>` (or <cmd> itself when rtk is absent).
+  - Prints, for both runs, the command, bytes, lines and exit code, then a verdict:
+    IDENTICAL, or DIFFERS with what differs. --show N also prints the first N lines of each.
+  - The command runs TWICE. Probe only read-only commands (git log, grep, a test run);
+    never anything that writes, deploys or deletes.
+
+Exit codes
+  0   both runs completed (whatever they printed)
+  1   a run timed out or could not start
+  64  usage error
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+
+EXIT_OK, EXIT_RUN_FAILED, EXIT_USAGE = 0, 1, 64
+RTK_REWRITTEN_CODES = (0, 3)   # rtk 0.41.0: 3 = rewritten, 0 = rewritten (python -m forms), 1 = not rewritten
+
+
+def hooked_command(command: str) -> tuple[str, bool]:
+    """(command the rtk hook would run, whether rtk rewrote it)."""
+    if not shutil.which("rtk"):
+        return command, False
+    try:
+        result = subprocess.run(["rtk", "rewrite", command], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return command, False
+    rewritten = result.stdout.strip()
+    if result.returncode in RTK_REWRITTEN_CODES and rewritten and rewritten != command:
+        return rewritten, True
+    return command, False
+
+
+def run(argv: list[str], timeout: float) -> dict:
+    try:
+        result = subprocess.run(argv, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return {"error": f"timed out after {timeout:g}s"}
+    except OSError as exc:
+        return {"error": f"cannot start: {exc.strerror or exc.__class__.__name__}"}
+    output = result.stdout + result.stderr
+    return {"exit": result.returncode, "bytes": len(output),
+            "lines": output.count(b"\n") + (1 if output and not output.endswith(b"\n") else 0),
+            "text": output.decode("utf-8", "replace")}
+
+
+def describe(label: str, command: str, outcome: dict, show: int) -> list[str]:
+    lines = [f"{label}: {command}"]
+    if "error" in outcome:
+        return lines + [f"  {outcome['error']}"]
+    lines.append(f"  bytes {outcome['bytes']}  lines {outcome['lines']}  exit {outcome['exit']}")
+    if show:
+        lines += ["  | " + line for line in outcome["text"].splitlines()[:show]]
+    return lines
+
+
+def compare(hooked: dict, raw: dict) -> str:
+    if "error" in hooked or "error" in raw:
+        return "VERDICT: INCOMPLETE (a run failed; see above)"
+    differences = [name for name in ("exit", "bytes", "lines") if hooked[name] != raw[name]]
+    if not differences:
+        return "VERDICT: IDENTICAL"
+    return f"VERDICT: DIFFERS ({', '.join(differences)}): take counts and exit codes from the raw run"
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="rtk-probe", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--timeout", type=float, default=120.0, help="seconds per run (default 120)")
+    parser.add_argument("--show", type=int, default=0, help="print the first N output lines of each run")
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="the command to probe")
+    args = parser.parse_args(argv)
+    if args.command and args.command[0] == "--":
+        args.command = args.command[1:]
+    return args
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    if not args.command:
+        print("usage: rtk-probe [--timeout SEC] [--show N] [--] <cmd> [args...]\n\n"
+              "Example:\n  rtk-probe git log --oneline -5", file=sys.stderr)
+        return EXIT_USAGE
+    command = shlex.join(args.command)
+    rewritten, was_rewritten = hooked_command(command)
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    hooked = run([shell, "-c", rewritten], args.timeout)
+    raw_argv = ["rtk", "proxy", *args.command] if shutil.which("rtk") else list(args.command)
+    raw = run(raw_argv, args.timeout)
+    report = describe("hooked" + ("" if was_rewritten else " (not rewritten)"), rewritten, hooked, args.show)
+    report += describe("raw", shlex.join(raw_argv), raw, args.show)
+    report.append(compare(hooked, raw))
+    print("\n".join(report))
+    return EXIT_RUN_FAILED if "error" in hooked or "error" in raw else EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

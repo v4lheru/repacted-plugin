@@ -1,23 +1,12 @@
-"""The `covers_since` rule where agents read and copy it, and what the lead is
-told about a wait that lacks the field.
+"""What the lead is told about a wait that lacks the `covers_since` field.
 
 Location: pact-plugin/tests/test_covers_since_instruction_pins.py
-Summary: pins that every wait SET writes `covers_since` (equal to `since` on a
-         SET that starts a wait, carried forward unchanged on a re-SET) at each
-         site an agent reads or copies it from, and pins that the lead-facing
-         surface for a missing anchor names every route to it and asserts none.
+Summary: pins that the lead-facing surface for a missing anchor names every
+         route to it and asserts none.
 Used by: the suite. No module-level sys.path.insert — path setup is
          conftest-owned; see tests/test_path_setup_pin.py.
 
-EVERY SITE, AND COUNTS WHERE A FILE HAS SEVERAL. An agent copies the wait from
-whichever template it is reading. A template that drops the field produces
-waits with no anchor however correct the rule table is, so each template is
-pinned in its own file, and a file carrying a template at several sites is
-pinned at that many: a presence check stays green with one of them reverted.
-
-PRESENCE PINS, NORMALISED. Backticks are stripped and whitespace runs collapsed
-on both sides, so a re-wrap or an inline-code change does not fail a pin and a
-re-word does.
+The wording pins of each template site were dropped in 1.5.0; git has them.
 
 A CORRECT FIRST SET HAS NOTHING TO REPORT. A wait written as instructed carries
 an anchor, so the lead-side scan stays silent about it. A wait without one can
@@ -28,75 +17,15 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 
 import missed_wake_scan as mw
 from fixtures.role_frames import captured_lead_userpromptsubmit_qualified
 
-PLUGIN = Path(__file__).resolve().parents[1]
-AGENT_TEAMS = "skills/pact-agent-teams/SKILL.md"
-TEACHBACK = "skills/pact-teachback/SKILL.md"
-ORCHESTRATOR = "agents/pact-orchestrator.md"
-COMPACT = "commands/comPACT.md"
-ORCHESTRATE = "commands/orchestrate.md"
-COMPLETION = "protocols/pact-completion-authority.md"
-PROTOCOLS = "protocols/pact-protocols.md"
-
-TEMPLATE_JSON = '"covers_since": "<the same value as since>"'
-TEMPLATE_INLINE = "covers_since=<the same value as since>"
-REVISION_LOOP = "re-SETs `intentional_wait` with a fresh `since` and a `covers_since` equal to it."
-
 
 def _phrase(text: str) -> str:
     return " ".join(text.replace("`", "").split())
-
-
-# (file, phrase, minimum occurrences). A minimum above 1 is a file that carries
-# the same template at that many sites.
-PINS = [
-    # The rule table row.
-    (AGENT_TEAMS, "| `covers_since` | on every SET |", 1),
-    (AGENT_TEAMS, "(the first SET, or any SET after a CLEAR), write the same value as `since`", 1),
-    (AGENT_TEAMS, "write `covers_since` again with its existing value in the same `TaskUpdate`", 1),
-    (AGENT_TEAMS, "leaving the field out deletes it", 1),
-    (AGENT_TEAMS, "If it is already missing, write the value `since` held BEFORE you overwrite it.", 1),
-    # The staleness paragraph.
-    (AGENT_TEAMS, "give it a fresh `since` and carry `covers_since` forward unchanged in the same write.", 1),
-    (AGENT_TEAMS, "a write that omits the field deletes it.", 1),
-    (AGENT_TEAMS, "A wait you SET after a CLEAR is a new wait: write `covers_since` equal to its new `since`.", 1),
-    # Templates an agent copies.
-    (AGENT_TEAMS, TEMPLATE_JSON, 1),
-    (AGENT_TEAMS, TEMPLATE_INLINE, 2),
-    (AGENT_TEAMS, "expected_resolver, since, covers_since}` per the SET subsection", 1),
-    (AGENT_TEAMS, '"covers_since": now,', 1),
-    (TEACHBACK, TEMPLATE_JSON, 2),
-    (COMPACT, TEMPLATE_INLINE, 1),
-    (ORCHESTRATE, TEMPLATE_INLINE, 1),
-    # The revision loop.
-    (COMPLETION, REVISION_LOOP, 1),
-    (PROTOCOLS, REVISION_LOOP, 1),
-    # What the lead is told about a teammate's wait.
-    (ORCHESTRATOR, "Fields: `reason`, `expected_resolver`, `since`, `covers_since`.", 1),
-    (ORCHESTRATOR, "re-SET with a fresh `since` and `covers_since` carried forward unchanged", 1),
-    (ORCHESTRATOR, "A re-SET that moves or drops `covers_since` has widened what the wait covers", 1),
-]
-
-
-@pytest.mark.parametrize(
-    "rel, phrase, minimum", PINS,
-    ids=[f"{i:02d}:{Path(r).parent.name if r.endswith('SKILL.md') else Path(r).stem}:{_phrase(p)[:36]}"
-         for i, (r, p, _) in enumerate(PINS)],
-)
-def test_the_every_SET_rule_is_stated_where_agents_read_it(rel, phrase, minimum):
-    found = _phrase((PLUGIN / rel).read_text(encoding="utf-8")).count(_phrase(phrase))
-    assert found >= minimum, (
-        f"{rel}: {phrase!r} appears {found} time(s), expected at least {minimum}. "
-        "An agent copies its wait from whichever site it is reading, so a site "
-        "that states the older rule or drops the field produces waits with no "
-        "anchor. If the wording changed on purpose, update this pin with it."
-    )
 
 
 LEAD_TEAM = "covers-since-team"

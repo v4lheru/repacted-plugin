@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""repact-payload: print a task's stored HANDOFF or teachback for the lead, or the open rejection
+or the undisposed amendments for the teammate, once. Read-only.
+
+Location: pact-plugin/bin/repact-payload (1.5.0, D2 single copy). The teammate's
+notify carries the task id, the rev and the digest its stored line printed, not the payload;
+the lead reads the payload here. The header gives rev and digest, computed by the same
+function as the stored line (hooks/shared/payload_digest.py) over the object on disk; the
+body is that object scrubbed with the scrub helper (secret values and denylist literals
+replaced). --digest compares the notify's digest with the stored one: a match means the lead
+read what the teammate stored; a mismatch means the object changed after the notify.
+
+A task file that is gone (the store drains completed tasks mid-session) is read from
+the session journal instead: the HANDOFF from its latest agent_handoff row, which holds it whole,
+and the teachback from its latest task_metadata_snapshot row. The header then names that source,
+says so when the journal kept only the head of an oversized value, and, when task ids restarted
+after a drain, says how many tasks used the id: the latest one is printed, so check the owner and
+subject (or pass --digest) before relying on it.
+
+--key rejection and --key amend are the teammate's readers of a lead directive (one channel,
+the design notes CH-3): the wake names an id and a digest, the value is
+read here. rejection prints every *_rejection that hooks/shared/amendments.open_rejection holds
+open; amend prints every amend_<n> that handoff.amendments does not name, in numeric order.
+Both are the tests bin/repact-wait returns on, so its next: line never names a reader that finds
+nothing. Each object has its own header (key, revision_number and rev for a rejection, digest)
+and a scrubbed body cut at DIRECTIVE_BODY_CHARS. --digest matches when it is the digest of any
+object printed. There is no journal fallback for these two: nothing open, or a task file that
+is gone or unreadable, is exit 4.
+
+Exit codes: 0 printed (and the digest matched, when given); 2 usage error; 3 digest mismatch;
+4 task or payload not found.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+BIN_DIR = Path(__file__).resolve().parent
+HOOKS_DIR = BIN_DIR.parent / "hooks"
+for _path in (BIN_DIR, HOOKS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from shared import evidence as ev  # noqa: E402
+from _repact_common import denylist_paths, load_denylist, scrub_value  # noqa: E402
+from shared.amendments import open_rejection  # noqa: E402
+from shared.payload_digest import DIGEST_LEN, payload_digest  # noqa: E402
+
+KEYS = {"handoff": "handoff", "teachback": "teachback_submit", "rejection": "rejection",
+        "amend": "amend"}
+DIRECTIVES = ("rejection", "amend")     # read from the task file only, several objects each
+REJECTION_SUFFIX = "_rejection"
+_AMEND_KEY = re.compile(r"amend_\d+")   # bin/repact-wait's rule, kept equal by test
+# Above the largest rejection the shape gate stores (a 2000-character reason and 20 corrections
+# of 4000), so a well-formed one is never cut.
+DIRECTIVE_BODY_CHARS = 100_000
+# A team or task id names one file under tasks/: no separators, no leading dot.
+_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
+_DIGEST = re.compile(r"[0-9a-f]{%d}" % DIGEST_LEN)
+EXAMPLE = "repact-payload 88 --digest 3f9a0c1b2d4e"
+EXAMPLES = (
+    "examples:\n"
+    f"  {EXAMPLE}\n"
+    "  repact-payload 87 --team session-e848a558 --key teachback\n"
+    "  repact-payload 88 --key rejection\n"
+    "  repact-payload 88 --key amend\n"
+    "exit: 0 printed, 2 usage, 3 digest mismatch, 4 task or payload not found."
+)
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}\n\n  {EXAMPLE}", file=sys.stderr)
+        sys.exit(2)
+
+
+def build_parser() -> Parser:
+    parser = Parser(
+        prog="repact-payload", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Print a task's stored HANDOFF (or teachback) scrubbed, with its rev and "
+                    "digest; --digest checks it against the notify. --key rejection and --key "
+                    "amend print what the lead wrote for the owner to read. Read-only.",
+        epilog=EXAMPLES)
+    parser.add_argument("task", help="task id")
+    parser.add_argument("--team", help="team name (default: the team whose task file is freshest)")
+    parser.add_argument("--key", choices=tuple(KEYS),
+                        help="which object (default: the HANDOFF when stored, else the teachback); "
+                             "rejection: each open *_rejection; amend: each undisposed amend_<n>")
+    parser.add_argument("--digest", help=f"the {DIGEST_LEN}-hex digest the notify named")
+    return parser
+
+
+def shown(value, limit: int = 64) -> str:
+    """A task-file value as printed in the header: printable, one line, bounded."""
+    text = "".join(ch if ch.isprintable() else " " for ch in str(value))
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def journal_task(team: str | None, task_id: str, session_id: str | None):
+    """(task, team) from the session journal when the task file is gone, else (None, team).
+    Without --team the team is this session's own, never another session's."""
+    team = team or ev.team_from_session(session_id)
+    if not team or not _NAME.fullmatch(team):
+        return None, team
+    return ev.task_from_journal(team, task_id, with_metadata=True), team
+
+
+def cut_in_journal(payload) -> bool:
+    """True for the marker the journal writes in place of a value over its size cap."""
+    return isinstance(payload, dict) and payload.get("_truncated") is True and "original_bytes" in payload
+
+
+def _amend_order(key: str):
+    """Numeric order; a suffix int() refuses (over its digit limit) sorts last, by name."""
+    try:
+        return 0, int(key[len("amend_"):]), key
+    except ValueError:
+        return 1, 0, key
+
+
+def open_directives(kind: str, metadata: dict) -> list[tuple[str, object]]:
+    """(key, value) of what the lead wrote and the owner has not answered, by the tests
+    bin/repact-wait returns on: every truthy *_rejection that open_rejection holds open, or
+    every amend_<n> that handoff.amendments does not name."""
+    if kind == "rejection":
+        return sorted(((key, value) for key, value in metadata.items()
+                       if isinstance(key, str) and key.endswith(REJECTION_SUFFIX) and value
+                       and open_rejection(key, value, metadata)), key=lambda item: item[0])
+    handoff = metadata.get("handoff") if isinstance(metadata.get("handoff"), dict) else {}
+    disposed = handoff.get("amendments") if isinstance(handoff.get("amendments"), dict) else {}
+    keys = [key for key in metadata
+            if isinstance(key, str) and _AMEND_KEY.fullmatch(key) and key not in disposed]
+    return [(key, metadata[key]) for key in sorted(keys, key=_amend_order)]
+
+
+def directive_body(value, denylists) -> str:
+    """One directive's value as printed: scrubbed, bounded, and never a reason to raise (the
+    value is disk state: any type, any size, any depth, lone surrogates)."""
+    try:
+        text = json.dumps(scrub_value(value, *denylists), indent=1, ensure_ascii=False)
+    except (RecursionError, TypeError, ValueError):
+        return "[not printable: read the task file]"
+    text = text.encode("utf-8", "replace").decode("utf-8")
+    if len(text) > DIRECTIVE_BODY_CHARS:
+        text = (f"{text[:DIRECTIVE_BODY_CHARS]}\n[cut: {len(text)} characters stored, the first "
+                f"{DIRECTIVE_BODY_CHARS} shown]")
+    return text
+
+
+def print_directives(kind: str, task: dict, task_id: str, team: str, expected: str | None) -> int:
+    """Print every open rejection or undisposed amendment of the task; the exit code."""
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    found = open_directives(kind, metadata)
+    if not found:
+        what = "open rejection" if kind == "rejection" else "undisposed amendment"
+        print(f"repact-payload: no {what} on #{task_id} (team {team})", file=sys.stderr)
+        return 4
+    where = (f"team {team}, owner {shown(task.get('owner') or 'none')}, "
+             f"status {shown(task.get('status'))}")
+    paths = denylist_paths()
+    denylists = (load_denylist(paths[0]), load_denylist(paths[1]))
+    digests = []
+    for key, value in found:
+        digests.append(payload_digest(value) or "unavailable")
+        facts = ""
+        if kind == "rejection" and isinstance(value, dict):
+            facts = (f"revision_number {shown(value.get('revision_number'), 24)}, "
+                     f"rev {shown(value.get('rev'), 24)}, ")
+        print(f"{shown(key)} on #{task_id} ({where}): {facts}digest {digests[-1]}")
+        print(directive_body(value, denylists))
+    if expected is None:
+        return 0
+    if expected in digests:
+        print(f"digest matches the wake ({expected})")
+        return 0
+    print(f"DIGEST MISMATCH: the wake named {expected}, the task file holds {', '.join(digests)}. "
+          "The stored object changed after the wake; what is on disk is printed above.",
+          file=sys.stderr)
+    return 3
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    task_id = str(args.task)
+    if not _NAME.fullmatch(task_id) or (args.team and not _NAME.fullmatch(args.team)):
+        parser.error("a task id or team name is letters, digits, '_', '-' and '.' only")
+    expected = args.digest.strip().lower() if args.digest else None
+    if expected is not None and not _DIGEST.fullmatch(expected):
+        parser.error(f"--digest is {DIGEST_LEN} hex characters, as the stored line printed it")
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    team = args.team or ev.resolve_team(session_id, task_id)
+    task = ev.load_task(ev.task_path(team, task_id)) if team else None
+    if task is None and args.key not in DIRECTIVES:
+        task, team = journal_task(team, task_id, session_id)
+    if task is None:
+        print(f"repact-payload: task {task_id} not found{' in team ' + team if team else ''}",
+              file=sys.stderr)
+        return 4
+    if args.key in DIRECTIVES:
+        return print_directives(args.key, task, task_id, team, expected)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    key = KEYS[args.key] if args.key else (
+        "handoff" if metadata.get("handoff") is not None else "teachback_submit")
+    payload = metadata.get(key)
+    if payload is None:
+        print(f"repact-payload: no {key} stored on #{task_id} (team {team})", file=sys.stderr)
+        return 4
+    digest = payload_digest(payload) or "unavailable"
+    rev = f"rev {shown(payload.get('rev'), 24)}, " if key == "handoff" and isinstance(payload, dict) else ""
+    status = f"status {shown(task.get('status'))}"
+    if task.get("source") == "journal":
+        status = "task file gone, source: session journal"
+        if isinstance(task.get("arcs"), int) and task["arcs"] > 1:
+            status += f", latest of {task['arcs']} tasks that used this id: {shown(task.get('subject'))}"
+        if cut_in_journal(payload):
+            status += f", only the head of {shown(payload.get('original_bytes'), 24)} bytes was kept"
+    print(f"{key} on #{task_id} (team {team}, owner {shown(task.get('owner') or 'none')}, "
+          f"{status}): {rev}digest {digest}")
+    if expected is not None:
+        if expected != digest:
+            print(f"DIGEST MISMATCH: the notify named {expected}, the task file holds {digest}. "
+                  "The stored object changed after the notify; read it below before accepting.",
+                  file=sys.stderr)
+        else:
+            print(f"digest matches the notify ({expected})")
+    paths = denylist_paths()
+    print(json.dumps(scrub_value(payload, load_denylist(paths[0]), load_denylist(paths[1])),
+                     indent=1, ensure_ascii=False))
+    return 3 if expected is not None and expected != digest else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

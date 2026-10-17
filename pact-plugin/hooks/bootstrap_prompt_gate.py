@@ -31,6 +31,7 @@ from __future__ import annotations
 
 # ─── stdlib first (used by _emit_load_failure_advisory BEFORE wrapped imports) ─
 import json
+import os
 import sys
 from typing import NoReturn
 
@@ -75,7 +76,7 @@ def _emit_load_failure_advisory(stage: str, error: BaseException) -> NoReturn:
                 f"PACT bootstrap_prompt_gate {stage} failure — the hook "
                 f"could not verify bootstrap state. {error_detail}. "
                 f"Until this is resolved, you should invoke "
-                'Skill("PACT:bootstrap") before any code-editing or agent '
+                'Skill("repacted:bootstrap") before any code-editing or agent '
                 "dispatch action; the companion `bootstrap_gate` PreToolUse "
                 "will block those tools fail-closed."
             ),
@@ -113,8 +114,8 @@ _SUPPRESS_OUTPUT = json.dumps({
 
 _BOOTSTRAP_INSTRUCTION_TEMPLATE = (
     "REQUIRED: Before responding to this message, invoke "
-    'Skill("PACT:bootstrap"). Code-editing tools (Edit, Write) and agent '
-    "dispatch (Agent) are mechanically blocked until bootstrap completes. "
+    'Skill("repacted:bootstrap"). Agent dispatch (Agent) is mechanically '
+    "blocked until bootstrap completes. "
     "This loads your operating instructions, governance policy, and "
     "workflow protocols."
     "{session_dir_hint}"
@@ -123,6 +124,40 @@ _BOOTSTRAP_INSTRUCTION_TEMPLATE = (
 _SESSION_DIR_HINT = (
     "\n\nPACT_SESSION_DIR={session_dir}"
 )
+
+# Once SessionStart resolved the team, editing tools pass the bootstrap gate and only
+# Agent waits for the team on disk (#243). A session that never dispatches never gets the
+# marker, so this text is shown once per session (the sentinel below) and never claims
+# that editing is blocked or asks for a second bootstrap.
+_RESOLVED_TEAM_INSTRUCTION_TEMPLATE = (
+    'If Skill("repacted:bootstrap") has not run yet in this session, invoke it once '
+    "before responding; do not run it again. Editing tools are available. Agent dispatch "
+    "waits until the session team exists on disk: assign the task owner first, and a "
+    "spawn denied for that reason passes from the next prompt."
+    "{session_dir_hint}"
+)
+
+_ADVISED_SENTINEL = "bootstrap-advised"
+
+
+def _session_team_resolved() -> bool:
+    """True when SessionStart recorded a non-blank team name (bootstrap_gate's predicate)."""
+    team = pact_context.get_pact_context().get("team_name")
+    return isinstance(team, str) and bool(team.strip())
+
+
+def _first_advisory(session_dir: str) -> bool:
+    """Claim the once-per-session advisory; True only for the first claim. A sentinel that
+    cannot be written errs toward advising again, never toward silence."""
+    try:
+        fd = os.open(os.path.join(session_dir, _ADVISED_SENTINEL),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+    os.close(fd)
+    return True
 
 # `_detect_stale_session_block` (and its `_RESUME_LINE_RE` /
 # `_STALENESS_WARNING_TEMPLATE` constants) moved to shared/stale_session.py —
@@ -181,9 +216,14 @@ def _check_bootstrap_needed(input_data: dict) -> str | None:
     # Staleness runs ONLY here (lead + no-marker): the marker-set fast path
     # above keeps its zero-tokens/sub-ms contract (no per-prompt file read),
     # and a marker-set session has by definition completed bootstrap.
-    return _BOOTSTRAP_INSTRUCTION_TEMPLATE.format(
-        session_dir_hint=_SESSION_DIR_HINT.format(session_dir=session_dir)
-    ) + (_detect_stale_session_block(input_data) or "")
+    hint = _SESSION_DIR_HINT.format(session_dir=session_dir)
+    if _session_team_resolved():
+        if not _first_advisory(session_dir):
+            return None
+        template = _RESOLVED_TEAM_INSTRUCTION_TEMPLATE
+    else:
+        template = _BOOTSTRAP_INSTRUCTION_TEMPLATE
+    return template.format(session_dir_hint=hint) + (_detect_stale_session_block(input_data) or "")
 
 
 def main():

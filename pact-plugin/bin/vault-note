@@ -1,0 +1,1109 @@
+#!/usr/bin/env python3
+"""vault-note (alias kb-note): schema-consistent write-back to the user's knowledge base (a
+Markdown coding wiki, Obsidian-compatible).
+
+Location: pact-plugin/bin/vault-note.
+Used by: agents writing a reusable gotcha, pattern, API quirk or decision; the unit 14
+page-quality pass (retitle-report, append --moc-summary). It loads bin/vault-find as a
+module for the duplicate check and related links, so ranking lives in one place.
+
+Contract: the design notes (nothing outside the KB folder is read):
+  propose       KB-GATE (contract section 7): one new lesson (JSON on stdin or --json FILE) runs
+                the deterministic checks (grammar, D25 fail-closed, links, key grounding), is
+                routed (skip / append / supersede / new topic page `<Folder>/topic-<slug>.md`)
+                and QUEUED in `<KB>/_kb/queue/`; a class that has
+                earned the auto-accept bar is applied at once (every 10th still queued). A refusal
+                writes nothing, and a credential never reaches the queue. Logic: bin/_kb/gate.py.
+  new           a thin front to propose: it builds the proposal from its
+                flags and queues it, so no lesson bypasses the gate.
+  queue | drain list the queue; `drain --decide ID accepted|edited|rejected|deferred --by WHO`
+                records a decision in `_kb/queue/decided/YYYY-MM/`. Only a named decider rejects.
+  apply         writes the accepted items additively, then refreshes the index and the catalog.
+  append        adds text under a `## ` heading (created above `## Related` if missing),
+                bumps `modified`; never deletes a byte of existing text. It refuses text that
+                would add a new lesson (that goes through propose) and any credential (D25).
+  append --moc-summary  adds a MOC line for the page (a later line wins in vault-find;
+                old lines are kept, per the schema's additive-only rule).
+  check         validates frontmatter and page rules (contract sections 2 and 3): the value domains
+                of the wiki-* keys are errors; what the section 9 migration or the curation apply
+                will supply (wiki-summary, wiki-first-seen, topic-key shape) only warns. A control
+                file at the KB root (`_schema.md`, `_kb/`) is not a page and is not checked.
+                Exit 1 on any error.
+  retitle-report  lists pages whose title or summary limits retrieval, largest first.
+  project-page  the D10 project atlas (the design notes §15): reads one JSON
+                request from `repact-task atlas` on stdin and writes ONLY under <root>/Projects/
+                (realpath-pinned, no symlinks). It replaces only the text between
+                `<!-- repacted:begin/end <region> -->` markers, refuses the whole run on any marker
+                doubt or slug/id collision, never re-adds a region the user deleted, writes nothing
+                when the bytes would not change, takes a sha256-verified backup of Projects/ before
+                the first write on a machine and keeps the last 5 previous versions of each page.
+
+Every write is additive: the old text must survive as a subsequence of the new text,
+or the write is refused. New pages are created with O_EXCL, so nothing is overwritten.
+
+Scope (D26): the root is the KB folder only (the same `vault_scope_root` as vault-find);
+REPACT_VAULT may only narrow it; a page, target folder or MOC that resolves outside it, or is
+a symlink, is refused and never read or written.
+
+Exit codes: 0 ok; 1 check failed, write refused as a duplicate, or (project-page) a slug or id
+collision, a credential in a region or a failed backup; 2 usage error; 3 the KB is off or
+missing, or a root or target lies outside it (or outside Projects/); 4 the target page is
+missing, the write would not be additive, or (project-page) a marker is in doubt;
+5 (project-page) --restore names a page that exists.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+BIN_DIR = Path(__file__).resolve().parent
+
+KIND_PATHS = {                  # KB-GATE: new pages follow unit 14's naming, topic-<slug>.md (section 7.3)
+    "gotcha": ("Gotchas", "topic-{slug}.md"),
+    "entity": ("APIs", "topic-{slug}.md"),
+    "pattern": ("Patterns", "topic-{slug}.md"),
+    "architecture": ("Architecture", "topic-{slug}.md"),
+    "synthesis": ("", "topic-{slug}.md"),
+}
+REFUSED_KINDS = {"workflow": "Workflows/", "comparison": "Comparisons/"}
+KIND_NEEDS_TOOL = {"gotcha", "entity"}
+MOC_SECTIONS = {
+    "gotcha": "## Gotchas & Debugging",
+    "entity": "## API Integration References",
+    "pattern": "## Cross-Cutting Patterns",
+    "architecture": "## Architecture Decisions",
+    "synthesis": "## Cross-Cutting Patterns",
+}
+FILL_MARK = "<!-- fill -->"     # a legacy scaffold marker: `check` still refuses a page that holds one
+REQUIRED_KEYS = ("type", "tags", "status", "created", "modified", "area", "wiki-source",
+                 "wiki-confidence")
+TYPES = {"project", "meeting", "transcript", "prompt", "resource", "api-key", "tutorial",
+         "research", "personal", "archive", "template", "dashboard", "note", "report",
+         "proposal", "code", "config"}
+STATUSES = {"active", "completed", "archived", "draft", "in-progress", "reference"}
+AREAS = {"work", "side-project", "education", "personal", "career", "daily"}
+WIKI_SOURCES = {"auto", "manual", "seed", "repacted"}
+WIKI_STATUSES = ("current", "dated", "superseded", "archived")
+# Contract section 3.4: the ONLY frontmatter keys a write may change in place; every other line is
+# additive (list keys such as wiki-topic-keys, wiki-projects and tags only grow).
+STATE_KEYS = ("modified", "wiki-status", "wiki-status-since", "wiki-last-reviewed", "wiki-summary",
+              "wiki-superseded-by")
+ALLOW_CHANGED = tuple(f"{key}:" for key in STATE_KEYS)
+DATE_KEYS = ("wiki-status-since", "wiki-first-seen", "wiki-last-reviewed")
+SUMMARY_MAX = 160
+NEW_PAGE_SOURCE = "manual"     # the wiki-source vault-note `new` writes: its summaries must fit
+TOPIC_KEYS_MIN, TOPIC_KEYS_MAX = 3, 8
+KEY_PHRASE = re.compile(r"^[a-z0-9][a-z0-9.+#/_-]*(?: [a-z0-9][a-z0-9.+#/_-]*){1,4}$")
+WIKILINK_VALUE = re.compile(r"^\[\[[^\[\]]+\]\]$")
+CONFIDENCES = {"high", "medium", "low"}
+WORD_LIMIT = 3000
+SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+WIKILINK = re.compile(r"\[\[[^\]]+\]\]")
+GENERIC_STEM = re.compile(r"(-(patterns|gotchas|reference|misc|integration)(-\d+)?|-\d+)$")
+GENERIC_MIN_BYTES = 20_000
+MAX_TOPICS = 8
+
+
+def load_vault_find():
+    """Import bin/vault-find (no .py suffix) as a module."""
+    loader = importlib.machinery.SourceFileLoader("vault_find", str(BIN_DIR / "vault-find"))
+    spec = importlib.util.spec_from_loader("vault_find", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+VF = load_vault_find()
+import _repact_common as common  # noqa: E402  (bin/ is on sys.path once vault-find is loaded)
+
+
+class NotAdditive(Exception):
+    """A write would remove or change existing text."""
+
+
+def today() -> str:
+    return datetime.date.today().isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Additive write primitive
+# ---------------------------------------------------------------------------
+
+def is_subsequence(old_lines: list[str], new_lines: list[str]) -> bool:
+    position = 0
+    for line in new_lines:
+        if position < len(old_lines) and line == old_lines[position]:
+            position += 1
+    return position == len(old_lines)
+
+
+def write_additive(path: Path, old: str, new: str, allow_changed: tuple[str, ...] = ()) -> None:
+    """Replace `path` with `new` only if every old line survives, in order.
+
+    Lines starting with a prefix in `allow_changed` (e.g. `modified:`) may change.
+
+    Raises:
+        NotAdditive: an existing line would be lost or edited.
+    """
+    def keep(lines):
+        return [ln for ln in lines if not ln.startswith(allow_changed)] if allow_changed else lines
+    if not is_subsequence(keep(old.splitlines()), keep(new.splitlines())):
+        raise NotAdditive(str(path))
+    if path.read_text(encoding="utf-8") != old:
+        raise NotAdditive(f"{path} changed on disk during the write")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(new, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------
+# new
+# ---------------------------------------------------------------------------
+
+def gate(part: str = "gate"):
+    """bin/_kb/<part>.py: KB-GATE or its views, loaded lazily."""
+    return importlib.import_module(f"_kb.{part}")  # bin/ is on sys.path via vault-find
+
+
+def moc_insert(moc_text: str, section: str, line: str) -> str:
+    """Insert `line` at the end of `section`'s list; add the section at the end if absent."""
+    lines = moc_text.splitlines()
+    try:
+        start = lines.index(section)
+    except ValueError:
+        return moc_text.rstrip("\n") + f"\n\n{section}\n\n{line}\n"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    last_item = max((i for i in range(start, end) if lines[i].startswith("- ")), default=start)
+    lines.insert(last_item + 1, line)
+    return "\n".join(lines) + ("\n" if moc_text.endswith("\n") else "")
+
+
+class OutOfScope(Exception):
+    """A write target resolves outside the knowledge folder (D26)."""
+
+
+def add_moc_line(vault: Path, stem: str, summary: str, section: str) -> None:
+    moc = VF.moc_path(vault)
+    if moc is None:
+        raise OutOfScope(f"no MOC inside {vault} (missing, a symlink, or outside the knowledge folder)")
+    old = moc.read_text(encoding="utf-8")
+    write_additive(moc, old, moc_insert(old, section, f"- [[{stem}]] -- {summary}"))
+
+
+def cmd_new(args, vault: Path) -> int:
+    """A thin front to propose: the flags become one proposal, which is checked and queued."""
+    title = args.title or f"{(args.tool + ': ') if args.tool else ''}{args.topic.replace('-', ' ')}"
+    missing = [flag for flag, value in (("--claim", args.claim), ("--why", args.why), ("--apply", args.apply),
+                                        ("--evidence", args.evidence), ("--evidence-how", args.evidence_how),
+                                        ("--ctx", args.ctx)) if not value]
+    if missing:
+        print(f"vault-note: new queues one lesson through the KB gate and needs {', '.join(missing)}; "
+              "or send the lesson as JSON: vault-note propose --json FILE", file=sys.stderr)
+        return 2
+    proposal = {"title": title, "claim": args.claim, "why": args.why, "apply": args.apply,
+                "evidence": {"class": args.evidence, "how": args.evidence_how}, "ctx": args.ctx,
+                "date": args.date or today(), "kind": args.kind, "tool": args.tool or "", "topic": args.topic,
+                "keys": args.keys, "summary": args.summary}
+    return run_propose(proposal, vault)
+
+
+def run_propose(proposal: dict, vault: Path) -> int:
+    G = gate()
+    try:
+        result = G.propose(vault, proposal)
+    except G.Refusal as refusal:
+        print(f"vault-note: refused ({refusal.check}): {refusal}", file=sys.stderr)
+        return refusal.code
+    if result["status"] == "auto-applied":
+        print(f"auto-applied {result['id']} action={result['action']} target={result['target']} "
+              "(the class met the auto-accept bar)")
+    elif result["status"] == "auto-accepted":
+        print(f"auto-accepted {result['id']} action={result['action']} target={result['target']}; "
+              f"not written yet ({result['apply_error']}); vault-note apply retries it", file=sys.stderr)
+        return 4
+    else:
+        print(f"queued {result['id']} action={result['action']} target={result['target']}"
+              + ("  [audit sample]" if result.get("audit_sample") else "")
+              + (f"\ncandidates: {', '.join(result['candidates'])}" if result.get("candidates") else ""))
+        print("next: a later session's wrap-up drains the KB queue; the session that proposed an item never decides it")
+    return 0
+
+
+def cmd_propose(args, vault: Path) -> int:
+    try:
+        raw = sys.stdin.read() if args.json in (None, "-") else Path(args.json).read_text(encoding="utf-8")
+        proposal = json.loads(raw)
+    except (OSError, ValueError) as exc:
+        print(f"vault-note: propose reads one JSON proposal ({exc.__class__.__name__})", file=sys.stderr)
+        return 2
+    return run_propose(proposal, vault)
+
+
+def cmd_queue(args, vault: Path) -> int:
+    print("\n".join(gate("views").queue_lines(vault)))
+    return 0
+
+
+def cmd_drain(args, vault: Path) -> int:
+    if args.blind_brief:
+        print("\n".join(gate("views").blind_brief(vault)))
+        return 0
+    if not args.decide:
+        return cmd_queue(args, vault)
+    G = gate()
+    item_id, decision = args.decide
+    try:
+        edit = json.loads(Path(args.edit).read_text(encoding="utf-8")) if args.edit else None
+        result = gate("decide").decide(vault, item_id, decision, args.by, args.blind, edit)
+    except (OSError, ValueError) as exc:
+        print(f"vault-note: cannot read --edit ({exc.__class__.__name__})", file=sys.stderr)
+        return 2
+    except G.Refusal as refusal:
+        print(f"vault-note: refused ({refusal.check}): {refusal}", file=sys.stderr)
+        return refusal.code
+    print(f"{result['id']}: {result['decision']}")
+    return 0
+
+
+def cmd_apply_queue(args, vault: Path) -> int:
+    G = gate()
+    try:
+        done, failures = G.apply(vault)
+    except G.Refusal as refusal:
+        print(f"vault-note: refused ({refusal.check}): {refusal}", file=sys.stderr)
+        return refusal.code
+    for item in done:
+        print(f"applied {item['id']} {item['action']} -> {item['target']}")
+    for failure in failures:
+        print(f"vault-note: not applied {failure['id']}: {failure['error']}", file=sys.stderr)
+    print(f"applied {len(done)}" + (f", {len(failures)} not applied" if failures else ""))
+    return 4 if failures else 0
+
+
+# ---------------------------------------------------------------------------
+# append
+# ---------------------------------------------------------------------------
+
+def bump_modified(text: str) -> str:
+    return re.sub(r"^modified:.*$", f"modified: {today()}", text, count=1, flags=re.M)
+
+
+def append_under(text: str, section: str, addition: str) -> str:
+    heading = f"## {section.lstrip('#').strip()}"
+    lines = text.rstrip("\n").splitlines()
+    if heading in lines:
+        start = lines.index(heading)
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+        lines[end:end] = ["", addition]
+    else:
+        related = lines.index("## Related") if "## Related" in lines else len(lines)
+        lines[related:related] = [heading, "", addition, ""]
+    return "\n".join(lines) + "\n"
+
+
+LESSON_SHAPE = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s+\*\*(?:Why|Apply|Evidence):\*\*)|\*\(from [^)]*\)\*\s*$",
+                          re.M)
+
+
+def lesson_shaped(text: str) -> bool:
+    """K5: a heading, a Why/Apply/Evidence bullet or a provenance tag is lesson grammar, wherever it
+    is appended (under ## Related the lesson parser stops, so counting lessons alone misses it)."""
+    return bool(LESSON_SHAPE.search(text))
+
+
+def kb_lessons():
+    from _kb import lessons  # noqa: E402 - bin/ is on sys.path once vault-find is loaded
+    return lessons
+
+
+def in_scope_page(vault: Path, path: Path) -> bool:
+    """A regular file (not a symlink) that resolves inside the knowledge folder."""
+    return path.is_file() and not path.is_symlink() and VF.is_within(path, vault)
+
+
+def resolve_page(vault: Path, page: str) -> Path | None:
+    """A page by relpath or stem, only ever inside the knowledge folder (D26)."""
+    candidate = vault / page
+    if in_scope_page(vault, candidate):
+        return candidate
+    stem = Path(page).stem
+    matches = [p for _, p, _ in VF.iter_pages(vault)
+               if p.stem == stem and not VF.is_archived(p.relative_to(vault).as_posix())]
+    return matches[0] if len(matches) == 1 else None
+
+
+def cmd_append(args, vault: Path) -> int:
+    path = resolve_page(vault, args.page)
+    if path is None:
+        print(f"vault-note: page not found (or ambiguous): {args.page}", file=sys.stderr)
+        return 4
+    for flag, value in (("--section", args.section), ("--moc-section", args.moc_section),
+                        ("--moc-summary", args.moc_summary)):
+        if value and VF.credential_reason("vault-note-append", value):
+            print(f"vault-note: refused (d25): {flag} carries a credential; nothing written", file=sys.stderr)
+            return 1
+    if args.moc_summary:
+        add_moc_line(vault, path.stem, args.moc_summary, args.moc_section or "## Other")
+        print(f"MOC line added for {path.stem}")
+        return 0
+    if not args.section or not args.text:
+        print("vault-note: append needs --section and --text (or --moc-summary)", file=sys.stderr)
+        return 2
+    addition = args.text.rstrip() + (" (unverified)" if args.unverified else "")
+    if VF.credential_reason("vault-note-append", addition) or any(
+            VF.credential_reason("vault-note-append", line) for line in addition.splitlines()):
+        print("vault-note: refused (d25): the text carries a credential; nothing written", file=sys.stderr)
+        return 1
+    old = path.read_text(encoding="utf-8")
+    new = append_under(old, args.section, addition)
+    relpath = path.relative_to(vault).as_posix()
+    if lesson_shaped(addition) or len(kb_lessons().lessons(new, relpath)) > len(kb_lessons().lessons(old, relpath)):
+        print("vault-note: refused: the text would add a new lesson; a lesson goes through the KB gate: "
+              "vault-note propose --json FILE", file=sys.stderr)
+        return 2
+    write_additive(path, old, bump_modified(new), allow_changed=ALLOW_CHANGED)
+    print(f"appended to {path.relative_to(vault).as_posix()} under ## {args.section.lstrip('#').strip()}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# check
+# ---------------------------------------------------------------------------
+
+def page_type(relpath: str) -> str:
+    """Contract section 2, first match wins: control, archived, project, index, topic, collection."""
+    parts = relpath.split("/")
+    if VF.is_control(parts[0]):                  # a top-level `_` entry (file or folder)
+        return "control"
+    if VF.is_archived(relpath):
+        return "archived"
+    if parts[0] == "Projects":
+        return "project"
+    stem, index = Path(relpath).stem, VF.kb_index_page()
+    if index and stem == Path(index).stem:
+        return "index"
+    return "topic" if stem.startswith("topic-") else "collection"
+
+
+def _one_wikilink(value) -> bool:
+    items = value if isinstance(value, list) else [value]
+    return len(items) == 1 and isinstance(items[0], str) and bool(WIKILINK_VALUE.match(items[0]))
+
+
+def check_contract_keys(meta: dict, warnings: list[str] | None = None) -> list[str]:
+    """Errors for the new wiki-* keys (contract section 3.2). No page carries them before the
+    contract, so a bad value can only be a fresh write. One exception (lead ruling on KB-MIGRATE):
+    the migration copies each existing page's MOC line VERBATIM into `wiki-summary` (section 6.5
+    needs the equality), so an over-limit summary on an existing page only WARNS ("shorten when
+    curated"); on a page vault-note `new` created (`wiki-source: manual`) it stays an error."""
+    errors = []
+    status = meta.get("wiki-status")
+    if status not in (None, "", []):
+        if status not in WIKI_STATUSES:
+            errors.append(f"`wiki-status: {str(status)[:40]}` not in {list(WIKI_STATUSES)}")
+        if "wiki-status-since" not in meta:
+            errors.append("`wiki-status` needs `wiki-status-since`")
+    superseded_by = meta.get("wiki-superseded-by")
+    if status == "superseded" and superseded_by in (None, "", []):
+        errors.append("`wiki-status: superseded` needs `wiki-superseded-by`")
+    if superseded_by not in (None, "", []):
+        if status != "superseded":
+            errors.append("`wiki-superseded-by` needs `wiki-status: superseded`")
+        if not _one_wikilink(superseded_by):
+            errors.append("`wiki-superseded-by` is not a [[wikilink]]")
+    errors += [f"`{key}` is not YYYY-MM-DD" for key in DATE_KEYS
+               if key in meta and not (isinstance(meta[key], str) and DATE.match(meta[key]))]
+    summary = meta.get("wiki-summary")
+    if summary not in (None, "", []) and not isinstance(summary, str):
+        errors.append("`wiki-summary` is not one line of text")
+    elif isinstance(summary, str) and len(summary) > SUMMARY_MAX:
+        if meta.get("wiki-source") == NEW_PAGE_SOURCE or warnings is None:
+            errors.append(f"`wiki-summary` is longer than {SUMMARY_MAX} characters (or not one line)")
+        else:
+            warnings.append(f"`wiki-summary` is longer than {SUMMARY_MAX} characters; shorten when curated")
+    if "wiki-projects" in meta and not all(SLUG.match(v) for v in VF.as_list(meta["wiki-projects"])):
+        errors.append("`wiki-projects` holds a value that is not a slug")
+    return errors
+
+
+def check_page_type(meta: dict, kind: str) -> tuple[list[str], list[str]]:
+    """Contract section 3.3. A topic page without 3-8 keys is an error (every topic page has them
+    today); what the section 9 migration supplies, and the key-phrase shape, only warn."""
+    errors, warnings = [], []
+    if kind not in ("topic", "collection"):
+        return errors, warnings
+    keys = VF.as_list(meta.get("wiki-topic-keys")) if meta.get("wiki-topic-keys") else []
+    if kind == "topic":
+        if not TOPIC_KEYS_MIN <= len(keys) <= TOPIC_KEYS_MAX:
+            errors.append(f"topic page needs `wiki-topic-keys` ({TOPIC_KEYS_MIN}-{TOPIC_KEYS_MAX} key phrases)")
+        if "wiki-first-seen" not in meta:
+            warnings.append("missing `wiki-first-seen` (the section 9 migration writes it)")
+    bad = [key for key in keys if not KEY_PHRASE.match(key)]
+    if bad:
+        warnings.append(f"`wiki-topic-keys` phrase is not 2-5 lowercase words ({len(bad)} of {len(keys)})")
+    if "wiki-summary" not in meta:
+        warnings.append("missing `wiki-summary` (the section 9 migration copies it from the MOC)")
+    return errors, warnings
+
+
+def check_page(text: str, relpath: str | None = None) -> tuple[list[str], list[str]]:
+    """(errors, warnings) for one page against the KB contract and the page rules. With `relpath`
+    the per-type rules of contract section 3.3 apply too."""
+    meta, body = VF.split_frontmatter(text)
+    errors, warnings = [], []
+    if not meta:
+        return ["no frontmatter"], warnings
+    for key in REQUIRED_KEYS:
+        if key not in meta or meta[key] in ("", []):
+            errors.append(f"missing frontmatter `{key}`")
+    rules = (("type", TYPES), ("status", STATUSES), ("area", AREAS))
+    errors += [f"`{k}: {meta[k]}` not in schema" for k, allowed in rules
+               if isinstance(meta.get(k), str) and meta[k] and meta[k] not in allowed]
+    errors += [f"`{k}` is not YYYY-MM-DD" for k in ("created", "modified")
+               if isinstance(meta.get(k), str) and meta[k] and not DATE.match(meta[k])]
+    if meta.get("tags") and "wiki" not in VF.as_list(meta["tags"]):
+        errors.append("tags lack `wiki`")
+    for key, allowed in (("wiki-source", WIKI_SOURCES), ("wiki-confidence", CONFIDENCES)):
+        if isinstance(meta.get(key), str) and meta[key] and meta[key] not in allowed:
+            warnings.append(f"`{key}: {meta[key][:40]}` outside {sorted(allowed)}")
+    related = body.split("\n## Related", 1)
+    if len(related) < 2:
+        errors.append("no `## Related` section")
+    elif not WIKILINK.search(related[1]):
+        errors.append("`## Related` has no [[wikilink]]")
+    if FILL_MARK in body:
+        errors.append(f"unfilled scaffold ({FILL_MARK})")
+    errors += check_contract_keys(meta, warnings)
+    if relpath is not None:
+        type_errors, type_warnings = check_page_type(meta, page_type(relpath))
+        errors += type_errors
+        warnings += type_warnings
+    words = len(body.split())
+    if words >= WORD_LIMIT:
+        # An automatic page generator caps its own `auto` pages near the limit; for those it is a unit 14 signal,
+        # for a page an agent wrote it is a defect.
+        target = warnings if meta.get("wiki-source") == "auto" else errors
+        target.append(f"{words} words; split the page (limit {WORD_LIMIT})")
+    return errors, warnings
+
+
+def cmd_check(args, vault: Path) -> int:
+    failed = False
+    for page in args.pages:
+        path = resolve_page(vault, page)
+        relpath = path.relative_to(vault).as_posix() if path is not None else None
+        if relpath is not None and page_type(relpath) == "control":
+            print(f"{page}: control file, not a page (not checked)")
+            continue
+        try:
+            if path is None:
+                raise OSError(page)
+            errors, warnings = check_page(path.read_text(encoding="utf-8"), relpath)
+        except OSError:
+            errors, warnings = ["not a readable page inside the knowledge folder"], []
+        for message in errors:
+            print(f"{page}: ERROR {message}")
+        for message in warnings:
+            print(f"{page}: WARN {message}")
+        failed = failed or bool(errors)
+    if not failed:
+        print(f"ok: {len(args.pages)} page(s)")
+    return 1 if failed else 0
+
+
+# ---------------------------------------------------------------------------
+# retitle-report
+# ---------------------------------------------------------------------------
+
+def retitle_reasons(entry: dict, size: int) -> list[str]:
+    reasons = []
+    if GENERIC_STEM.search(entry["stem"]) and size > GENERIC_MIN_BYTES:
+        reasons.append("generic-stem")
+    if not entry.get("moc"):
+        reasons.append("no-moc-summary")
+    normalized_stem = entry["stem"].replace("-", " ").lower()
+    if not entry["title"] or entry["title"].lower().replace("-", " ") == normalized_stem:
+        reasons.append("h1-repeats-filename")
+    if len(entry["headings"]) > MAX_TOPICS:
+        reasons.append(f"{len(entry['headings'])}-topics")
+    return reasons
+
+
+def cmd_retitle_report(args, vault: Path) -> int:
+    index = VF.refresh_index(vault, VF.default_index_path())
+    rows = []
+    for relpath, entry in index["pages"].items():
+        if VF.is_archived(relpath):
+            continue
+        size = entry["sig"][1]
+        reasons = retitle_reasons(entry, size)
+        if reasons:
+            rows.append((size, relpath, len(entry["headings"]), "moc" if entry.get("moc") else "no-moc",
+                         ",".join(reasons)))
+    rows.sort(key=lambda row: (-row[0], row[1]))
+    for size, relpath, headings, moc, reasons in rows[: args.limit]:
+        print(f"{size:>7}  {headings:>3}h  {moc:<6}  {relpath}  [{reasons}]")
+    print(f"{len(rows)} page(s) listed of {len(index['pages'])}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# project-page (D10 §15, the project atlas; the request is built by `repact-task atlas`)
+# ---------------------------------------------------------------------------
+
+PROJECTS_DIR = "Projects"
+INDEX_KEY = "_index"
+PAGE_REGIONS = ("overview", "stack", "decisions", "next", "blocked", "kb-links")
+INDEX_REGIONS = ("projects",)
+REGION_HEADINGS = {"stack": "Stack", "decisions": "Key decisions", "next": "Next",
+                   "blocked": "Blocked", "kb-links": "KB links"}
+MARKER = re.compile(r"^<!-- repacted:(begin|end) ([a-z0-9-]+) -->$")
+MARKER_WORD = re.compile(r"repacted\s*:\s*(begin|end)", re.I)     # the R1 backstop: any case, any spacing
+PROJECT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+NOTES_HEADING = "## Notes"
+KEEP_PREVIOUS = 5
+SLUG_MAX = 40
+CREDENTIAL_PATH = "repacted-atlas"
+
+
+class MarkerDoubt(Exception):
+    """The page's markers are damaged, duplicated or nested: the page is refused, not guessed at."""
+
+
+class Collision(Exception):
+    """The target belongs to another project (or to the user), or a rename target exists."""
+
+
+NOTHING_TO_RESTORE = 5         # its own exit, so repact-task maps it (and only it) to usage 64
+
+
+class NothingToRestore(Exception):
+    """--restore names a page that exists: restoring it would re-add sections the user deleted."""
+
+
+class BackupFailed(Exception):
+    """The first-write backup copy does not match its source."""
+
+
+def load_registry():
+    """bin/_tasks/registry.py (the atlas's backup flag and the regions each page was given)."""
+    spec = importlib.util.spec_from_file_location("repacted_registry", BIN_DIR / "_tasks" / "registry.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def utc_stamp(fraction: bool = False) -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y%m%dT%H%M%S%fZ" if fraction else "%Y%m%dT%H%M%SZ")
+
+
+def pin(vault: Path, *parts: str) -> Path:
+    """<vault>/Projects/<parts>, refused unless it stays inside Projects/ (D26): no component may
+    be a symlink, and the resolved path must lie inside the resolved Projects/ folder, which
+    must itself lie inside the knowledge folder. Nothing outside Projects/ is ever a target."""
+    root = vault / PROJECTS_DIR
+    path = root
+    for part in parts:
+        path = path / part
+        if path.is_symlink():
+            raise OutOfScope(f"{path.relative_to(vault)} is a symlink; nothing written")
+    if root.is_symlink() or not VF.is_within(root, vault) or not VF.is_within(path, root):
+        raise OutOfScope(f"{path.relative_to(vault)} resolves outside {PROJECTS_DIR}/ in {vault}; nothing written")
+    return path
+
+
+def region_spans(lines: list[str]) -> dict:
+    """{region: (begin line, end line)}. Any doubt about the markers raises MarkerDoubt."""
+    spans, open_name, open_at = {}, None, 0
+    for number, line in enumerate(lines):
+        match = MARKER.match(line.rstrip("\r"))
+        if not match:
+            if "repacted:begin" in line or "repacted:end" in line:
+                raise MarkerDoubt(f"line {number + 1} is a damaged marker")
+            continue
+        kind, name = match.groups()
+        if kind == "begin":
+            if open_name is not None:
+                raise MarkerDoubt(f"line {number + 1}: {name} begins inside {open_name} (nested markers)")
+            if name in spans:
+                raise MarkerDoubt(f"line {number + 1}: region {name} appears twice "
+                                  "(a marker quoted in your own text, e.g. in a code block, counts)")
+            open_name, open_at = name, number
+        elif open_name != name:
+            raise MarkerDoubt(f"line {number + 1}: the end of {name} has no begin")
+        else:
+            spans[name], open_name = (open_at, number), None
+    if open_name is not None:
+        raise MarkerDoubt(f"region {open_name} begins at line {open_at + 1} and never ends")
+    return spans
+
+
+def region_block(name: str, text: str) -> list[str]:
+    heading = REGION_HEADINGS.get(name)
+    return ([f"## {heading}", ""] if heading else []) + \
+        [f"<!-- repacted:begin {name} -->", *text.split("\n"), f"<!-- repacted:end {name} -->", ""]
+
+
+def new_page(title: str, project_id: str | None, regions: dict, order: tuple) -> str:
+    """The template: vault-note's frontmatter shape, the regions, then an empty ## Notes.
+    Deliberately no wiki-topic-keys (§15.6): the atlas pages never reach recall's T2."""
+    lines = ["---", "type: resource", "tags:", "  - wiki", "  - project", "status: active",
+             f"created: {today()}", f"modified: {today()}", "area: work", "wiki-source: repacted",
+             "wiki-confidence: high"]
+    lines += [f"repacted-project-id: {project_id}"] if project_id else []
+    lines += ["---", "", f"# {title}", ""]
+    for name in order:
+        lines += region_block(name, regions[name])
+    return "\n".join(lines + [NOTES_HEADING, "", ""])
+
+
+def bump_frontmatter_modified(text: str) -> str:
+    """`modified:` in the frontmatter only; a page without one does not get one."""
+    close = text.find("\n---", 4) if text.startswith(("---\n", "---\r\n")) else -1
+    if close < 0:
+        return text
+    return re.sub(r"^modified:[^\r\n]*", f"modified: {today()}", text[:close], count=1, flags=re.M) + text[close:]
+
+
+def merge_page(old: str, regions: dict, order: tuple, written: set) -> tuple[str, dict]:
+    """Replace ONLY the text between each region's markers; every other byte is kept. A region
+    the atlas wrote before and the page no longer has was deleted by the user: never re-added.
+    A region the atlas never wrote is new: added before ## Notes."""
+    lines = old.split("\n")            # read with newline="": a CRLF line keeps its "\r" (S1)
+    spans = region_spans(lines)
+    changed = []
+    for name, (start, stop) in sorted(spans.items(), key=lambda item: -item[1][0]):
+        cr = "\r" if lines[start].endswith("\r") else ""
+        inner = [line + cr for line in regions[name].split("\n")] if name in regions else None
+        if inner is not None and lines[start + 1:stop] != inner:
+            lines[start + 1:stop] = inner
+            changed.append(name)
+    missing = [name for name in order if name not in spans]
+    added = [name for name in missing if name not in written]
+    if added:
+        cr = "\r" if "\r\n" in old else ""
+        at = next((i for i, line in enumerate(lines) if line.rstrip("\r") == NOTES_HEADING), len(lines))
+        lines[at:at] = [line + cr for name in added for line in region_block(name, regions[name])]
+    new = "\n".join(lines)
+    if changed or added:
+        new = bump_frontmatter_modified(new)
+    return new, {"changed": sorted(changed + added), "deleted": [n for n in missing if n in written],
+                 "present": sorted((set(spans) & set(order)) | set(added)),
+                 "unknown": sorted(set(spans) - set(order))}
+
+
+def read_page(path: Path) -> str:
+    """The page's exact text: newline="" keeps CRLF endings, so the user's bytes survive (S1)."""
+    with open(path, encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def page_id(text: str) -> str | None:
+    meta, _ = VF.split_frontmatter(text.replace("\r\n", "\n"))
+    value = (meta or {}).get("repacted-project-id")
+    return value if isinstance(value, str) else None
+
+
+def request_problems(request) -> list[str]:
+    if not isinstance(request, dict) or not isinstance(request.get("pages"), list):
+        return ["the request is not {\"pages\": [...], \"index\": {...} | null}"]
+    problems, seen = [], set()
+    for page in request["pages"]:
+        if not isinstance(page, dict):
+            problems.append("a page entry is not an object")
+            continue
+        slug, previous = page.get("slug"), page.get("rename_from")
+        for value in (slug, previous):
+            if value is not None and (not isinstance(value, str) or not SLUG.match(value)
+                                      or len(value) > SLUG_MAX or value.startswith(("_", "."))):
+                problems.append(f"slug {value!r} is not [a-z0-9-] of {SLUG_MAX} characters or fewer")
+        if slug is None or slug in seen:
+            problems.append(f"slug {slug!r} is missing or repeated")
+        seen.add(slug)
+        if not isinstance(page.get("project_id"), str) or not PROJECT_ID.match(page["project_id"]):
+            problems.append(f"{slug}: project_id is not a UUID")
+        if not isinstance(page.get("title"), str) or not page["title"].strip() or "\n" in page["title"]:
+            problems.append(f"{slug}: title must be one non-empty line")
+        problems += region_problems(slug, page.get("regions"), PAGE_REGIONS)
+    restore = request.get("restore") or []
+    keys = seen | ({INDEX_KEY} if request.get("index") else set())
+    if not isinstance(restore, list) or not all(key in keys for key in restore):
+        problems.append(f"restore must list pages in this request ({', '.join(sorted(map(str, keys)))})")
+    index = request.get("index")
+    if index is not None:
+        problems += region_problems(INDEX_KEY, (index or {}).get("regions") if isinstance(index, dict) else None,
+                                    INDEX_REGIONS)
+    return problems or marker_problems(request)
+
+
+def marker_problems(request: dict) -> list[str]:
+    """R1 backstop: repact-task atlas neutralizes marker words; a request that still carries one
+    (in a region or a title) would forge or break a region, so it is refused whole."""
+    texts = [(f"{p['slug']} title", p["title"]) for p in request["pages"]]
+    texts += [(f"{p['slug']} {name}", text) for p in request["pages"] for name, text in p["regions"].items()]
+    if request.get("index"):
+        texts += [(f"{INDEX_KEY} {name}", text) for name, text in request["index"]["regions"].items()]
+    return [f"{where} carries a repacted marker word; nothing written" for where, text in texts
+            if MARKER_WORD.search(text)]
+
+
+def region_problems(where, regions, order: tuple) -> list[str]:
+    if not isinstance(regions, dict) or set(regions) != set(order) \
+            or not all(isinstance(text, str) for text in regions.values()):
+        return [f"{where}: regions must be exactly {', '.join(order)}, as text"]
+    return []
+
+
+def credential_regions(request) -> list[str]:
+    """D25 backstop: the atlas withholds credential lines; a region that still carries one is refused."""
+    found = []
+    targets = [(p["slug"], p["regions"]) for p in request["pages"]]
+    targets += [(INDEX_KEY, request["index"]["regions"])] if request.get("index") else []
+    for key, regions in targets:
+        found += [f"{key} {name}: {kind}" for name, text in regions.items()
+                  for kind in [VF.credential_reason(CREDENTIAL_PATH, text)] if kind]
+    return found
+
+
+def plan_page(vault: Path, registry, key: str, regions: dict, order: tuple, title: str,
+              project_id: str | None, rename_from: str | None = None, restore: bool = False) -> dict:
+    """What one page write would do; reads only inside Projects/, writes nothing. A page the atlas
+    wrote before and the user deleted whole stays deleted (amend_1) unless `restore` is set."""
+    parts = (key, "index.md") if project_id else (f"{INDEX_KEY}.md",)
+    path = pin(vault, *parts)
+    move, written, source = None, registry.regions_written(key), path
+    if rename_from:
+        old_page = pin(vault, rename_from, "index.md")
+        if old_page.is_file():
+            if page_id(read_page(old_page)) != project_id:
+                raise Collision(f"Projects/{rename_from}/index.md belongs to another project; nothing written. "
+                                "Fix: move that folder away, or choose another slug: repact-task project --slug <new>")
+            if path.parent.exists():
+                raise Collision(f"cannot move Projects/{rename_from}/ to Projects/{key}/: it exists; nothing written. "
+                                f"Fix: merge or remove Projects/{key}/ by hand, or choose another slug")
+            move, written, source = (old_page.parent, path.parent), registry.regions_written(rename_from), old_page
+    old = read_page(source) if source.is_file() else None
+    rel = path.relative_to(vault).as_posix()
+    if restore and old is not None:
+        raise NothingToRestore(f"{rel} exists; nothing to restore")
+    if restore:
+        written = set()
+    elif old is None and not move and (written or registry.page_deleted(key)):
+        return {"key": key, "rel": rel, "path": path, "old": None, "new": None, "deleted": True,
+                "report": {"changed": [], "deleted": [], "present": [], "unknown": []},
+                "move": None, "rename_from": None, "regions": regions, "written": written, "restore": False}
+    if old is None:
+        new, report = new_page(title, project_id, regions, order), \
+            {"changed": list(order), "deleted": [], "present": list(order), "unknown": []}
+    else:
+        if project_id and page_id(old) != project_id:
+            owner = page_id(old)
+            raise Collision(f"Projects/{key}/index.md belongs to {'project ' + owner if owner else 'no atlas project'}; "
+                            "nothing written. Fix: choose another slug: repact-task project --slug <new>")
+        new, report = merge_page(old, regions, order, written)
+    return {"key": key, "rel": rel, "path": path, "old": old, "new": new, "report": report,
+            "move": move, "rename_from": rename_from if move else None, "regions": regions,
+            "written": written, "deleted": False, "restore": restore}
+
+
+def sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def projects_files(root: Path) -> list[Path]:
+    """Regular files under Projects/; symlinks are neither followed nor copied."""
+    if not root.is_dir():
+        return []
+    found = []
+    for directory, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not (Path(directory) / d).is_symlink())
+        found += [Path(directory) / name for name in sorted(filenames)
+                  if not (Path(directory) / name).is_symlink() and (Path(directory) / name).is_file()]
+    return found
+
+
+def backup_projects(root: Path) -> dict:
+    """Copy Projects/ to ${CLAUDE_PLUGIN_DATA}/vault-backups/<UTC>-atlas/, verified by sha256."""
+    dest = common.data_subdir("vault-backups") / f"{utc_stamp()}-atlas"
+    dest.mkdir(parents=True, exist_ok=False)
+    manifest = []
+    for source in projects_files(root):
+        relpath = source.relative_to(root).as_posix()
+        copy = dest / PROJECTS_DIR / relpath
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, copy)
+        digest = sha256_of(source)
+        if sha256_of(copy) != digest:
+            raise BackupFailed(f"the backup copy of {PROJECTS_DIR}/{relpath} does not match; nothing written")
+        manifest.append(f"{digest}  {PROJECTS_DIR}/{relpath}")
+    text = "".join(line + "\n" for line in manifest)
+    (dest / "MANIFEST.sha256").write_text(text, encoding="utf-8")
+    return {"path": str(dest), "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "files": len(manifest)}
+
+
+def keep_previous(key: str, old: str) -> Path:
+    """The page's previous bytes, before each change; the last KEEP_PREVIOUS per page are kept."""
+    folder = common.data_subdir("vault-backups", "atlas-pages", key)
+    kept = folder / f"{utc_stamp(fraction=True)}.md"
+    with open(kept, "w", encoding="utf-8", newline="") as handle:
+        handle.write(old)
+    for stale in sorted(folder.glob("*.md"))[:-KEEP_PREVIOUS]:
+        stale.unlink()
+    return kept
+
+
+def replace_page(path: Path, old: str | None, new: str) -> None:
+    """Temp file, then os.replace; refused when the page changed since it was read."""
+    current = read_page(path) if path.is_file() else None
+    if current != old:
+        raise NotAdditive(f"{path.name} changed on disk during the write")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as handle:
+        handle.write(new)
+    os.replace(tmp, path)
+
+
+def print_plan(plans: list[dict], backup, root: Path, dry_run: bool) -> None:
+    for item in plans:
+        report = item["report"]
+        if item["deleted"]:
+            print(f"{item['rel']} was deleted by the user; not recreated "
+                  f"(bring it back: repact-task atlas --restore {item['key']})")
+            continue
+        if item["move"]:
+            print(f"move: Projects/{item['rename_from']}/ -> Projects/{item['key']}/")
+        state = "create" if item["old"] is None else ("unchanged" if item["new"] == item["old"] else "update")
+        detail = f" (regions: {', '.join(report['changed'])})" if state != "unchanged" else ""
+        print(f"{'target' if dry_run else 'page'}: {item['path']} {state}{detail}")
+        for name in report["deleted"]:
+            print(f"  region {name} was deleted by the user; not re-added")
+        for name in report["unknown"]:
+            print(f"  region {name} is not one the atlas generates; kept as it is")
+    if not dry_run:
+        return
+    if backup:
+        print(f"backup: taken {backup['at']}: {backup['path']}")
+    else:
+        count = len(projects_files(root))
+        print(f"backup: first atlas write on this machine: would copy {root} ({count} files) to "
+              f"{common.data_subdir('vault-backups', create=False)}/<UTC stamp>-atlas/, sha256-verified")
+    for item in plans:
+        if item["deleted"]:
+            continue
+        for name, text in item["regions"].items():
+            print(f"--- {item['rel']} [{name}]\n{text}")
+
+
+def doubt_message(rel: str, key: str, exc: Exception) -> str:
+    backups = common.data_subdir("vault-backups", "atlas-pages", key, create=False)
+    return (f"{rel}: {exc}. Fix: keep each region's begin and end marker lines once, in order and "
+            f"unnested, then run the atlas again; or restore the page from {backups}/")
+
+
+def cmd_project_page(args, vault: Path) -> int:
+    try:
+        request = json.loads(sys.stdin.read())
+    except ValueError:
+        print("vault-note: project-page reads one JSON request on stdin", file=sys.stderr)
+        return 2
+    problems = request_problems(request)
+    if problems:
+        print("vault-note: " + "; ".join(problems), file=sys.stderr)
+        return 2
+    carried = credential_regions(request)
+    if carried:
+        print(f"vault-note: refused, a region carries a credential ({'; '.join(carried)}); nothing written",
+              file=sys.stderr)
+        return 1
+    registry = load_registry()
+    plans, doubts, collisions = [], [], []
+    for page in request["pages"]:
+        try:
+            plans.append(plan_page(vault, registry, page["slug"], page["regions"], PAGE_REGIONS,
+                                   page["title"].strip(), page["project_id"], page.get("rename_from"),
+                                   restore=page["slug"] in (request.get("restore") or [])))
+        except MarkerDoubt as exc:
+            doubts.append(doubt_message(f"Projects/{page['slug']}/index.md", page["slug"], exc))
+        except Collision as exc:
+            collisions.append(str(exc))
+        except NothingToRestore as exc:
+            print(f"vault-note: {exc}; nothing written", file=sys.stderr)
+            return NOTHING_TO_RESTORE
+    if request.get("index"):
+        try:
+            plans.append(plan_page(vault, registry, INDEX_KEY, request["index"]["regions"], INDEX_REGIONS,
+                                   "Projects", None, restore=INDEX_KEY in (request.get("restore") or [])))
+        except NothingToRestore as exc:
+            print(f"vault-note: {exc}; nothing written", file=sys.stderr)
+            return NOTHING_TO_RESTORE
+        except MarkerDoubt as exc:
+            doubts.append(doubt_message(f"Projects/{INDEX_KEY}.md", INDEX_KEY, exc))
+    for message in doubts + collisions:
+        print(f"vault-note: refused: {message}", file=sys.stderr)
+    if doubts or collisions:
+        print("vault-note: nothing written", file=sys.stderr)
+        return 4 if doubts else 1
+    root, backup = pin(vault), registry.backup_record()
+    if args.dry_run:
+        print("dry-run: nothing written")
+        print_plan(plans, backup, root, dry_run=True)
+        return 0
+    if backup is None and any(not item["deleted"] and (item["new"] != item["old"] or item["move"])
+                              for item in plans):
+        backup = backup_projects(root)
+        registry.set_backup(backup)
+        print(f"backup: {backup['files']} file(s) of {PROJECTS_DIR}/ copied to {backup['path']} (sha256-verified)")
+    for item in plans:
+        write_planned(item, registry)
+    print_plan(plans, backup, root, dry_run=False)
+    return 0
+
+
+def write_planned(item: dict, registry) -> None:
+    if item["deleted"]:
+        if not registry.page_deleted(item["key"]):
+            registry.set_page_deleted(item["key"], True)
+        return
+    if item["move"]:
+        source, target = item["move"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(source, target)
+        registry.rename_page(item["rename_from"], item["key"])
+    if item["new"] != item["old"]:          # idempotence: byte-identical regeneration writes nothing
+        if item["old"] is not None:
+            keep_previous(item["key"], item["old"])
+        item["path"].parent.mkdir(parents=True, exist_ok=True)
+        replace_page(item["path"], item["old"], item["new"])
+    if not set(item["report"]["present"]) <= registry.regions_written(item["key"]):
+        registry.add_regions_written(item["key"], item["report"]["present"])
+    if registry.page_deleted(item["key"]) or item["restore"]:
+        registry.set_page_deleted(item["key"], False)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def slug(value: str) -> str:
+    if not SLUG.match(value):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a kebab-case slug")
+    return value
+
+
+def kind(value: str) -> str:
+    if value in REFUSED_KINDS:
+        raise argparse.ArgumentTypeError(
+            f"kind {value!r} is refused: the folder {REFUSED_KINDS[value]} does not exist in the "
+            "vault. Create a folder only when a page genuinely needs one, and update the skill.")
+    if value not in KIND_PATHS:
+        raise argparse.ArgumentTypeError(f"kind must be one of {sorted(KIND_PATHS)}")
+    return value
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="vault-note", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Write knowledge back to the knowledge base, schema-consistent and additive.",
+        epilog="examples:\n"
+               '  vault-note propose --json lesson.json       (one lesson through the KB gate; queued)\n'
+               '  vault-note queue ; vault-note drain --decide 20260928T101500Z-3fa1c2d4 accepted --by lead\n'
+               '  vault-note apply\n'
+               '  vault-note append Gotchas/gotcha-n8n-http-pagination-nesting.md --section Fix --text "..."\n'
+               '  vault-note append gotcha-foo --moc-summary "one specific sentence" --moc-section "## Other"\n'
+               "  vault-note check Gotchas/gotcha-n8n-http-pagination-nesting.md\n"
+               "  vault-note retitle-report --limit 40\n"
+               "  repact-task atlas --dry-run    (builds the request for: vault-note project-page [--dry-run])\n"
+               "exit: 0 ok, 1 check failed or duplicate, 2 usage, 3 vault missing, 4 page missing or not additive.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    propose = sub.add_parser("propose", help="queue one new lesson through the KB gate (JSON)")
+    propose.add_argument("--json", help="the proposal file (default: stdin)")
+    new = sub.add_parser("new", help="queue one new lesson through the KB gate (flags)")
+    new.add_argument("--kind", type=kind, required=True, help=f"one of {sorted(KIND_PATHS)}")
+    new.add_argument("--tool", type=slug, help="tool or service slug (gotcha, entity)")
+    new.add_argument("--topic", type=slug, required=True, help="topic slug: the page is <Folder>/topic-<tool>-<topic>.md")
+    new.add_argument("--summary", required=True, help="one situation sentence (<= 160 chars) for a new page")
+    new.add_argument("--title", help="the lesson title: the situation it answers (<= 90 chars)")
+    new.add_argument("--claim", help="1-3 sentences: what is true and what to do")
+    new.add_argument("--why", help="the mechanism or reason")
+    new.add_argument("--apply", help="when it applies, and how")
+    new.add_argument("--evidence", help="measured | observed | documented | inferred")
+    new.add_argument("--evidence-how", help="how it was established")
+    new.add_argument("--ctx", help="the provenance project or context")
+    new.add_argument("--date", help="YYYY-MM-DD (default: today)")
+    new.add_argument("--keys", type=lambda v: [k.strip() for k in v.split(",") if k.strip()], default=[],
+                     help="3-8 key phrases (comma-separated) for a new topic page")
+    sub.add_parser("queue", help="list the KB queue and the auto-accept bars")
+    drain = sub.add_parser("drain", help="list the queue, or record one decision")
+    drain.add_argument("--decide", nargs=2, metavar=("ID", "DECISION"),
+                       help="accepted | edited | rejected | deferred")
+    drain.add_argument("--by", help="who decided (required with --decide)")
+    drain.add_argument("--blind", help="the blind check's verdict: CLAUDE_WRONG | CLAUDE_KNOWS | UNSURE")
+    drain.add_argument("--edit", help="JSON file with the corrected fields (with edited)")
+    drain.add_argument("--blind-brief", action="store_true",
+                       help="print only the new items' situations for the ONE blind answerer")
+    sub.add_parser("apply", help="write the accepted items, then refresh the index and the catalog")
+    append = sub.add_parser("append", help="add text under a heading, or a MOC line")
+    append.add_argument("page", help="relpath or stem")
+    append.add_argument("--section", help="## heading to append under (created if missing)")
+    append.add_argument("--text", help="markdown to append")
+    append.add_argument("--unverified", action="store_true", help="suffix the text with (unverified)")
+    append.add_argument("--moc-summary", help="add a MOC line with this one-sentence summary")
+    append.add_argument("--moc-section", help="MOC section for --moc-summary (default: ## Other)")
+    check = sub.add_parser("check", help="validate pages; exit 1 on any error")
+    check.add_argument("pages", nargs="+")
+    report = sub.add_parser("retitle-report", help="pages whose title or summary limits retrieval")
+    report.add_argument("--limit", type=int, default=50)
+    project = sub.add_parser("project-page", help="write the atlas pages under Projects/ (JSON request on stdin)")
+    project.add_argument("--dry-run", action="store_true", help="print the targets, regions and backup; write nothing")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    if getattr(args, "kind", None) in KIND_NEEDS_TOOL and not args.tool:
+        print(f"vault-note: --kind {args.kind} needs --tool", file=sys.stderr)
+        return 2
+    try:
+        vault = VF.vault_root()
+    except VF.VaultScopeError as exc:
+        print(f"vault-note: {exc}", file=sys.stderr)
+        return 3
+    if not vault.is_dir():
+        print(f"vault-note: vault not found: {vault} (set REPACT_VAULT)", file=sys.stderr)
+        return 3
+    handlers = {"new": cmd_new, "append": cmd_append, "check": cmd_check,
+                "retitle-report": cmd_retitle_report, "project-page": cmd_project_page,
+                "propose": cmd_propose, "queue": cmd_queue, "drain": cmd_drain, "apply": cmd_apply_queue}
+    try:
+        return handlers[args.command](args, vault)
+    except FileExistsError as exc:
+        print(f"vault-note: refusing to overwrite {exc.filename}", file=sys.stderr)
+        return 1
+    except NotAdditive as exc:
+        print(f"vault-note: write refused, not additive: {exc}", file=sys.stderr)
+        return 4
+    except OutOfScope as exc:
+        print(f"vault-note: write refused: {exc}", file=sys.stderr)
+        return 3
+    except BackupFailed as exc:
+        print(f"vault-note: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

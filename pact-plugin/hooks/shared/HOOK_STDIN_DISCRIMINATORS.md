@@ -14,7 +14,7 @@ field-presence**:
 
 | Role | `agent_type` value |
 |------|--------------------|
-| team-lead | `PACT:pact-orchestrator` **or** `pact-orchestrator` (both spellings the harness can stamp) |
+| team-lead | `repacted:pact-orchestrator` **or** `pact-orchestrator` (both spellings the harness can stamp) |
 | teammate (tmux) | the specialist value, e.g. `pact-architect`, `pact-backend-coder` |
 | teammate (in-process) | **the teammate's own `name`**, e.g. `background-work-coder` — NOT the configured `agentType`. See the mode split below. |
 | plain / non-PACT primary | **field absent** |

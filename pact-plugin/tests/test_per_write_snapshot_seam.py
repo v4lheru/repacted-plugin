@@ -27,7 +27,7 @@ import shared.task_metadata_snapshot as tms  # noqa: E402
 import task_lifecycle_gate as tlg  # noqa: E402
 
 TEAM = "pact-test"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
 
 LEAD_SID = "lead-session-0001"
@@ -158,7 +158,7 @@ class TestPerWriteFrameMatrix:
         )
         tlg.evaluate_lifecycle(
             _open_write_payload(
-                "60", {"scope_contract": SCOPE}, session_id=LEAD_SID
+                "60", {"handoff_rejection": SCOPE}, session_id=LEAD_SID
             )
         )
         snaps = _snapshots(snapshot_events)
@@ -169,7 +169,7 @@ class TestPerWriteFrameMatrix:
         assert event["owner"] == "team-lead"
         assert event["metadata"] == {
             "note": "existing",
-            "scope_contract": SCOPE,
+            "handoff_rejection": SCOPE,
         }
 
     def test_in_process_teammate_frame_emits(
@@ -253,7 +253,7 @@ class TestPerWriteFrameMatrix:
         tlg.evaluate_lifecycle(
             _open_write_payload(
                 "63",
-                {"worktree_path": "/tmp/wt"},
+                {"teachback_rejection": {"reason": "redo"}},
                 session_id="lead-tmux-other",
             )
         )
@@ -302,7 +302,7 @@ class TestPerWriteFirePredicate:
             metadata={},
         )
         payload = _open_write_payload(
-            "65", {"scope_contract": SCOPE}, session_id=LEAD_SID
+            "65", {"handoff_rejection": SCOPE}, session_id=LEAD_SID
         )
         tlg.evaluate_lifecycle(payload)
         tlg.evaluate_lifecycle(payload)
@@ -328,7 +328,7 @@ class TestPerWriteFirePredicate:
         )
         tlg.evaluate_lifecycle(
             _open_write_payload(
-                "66", {"scope_contract": SCOPE}, session_id=LEAD_SID
+                "66", {"handoff_rejection": SCOPE}, session_id=LEAD_SID
             )
         )
         assert len(_snapshots(snapshot_events)) == 1
@@ -338,7 +338,7 @@ class TestPerWriteFirePredicate:
                 "66",
                 "scope: atomize sub-scope",
                 "team-lead",
-                {"scope_contract": SCOPE},
+                {"handoff_rejection": SCOPE},
             )
         )
         assert len(_snapshots(snapshot_events)) == 1
@@ -348,7 +348,7 @@ class TestPerWriteFirePredicate:
                 "66",
                 "scope: atomize sub-scope",
                 "team-lead",
-                {"scope_contract": {**SCOPE, "boundaries": "widened"}},
+                {"handoff_rejection": {**SCOPE, "boundaries": "widened"}},
             )
         )
         assert len(_snapshots(snapshot_events)) == 2
@@ -367,19 +367,19 @@ class TestPerWriteFirePredicate:
             subject="scope: atomize sub-scope",
             owner="team-lead",
             status="in_progress",
-            # Post-delete disk state: scope_contract already removed by the
+            # Post-delete disk state: handoff_rejection already removed by the
             # platform; a sibling survives.
             metadata={"worktree_path": "/tmp/wt"},
         )
         tlg.evaluate_lifecycle(
             _open_write_payload(
-                "67", {"scope_contract": None}, session_id=LEAD_SID
+                "67", {"handoff_rejection": None}, session_id=LEAD_SID
             )
         )
         snaps = _snapshots(snapshot_events)
         assert len(snaps) == 1
         assert snaps[0]["metadata"] == {"worktree_path": "/tmp/wt"}
-        assert "scope_contract" not in snaps[0]["metadata"]
+        assert "handoff_rejection" not in snaps[0]["metadata"]
 
     def test_rejection_fire_carries_on_disk_submit_sibling(
         self, home, pact_context, snapshot_events
@@ -475,7 +475,7 @@ class TestPerWriteFirePredicate:
         )
         tlg.evaluate_lifecycle(
             _open_write_payload(
-                "68", {"scope_contract": SCOPE}, session_id=LEAD_SID
+                "68", {"handoff_rejection": SCOPE}, session_id=LEAD_SID
             )
         )
         assert len(_snapshots(snapshot_events)) == 1
@@ -490,12 +490,12 @@ class TestPerWriteFirePredicate:
         pact_context(team_name=TEAM, session_id=LEAD_SID)
         tlg.evaluate_lifecycle(
             _open_write_payload(
-                "69", {"scope_contract": SCOPE}, session_id=LEAD_SID
+                "69", {"handoff_rejection": SCOPE}, session_id=LEAD_SID
             )
         )
         snaps = _snapshots(snapshot_events)
         assert len(snaps) == 1
-        assert snaps[0]["metadata"] == {"scope_contract": SCOPE}
+        assert snaps[0]["metadata"] == {"handoff_rejection": SCOPE}
 
 
 # =============================================================================
@@ -528,17 +528,17 @@ class TestPerWriteTaskCreateLeg:
             subject="scope: sub-scope",
             owner="team-lead",
             status="pending",
-            metadata={"scope_contract": SCOPE},
+            metadata={"handoff_rejection": SCOPE},
         )
         tlg.evaluate_lifecycle(
-            self._create_payload("70", {"scope_contract": SCOPE})
+            self._create_payload("70", {"handoff_rejection": SCOPE})
         )
         snaps = _snapshots(snapshot_events)
         assert len(snaps) == 1
         event = snaps[0]
         assert event["task_id"] == "70"
         assert event["subject"] == "scope: sub-scope"
-        assert event["metadata"] == {"scope_contract": SCOPE}
+        assert event["metadata"] == {"handoff_rejection": SCOPE}
 
     def test_create_without_targeted_key_no_emit(
         self, home, pact_context, snapshot_events
@@ -561,7 +561,7 @@ class TestPerWriteTaskCreateLeg:
             "tool_name": "TaskCreate",
             "tool_input": {
                 "subject": "scope: sub-scope",
-                "metadata": {"scope_contract": SCOPE},
+                "metadata": {"handoff_rejection": SCOPE},
             },
             "tool_response": {},
             "agent_type": LEAD,
@@ -591,7 +591,7 @@ class TestPerWriteTaskCreateLeg:
             "tool_name": "TaskCreate",
             "tool_input": {
                 "subject": "scope: sub-scope",
-                "metadata": {"scope_contract": SCOPE},
+                "metadata": {"handoff_rejection": SCOPE},
             },
             "tool_response": {"task": {"id": "72"}},
             "agent_type": TEAMMATE,
@@ -628,7 +628,7 @@ class TestReadOnlyPayloadBuild:
             metadata={"note": "existing"},
         )
         shared_delta = {
-            "scope_contract": SCOPE,
+            "handoff_rejection": SCOPE,
             "teachback_submit": {"understanding": "u"},
             "worktree_path": None,
         }

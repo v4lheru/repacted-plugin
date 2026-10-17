@@ -731,7 +731,6 @@ class TestTheRefutedCauseStaysOut:
         # A CLEAN ANSWER OVER THE PART IT CANNOT REACH.
         for expected in (
             "scripts/memory_repair/__init__.py",
-            "tests/test_archive_pin.py",
             "agents/pact-secretary.md",
         ):
             assert expected in reached, (

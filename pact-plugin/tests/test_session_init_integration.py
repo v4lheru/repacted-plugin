@@ -102,7 +102,7 @@ class TestSessionInitCheckpointRealSeam:
                     owner="backend", blocked_by=["101"])
         cp = _build_checkpoint()
         assert "[POST-COMPACTION CHECKPOINT]" in cp
-        assert "Unable to identify feature task" not in cp, (
+        assert "cannot tell which task is the feature" not in cp, (
             "the real team dir must resolve via get_task_list() -> a real "
             "feature line; the safety-net shape here is the inert caller-3 bug"
         )
@@ -112,14 +112,14 @@ class TestSessionInitCheckpointRealSeam:
         live_env.mkdir(parents=True, exist_ok=True)  # team dir exists but empty
         cp = _build_checkpoint()
         # get_task_list() -> None -> finders get [] -> safety-net feature line.
-        assert "Unable to identify feature task" in cp
+        assert "cannot tell which task is the feature" in cp
 
 
 # ── Seam B: session-dir resolution behind the lead-read instruction ──────────
 
 
 _LEAD_AGENT_TYPE = "pact-orchestrator"
-_UNKNOWN_ROLE_FRAGMENT = "relaunch with `--agent PACT:pact-orchestrator`"
+_UNKNOWN_ROLE_FRAGMENT = "relaunch with `--agent repacted:pact-orchestrator`"
 
 
 def _run_compact_main(tmp_path, monkeypatch, session_id,
@@ -156,12 +156,11 @@ def _run_compact_main(tmp_path, monkeypatch, session_id,
     monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    with patch("session_init.setup_plugin_symlinks", return_value=None), \
-         patch("session_init.ensure_project_memory_md", return_value=None), \
-         patch("session_init.check_pinned_staleness", return_value=None), \
-         patch("session_init.update_session_info", return_value=None), \
-         patch("session_init.restore_last_session", return_value=None), \
-         patch("session_init.check_resume_state", return_value=None), \
+    with patch("shared.session_init_common.setup_plugin_symlinks", return_value=None), \
+         patch("shared.session_init_common.ensure_project_memory_md", return_value=None), \
+         patch("shared.session_init_lead.update_session_info", return_value=None), \
+         patch("shared.session_init_lead.restore_last_session", return_value=None), \
+         patch("shared.session_init_lead.check_resume_state", return_value=None), \
          patch("sys.stdin", io.StringIO(json.dumps(payload))), \
          patch("sys.stdout", new_callable=io.StringIO) as out:
         with pytest.raises(SystemExit) as exc:
@@ -195,7 +194,7 @@ class TestCompactReadInstructionRealSeam:
     _archive_clause in hooks/session_init.py with a blind interpolation of
     session_dir, then run:
         python3 -m pytest tests/test_session_init_integration.py -k missing_session_id
-    EXPECTED cardinality: {1 failed} — the blind form emits "archived it into
+    EXPECTED cardinality: {1 failed} — the blind form emits "archived the summary into
      as compact-summary-<timestamp>.txt", naming an empty directory, so the
     fallback-wording assertion fails. Restore -> green. The real-session_id case
     is the positive control: it fails in the opposite direction if resolution
@@ -241,7 +240,7 @@ class TestCompactReadInstructionRealSeam:
         # The archive directory is the REAL resolved one. Asserted from the
         # inputs (home + session id), never by re-deriving the resolver, so a
         # resolver returning "" or the wrong dir fails here.
-        assert f"archived it into {tmp_path}" in ctx
+        assert f"archived the summary into {tmp_path}" in ctx
         assert sid in ctx
         assert "names the path in its briefing" not in ctx, (
             "the guarded fallback fired for a well-formed session — "
@@ -257,7 +256,7 @@ class TestCompactReadInstructionRealSeam:
         parked file, which may hold a teammate's summary."""
         ctx = _run_compact_main(tmp_path, monkeypatch, "aabb1122-0000-0000-0000-000000000000")
 
-        assert f"(if it is absent, either the secretary archived it into {tmp_path}" in ctx
+        assert f"(if it is absent, either the secretary archived the summary into {tmp_path}" in ctx
         assert (
             "or it was not attributed to this session and you continue from the "
             "summary already in your context)" in ctx
@@ -278,7 +277,7 @@ class TestCompactReadInstructionRealSeam:
         assert "pact-sessions/compact-summary.txt" in ctx
         assert "names the path in its briefing" in ctx
         # The two failure shapes a blind interpolation would produce.
-        assert "archived it into  as" not in ctx
+        assert "archived the summary into  as" not in ctx
         assert "unknown-" not in ctx, (
             "the unknown-* fallback session id must never reach an instruction "
             "the lead may act on"

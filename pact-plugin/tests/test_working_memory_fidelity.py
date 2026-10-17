@@ -448,8 +448,8 @@ def _prose_sites():
         "harvest Step 7.5": _slice(_HARVEST_SKILL, "### Step 7.5:", r"^### "),
         "harvest Consolidation Step 4": _slice(
             _HARVEST_SKILL, "### Step 4: Reconcile Working Memory", r"^### "),
-        "secretary spawn step": _slice(
-            _SECRETARY, "1. **Rebuild Working Memory from the store**", r"^\d+\. "),
+        # The secretary's spawn-step site retired with the secretary rework: session_init starts the
+        # session-start rebuild (tests/test_working_memory_rebuild.py).
         "secretary WORKING MEMORY SYNC": _slice(
             _SECRETARY, "# WORKING MEMORY SYNC", r"^# "),
         "pact-memory sync row": _slice(_MEMORY_SKILL, "| `sync` |", r"^\|"),
@@ -481,8 +481,9 @@ def _sites_disagreeing_with(count):
 
 _REPORT_SLOT = "{sync_status | empty, project {project_id}}"
 
-# Where each report template renders the slot, and how many times.
-_SLOT_SITES = {_HARVEST_SKILL: 2, _SECRETARY: 1}
+# Where each report template renders the slot, and how many times. The secretary's
+# briefing template retired with the secretary rework (the hook renders the briefing).
+_SLOT_SITES = {_HARVEST_SKILL: 2}
 
 
 class TestTheReportTemplatesRenderTheProject:
@@ -494,7 +495,7 @@ class TestTheReportTemplatesRenderTheProject:
         # The comparison below is built from `_SLOT_SITES` itself, so it agrees
         # with a census that lost a FILE. The per-file counts are pinned there;
         # the number of files is not, so pin it here.
-        assert len(_SLOT_SITES) == 2, sorted(p.name for p in _SLOT_SITES)
+        assert len(_SLOT_SITES) == 1, sorted(p.name for p in _SLOT_SITES)
         counts = {path.name: path.read_text(encoding="utf-8").count(_REPORT_SLOT)
                   for path in _SLOT_SITES}
         assert counts == {path.name: n for path, n in _SLOT_SITES.items()}
@@ -520,7 +521,7 @@ class TestTheProseCountIsTheConstant:
         sites = _prose_sites()
         assert sites, "the prose census extracted nothing; report this as an " \
                       "extraction failure, not as agreement"
-        assert len(sites) == 6, sorted(sites)
+        assert len(sites) == 5, sorted(sites)
 
     def test_every_site_names_the_cap(self):
         assert _sites_disagreeing_with(MAX_WORKING_MEMORIES) == []

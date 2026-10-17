@@ -396,18 +396,13 @@ def _refuse_live_db_under_pytest(db_path) -> None:
     NO IN-PROCESS PROPERTY CLOSES THIS, and that is a BOUND rather than a
     to-do. The separating fact is CALLER IDENTITY, and for a fresh interpreter
     that lives only in the environment, so a stronger predicate is not
-    available here. The parent-side sibling in `archive_pin._run_memory_cli`
-    CAN add `"pytest" in sys.modules`, because that one runs in the pytest
-    interpreter. This one cannot, which is the same forced choice recorded
-    above, stated as a residual rather than as a justification.
+    available here, which is the same forced choice recorded above, stated as
+    a residual rather than as a justification.
 
-    WHY IT IS GATED, AND WHY THE GATE IS NOT OPTIONAL. `archive_pin --index N`
-    is the curator's documented production invocation and it passes NO
-    `--db-path` -- production SHOULD use the real store. An ungated refusal
-    would break that command outright, and it is the command
-    `/PACT:prune-memory` keys its refuse-or-proceed decision on. That is a
-    cardinal over-block on the one path whose purpose is not destroying
-    content. Outside pytest this function returns immediately.
+    WHY IT IS GATED, AND WHY THE GATE IS NOT OPTIONAL. The documented
+    production invocations (`/repacted:prune-memory` saves a pin through
+    `save`) pass NO `--db-path` -- production SHOULD use the real store. An
+    ungated refusal would break them outright. Outside pytest this function returns immediately.
 
     DEPENDENCY WITH AN `ALLOW` FAIL DIRECTION -- the reason its tripwire test
     is not optional. This guard works only because the spawning parent hands us
@@ -487,7 +482,7 @@ def _scrub(msg: str) -> str:
     Replace the user's home directory with '~' in an error message.
 
     Handles both the raw `~` expansion and the realpath form (which may
-    differ on macOS where `/Users/foo` resolves through `/System/Volumes/Data`
+    differ on macOS where `/Users/alice` resolves through `/System/Volumes/Data`
     or similar). Guards against an empty/unset HOME — if expanduser returns
     the literal '~', no substitution is applied.
 
@@ -658,14 +653,50 @@ def cmd_search(args, db_path=None):
         args.query, current_file=current_file, limit=args.limit,
         sync_to_claude=False, **search_kwargs
     )
-    _success([r.to_dict() for r in results])
+    _success(_without_credentials([r.to_dict() for r in results]))
 
 
 def cmd_list(args, db_path=None):
     """Handle the 'list' subcommand."""
     memory = PACTMemory(db_path=db_path)
     results = memory.list(limit=args.limit)
-    _success([r.to_dict() for r in results])
+    _success(_without_credentials([r.to_dict() for r in results]))
+
+
+# repacted D9s S3 (the design notes D9.12, D25): the search and list output path never
+# prints a credential. A row whose text carries one is withheld whole (its id stays, so the
+# owner can find and redact it); every other row passes through scrub_value. The helpers
+# live in the plugin's bin/_repact_common.py, the one pattern list recall also uses.
+_PLUGIN_BIN = str(Path(__file__).resolve().parents[3] / "bin")
+
+
+def _string_leaves(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [leaf for item in value.values() for leaf in _string_leaves(item)]
+    if isinstance(value, list):
+        return [leaf for item in value for leaf in _string_leaves(item)]
+    return []
+
+
+def _without_credentials(rows: list[dict]) -> list[dict]:
+    if _PLUGIN_BIN not in sys.path:
+        sys.path.append(_PLUGIN_BIN)
+    from _repact_common import credential_reason, scrub_value
+
+    safe = []
+    for row in rows:
+        memory_id = str(row.get("id") or "")
+        if credential_reason(f"pact-memory/{memory_id}", "\n".join(_string_leaves(row))):
+            safe.append({"id": memory_id, "withheld": f"memory {memory_id} - holds credentials"})
+        else:
+            safe.append(scrub_value(row))
+    return safe
+
+
+# Two lines of this length, the id and the date come to about 300 characters.
+_BRIEF_LINE_MAX_CHARS = 100
 
 
 def cmd_get(args, db_path=None):
@@ -702,7 +733,44 @@ def cmd_get(args, db_path=None):
         )
     if result is None:
         _error("NOT_FOUND", f"Memory '{args.memory_id}' not found")
-    _success(result.to_dict())
+    record = result.to_dict()
+    if getattr(args, "brief", False):
+        _success(_brief_record(record))
+    wanted = getattr(args, "fields", None)
+    if wanted is not None:
+        unknown = [name for name in wanted if name not in record]
+        if unknown or not wanted:
+            _error(
+                "UNKNOWN_FIELD",
+                "--fields takes a comma-separated list of record fields"
+                + (f"; not a field: {', '.join(unknown)}" if unknown else ""),
+                allowed_fields=sorted(record),
+            )
+        _success({name: record[name] for name in wanted})
+    _success(record)
+
+
+def _first_line(value, limit: int) -> str:
+    """The first non-empty line of a text field, cut to `limit` characters."""
+    if not isinstance(value, str):
+        return ""
+    line = next((part.strip() for part in value.splitlines() if part.strip()), "")
+    return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
+
+
+def _brief_record(record: dict) -> dict:
+    """A record as `get --brief` prints it: id, date and one line each of context and goal."""
+    return {
+        "id": record.get("id"),
+        "date": record.get("created_at"),
+        "context": _first_line(record.get("context"), _BRIEF_LINE_MAX_CHARS),
+        "goal": _first_line(record.get("goal"), _BRIEF_LINE_MAX_CHARS),
+    }
+
+
+def _field_list(value: str) -> list[str]:
+    """`a,b` as ["a", "b"], in the order given and without repeats."""
+    return list(dict.fromkeys(name.strip() for name in value.split(",") if name.strip()))
 
 
 def cmd_status(args, db_path=None):
@@ -793,16 +861,37 @@ def cmd_update(args, db_path=None):
     # text the record no longer contains. Reporting on save alone would close
     # the milder path and leave the worse one silent.
     #
-    # NO `sync_status` HERE EITHER, and again as an observation: as of
-    # 2026-08-04 `update()` performs no CLAUDE.md sync at all, so the field
-    # would either be absent or -- on a reused instance -- carry a PREVIOUS
-    # save's outcome and misreport it as this update's. If `update` ever gains
-    # a sync, add the field here rather than letting it inherit one.
+    # `update()` itself never touches CLAUDE.md: the Working Memory block is
+    # rebuilt only at a propagation boundary, so an update stays quiet and its
+    # envelope carries no `sync_status`. `--sync` opts in and runs the `sync`
+    # command's own path (_sync_envelope), so its fields are sync's fields.
     result = {"memory_id": resolved_id}
     embedding_status = memory.last_embedding_status
     if embedding_status is not None:
         result["embedding_status"] = embedding_status
+    if getattr(args, "sync", False):
+        result.update(_sync_envelope(args, memory))
     _success(result)
+
+
+def _sync_envelope(args, memory):
+    """Rebuild the Working Memory block; the one path `sync` and `update --sync`
+    share. Returns sync_status, projected, memory_ids and project_id."""
+    sync_kwargs = {}
+    claude_md_root = getattr(args, "claude_md_root", None)
+    if claude_md_root:
+        sync_kwargs["claude_md_root"] = Path(claude_md_root)
+    try:
+        memory_ids = memory.sync(**sync_kwargs)
+    except ProjectScopeDisagreementError as exc:
+        # Same deliberate refusal shape as cmd_save: both values + remedy.
+        _error("SCOPE_DISAGREEMENT", _scrub(str(exc)))
+    return {
+        "sync_status": memory.last_sync_status,
+        "projected": len(memory_ids),
+        "memory_ids": memory_ids,
+        "project_id": memory.project_id,
+    }
 
 
 def cmd_sync(args, db_path=None):
@@ -816,21 +905,7 @@ def cmd_sync(args, db_path=None):
     `empty` can be checked against the project the caller expected.
     """
     memory = PACTMemory(db_path=db_path)
-    sync_kwargs = {}
-    claude_md_root = getattr(args, "claude_md_root", None)
-    if claude_md_root:
-        sync_kwargs["claude_md_root"] = Path(claude_md_root)
-    try:
-        memory_ids = memory.sync(**sync_kwargs)
-    except ProjectScopeDisagreementError as exc:
-        # Same deliberate refusal shape as cmd_save: both values + remedy.
-        _error("SCOPE_DISAGREEMENT", _scrub(str(exc)))
-    _success({
-        "sync_status": memory.last_sync_status,
-        "projected": len(memory_ids),
-        "memory_ids": memory_ids,
-        "project_id": memory.project_id,
-    })
+    _success(_sync_envelope(args, memory))
 
 
 def cmd_delete(args, db_path=None):
@@ -1033,6 +1108,18 @@ def build_parser():
         "memory_id",
         help="Full 32-char memory ID, or a unique prefix of >= 7 characters",
     )
+    get_shape = get_parser.add_mutually_exclusive_group()
+    get_shape.add_argument(
+        "--brief",
+        action="store_true",
+        help="Only id, date and the first line of context and goal (about 300 characters)",
+    )
+    get_shape.add_argument(
+        "--fields",
+        type=_field_list,
+        metavar="a,b",
+        help="Only these record fields, e.g. --fields goal,decisions",
+    )
 
     # status
     status_parser = subparsers.add_parser(
@@ -1083,9 +1170,26 @@ def build_parser():
         action="store_true",
         help=(
             "Replace list-valued fields wholesale instead of merging "
-            "additively (default: additive merge with content-hash dedup). "
-            "Use when you intentionally want to remove items from a list."
+            "additively (default: additive merge with content-hash dedup, "
+            "where an entity, task or decision whose name/task/decision "
+            "matches an existing one replaces it). Use when you "
+            "intentionally want to remove items from a list."
         ),
+    )
+    update_parser.add_argument(
+        "--sync",
+        action="store_true",
+        help=(
+            "Also rebuild CLAUDE.md's Working Memory block, exactly as the "
+            "sync command does. Off by default: the block is rebuilt only at "
+            "a propagation boundary, so without this flag it shows the "
+            "updated record after the next sync."
+        ),
+    )
+    update_parser.add_argument(
+        "--claude-md-root",
+        default=None,
+        help="With --sync: the directory the CLAUDE.md write must stay inside (as for sync).",
     )
 
     # delete

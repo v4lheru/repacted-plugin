@@ -93,7 +93,7 @@ class Session:
         return started["hookSpecificOutput"]["additionalContext"]
 
     def read_summary(self):
-        frame = {"hook_event_name": "PreToolUse", "agent_type": "PACT:pact-orchestrator", "session_id": SID,
+        frame = {"hook_event_name": "PreToolUse", "agent_type": "repacted:pact-orchestrator", "session_id": SID,
                  "tool_name": "Read", "tool_input": {"file_path": str(self.canonical)}}
         output = self.run("bootstrap_gate.py", frame)
         assert "permissionDecision" not in json.dumps(output), output

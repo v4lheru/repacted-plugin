@@ -55,7 +55,11 @@ import pytest
 
 from merge_guard_post import main as _post_main
 from merge_guard_pre import check_merge_authorization, main as _pre_main
-from shared.merge_guard_common import TOKEN_PREFIX, extract_command_context
+from shared.merge_guard_common import TOKEN_PREFIX
+from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
+from merge_guard_repo_fixture import minted_context  # noqa: E402  (amend_3 on #141: mint-side repo binding)
+from merge_guard_repo_fixture import take_out_typed  # noqa: E402
+from merge_guard_repo_fixture import git_bound  # noqa: E402  (1.4.1 U13: git checkout/remote binding)
 
 # ───────────────────────────── helpers (no mocks of the seam) ────────────────
 
@@ -359,27 +363,27 @@ class TestRegressionMustAuthorize:
     def test_r5_branch_axis(self, tmp_path):
         """R5: branch-delete target axis. Command-anchored branch name binds."""
         q = "Delete the merged feature branch?"
-        self._approve(tmp_path, q, "Yes, delete", "Run `git branch -D feature/login`")
+        self._approve(tmp_path, q, "Yes, delete local branch", "Run `git branch -D feature/login`")
         assert _authorize("git branch -D feature/login", tmp_path) is None
 
     def test_r6_op_type_axis(self, tmp_path):
         """R6: op-type axis. Prose mentions 'force-push' but the approved command
         is a branch-delete; mint binds the COMMAND's op, not the prose word."""
         q = "We discussed a force-push earlier — delete the stale branch instead?"
-        self._approve(tmp_path, q, "Yes, delete", "Run `git branch -D stale/x`")
+        self._approve(tmp_path, q, "Yes, delete local branch", "Run `git branch -D stale/x`")
         assert _authorize("git branch -D stale/x", tmp_path) is None
 
     def test_r7_command_only_in_option_descriptive_label(self, tmp_path):
-        """R7 / #1034: the command lives ONLY in the option (label 'Merge now',
-        not in the old affirmative allowlist). Option-mode exact-label match +
-        command-anchored mint → pr 1034 authorized.
+        """R7 / #1034: the command lives ONLY in the option, under a label of the closed
+        set ('Yes, merge'; the 'Merge now' of the first capture is outside it and mints
+        nothing). Option-mode exact-label match + command-anchored mint → pr 1034 authorized.
 
         PROVISIONAL: reconstructed from the documented payload structure (the
         verbatim #1034 capture was not preserved). Asserts mint==1034 from the
         selected-option command, which is the load-bearing #1034 property."""
         q = ("We have reviewed the changes thoroughly across several files and "
              "the CI is green; the team has signed off on the approach.")
-        self._approve(tmp_path, q, "Merge now", "Run `gh pr merge 1034`")
+        self._approve(tmp_path, q, "Yes, merge", "Run `gh pr merge 1034`")
         assert _authorize("gh pr merge 1034", tmp_path) is None
 
 
@@ -393,7 +397,7 @@ class TestWriteGateEvasion:
     # asserted the now-REMOVED decline/defer veto. Under the minimal floor those
     # selections MINT (the operator clicked a command-bearing option) — a documented
     # ACCEPTED RESIDUAL (#21). Their residual coverage moved to
-    # TestDeclineLabelCarryingCommandResidualMints below; deleted here because the
+    # TestDeclineLabelCarryingCommandNeverMints below; deleted here because the
     # veto mechanism they exercised no longer exists.
 
     def test_wge3_answer_matching_no_label_no_iter_fallback(self, tmp_path):
@@ -472,39 +476,25 @@ class TestClassIINonSelectedOptionSmuggle:
         assert _authorize("gh pr merge 99", tmp_path) is not None
 
 
-class TestDeclineLabelCarryingCommandResidualMints:
-    """RESIDUAL-CANARY (post-#22 minimal floor). The floor does NO decline/defer
-    intent-parsing — the operator's CONSENT is the CLICK on a command-bearing
-    option, and the surrounding label/description prose is never read to second-
-    guess it. So clicking a DECLINE- or DEFER-labelled option whose description
-    nonetheless CARRIES the destructive command MINTS — a documented, user-ratified
-    ACCEPTED RESIDUAL (#21 threat-model: the agent places the command ONLY in
-    affirmative options, so a genuine decline option carries no command). These were
-    previously WGE-1/WGE-2 (decline/defer veto) + the decline-label guardrail; they
-    are reframed as residual-canaries that ASSERT the mint, so any re-introduction
-    of a prose decline/defer cross-check is caught.
-
-    NON-VACUITY (broaden-mutation, the ONLY valid proof for an accepted-residual
-    canary — a source revert leaves it green): re-add a decline/defer prose veto to
-    `_mint_context_from_bundle` (scan the selected option's label+description for a
-    decline word and refuse) → these selections refuse → 0 tokens → every row RED.
-    That mutation is exactly the #17/#21 under-block/FP class the floor removed."""
+class TestDeclineLabelCarryingCommandNeverMints:
+    """Consent is read from the clicked LABEL (merge_guard_post.is_approval_label): a
+    decline- or defer-labelled option mints nothing even when its description carries the
+    destructive command. This replaces the earlier accepted residual (such a click minted);
+    the description is still never read for intent, only for the command."""
 
     @pytest.mark.parametrize("label, description", [
         ("Pause work for now", "Run `gh pr merge 42` later, not now"),   # decline label
         ("Continue reviewing", "Run `gh pr merge 42` after review"),     # decline label (was WGE-1)
         ("Approve after CI", "Run `gh pr merge 42` once CI is green"),   # defer label (was WGE-2)
     ])
-    def test_decline_or_defer_label_carrying_command_mints(self, tmp_path, label, description):
+    def test_decline_or_defer_label_carrying_command_mints_nothing(self, tmp_path, label,
+                                                                   description):
         q = "Merge or hold?"
         opts = [_opt(label, description), _opt("Cancel", "Abort")]
         code = _invoke_post([_q(q, opts)], {q: label}, tmp_path)
         assert code == 0
-        assert len(_minted_tokens(tmp_path)) == 1, (
-            f"floor residual: clicking decline/defer label {label!r} carrying the "
-            "command must MINT (no prose intent-parsing)"
-        )
-        assert _authorize("gh pr merge 42", tmp_path) is None
+        assert _minted_tokens(tmp_path) == []
+        assert _authorize("gh pr merge 42", tmp_path) is not None
 
 
 class TestA5NoTokenNonCase:
@@ -532,7 +522,7 @@ class TestMintReadParity:
         ("git branch -D feature/x", "git branch -D feature/y"),
     ])
     def test_minted_command_round_trips(self, tmp_path, command, other):
-        ctx = extract_command_context(command)
+        ctx = minted_context(command)
         from merge_guard_post import write_token
         token_path = write_token(ctx, token_dir=tmp_path)
         assert token_path is not None
@@ -558,7 +548,7 @@ class TestShellRedirectIsolation:
         assert write_token(context, token_dir=tmp_path) is not None
 
     def test_merge_with_redirect_still_authorizes(self, tmp_path):
-        self._seed_typed(tmp_path, {"operation_type": "merge", "pr_number": "5"})
+        self._seed_typed(tmp_path, {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"})
         assert _authorize("gh pr merge 5 2>&1", tmp_path) is None
 
     def test_branch_delete_with_redirect_authorizes(self, tmp_path):
@@ -567,7 +557,8 @@ class TestShellRedirectIsolation:
         ref re-derives to `x` and matches the token. (Previously this over-blocked
         — the redirect was miscounted as a second positional; the over-block-
         tokenizer fix removes it without opening a #1032 under-block.)"""
-        self._seed_typed(tmp_path, {"operation_type": "branch-delete", "branch": "x"})
+        self._seed_typed(tmp_path, git_bound({"operation_type": "branch-delete", "branch": "x"},
+                                             "git branch -D x"))
         assert _authorize("git branch -D x 2>&1", tmp_path) is None
         # Companion: WITHOUT the redirect the same token also authorizes.
         assert _authorize("git branch -D x", tmp_path) is None
@@ -578,7 +569,8 @@ class TestShellRedirectIsolation:
         destination re-derives to `main` and matches the token. (Previously this
         over-blocked; the fix re-derives the target from the executable prefix and
         the redirect filename can never become the ref — no #1032 under-block.)"""
-        self._seed_typed(tmp_path, {"operation_type": "force-push", "target_ref": "main"})
+        self._seed_typed(tmp_path, git_bound({"operation_type": "force-push", "target_ref": "main"},
+                                             "git push --force origin main"))
         assert _authorize("git push --force origin main 2>&1", tmp_path) is None
         # Companion: WITHOUT the redirect the same token also authorizes.
         assert _authorize("git push --force origin main", tmp_path) is None
@@ -604,7 +596,7 @@ class TestMintGuardBranches:
 
     def test_label_op_inconsistent_with_command_mints_residual(self, tmp_path):
         """RESIDUAL-CANARY (floor): when the clicked option's LABEL names a DIFFERENT
-        operation than the command in its description (label 'Close the PR', command
+        operation than the command in its description (label 'Yes, close', command
         `gh pr merge 42`), the mint MINTS the command — the floor trusts the clicked
         command and does NOT cross-check the label prose (a documented wrong-OP
         ACCEPTED RESIDUAL). NON-VACUITY (broaden-mutation): re-add a Step-4
@@ -612,8 +604,8 @@ class TestMintGuardBranches:
         selection refuses → 0 tokens → RED."""
         q = "Proceed?"
         # Label says 'close', description carries a MERGE command — divergent op.
-        opts = [_opt("Close the PR", "Run `gh pr merge 42`"), _opt("Cancel", "Abort")]
-        code = _invoke_post([_q(q, opts)], {q: "Close the PR"}, tmp_path)
+        opts = [_opt("Yes, close", "Run `gh pr merge 42`"), _opt("Cancel", "Abort")]
+        code = _invoke_post([_q(q, opts)], {q: "Yes, close"}, tmp_path)
         assert code == 0
         assert len(_minted_tokens(tmp_path)) == 1
         assert _authorize("gh pr merge 42", tmp_path) is None
@@ -622,8 +614,8 @@ class TestMintGuardBranches:
         """Positive control: a label whose op AGREES with the command's op mints
         normally (proves the consistency guard isn't blanket-refusing)."""
         q = "Proceed?"
-        opts = [_opt("Merge the PR", "Run `gh pr merge 42`"), _opt("Cancel", "Abort")]
-        code = _invoke_post([_q(q, opts)], {q: "Merge the PR"}, tmp_path)
+        opts = [_opt("Yes, merge", "Run `gh pr merge 42`"), _opt("Cancel", "Abort")]
+        code = _invoke_post([_q(q, opts)], {q: "Yes, merge"}, tmp_path)
         assert code == 0
         assert _authorize("gh pr merge 42", tmp_path) is None
 
@@ -654,7 +646,8 @@ class TestMultiTargetBranchDeleteUnderBlock:
         """Positive control: the #30 fix must NOT over-block the legitimate
         single-target case — a token for 'feature' still authorizes the exact
         single-branch delete it approved."""
-        _seed_token(tmp_path, {"operation_type": "branch-delete", "branch": "feature"})
+        _seed_token(tmp_path, git_bound({"operation_type": "branch-delete", "branch": "feature"},
+                                        "git branch -D feature"))
         assert _authorize("git branch -D feature", tmp_path) is None
 
 
@@ -954,8 +947,8 @@ class TestLegBoundedMintWindow:
         faithful re-execution refuse. The window binds [] — EXACTLY — and the
         faithful compound authorizes."""
         q = "Proceed with this operation?"
-        opts = [_opt("Yes, run it", f"On approval run: `{member}`"), _opt("Cancel", "Abort")]
-        assert _invoke_post([_q(q, opts)], {q: "Yes, run it"}, tmp_path) == 0
+        opts = [_opt("Yes", f"On approval run: `{member}`"), _opt("Cancel", "Abort")]
+        assert _invoke_post([_q(q, opts)], {q: "Yes"}, tmp_path) == 0
         assert _token_bound_flags(tmp_path) == []
         assert _authorize(member, tmp_path) is None
 
@@ -993,8 +986,8 @@ class TestLegBoundedMintWindow:
         matched the escalated single-command execution's read-side bind →
         AUTHORIZE. Post-fix the token binds [] → the escalation REFUSES."""
         q = "Proceed?"
-        opts = [_opt("Yes, run it", f"On approval run: `{member}`"), _opt("Cancel", "Abort")]
-        assert _invoke_post([_q(q, opts)], {q: "Yes, run it"}, tmp_path) == 0
+        opts = [_opt("Yes", f"On approval run: `{member}`"), _opt("Cancel", "Abort")]
+        assert _invoke_post([_q(q, opts)], {q: "Yes"}, tmp_path) == 0
         assert _token_bound_flags(tmp_path) == []
         assert _authorize(escalated, tmp_path) is not None
 
@@ -1007,8 +1000,13 @@ class TestLegBoundedMintWindow:
             "echo --delete-branch && gh pr close 42",   # reversed close arm
         ],
     )
-    def test_close_emergent_member_mints_nothing_and_runs_free(self, member, tmp_path):
-        """Post-#1087 the close danger arms match PER-LEG at the read floor, so
+    def test_close_emergent_member_mints_plain_close_and_authorizes(self, member, tmp_path):
+        """FIX-MERGE f3 (amend_1 a): a bare close now gates, so the close leg is itself
+        destructive (tier 1). The approval mints ONE close token whose flags come from the
+        close's own leg only (the echo literal is another statement), so the byte-
+        identical re-execution authorizes and binds []. Pre-f3 text follows.
+
+        Post-#1087 the close danger arms match PER-LEG at the read floor, so
         neither shape has `gh pr close` and `--delete-branch` together in ONE leg
         — is_dangerous=False. The member is no longer an emergent-danger compound:
         the approval mints NOTHING (write-gate: not_dangerous) and the
@@ -1022,7 +1020,8 @@ class TestLegBoundedMintWindow:
         q = "Close it?"
         opts = [_opt("Yes, close", f"On approval run: `{member}`"), _opt("Cancel", "Abort")]
         assert _invoke_post([_q(q, opts)], {q: "Yes, close"}, tmp_path) == 0
-        assert len(_minted_tokens(tmp_path)) == 0
+        assert len(_minted_tokens(tmp_path)) == 1
+        assert _token_bound_flags(tmp_path) == []
         assert _authorize(member, tmp_path) is None
 
     def test_close_laundering_channel_closed(self, tmp_path):
@@ -1041,7 +1040,11 @@ class TestLegBoundedMintWindow:
         q = "Close it?"
         opts = [_opt("Yes, close", f"On approval run: `{member}`"), _opt("Cancel", "Abort")]
         assert _invoke_post([_q(q, opts)], {q: "Yes, close"}, tmp_path) == 0
-        assert len(_minted_tokens(tmp_path)) == 0
+        # FIX-MERGE f3: the member now mints a PLAIN close token (bound []), and the
+        # escalated branch-deleting close still REFUSES on the flag axis. The count and
+        # flag assertions keep this non-vacuous: a re-minted flagged token flips RED.
+        assert len(_minted_tokens(tmp_path)) == 1
+        assert _token_bound_flags(tmp_path) == []
         assert _authorize("gh pr close 42 --delete-branch", tmp_path) is not None
 
     def test_close_flag_on_op_single_leg_round_trips(self, tmp_path):
@@ -1057,15 +1060,17 @@ class TestLegBoundedMintWindow:
         assert _token_bound_flags(tmp_path) == ["--delete-branch"]
         assert _authorize(cmd, tmp_path) is None
 
-    def test_bare_close_boundary_stays_ungated(self, tmp_path):
-        """Boundary control: bare `gh pr close 42` is reversible and UNGATED —
-        the approval mints nothing (not dangerous) and the execution runs free
-        without consulting a token."""
+    def test_bare_close_boundary_is_gated_and_mints(self, tmp_path):
+        """Boundary control, re-ruled by FIX-MERGE f3 (amend_1 a): bare `gh pr close 42`
+        is DENIED without a token, the approval mints exactly one plain close token, and
+        that token authorizes the execution."""
         cmd = "gh pr close 42"
+        assert _authorize(cmd, tmp_path) is not None
         q = "Close it?"
         opts = [_opt("Yes, close", f"On approval run: `{cmd}`"), _opt("Cancel", "Abort")]
         assert _invoke_post([_q(q, opts)], {q: "Yes, close"}, tmp_path) == 0
-        assert len(_minted_tokens(tmp_path)) == 0
+        assert len(_minted_tokens(tmp_path)) == 1
+        assert _token_bound_flags(tmp_path) == []
         assert _authorize(cmd, tmp_path) is None
 
     # --- no-under-bind: op in a NON-FIRST leg carrying its REAL flag ---
@@ -1074,7 +1079,7 @@ class TestLegBoundedMintWindow:
         "cmd,expected_flags",
         [
             ("echo hi && gh pr close 42 --delete-branch", ["--delete-branch"]),
-            ("cd /repo && gh pr merge 42 --admin", ["--admin"]),
+            ("cd . && gh pr merge 42 --admin", ["--admin"]),
             ("gh pr close 42 --delete-branch && echo x", ["--delete-branch"]),
         ],
     )
@@ -1085,8 +1090,8 @@ class TestLegBoundedMintWindow:
         first leg → mint [] vs read [flag] → the faithful click OVER-BLOCKED);
         the two-tier selection cures that direction too."""
         q = "Proceed?"
-        opts = [_opt("Yes, run it", f"On approval run: `{cmd}`"), _opt("Cancel", "Abort")]
-        assert _invoke_post([_q(q, opts)], {q: "Yes, run it"}, tmp_path) == 0
+        opts = [_opt("Yes", f"On approval run: `{cmd}`"), _opt("Cancel", "Abort")]
+        assert _invoke_post([_q(q, opts)], {q: "Yes"}, tmp_path) == 0
         assert _token_bound_flags(tmp_path) == expected_flags
         assert _authorize(cmd, tmp_path) is None
 
@@ -1098,9 +1103,10 @@ class TestLegBoundedMintWindow:
         `gh pr close 42 && gh pr close 43 && echo --delete-branch` (which reads as
         two reversible bare closes plus an echo) minted a token whose set
         AUTHORIZED the escalated single `gh pr close 42 --delete-branch` (a real
-        branch delete). Post-fix the ambiguous source is is_dangerous=False
-        per-leg → the approval mints NOTHING, and the escalated single-command
-        REFUSES for lack of any token. This is the approval-SOURCE direction the
+        branch delete). Post-fix the approval mints NOTHING (since FIX-MERGE f3 because
+        the source is a COMPOUND of two destructive bare closes; before f3 because it was
+        is_dangerous=False per-leg), and the escalated single-command REFUSES for lack of
+        any token. This is the approval-SOURCE direction the
         #1083 close pins never exercised (they drove the member as an execution
         target); it is the direct laundering-closed proof."""
         ambiguous = "gh pr close 42 && gh pr close 43 && echo --delete-branch"
@@ -1120,8 +1126,12 @@ class TestLegBoundedMintWindow:
             _single_detectable_leg,
         )
         assert _single_destructive_leg("gh pr merge 42 && echo --admin") == "gh pr merge 42"
-        assert _single_destructive_leg("gh pr close 42 && echo --delete-branch") is None
+        # FIX-MERGE f3: a bare close is destructive, so tier 1 wins for close too.
+        assert _single_destructive_leg("gh pr close 42 && echo --delete-branch") == "gh pr close 42"
         assert _single_detectable_leg("gh pr close 42 && echo --delete-branch") == "gh pr close 42"
+        assert _single_destructive_leg(
+            "gh pr close 42 && gh pr close 43 && echo --delete-branch"
+        ) is None
         assert _single_detectable_leg(
             "gh pr close 42 && gh pr close 43 && echo --delete-branch"
         ) is None
@@ -1153,7 +1163,7 @@ class TestLegBoundedMintWindow:
             "echo --delete-branch && gh pr close 42",
             "echo hi && gh pr close 42 --delete-branch",
             "gh pr merge 42 && echo --admin",
-            "cd /repo && gh pr merge 42 --admin",
+            "cd . && gh pr merge 42 --admin",
             "gh pr close 42 --delete-branch",
         ]:
             window = _leg_bounded_flag_scan_surface(
@@ -1228,6 +1238,7 @@ class TestLegBoundedMintWindow:
         # direction 2 — pre-fix surface restored: the channel re-opens
         import merge_guard_post as post_mod
         monkeypatch.setattr(post_mod, "_leg_bounded_flag_scan_surface", lambda text, cmd: text)
+        take_out_typed(monkeypatch)     # the word-for-word binding closes the channel as well
         tmp2 = tmp_path / "prefix-sim"
         tmp2.mkdir()
         assert _invoke_post([_q(q, opts)], {q: "Yes, push"}, tmp2) == 0
@@ -1257,8 +1268,11 @@ class TestLegBoundedMintWindow:
         escalated = "gh pr close 42 --delete-branch"
         q = "Close it?"
         opts = [_opt("Yes, close", f"On approval run: `{ambiguous}`"), _opt("Cancel", "Abort")]
-        # direction 1 — fix present: not-dangerous, mints nothing, escalation denies
-        assert is_dangerous_command(ambiguous) is False
+        # direction 1 — fix present. FIX-MERGE f3: each bare close is now destructive, so
+        # the ambiguous source is a COMPOUND (two destructive legs) and the mint refuses it
+        # upstream of any bind; the escalation still denies for lack of any token.
+        from shared.merge_guard_common import is_compound_destructive_command
+        assert is_compound_destructive_command(ambiguous) is True
         assert _invoke_post([_q(q, opts)], {q: "Yes, close"}, tmp_path) == 0
         assert len(_minted_tokens(tmp_path)) == 0
         assert _authorize(escalated, tmp_path) is not None
@@ -1300,22 +1314,23 @@ class TestLegBoundedMintWindow:
         ambiguous = "git branch new-feature && echo -D"
         escalated = "git branch -D new-feature"
         q = "Create the branch?"
-        opts = [_opt("Yes, create", f"On approval run: `{ambiguous}`"), _opt("Cancel", "Abort")]
+        opts = [_opt("Yes", f"On approval run: `{ambiguous}`"), _opt("Cancel", "Abort")]
         # direction 1 — fix present: not-dangerous, mints nothing, escalation denies
         assert is_dangerous_command(ambiguous) is False
-        assert _invoke_post([_q(q, opts)], {q: "Yes, create"}, tmp_path) == 0
+        assert _invoke_post([_q(q, opts)], {q: "Yes"}, tmp_path) == 0
         assert len(_minted_tokens(tmp_path)) == 0
         assert _authorize(escalated, tmp_path) is not None
         # direction 2 — pre-fix whole-command match restored: laundering re-opens
         import shared.merge_guard_common as common_mod
         monkeypatch.setattr(common_mod, "_slice_stripped_legs", lambda s: [s])
+        take_out_typed(monkeypatch)     # the word-for-word binding closes the channel as well
         assert is_dangerous_command(ambiguous) is True, (
             "identity-slice did not restore the whole-command branch-delete match — "
             "the branch-delete laundering-closed canary would be vacuous"
         )
         tmp2 = tmp_path / "prefix-sim"
         tmp2.mkdir()
-        assert _invoke_post([_q(q, opts)], {q: "Yes, create"}, tmp2) == 0
+        assert _invoke_post([_q(q, opts)], {q: "Yes"}, tmp2) == 0
         assert len(_minted_tokens(tmp2)) == 1, (
             "whole-command branch-delete match did not restore the pre-fix mint — "
             "the branch-delete laundering-closed canary would be vacuous"
@@ -1338,11 +1353,11 @@ class TestPrivilegedFlagReadFloorSeam:
     match), not an unrelated mismatch."""
 
     def test_flagless_token_denies_admin_execution(self, tmp_path):
-        _seed_token(tmp_path, {"operation_type": "merge", "pr_number": "5", "bound_flags": []})
+        _seed_token(tmp_path, {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []})
         assert _authorize("gh pr merge 5 --admin", tmp_path) is not None
 
     def test_flagless_token_denies_cross_repo_redirect(self, tmp_path):
-        _seed_token(tmp_path, {"operation_type": "merge", "pr_number": "5", "bound_flags": []})
+        _seed_token(tmp_path, {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []})
         assert _authorize("gh --repo victim/repo pr merge 5", tmp_path) is not None
 
     def test_admin_token_authorizes_matching_admin(self, tmp_path):
@@ -1350,7 +1365,7 @@ class TestPrivilegedFlagReadFloorSeam:
         — so the refusals above are the flag axis, not a target/op mismatch."""
         _seed_token(
             tmp_path,
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
         )
         assert _authorize("gh pr merge 5 --admin", tmp_path) is None
 
@@ -1376,8 +1391,8 @@ class TestPrivilegedFlagReadFloorSeam:
         """Positive control: the matching --no-verify execution AUTHORIZES."""
         _seed_token(
             tmp_path,
-            {"operation_type": "force-push", "target_ref": "main",
-             "bound_flags": ["--no-verify"]},
+            git_bound({"operation_type": "force-push", "target_ref": "main",
+                       "bound_flags": ["--no-verify"]}, "git push --no-verify origin main --force"),
         )
         assert _authorize("git push --no-verify origin main --force", tmp_path) is None
 
@@ -1494,7 +1509,7 @@ class TestLineContinuationMintReadSymmetry:
 # worth pinning is that these specific FLAG / BRANCH-NAME forms still mint+bind
 # correctly — the positive teeth below. The decline/defer-label, wrong-op and
 # wrong-target scenarios are now ACCEPTED RESIDUALS, asserted as residual-canaries
-# in TestDeclineLabelCarryingCommandResidualMints / TestMintGuardBranches /
+# in TestDeclineLabelCarryingCommandNeverMints / TestMintGuardBranches /
 # TestOptionAnchoringMint above.
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1516,11 +1531,11 @@ class TestVetoWordSubstringFormsMint1049:
         ("Merge this PR now? Reviewers signed off.", "Yes, merge",
          "Run `gh pr merge 42 --no-verify`", "gh pr merge 42 --no-verify", "no"),
         # `review` in a branch name; force-push target_ref round-trips cleanly.
-        ("Force-push the rebased branch?", "Approve force-push",
+        ("Force-push the rebased branch?", "Yes, force-push",
          "Run `git push --force origin feature/review-ui`",
          "git push --force origin feature/review-ui", "review"),
         # `pending` in a branch name; force-push target_ref round-trips cleanly.
-        ("Force-push the staging branch?", "Approve force-push",
+        ("Force-push the staging branch?", "Yes, force-push",
          "Run `git push --force origin release/pending-qa`",
          "git push --force origin release/pending-qa", "pending"),
     ])

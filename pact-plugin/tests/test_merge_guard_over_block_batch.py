@@ -1,4 +1,7 @@
-"""Batch-level TEST-phase certification for the merge-guard over-block batch
+"""
+Folded 2026-10-04 (refactor shell lane): its row tests are decision-table rows now
+         (tests/fixtures/shell/decisions/fold_manifest.json); the mechanism tests stay.
+Batch-level TEST-phase certification for the merge-guard over-block batch
 (#1064 lease-push fold + presence-bind, #1077 httpie un-gating, #1078 cross-leg
 flag-leak union-arm anchoring).
 
@@ -40,11 +43,8 @@ from unittest.mock import patch
 
 import pytest
 
-from shared.merge_guard_common import (  # noqa: E402
-    is_dangerous_command as D,
-    detect_command_operation_type as OP,
-    extract_privileged_flags as EPF,
-)
+from shared.merge_guard_common import is_dangerous_command as D  # noqa: E402
+from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
 
 
 # ---------------------------------------------------------------------------
@@ -100,40 +100,6 @@ def _execute(cmd: str, tmp_path) -> int:
 # Lane 1 (#1064) — faithful lease spellings across flag placement
 # ===========================================================================
 
-class TestLeaseFaithfulPlacementVariants:
-    """A faithful lease push to a default branch must gate AND mint regardless of
-    where the `--force-with-lease` flag sits relative to other flags/positionals.
-    The lane suite pins bare / master / =value; this pins the PLACEMENT axis
-    (global flags before, order swaps, trailing flag) so the fold cannot silently
-    regress on a real-world spelling. Every row is a faithful single command."""
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
-            "git push -u --force-with-lease origin main",          # global flag before
-            "git push --force-with-lease -v origin main",          # flag between
-            "git push --force-with-lease origin main --verbose",   # trailing benign flag
-            "git push origin main --force-with-lease",             # trailing lease flag
-            "git push --force-with-lease origin master",           # master target
-        ],
-    )
-    def test_placement_variants_detect_push_to_main(self, cmd):
-        assert OP(cmd) == "push-to-main", f"lease placement variant lost recognition: {cmd!r}"
-        assert D(cmd) is True
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
-            "git push -u --force-with-lease origin main",
-            "git push --force-with-lease -v origin main",
-            "git push origin main --force-with-lease",
-        ],
-    )
-    def test_placement_variants_bind_the_presence_flag(self, cmd):
-        """The presence bind must fire on every placement (else a plain-push token
-        could authorize the lease push — the #1042 separation would silently fail)."""
-        assert EPF(cmd, "push-to-main") == ["--force-with-lease"]
-
 
 class TestLeaseBenignContinuationComposition:
     """#1064 x #1069: a faithful lease approval (SINGLE command) must AUTHORIZE the
@@ -172,157 +138,15 @@ class TestLeaseBenignContinuationComposition:
 # Lane 3 (#1078) — cross-leg leak cure across the full separator/placement matrix
 # ===========================================================================
 
-class TestCrossLegLeakSeparatorAndPlacementMatrix:
-    """The #1078 cure (first-leg anchoring of the flag-condition union arm) must
-    hold across every separator and placement, not just the &&/;/| the lane suite
-    pins. Each row is a benign first-leg op with a destructive-LOOKING flag/verb in
-    a NON-first leg — all must run FREE (D is False). Extends
-    TestCrossLegFlagLeakOverBlockGone.
-
-    Every row here is COUPLED to the anchoring (verified: each flips back to gated
-    under the identity-prefix mutation that simulates the pre-fix whole-command
-    feed — the same non-vacuity mutation TestCrossLegFlagLeakOverBlockGone runs).
-    Rows whose ungating comes from a DIFFERENT mechanism (quote stripping) live in
-    test_quoted_danger_flag_in_benign_leg_runs_free below, not here."""
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
-            "git push origin feature & rm -rf build/",              # single & (background)
-            "git push origin feature |& rm -rf build/",            # |& pipe-both
-            "git push origin feature && rm -rf build/ && echo ok",  # 3-leg
-            "echo start && git push origin feature && rm -rf x",    # push is a MIDDLE leg
-            "git push 'origin' feature && rm -rf build/",           # quoted positional, first leg
-            'git push origin "feat&&ure" && rm -rf build/',         # quoted metachar, first leg
-        ],
-    )
-    def test_cross_leg_leak_stays_cured(self, cmd):
-        assert D(cmd) is False, f"cross-leg flag leak re-appeared (OVER-BLOCK): {cmd!r}"
-
-    def test_quoted_danger_flag_in_benign_leg_runs_free(self):
-        """DEFENSE-IN-DEPTH (distinct mechanism from the anchoring): a QUOTED danger
-        flag echoed in a benign leg runs free because `_strip_non_executable_content`
-        removes the quoted string BEFORE the literal floor sees it — NOT because of
-        first-leg anchoring (this row stays ungated even under the identity-prefix
-        mutation). Kept separate so the cure class above is honestly anchoring-coupled."""
-        assert D('git push origin feature && echo "--force"') is False
-
-    @pytest.mark.parametrize(
-        "cmd,expected_op",
-        [
-            ("git push origin feature && git branch -D other", "branch-delete"),
-            ("git push origin feature && gh pr close 9 --delete-branch", "close"),
-        ],
-    )
-    def test_real_destructive_op_in_later_leg_still_gates(self, cmd, expected_op):
-        """DISCRIMINATION CONTRAST — NOT an over-block. When the NON-first leg holds
-        a GENUINELY destructive op (idiomatic `git branch -D` / `gh pr close
-        --delete-branch`), the LITERAL floor gates it in ANY leg position BY DESIGN
-        (SSOT header NB) — PER-LEG, not match-anywhere: the arms are evaluated against
-        each isolated leg, which is why a danger token sitting in a BENIGN leg (the
-        rows above) still runs free while a real op in a later leg gates. It is
-        authorizable via the read side's single-destructive-leg isolation. This
-        differs from BOTH the cured benign-leak rows above (where the
-        later leg is a benign `rm`/`echo` whose flag leaked into the union arm) AND
-        the #1082 over-block residual (a benign push mislabeled force-push by a later
-        `rm -f`/`rm --force`) — here a real destructive op is present, so gating is
-        correct, not a faithful-click over-block."""
-        assert D(cmd) is True, f"UNDER-BLOCK: real destructive later leg stopped gating: {cmd!r}"
-        assert OP(cmd) == expected_op
-
-
-class TestFirstLegDangerWithContinuationStillGates:
-    """UNDER-BLOCK GUARD (non-vacuity for the anchoring): a destructive op in the
-    FIRST leg must STILL gate with the correct op-class even when a BENIGN
-    continuation follows. First-leg anchoring narrows recognition to the first
-    executable leg — it must not stop gating a first-leg destructive form. These
-    are the union-arm-only spellings (clustered / split / short flags the literal
-    floor alone would miss), so a regression here is a real under-block."""
-
-    @pytest.mark.parametrize(
-        "cmd,expected_op",
-        [
-            ("git branch -Df temp && echo done", "branch-delete"),
-            ("git branch -fD temp ; echo done", "branch-delete"),
-            ("git branch --delete -f temp && echo done", "branch-delete"),
-            ("gh pr close 5 -d && echo done", "close"),
-            ("gh pr close 5 -d | tee log", "close"),
-            ("git branch -Df temp && rm -rf build/", "branch-delete"),
-        ],
-    )
-    def test_first_leg_danger_gates_despite_continuation(self, cmd, expected_op):
-        assert D(cmd) is True, f"UNDER-BLOCK: first-leg danger stopped gating: {cmd!r}"
-        assert OP(cmd) == expected_op
-
 
 # ===========================================================================
 # Cross-lane composition
 # ===========================================================================
 
-class TestBatchCrossLaneComposition:
-    """Interaction rows spanning two lanes' surfaces in one command — the batch is
-    only correct if the lanes compose without one re-opening another's over-block
-    or masking another's cure."""
-
-    @pytest.mark.parametrize(
-        "cmd,exp_d,exp_op",
-        [
-            # lease-to-default (Lane 1) as the first leg + a benign continuation
-            # (Lane 3 territory): still gated AND recognized -> mintable via the
-            # single-leg approval (no gated-but-unmintable state).
-            ("git push --force-with-lease origin main && rm -rf build/", True, "push-to-main"),
-            ("git push origin main && rm -rf build/", True, "push-to-main"),
-            # lease-to-TOPIC (must NOT gate) + a continuation: the fold must not
-            # widen beyond the default branch even in a compound.
-            ("git push --force-with-lease origin feature && rm -rf build/", False, None),
-            # lease-to-default first leg + an httpie (Lane 2, ungated) leg: the
-            # lease still gates+mints; httpie contributes nothing.
-            ("git push --force-with-lease origin main && http DELETE api.github.com/x/git/refs",
-             True, "push-to-main"),
-            # close sibling (Lane 3 cured) three-leg with a benign rm: runs free.
-            ("gh pr close 42 && git branch -d temp && rm -rf build/", False, "close"),
-        ],
-    )
-    def test_cross_lane_rows(self, cmd, exp_d, exp_op):
-        assert D(cmd) is exp_d, f"cross-lane composition changed gating: {cmd!r}"
-        assert OP(cmd) == exp_op
-
 
 # ===========================================================================
 # Lane 2 (#1077) — adversarial httpie spellings (extends the membership suite)
 # ===========================================================================
-
-class TestHttpieAdversarialSpellings:
-    """Additional httpie spellings beyond the lane membership suite — all must be
-    ungated (D is False) AND unclassified (OP is None), keeping httpie wholly out
-    of charter (#1077/#1079). If any gates, a second httpie read site exists or a
-    removed arm regrew."""
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
-            "http --auth user:pass DELETE https://api.github.com/repos/o/r/git/refs/heads/f",
-            "http -v PUT https://api.github.com/repos/o/r/pulls/42/merge",
-            "https PATCH api.github.com/repos/o/r/git/refs/heads/f",   # https alias, no scheme
-            "http Delete https://api.github.com/repos/o/r/git/refs/heads/f",  # mixed-case method
-            "http PUT api.github.com/repos/o/r/git/refs/heads/f && rm -rf build/",  # httpie x lane3
-        ],
-    )
-    def test_httpie_spelling_stays_ungated_and_unclassified(self, cmd):
-        assert D(cmd) is False, f"httpie re-gated (over-block): {cmd!r}"
-        assert OP(cmd) is None, f"httpie re-classified in mint: {cmd!r}"
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
-            "wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/f",
-            "curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/f",
-        ],
-    )
-    def test_idiomatic_clients_still_gate_contrast(self, cmd):
-        """Discriminating contrast: the idiomatic API clients stay gated, so the
-        all-ungated httpie rows are a real membership fact, not a broken probe."""
-        assert D(cmd) is True, f"idiomatic API client stopped gating: {cmd!r}"
 
 
 # ===========================================================================
@@ -339,7 +163,7 @@ class TestHttpieAdversarialSpellings:
 # TestAmbiguousApprovalByteIdenticalIsSafeDirection.
 # ===========================================================================
 
-def _mint_ctx(desc: str, tmp_path, question="Proceed?", label="Yes, run it"):
+def _mint_ctx(desc: str, tmp_path, question="Proceed?", label="Yes"):
     """Drive the REAL post hook with an option whose description = `desc`
     (verbatim — lets a test control the exact wrapper/whitespace shape). Returns
     (n_tokens, first_token_context_or_None)."""
@@ -437,13 +261,13 @@ class TestTwoTierNoUnderBindRideAlong:
         "approve,execute,flags",
         [
             ("git push --force-with-lease origin main",
-             "cd /repo && git push --force-with-lease origin main", ["--force-with-lease"]),
+             "cd . && git push --force-with-lease origin main", ["--force-with-lease"]),
             ("git push --force-with-lease origin main",
              "git push --force-with-lease origin main && echo done", ["--force-with-lease"]),
             ("git push --no-verify origin main --force",
-             "cd /repo && git push --no-verify origin main --force", ["--no-verify"]),
+             "cd . && git push --no-verify origin main --force", ["--no-verify"]),
             ("git push origin main",
-             "cd /repo && git push origin main", []),
+             "cd . && git push origin main", []),
         ],
         ids=["lease-cd-prefix", "lease-continuation", "forcepush-noverify-cd", "plain-cd-prefix"],
     )
@@ -456,87 +280,6 @@ class TestTwoTierNoUnderBindRideAlong:
         assert _authorize(execute, tmp_path) is None, (
             f"benign-prefix/continuation compound over-blocked despite a faithful "
             f"single-command approval: approve={approve!r} execute={execute!r}"
-        )
-
-
-class TestEmergentDangerClassIsCloseOnly:
-    """#1083 §12.9 structural fact: an op that is detect-POSITIVE but NOT
-    individually dangerous is the ONLY kind that can form an emergent-danger
-    compound (whole-command danger arising from a cross-leg match). `close` is the
-    ONLY such op; every other privileged op is bare-dangerous (tier-1 handles it).
-
-    #1087 update: the close danger arms are now matched PER-LEG, so `close` no
-    longer produces an emergent-*dangerous* compound — a dangerous close is a
-    dangerous LEG (tier 1), and a bare multi-close is is_dangerous=False (no bind
-    at all). `close` KEEPS the detect-positive-but-not-dangerous PROPERTY, though
-    (bare `gh pr close` classifies as `close` yet is not dangerous), and THAT is
-    what this pin guards: it is the CLOSE HALF of the tier-2-retention tripwire
-    (OPEN-Q A/D). Tier 2 (_single_detectable_leg) is retained as defense-in-depth
-    for a FUTURE op that becomes detect-positive-but-not-dangerous; if one does,
-    this pin (and the API half, test_bare_api_form_is_detect_negative
-    below) flips RED, catching the re-populated emergent class before it can
-    launder. The bare-form assertions below are UNCHANGED by the per-leg
-    conversion — they test bare close / bare-dangerous ops / a bare API GET leg,
-    none of which the conversion touches."""
-
-    @pytest.mark.parametrize(
-        "cmd,dangerous",
-        [
-            ("gh pr close 42", False),                       # EMERGENT: detect+ not-dangerous
-            ("gh pr merge 42", True),
-            ("git push --force origin main", True),
-            ("git push origin main", True),
-            ("git branch -D victim", True),
-        ],
-    )
-    def test_only_close_is_detect_positive_but_not_dangerous(self, cmd, dangerous):
-        assert OP(cmd) is not None, f"expected a classified op: {cmd!r}"
-        assert D(cmd) is dangerous, (
-            f"emergent-class membership changed for {cmd!r} — if this op became "
-            f"detect-positive-but-not-dangerous it joins the close emergent class "
-            f"(§12.9 re-open trigger)"
-        )
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
-            # gh api bare (method-less) forms — one per API family the arms target
-            "gh api /repos/o/r/git/refs",
-            "gh api /repos/o/r/git/refs/heads/x",
-            "gh api /repos/o/r/branches/main/protection",
-            "gh api /repos/o/r/contents/file.txt",
-            "gh api /repos/o/r/pulls/5/merge",
-            # curl / wget bare-GET equivalents for git/refs and protection
-            "curl https://api.github.com/repos/o/r/git/refs/heads/x",
-            "curl https://api.github.com/repos/o/r/branches/main/protection",
-            "wget https://api.github.com/repos/o/r/git/refs/heads/x",
-        ],
-    )
-    def test_bare_api_form_is_detect_negative(self, cmd):
-        """OPEN-Q D tripwire — the API HALF of the tier-2-retention invariant
-        (pairs with the close-half assertion above). Every bare (method-less) API
-        form, across every family the #1086 danger arms target, is detect-NEGATIVE:
-        an isolated bare API leg classifies to NO op (unlike bare `gh pr close`,
-        which is detect-positive-but-not-dangerous). That is why API is NOT in the
-        emergent-danger class — tier 2 abstains → both surfaces stay on the
-        whole-command scan → SYMMETRIC bind → no laundering asymmetry (the API
-        emergent members are pure over-blocks, now removed by the per-leg
-        conversion, not laundering channels). If a future edit makes any bare API
-        form detect-POSITIVE (classifiable without a mutating method, i.e. isolable
-        like close), that op joins the emergent class and gains the mint/read
-        isolation asymmetry #1083 fixed for close — a laundering channel, and this
-        assertion FAILS FIRST. Coverage is ENUMERATIVE, not universal: it pins the
-        bare forms of the API families the #1086 arms target, so it catches a
-        REGRESSION that makes one of THEM isolable — but a genuinely-new op class
-        OUTSIDE this enumeration (a new endpoint family, or a non-API op) could
-        still re-populate the emergent class WITHOUT tripping this pin. It is a
-        strong regression tripwire for the known surface, not a universal
-        guarantee; together with the close half it is the (enumerated) evidence
-        that justifies retaining tier 2 (OPEN-Q A), and it MUST remain a standing
-        merge gate."""
-        assert OP(cmd) is None, (
-            f"bare API form became detect-positive: {cmd!r} — it would join the "
-            f"close emergent-danger class and gain a laundering asymmetry (re-open)"
         )
 
 
@@ -556,12 +299,13 @@ class TestAmbiguousApprovalByteIdenticalIsSafeDirection:
     AMBIG = "gh pr close 42 && gh pr close 43 && echo --delete-branch"
 
     def test_ambiguous_approval_mints_no_token(self, tmp_path):
-        """The ambiguous multi-close is not-dangerous per-leg, so the approval
-        mints NOTHING (n == 0 — was n == 1 pre-fix), and the byte-identical
-        re-execution RUNS FREE (not-dangerous → no token consulted)."""
+        """The approval mints NOTHING (n == 0 — was n == 1 pre-#1087). FIX-MERGE f3
+        (amend_1 a): each bare close now gates, so the ambiguous multi-close is a
+        compound of two destructive legs: the mint refuses it and the byte-identical
+        re-execution is REFUSED as a compound (before f3 it ran free as not-dangerous)."""
         n, _ctx = _mint_ctx(f"On approval run: `{self.AMBIG}`", tmp_path, question="Close?", label="Yes")
         assert n == 0
-        assert _authorize(self.AMBIG, tmp_path) is None
+        assert _authorize(self.AMBIG, tmp_path) is not None
 
     def test_ambiguous_approval_source_does_not_authorize_escalated_single(self, tmp_path):
         """THE laundering-closed proof (closes the #1087 O9 gap): approving the

@@ -40,8 +40,8 @@ Population: tests/**/*.py plus skills-adjacent test files
 (skills/*/test_*.py). conftest.py files are the mechanism and are exempt.
 
 Keep-set provenance (enumerated from the tree, not inherited from plan
-text): 5 module-level carriers, 2 function-level (spawn-worker) carriers,
-12 codegen-string carriers. Plan-level expectations counted pre-deletion
+text): 6 module-level carriers (one a standalone maintainer script under tests/tools/),
+3 function-level carriers (2 spawn workers, 1 capture tool), 15 codegen-string carriers. Plan-level expectations counted pre-deletion
 category memberships (16 spawn/subprocess + 8 top-level-scripts importers);
 the 8 top-level-scripts importers retain no inserts at all once scripts/ is
 conftest-owned, so they do not appear here.
@@ -64,6 +64,8 @@ _STR_VERBS = (".insert", ".append", ".extend", "+=")
 
 _MODULE_ALLOWLIST = {
     "tests/merge_guard_baseline_loader.py",
+    # a maintainer script run as `python3 tests/tools/closures.py`, outside pytest and its conftests
+    "tests/tools/closures.py",
     "tests/test_session_journal.py",
     "tests/test_task_claim_gate.py",
     "tests/test_task_utils.py",
@@ -74,17 +76,22 @@ _KEEP_SET = _MODULE_ALLOWLIST | {
     # function-level (spawn workers re-derive path in the child process)
     "tests/test_session_registry_concurrency.py",
     "tests/test_working_memory_concurrency_comprehensive.py",
+    # function-level: a capture tool conftest installs under PACT_CAPTURE_LIVE=1, also run standalone
+    "tests/tools/live_capture.py",
     # codegen strings (subprocess harnesses embed path lines in child code)
     "tests/test_agent_handoff_marker.py",
     "tests/test_containment_certification.py",
+    "tests/test_context_ledger.py",
+    "tests/test_dispatch.py",
+    "tests/test_dispatch_timeout.py",
     "tests/test_embedding_status_contract.py",
+    "tests/test_env_guard_git.py",
     "tests/test_memory_cli.py",
     "tests/test_memory_init.py",
     "tests/test_memory_reachability.py",
     "tests/test_memory_store_isolation.py",
     "tests/test_merge_guard.py",
     "tests/test_pact_session_config_dir_parity.py",
-    "tests/test_pin_marker_writer_adversarial.py",
     "tests/test_project_dir_resolution.py",
     "tests/test_sync_result_contract.py",
 }

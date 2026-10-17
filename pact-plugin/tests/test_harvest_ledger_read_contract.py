@@ -39,11 +39,16 @@ from pathlib import Path
 import pytest
 from clock_shift.clock_shift_env import carry_clock_shift
 
+# the secretary rework: the ledger moved to pact-sessions/<project>/processed-tasks/<team>.jsonl and
+# scripts/harvest.py reads it. The OLD file's rule text lives verbatim in the skill's long form and
+# is still what the one-release fallback read implements, so the prose arms read it there, and
+# TestTheScriptReadsTheOldLedgerByTheSameRule drives the executable fallback over the same fixtures.
 SKILL_FILE = (
     Path(__file__).resolve().parents[1]
     / "skills"
     / "pact-handoff-harvest"
-    / "SKILL.md"
+    / "references"
+    / "harvest-long-form.md"
 )
 
 # The `Read` tool's default line budget. THIS IS A MODEL OF THE READ CUT, NOT
@@ -454,3 +459,40 @@ class TestEverySiteUsingTheLedgerObeysItsRule:
                 f"cites Step 8, so an agent reaching it has nothing to follow "
                 f"but memory: {block.strip()[:200]!r}"
             )
+
+
+class TestTheScriptReadsTheOldLedgerByTheSameRule:
+    """PR-9: the one-release fallback read of the OLD ledger is executable now
+    (scripts/harvest.py `read_old_ledger`). It must obey the rule the long form
+    documents over the same oversized fixtures: existence by a COUNT over the
+    whole file (a section past the read cut is found), 2+ sections refused, and
+    the processed set is the UNION of every `Processed task IDs` line."""
+
+    @staticmethod
+    def _harvest():
+        import harvest  # plugin-level scripts/ is on sys.path via conftest
+        return harvest
+
+    def test_a_section_past_the_read_cut_is_found(self, tmp_path):
+        ledger = tmp_path / "ledger.md"
+        build_oversized_ledger(ledger, [TARGET_HEADER])
+        assert len(ledger.read_text().splitlines()) > READ_CUT
+        assert self._harvest().read_old_ledger(ledger, TARGET_TEAM) == {"1", "2", "3"}
+
+    def test_two_sections_are_refused(self, tmp_path):
+        ledger = tmp_path / "ledger.md"
+        build_oversized_ledger(ledger, [TARGET_HEADER, TARGET_HEADER])
+        harvest = self._harvest()
+        with pytest.raises(harvest.HarvestError):
+            harvest.read_old_ledger(ledger, TARGET_TEAM)
+
+    def test_zero_sections_read_as_none(self, tmp_path):
+        ledger = tmp_path / "ledger.md"
+        build_oversized_ledger(ledger, [])
+        assert self._harvest().read_old_ledger(ledger, TARGET_TEAM) == set()
+
+    def test_the_processed_set_is_the_union_of_every_line(self, tmp_path):
+        ledger = tmp_path / "ledger.md"
+        ledger.write_text(f"{TARGET_HEADER}\nProcessed task IDs: 1, 2\nLast processed: x\n"
+                          "Processed task IDs: 5\n" + DECOY_HEADER + "\nProcessed task IDs: 9\n")
+        assert self._harvest().read_old_ledger(ledger, TARGET_TEAM) == {"1", "2", "5"}

@@ -20,7 +20,8 @@ After compaction completes:
    frame, and in every capture the transcript records that tell the two apart
    landed after the compaction hooks had returned, so a later hook decides
    whose summary it is. The root
-   singleton names no session, so it is written directly, as before.
+   singleton names no session, so it is written directly, as before. Each
+   destination gets a capped head beside the full file (shared.summary_head).
 4. Emits suppressOutput to avoid false "hook error" UI display on clean exits
 
 This is a non-blocking side effect (always exits 0), not a gate.
@@ -36,7 +37,7 @@ import os
 import sys
 from pathlib import Path
 
-from shared import compaction_owner
+from shared import compaction_owner, summary_head
 from shared.constants import COMPACT_SUMMARY_NAME, get_compact_summary_path
 from shared.error_output import hook_error_json
 from shared.pact_context import is_lead, resolve_compact_summary_path
@@ -119,9 +120,13 @@ def main():
         if compact_summary and is_lead(stdin_data):
             destination = resolve_compact_summary_path(stdin_data)
             if destination == get_compact_summary_path():
-                write_compact_summary(compact_summary, str(destination.parent))
+                if write_compact_summary(compact_summary, str(destination.parent)):
+                    summary_head.write_head(destination.parent, compact_summary)
             else:
                 compaction_owner.settle(str(destination.parent))
+                # The head on disk describes an earlier compaction; this one
+                # gets its own only if settle later promotes it as the lead's.
+                summary_head.discard(destination.parent)
                 compaction_owner.stage_summary(stdin_data, str(destination.parent))
 
         # Suppress output to avoid false "hook error" UI display on clean exits.

@@ -22,9 +22,11 @@ THREE BEHAVIORAL TIERS, keyed on a STRUCTURAL signal (never a mode flag):
                             (cheapest early-exit; the highest-frequency actor).
   • Teammate, in-process  — session_id == leadSessionId → identity collapses on
                             the shared session_id (the registered NAME last-wins-
-                            collapses), so the gate CANNOT attribute a specific
-                            owner → generic, attribution-free advisory only,
-                            F3 relevance-guarded; NEVER auto-flips.
+                            collapses), so the registry CANNOT attribute a
+                            specific owner → generic, attribution-free advisory
+                            only, F3 relevance-guarded; NEVER auto-flips. When
+                            the frame's agent_type names a team member, only
+                            that member's tasks count toward the nudge.
   • Teammate, tmux        — session_id != leadSessionId → the distinct session_id
                             disambiguates identity via the registry → enforce:
                             M1 advisory floor / M2 conditional auto-heal of the
@@ -61,6 +63,12 @@ holds NOT via 'own-task-only' but because the same OS user already has full
 TaskUpdate/FS access and the only mutation is a benign pending→in_progress flip —
 the gate crosses no privilege boundary.
 
+FRAME/REGISTRY CONFLICT: when the frame's agent_type names a team member and
+that member differs from the registry-resolved name (a stale leadSessionId can
+send an in-process frame down the tmux branch with the shared session's row),
+identity is treated as unconfident and nothing flips. A registry value that
+disagrees with a frame naming no member is not caught by this.
+
 THREAT-MODEL BOUNDARY (security F-2): every no-escalation claim above rests on a
 single assumption — ALL team frames (lead, in-process teammate, tmux teammate)
 run as the SAME OS user, who ALREADY holds unrestricted TaskUpdate + filesystem
@@ -91,7 +99,6 @@ from __future__ import annotations
 
 # ─── stdlib first (used on the input-side fail-open BEFORE wrapped imports) ──
 import json
-import os
 import sys
 
 _SUPPRESS_OUTPUT = json.dumps({"suppressOutput": True})
@@ -117,16 +124,16 @@ try:
     # binds the name as THIS module's attribute, preserving the test seam
     # that monkeypatches task_claim_gate._read_lead_session_id.
     from shared.pact_context import _read_lead_session_id
+    from shared.frame import is_lead_frame
     from shared.session_registry import resolve as registry_resolve
     from shared.task_utils import (
         iter_team_task_jsons,
         is_teachback_subject,
-        read_task_json,
+        update_task_file,
     )
     from shared.intentional_wait import is_self_complete_exempt
     from shared.session_state import is_safe_path_component
     from shared.agent_handoff_marker import sanitize_path_component
-    from shared.paths import get_claude_config_dir
     _IMPORTS_OK = True
 except BaseException:  # noqa: BLE001 — fail-OPEN catch-all (this gate never denies)
     _IMPORTS_OK = False
@@ -225,6 +232,9 @@ def _is_unblocked(task: dict, by_id: dict) -> bool:
     cross-team) is treated as RESOLVED (no live dependency): permissive per the
     spec, bounded by the single-candidate + owned + pending conjunction at the
     call site.
+
+    A blocker whose completion task_lifecycle_gate disputed (``metadata.completion_disputed``,
+    e.g. a teammate self-completed its teachback) is NOT completed until the lead clears it.
     """
     for bid in (task.get("blockedBy") or []):
         blocker = by_id.get(str(bid))
@@ -232,22 +242,56 @@ def _is_unblocked(task: dict, by_id: dict) -> bool:
             continue  # unresolvable/deleted blocker → treated as resolved (§7)
         if blocker.get("status") != "completed":
             return False  # an open dependency remains
+        metadata = blocker.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("completion_disputed"):
+            return False  # a disputed completion does not unblock
     return True
 
 
-def _any_unclaimed_claim_candidate(tasks: list, by_id: dict, team_name: str) -> bool:
+def _frame_member(input_data: dict, team_name: str) -> str | None:
+    """The member this frame names, or None.
+
+    An in-process teammate's frame carries its own member name in `agent_type`
+    (and an `agent_id` built from it); a tmux frame carries a type. The name is
+    trusted only when it is a member of the team config. Imported here so a
+    failure leaves the gate on its attribution-free path instead of disabling it.
+    """
+    try:
+        from shared.background_work import agent_type_names_a_member
+
+        agent_type = input_data.get("agent_type")
+        if agent_type_names_a_member(agent_type, team_name, agent_id=input_data.get("agent_id")):
+            return agent_type
+    except Exception:
+        pass
+    return None
+
+
+def _frame_agent_id(input_data: dict):
+    """The frame's raw `agent_id`. Read for identity confidence only (does the
+    registry row name THIS frame?), never to tell the lead from a teammate."""
+    return input_data.get("agent_id")
+
+
+def _any_unclaimed_claim_candidate(
+    tasks: list, by_id: dict, team_name: str, owner: str | None = None
+) -> bool:
     """F3 relevance-guard for the attribution-free generic advisory.
 
-    The in-process and identity-unconfident branches cannot attribute a specific
-    owner, so the generic nudge must not fire on every Edit/Write/Bash. Emit
-    ONLY if the team has ≥1 task that is `pending` AND unblocked AND
+    The in-process and identity-unconfident branches cannot flip a specific
+    task, so the generic nudge must not fire on every Edit/Write/Bash. Emit
+    ONLY if there is ≥1 task that is `pending` AND unblocked AND
     not-teachback-subject AND not-self-complete-exempt AND has a NON-EMPTY owner
-    (someone's pre-assigned Task B still pending). Otherwise NO-OP.
+    (a pre-assigned Task B still pending). With `owner` (the member the frame
+    names), only that member's tasks count, so a teammate whose own Task B is
+    claimed is not nudged about a peer's. Without it, any owner counts.
     """
     for task in tasks:
-        owner = task.get("owner")
-        if not isinstance(owner, str) or not owner.strip():
+        task_owner = task.get("owner")
+        if not isinstance(task_owner, str) or not task_owner.strip():
             continue  # must be a pre-assigned (owned) task
+        if owner is not None and task_owner != owner:
+            continue
         if task.get("status") != "pending":
             continue
         if not _is_unblocked(task, by_id):
@@ -268,43 +312,24 @@ def _atomic_claim(task_id: str, team_name: str) -> bool:
     ``pending → in_progress`` via a direct, atomic filesystem write of the WHOLE
     task JSON.
 
-    Mirrors ``task_lifecycle_gate._writeback_dispute`` in shape: read the whole
-    dict via ``read_task_json`` (path-traversal safe) → RE-VALIDATE
-    ``status == "pending"`` under the read-back (the load-bearing no-clobber
+    Mirrors ``task_lifecycle_gate._writeback_dispute`` in shape: through
+    ``shared.task_utils.update_task_file``, read the whole dict under the host's
+    own task lock (the ``<id>.json.lock`` directory, which the platform's
+    TaskUpdate also takes) → RE-VALIDATE ``status == "pending"`` (the no-clobber
     guard against a race between the scan and this write) → flip the TOP-LEVEL
-    status → write the WHOLE json via ``.tmp`` + ``os.replace`` (atomic;
+    status → replace the WHOLE json from a per-write temp file (atomic;
     preserves every sibling top-level key — the shallow-merge pin).
 
-    Fail-OPEN: any failure (unsafe ids, missing task, status moved, OSError)
-    returns False and the caller degrades to the CLAIM_NUDGE_SINGLE advisory.
-    The flip — not the advisory — is the load-bearing signal: it lands whether
-    or not the advisory channel surfaces (the M2 robustness argument). Never
-    raises.
+    Fail-OPEN: any failure (unsafe ids, missing task, status moved, lock not
+    taken, OSError) returns False and the caller degrades to the
+    CLAIM_NUDGE_SINGLE advisory. The flip — not the advisory — is the
+    load-bearing signal. Never raises.
 
-    CONCURRENCY — ACCEPTED TOCTOU WINDOW (issue #968): this is a LOCK-FREE
-    read-modify-write. The ``status == "pending"`` re-validation below reads at
-    ``read_task_json`` time, NOT atomically with the ``os.replace``; in the
-    read→replace window a concurrent PLATFORM write to the SAME task can be lost
-    (the whole-file replace is last-writer-wins, so a racing platform write — e.g.
-    the lead flipping ``status`` to ``completed`` — would be reverted). NO
-    plugin-side ``fcntl.flock`` is taken to close this, and that is DELIBERATE:
-    the #34 probe established that the platform does NOT ``flock`` the
-    ``{team}/.lock`` when writing tasks (5.2M non-blocking samples, 0 EWOULDBLOCK
-    across 8 confirmed in-window platform writes; the ``.lock`` is universally
-    0 bytes; the platform relies on atomic ``os.replace``). A plugin flock would
-    serialize against nothing — FALSE SAFETY, not real mutual exclusion. The REAL
-    safety is two-fold and sufficient in practice: the atomic ``os.replace`` (no
-    torn write — a reader always sees the whole old or whole new file) plus the
-    ``status == "pending"`` no-clobber re-validation (which catches the COMMON
-    ordering, where the competing write lands before our read). The residual
-    read→replace window is ACCEPTED: low-probability (the lead completes Task B
-    only AFTER the teammate's HANDOFF + idle, never while the teammate is
-    mid-Edit/Write/Bash — the only moment this flip fires), recoverable (a later
-    platform read-modify-write heals it), and at PARITY with the sibling
-    ``_writeback_dispute`` / ``_writeback_audit_recovery`` lock-free writebacks.
-    Tracked as FUTURE in issue #968; the only complete fix — one real lock shared
-    across all three writebacks — awaits a platform-cooperative lock primitive
-    that does not exist today.
+    CONCURRENCY (issue #968, closed by the host-lock fix): hook writers and the platform's
+    file-backed task writes now serialise on that one lock, so a racing platform
+    write is no longer lost in the read→replace window. Before it, the hook
+    locked a flock sidecar the platform never took, and left a regular file of
+    the platform's lock name behind (ENOTDIR on the next TaskUpdate).
 
     Returns True iff the flip was written.
     """
@@ -322,64 +347,25 @@ def _atomic_claim(task_id: str, team_name: str) -> bool:
     if not is_safe_path_component(team_name):
         return False
 
-    task = read_task_json(sanitized, team_name)
-    if not task:
-        return False
-
-    # No-clobber re-validation: another actor may have moved the task between the
-    # scan and now. Only flip a still-pending task; never overwrite a status
-    # another actor already changed. (owner / unblocked were validated pre-scan;
-    # this status re-check is the load-bearing race guard.)
-    if task.get("status") != "pending":
-        return False
-
-    task["status"] = "in_progress"  # TOP-LEVEL flip (the case M0 proved honored)
-    metadata = task.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-        task["metadata"] = metadata
-    # gate_writeback: set for convention-parity with the _writeback_* recursion
-    # guard, but NON-LOAD-BEARING on this path. This is a direct FS write that
-    # emits NO TaskUpdate event, and the ONLY reader of gate_writeback
-    # (task_lifecycle_gate.py) inspects an INCOMING TaskUpdate's
-    # tool_input.metadata — never on-disk task metadata — so it cannot recursively
-    # re-fire any gate here. Set as belt-and-suspenders / future-proofing against
-    # any future replay path; do NOT mistake it for a load-bearing recursion guard
-    # for the status flip.
-    metadata["gate_writeback"] = True
-
-    # Writer/reader symlink-anchoring parity: mirror the sibling READERS'
-    # resolve()+relative_to containment assertion (read_task_json does
-    # `task_dir.resolve().relative_to(base.resolve())`; iter_team_task_jsons
-    # asserts the resolved team dir under the resolved tasks_root) BEFORE writing.
-    # team_name already passed is_safe_path_component (no traversal), but a
-    # SYMLINK at tasks/{team_name} pointing outside base is an ORTHOGONAL escape
-    # vector the readers guard and the writer must too — else os.replace could
-    # land the write outside the anchored tasks tree. Fail-OPEN on mismatch:
-    # return False → caller degrades to the M1 advisory (never deny, never write
-    # outside the anchored dir). Write via the UNresolved path after the check
-    # passes (matches read_task_json; inherits the same accepted TOCTOU window —
-    # parity, not gold-plating).
-    base = get_claude_config_dir() / "tasks"
-    tasks_root = base / team_name
-    try:
-        tasks_root.resolve().relative_to(base.resolve())
-    except (OSError, ValueError):
-        return False
-    target = tasks_root / f"{sanitized}.json"
-    tmp = tasks_root / f".{sanitized}.json.tmp"
-    try:
-        tasks_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        tmp.write_text(json.dumps(task), encoding="utf-8")
-        os.replace(str(tmp), str(target))
+    # No-clobber re-validation, under the host's task lock: another actor may
+    # have moved the task between the scan and now. Only flip a still-pending
+    # task; never overwrite a status another actor already changed. (owner /
+    # unblocked were validated pre-scan.) update_task_file re-reads under the
+    # lock, uses a per-write temp name and refuses a tasks dir that resolves
+    # outside tasks/ (the readers' symlink containment).
+    def mutate(task: dict) -> bool:
+        if task.get("status") != "pending":
+            return False
+        task["status"] = "in_progress"  # TOP-LEVEL flip (the case M0 proved honored)
+        metadata = task.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = task["metadata"] = {}
+        # gate_writeback: convention-parity with the _writeback_* recursion
+        # guard; NON-LOAD-BEARING here (a direct FS write emits no TaskUpdate).
+        metadata["gate_writeback"] = True
         return True
-    except OSError:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
-        return False
+
+    return update_task_file(team_name, sanitized, mutate)
 
 
 # ─── core decision (pure-ish read; M2 adds one conditional write) ────────────
@@ -394,8 +380,8 @@ def _evaluate(stdin: dict) -> str | None:
     branch (_atomic_claim); every other path is read-only.
     """
     # ── Step 0: role early-exit (cheapest; covers the highest-frequency actor) ─
-    if pact_context.is_lead(stdin):
-        return None  # lead NO-OP, both modes
+    if is_lead_frame(stdin):
+        return None  # lead NO-OP, both modes; a lead launched without --agent included
 
     session_id = stdin.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -449,18 +435,38 @@ def _evaluate(stdin: dict) -> str | None:
     tasks = list(iter_team_task_jsons(team_name))
     by_id = {str(t.get("id")): t for t in tasks if t.get("id") is not None}
 
+    # The member the frame names, if any. It scopes the generic nudge to the
+    # actor's own tasks; with no member named, the nudge stays team-wide.
+    frame_member = _frame_member(stdin, team_name)
+
     if in_process:
-        # IN-PROCESS: identity collapsed → generic non-mutating advisory only,
+        # IN-PROCESS: the registry row is shared by every in-process member, so
+        # it cannot identify the actor → generic non-mutating advisory only,
         # F3 relevance-guarded. NEVER auto-flip.
-        if _any_unclaimed_claim_candidate(tasks, by_id, team_name):
+        if _any_unclaimed_claim_candidate(tasks, by_id, team_name, frame_member):
             return _GENERIC_CLAIM_NUDGE
         return None
 
     # ── TMUX branch: enforce ──────────────────────────────────────────────────
+    if frame_member is not None and frame_member != confident_name:
+        # The frame and the registry name DIFFERENT members (M12: a stale
+        # leadSessionId makes an in-process frame look separate-process, and the
+        # shared session's registry row names a peer). Identity is in conflict,
+        # so it is unconfident: never flip a task on the registry's word.
+        confident_name = None
+    agent_id = _frame_agent_id(stdin)
+    if (agent_id is not None and frame_member != confident_name
+            and agent_id != f"{confident_name}@{team_name}"):
+        # A separate-process teammate's own frames carry no agent_id. An id here is
+        # another frame in that session, such as an Agent-tool subagent the
+        # teammate started, or a stale leadSessionId's in-process
+        # frame: unless the frame names the same member (checked above), the
+        # registry row does not name it, so never flip on its word.
+        confident_name = None
     if not confident_name:
-        # Identity UNCONFIDENT (registry miss / unregistered teammate). NEVER
-        # guess a typed owner; fall back to the generic, attribution-free nudge.
-        if _any_unclaimed_claim_candidate(tasks, by_id, team_name):
+        # Identity UNCONFIDENT (registry miss / unregistered teammate / conflict).
+        # NEVER guess a typed owner; fall back to the generic, attribution-free nudge.
+        if _any_unclaimed_claim_candidate(tasks, by_id, team_name, frame_member):
             return _GENERIC_CLAIM_NUDGE
         return None
 

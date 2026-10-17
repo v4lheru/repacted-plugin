@@ -4,7 +4,8 @@ Summary: The one write path for PACT's small JSON state files: a sidecar lock,
          a temp file, fsync, and an atomic replace. Readers take no lock.
          Every read and write must stay inside a caller-supplied root.
 Used by: shared/background_work.py (the background-work registry and the
-         unflagged idle counter).
+         unflagged idle counter); shared/task_utils.py (team task files, under
+         the host's directory lock, host_locked_update).
 
 UNIX-ONLY, like the rest of PACT. `fcntl` is imported with no fallback, so no
 state file is ever written without a lock.
@@ -37,6 +38,8 @@ from __future__ import annotations
 
 import fcntl  # Unix-only; PACT supports macOS/Linux.
 import os
+import stat
+import time
 from pathlib import Path
 from typing import Any, Callable, Tuple
 
@@ -156,6 +159,119 @@ def locked_update(
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
     finally:
         os.close(lock_fd)
+    return result
+
+
+HOST_LOCK_WAIT = 11.0  # seconds: one past the host's stale threshold, so a crash leftover heals
+HOST_LOCK_STALE = 10.0  # the host's stale threshold; never reclaim sooner
+
+
+def _take_dir_lock(lock: Path, wait: float, stale: float):
+    """mkdir `lock`, the Claude Code host's own lock for a task file (proper-lockfile:
+    mkdir `<file>.lock`, rmdir on release, reclaim when its mtime is `stale` old).
+    Returns (st_dev, st_ino) of the directory taken, or None after `wait` seconds.
+
+    A regular EMPTY file at `lock` is plugin 1.5.0's leftover flock sidecar: it is
+    removed under its own flock (so a 1.5.0 writer still in flight finishes first).
+    A symlink, a non-empty file or any other shape is never followed or removed.
+    """
+    deadline = time.monotonic() + wait
+    delay = 0.005
+    while time.monotonic() <= deadline:
+        try:
+            os.mkdir(lock, DIR_MODE)
+            taken = os.lstat(lock)
+            return taken.st_dev, taken.st_ino
+        except FileExistsError:
+            pass
+        try:
+            held = os.lstat(lock)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(held.st_mode) and held.st_size == 0:
+            healed = _heal_sidecar(lock)
+            if healed is False:
+                return None
+            if healed:
+                continue
+        elif not stat.S_ISDIR(held.st_mode):
+            return None
+        elif held.st_mtime < time.time() - stale:
+            # Remove only the stale directory observed, never one a host reclaimed since.
+            try:
+                again = os.lstat(lock)
+                if (again.st_dev, again.st_ino, again.st_mtime_ns) == (
+                        held.st_dev, held.st_ino, held.st_mtime_ns):
+                    os.rmdir(lock)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return None
+            continue
+        time.sleep(delay)
+        delay = min(delay * 2, 0.1)
+    return None
+
+
+def _heal_sidecar(lock: Path):
+    """Unlink an empty regular `lock` file while holding its flock: True when it is
+    gone, None while a 1.5.0 writer holds it (wait), False to give up."""
+    try:
+        fd = os.open(str(lock), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        held = os.fstat(fd)
+        try:
+            same = os.lstat(lock)
+        except FileNotFoundError:
+            return True
+        if (same.st_dev, same.st_ino) != (held.st_dev, held.st_ino) or held.st_size:
+            return False
+        os.unlink(lock)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def host_locked_update(
+    path: Path,
+    apply: Callable[[str], Tuple[str, bool, Any]],
+    root: Path,
+) -> Any:
+    """`locked_update` for a file the Claude Code host also writes (a team task file):
+    the lock is the host's DIRECTORY `<file>.lock`, never a flock sidecar, so host
+    and hook writes exclude each other and nothing is left behind. The file must
+    already exist; an absent file runs `apply("")` and writes nothing. A lock not
+    taken within HOST_LOCK_WAIT raises TimeoutError (an OSError) and writes nothing.
+    """
+    path = Path(path)
+    if not os.path.lexists(path):
+        return apply("")[2]
+    target = _contained_directory(path, root) / path.name
+    lock = target.with_name(target.name + ".lock")
+    taken = _take_dir_lock(lock, HOST_LOCK_WAIT, HOST_LOCK_STALE)
+    if taken is None:
+        raise TimeoutError(f"task lock {lock} not taken")
+    try:
+        new_text, changed, result = apply(_current_text(target))
+        if changed:
+            _replace(target, new_text)
+    finally:
+        try:
+            now = os.lstat(lock)
+            if (now.st_dev, now.st_ino) == taken:
+                os.rmdir(lock)
+        except OSError:
+            pass
     return result
 
 

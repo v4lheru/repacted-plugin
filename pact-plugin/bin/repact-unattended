@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""repact-unattended: the switch and the decision log of unattended mode.
+
+Location: pact-plugin/bin/repact-unattended. The mode itself (the flag, the
+always-ask class, the classifier) is hooks/shared/unattended.py; hooks/unattended_gate.py
+refuses AskUserQuestion while the mode is ON. This command
+
+  on | off   writes the flag in the session directory and one journal row
+  status     prints the mode and what decided it (flag, env, unset, or an unusable flag)
+  default    records a question the lead answered with its "(Recommended)" option; refused
+             unless the gate gave that question (--ref) the verdict default
+  halt       records a question the lead must not answer, and the task it stops
+  list       prints every defaulted decision and every halt of the session, and the
+             refused questions that have no record
+
+It approves nothing: no guard reads its rows, and `default` and `halt` only record. They
+are refused while the mode is OFF, when the question goes to the user instead.
+
+Exit codes: 0 done; 1 the row was not written; 2 usage error; 3 refused; 4 no session
+directory.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+BIN_DIR = Path(__file__).resolve().parent
+HOOKS_DIR = BIN_DIR.parent / "hooks"
+for _path in (BIN_DIR, HOOKS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from _repact_common import utc_now_iso  # noqa: E402
+from shared import session_journal, unattended  # noqa: E402
+from shared.pact_context import reconstruct_session_dir  # noqa: E402
+
+SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")
+REF = re.compile(r"[0-9a-f]{12}")
+MAX_TEXT = 200
+EXAMPLE = "repact-unattended on --session-dir ~/.claude/pact-sessions/<project>/<session id>"
+EXAMPLES = (
+    "examples:\n"
+    f"  {EXAMPLE}\n"
+    '  repact-unattended default --ref 0123456789ab --question "Which layout" '
+    '--chose "Two columns (Recommended)" --why "matches the plan"\n'
+    '  repact-unattended halt --task 35 --question "Merge the branch"\n'
+    "  repact-unattended list\n"
+    "exit: 0 done, 1 row not written, 2 usage, 3 refused, 4 no session directory."
+)
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}\n\n  {EXAMPLE}", file=sys.stderr)
+        sys.exit(2)
+
+
+def short(text: str) -> str:
+    """One printable line of at most MAX_TEXT characters."""
+    line = " ".join("".join(char if char.isprintable() else " " for char in text).split())
+    return line[:MAX_TEXT]
+
+
+def text_arg(value: str) -> str:
+    line = short(value)
+    if not line:
+        raise argparse.ArgumentTypeError("needs some text")
+    return line
+
+
+def ref_arg(value: str) -> str:
+    if not REF.fullmatch(value):
+        raise argparse.ArgumentTypeError("a ref is the 12 hex characters the gate printed")
+    return value
+
+
+def build_parser() -> Parser:
+    parser = Parser(
+        prog="repact-unattended", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Turn unattended mode on or off for one session, record a defaulted "
+                    "decision or a halt, and list them.",
+        epilog=EXAMPLES)
+    parser.add_argument("verb", choices=("on", "off", "status", "default", "halt", "list"))
+    parser.add_argument("--session-dir", help="the session directory (default: the live "
+                                              "session's, from the environment)")
+    parser.add_argument("--ref", type=ref_arg, help="the question's hash, from the gate's refusal")
+    parser.add_argument("--question", type=text_arg, help="the question, short")
+    parser.add_argument("--chose", type=text_arg, help="default: the label of the option taken")
+    parser.add_argument("--why", type=text_arg, help="default: one line of reason")
+    parser.add_argument("--task", type=text_arg, help="halt: the id of the task that stops")
+    return parser
+
+
+def session_dir_of(explicit: str | None) -> tuple[str, str]:
+    """(the session directory, "") or ("", why not)."""
+    if explicit is None:
+        session = next((os.environ[name] for name in SESSION_ENV if os.environ.get(name)), "")
+        explicit = reconstruct_session_dir(os.environ.get("CLAUDE_PROJECT_DIR", ""), session)
+        if not explicit:
+            return "", "no session in the environment: give --session-dir"
+    folder = Path(explicit).expanduser()
+    if not folder.is_absolute():
+        return "", "the session directory must be an absolute path"
+    if not folder.is_dir():
+        return "", "no such session directory"
+    return str(folder), ""
+
+
+def gate_rows(session_dir: str) -> list[dict]:
+    """The per-question entries of this gate's refusals, oldest first."""
+    entries = []
+    for row in session_journal.read_events_from(session_dir, "gate_refusal"):
+        if row.get("hook") != unattended.GATE_NAME or not isinstance(row.get("questions"), list):
+            continue
+        entries.extend(item for item in row["questions"] if isinstance(item, dict))
+    return entries
+
+
+def write_row(session_dir: str, event_type: str, **fields) -> bool:
+    return session_journal.append_event(
+        session_journal.make_event(event_type, **fields), session_dir=session_dir)
+
+
+def state_line(mode) -> str:
+    return f"unattended: {'ON' if mode.on else 'OFF'} ({mode.cause})"
+
+
+def switch(session_dir: str, on: bool) -> int:
+    unattended.write_flag(session_dir, on, utc_now_iso())
+    written = write_row(session_dir, "unattended_mode", state="on" if on else "off", cause="command")
+    print(state_line(unattended.read_mode(session_dir)))
+    if on:
+        print(unattended.session_rules("flag"))
+    if not written:
+        print("repact-unattended: the flag is written, the journal row is not", file=sys.stderr)
+        return 1
+    return 0
+
+
+def record(session_dir: str, args, parser: Parser) -> int:
+    missing = [name for name in (("question", "chose", "why", "ref") if args.verb == "default"
+                                 else ("question", "task")) if getattr(args, name) is None]
+    if missing:
+        parser.error(f"{args.verb} needs " + ", ".join(f"--{name}" for name in missing))
+    mode = unattended.read_mode(session_dir)
+    if not mode.on:
+        print(f"repact-unattended: refused, {state_line(mode)}: ask the user with "
+              "AskUserQuestion instead", file=sys.stderr)
+        return 3
+    if args.verb == "default":
+        classes = [item.get("class") for item in gate_rows(session_dir) if item.get("ref") == args.ref]
+        if not classes:
+            print("repact-unattended: refused, the gate refused no question with this ref "
+                  "in this session", file=sys.stderr)
+            return 3
+        if classes[-1] != unattended.CLASS_DEFAULT:
+            print("repact-unattended: refused, the gate's verdict for this question is "
+                  "always-ask: do not choose, record a halt", file=sys.stderr)
+            return 3
+        written = write_row(session_dir, "unattended_default", ref=args.ref,
+                            question=args.question, chose=args.chose, why=args.why)
+        done = f"recorded default: {args.question} -> {args.chose}"
+    else:
+        fields = {"ref": args.ref} if args.ref else {}
+        written = write_row(session_dir, "unattended_halt", task_id=args.task,
+                            question=args.question, **fields)
+        done = (f"recorded halt on task {args.task}: {args.question}. Stop work on that "
+                "feature; it resumes when the owner turns the mode off and you ask again.")
+    if not written:
+        print("repact-unattended: the row was not written", file=sys.stderr)
+        return 1
+    print(done)
+    return 0
+
+
+def text_of(row: dict, key: str) -> str:
+    value = row.get(key)
+    return short(value) if isinstance(value, str) else "?"
+
+
+def listing(session_dir: str) -> list[str]:
+    defaults = session_journal.read_events_from(session_dir, "unattended_default")
+    halts = session_journal.read_events_from(session_dir, "unattended_halt")
+    refused = gate_rows(session_dir)
+    lines = [f"{state_line(unattended.read_mode(session_dir))}; defaults {len(defaults)}, "
+             f"halts {len(halts)}, questions refused {len(refused)}"]
+    for row in defaults:
+        lines.append(f"  default {text_of(row, 'ts')}: {text_of(row, 'question')} -> "
+                     f"{text_of(row, 'chose')}; why: {text_of(row, 'why')}")
+    for row in halts:
+        lines.append(f"  halt {text_of(row, 'ts')} task {text_of(row, 'task_id')}: "
+                     f"{text_of(row, 'question')}")
+    if halts:
+        lines.append("  a halt resumes when the owner runs `repact-unattended off` at the "
+                     "terminal and the lead asks again")
+    recorded = {row.get("ref") for row in defaults + halts}
+    open_refs = sorted({item.get("ref") for item in refused
+                        if isinstance(item.get("ref"), str) and item.get("ref")} - recorded)
+    if open_refs:
+        lines.append(f"  not recorded: {len(open_refs)} refused question(s) have no default "
+                     f"or halt row with their ref ({', '.join(open_refs[:8])})")
+    return lines
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    session_dir, why = session_dir_of(args.session_dir)
+    if not session_dir:
+        print(f"repact-unattended: {why}", file=sys.stderr)
+        return 4
+    try:
+        if args.verb in ("on", "off"):
+            return switch(session_dir, args.verb == "on")
+        if args.verb == "status":
+            print(state_line(unattended.read_mode(session_dir)))
+            return 0
+        if args.verb == "list":
+            print("\n".join(listing(session_dir)))
+            return 0
+        return record(session_dir, args, parser)
+    except OSError as error:
+        print(f"repact-unattended: {type(error).__name__}: {error.strerror or error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

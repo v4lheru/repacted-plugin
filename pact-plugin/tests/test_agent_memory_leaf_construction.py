@@ -112,7 +112,7 @@ _MUST_FLAG = (
     ("brace template", "path: ~/.claude/agent-memory/{agent_type}/MEMORY.md"),
     ("env-var leaf", "cd .claude/agent-memory/$AGENT_TYPE/"),
     ("HOME prefix", "$HOME/.claude/agent-memory/pact-auditor/index.md"),
-    ("absolute prefix", "/Users/x/.claude/agent-memory/pact-architect/"),
+    ("absolute prefix", "/Users/alice/.claude/agent-memory/pact-architect/"),
     ("bare relative", "agent-memory/pact-preparer/MEMORY.md"),
 )
 

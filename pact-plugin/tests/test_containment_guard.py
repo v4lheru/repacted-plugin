@@ -12,8 +12,8 @@ callers passes its OWN pre-resolve base, never a re-derived root.
 The per-obligation certification of that predicate lives in the sibling file
 test_containment_certification.py; this file is the cross-SITE sweep.
 
-The seed tests (test_staleness.py) cover site 1 (staleness) via a LEAF symlink.
-This file WIDENS to the actual F1 vector — a symlinked-PARENT `.claude` — driven
+Site 1 (the pinned-staleness check) went with the 1.5.0 pin-gate cut.
+This file covers the actual F1 vector — a symlinked-PARENT `.claude` — driven
 through each caller's REAL production entry point (NOT synthetic no-path calls;
 that is the discipline that would have caught both premises falsified this arc),
 and asserts BOTH directions at every site: F1 escape → REFUSED, benign → ALLOWED.
@@ -21,8 +21,7 @@ A guard tested only for refusal passes by refusing everything (the cardinal
 over-block).
 
 Real-production-entry topology (traced against merged code, not assumed):
-  * session_init SessionStart  -> site 1 check_pinned_staleness,
-                                   site 5 strip_orphan_kernel_block (GLOBAL anchor),
+  * session_init SessionStart  -> site 5 strip_orphan_kernel_block (GLOBAL anchor),
                                    site 6 ensure_project_memory_md,
                                    site 7 migrate_to_managed_structure
   * bootstrap_marker_writer     -> sites 2-4 update_session_info
@@ -146,67 +145,6 @@ class TestSite7MigrateToManagedStructure:
 
         assert result == "Migrated project CLAUDE.md to managed structure (#404)"
         assert "PACT_MANAGED_START" in target.read_text(encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Site 1 — check_pinned_staleness: F1 PARENT vector + multi-hop chain.
-# (The seed in test_staleness.py covers the LEAF vector; this covers the actual
-# F1 symlinked-PARENT `.claude` and a multi-hop escape, via the real wrapper.)
-# ---------------------------------------------------------------------------
-
-_STALE = (
-    "# Project Memory\n\n## Pinned Context\n\n"
-    "### Old Feature (PR #100, merged 2020-01-01)\n- detail\n\n"
-)
-
-
-class TestSite1StalenessParentAndMultiHop:
-    def test_f1_symlinked_parent_escape_refused(self, tmp_path):
-        from session_init import check_pinned_staleness
-
-        project = tmp_path / "proj"
-        outside = tmp_path / "outside"
-        project.mkdir()
-        outside.mkdir()
-        os.symlink(str(outside), str(project / ".claude"), target_is_directory=True)
-        managed = project / ".claude" / "CLAUDE.md"  # resolves into `outside`
-        managed.write_text(_STALE, encoding="utf-8")
-        before = (outside / "CLAUDE.md").read_text(encoding="utf-8")
-
-        from unittest.mock import patch
-        with patch("session_init._get_project_claude_md_path", return_value=managed), \
-             patch("staleness._get_project_claude_md_path", return_value=managed):
-            result = check_pinned_staleness()
-
-        # Lexical base = proj (parent.name=='.claude' -> parent.parent); target
-        # resolves into `outside` -> escapes -> opaque refuse, victim untouched.
-        assert result == "Pinned staleness skipped: path precondition not met."
-        assert (outside / "CLAUDE.md").read_text(encoding="utf-8") == before
-
-    def test_multi_hop_symlink_chain_escape_refused(self, tmp_path):
-        from session_init import check_pinned_staleness
-
-        project = tmp_path / "proj"
-        project.mkdir()
-        outside = tmp_path / "outside"
-        outside.mkdir()
-        # .claude -> hop1 -> hop2 -> outside  (resolve() follows the whole chain)
-        hop2 = tmp_path / "hop2"
-        os.symlink(str(outside), str(hop2), target_is_directory=True)
-        hop1 = tmp_path / "hop1"
-        os.symlink(str(hop2), str(hop1), target_is_directory=True)
-        os.symlink(str(hop1), str(project / ".claude"), target_is_directory=True)
-        managed = project / ".claude" / "CLAUDE.md"
-        managed.write_text(_STALE, encoding="utf-8")
-        before = (outside / "CLAUDE.md").read_text(encoding="utf-8")
-
-        from unittest.mock import patch
-        with patch("session_init._get_project_claude_md_path", return_value=managed), \
-             patch("staleness._get_project_claude_md_path", return_value=managed):
-            result = check_pinned_staleness()
-
-        assert result == "Pinned staleness skipped: path precondition not met."
-        assert (outside / "CLAUDE.md").read_text(encoding="utf-8") == before
 
 
 # ---------------------------------------------------------------------------

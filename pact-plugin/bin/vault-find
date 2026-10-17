@@ -1,0 +1,869 @@
+#!/usr/bin/env python3
+"""vault-find (alias kb-find): local BM25 search over the user's knowledge base (a Markdown
+coding wiki, Obsidian-compatible).
+
+Location: pact-plugin/bin/vault-find.
+Used by: agents directly (on the Bash PATH while the plugin is enabled) and `vault-note`
+(duplicate check, related links), which loads this file as a module (load_module()), so the
+search API below is shared, not copied.
+
+What it does:
+  1. Keeps an index at ${CLAUDE_PLUGIN_DATA}/vault-index.json, refreshed incrementally by
+     (relpath, mtime, size). The MOC (the profile's kb.index_page; none by default) is parsed
+     for its `- [[page]] -- description` lines (the one-line summaries); agents never read it.
+  2. Ranks with BM25 (k1 1.2, b 0.75) over a weighted field concatenation:
+     title and stem x3, tags x3, headings x2, MOC summary x2, body x1.
+  3. Prints at most --k lines inside a hard output byte cap:
+     `score  relpath  -- summary  [tags]  ¶ L<line> <lesson title>`, plus one trailing `root=` line;
+     distill-origin text prints wrapped as data with a [distill] mark (bin/_kb/findview.py).
+  4. Anchors each hit to its best-matching lesson (KB-REACH): every lesson (bin/_kb/lessons.py)
+     is indexed with its own BM25 statistics, and the hit carries `lesson` = {id, title, line,
+     anchor = relpath#Title}, so a reader opens one lesson instead of a long page. The anchor
+     never changes the order (docs/test/kb-reach-prereg.md).
+
+Scope and credentials (D26, D25; the design notes D9.12 rules 0 and 2-4):
+  - The root is the KB folder only (`_repact_common.vault_scope_root`): realpath-resolved,
+    REPACT_VAULT may only narrow it, and symlinked entries are never followed.
+  - A note whose path or H1 is credential-titled, or whose body carries any secret-class span
+    (`_repact_common.credential_reason`), never enters the pages index, so its text never
+    reaches the index file. It goes to a `withheld` table (path, reason, path/H1 terms only);
+    a query naming it prints the path, never content.
+  - Every returned title, summary and tag passes through `scrub_text` too.
+
+The same refresh pass also writes the KB catalog, ${CLAUDE_PLUGIN_DATA}/kb-catalog.json
+(bin/_kb/catalog.py; one walker, one parser, two outputs). `--catalog [VIEW]` prints its counts
+or one of its path lists. A catalog failure never fails a search: the doctor's kb check reports it.
+
+Exit codes: 0 results printed; 1 no page matched; 2 usage error; 3 the KB is off (no paths.kb),
+missing, or the root lies outside the knowledge folder (one stderr line names the key or root).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _repact_common import (VaultScopeError, credential_reason, detector_fingerprint,  # noqa: E402
+                            is_within, kb_index_page, normalise_title, plugin_data_dir, scrub_text,
+                            vault_scope_root)
+from _kb import catalog as kb_catalog  # noqa: E402
+from _kb.lessons import lessons as parse_lessons  # noqa: E402
+from _kb.findview import OUTPUT_CAP, page_origin, render_json, render_text  # noqa: E402,F401  # re-export: OUTPUT_CAP
+
+ARCHIVE_DIR = "_Archive"
+PROJECTS_DIR = "Projects"       # the D10 atlas pages: kept out of the default pool and the keys map (D27)
+INDEX_NAME = "vault-index.json"
+INDEX_VERSION = 6              # 3: credential notes withheld; 4: keys and superseded_by (D9.7);
+                               # 5: per-page lessons for lesson-level reach (KB-REACH);
+                               # 6: per-field terms, projects and lesson states (KB-RANK).
+# The index also stores the credential detector's fingerprint: withholding is decided at index
+# time and unchanged notes are never re-parsed, so a detector change rebuilds the index by itself
+# (FIX-D25-SHAPES); INDEX_VERSION is for the index's own schema.
+# Test-only switch: with it off, the redaction layer is the only guard left (D9.12 tests).
+EXCLUDE_CREDENTIALS = True
+SUMMARY_MAX = 120
+BODY_CHARS = 2000
+DEFAULT_K = 8
+BM25_K1 = 1.2
+BM25_B = 0.75
+FIELD_WEIGHTS = {"title": 3, "stem": 3, "tags": 3, "headings": 2, "moc": 2, "body": 1}
+# KB-REACH (docs/test/kb-reach-prereg.md): lessons are indexed for the hit's ANCHOR only; no
+# ranking arm passed its gate, so the page ranking is unchanged.
+LESSON_TITLE_WEIGHT = 2
+# KB-RANK (docs/test/kb-rank-prereg.md): the ranking modes, chosen by --rank or $REPACT_VAULT_RANK.
+#   v1  the shipped BM25 page ranking (byte-identical to KB-REACH's anchors-only build);
+#   a   reciprocal-rank fusion of v1 and KB-REACH arm B (page fields without body + best lesson);
+#   b   v1 plus the KB frontmatter: wiki-summary replaces a stale MOC line, wiki-topic-keys is a
+#       field, non-current pages are demoted, and the query's project boosts its pages;
+#   c   a with b's fields, demotion and boost on both sides, and superseded lessons never scored.
+RANK_MODES = ("v1", "a", "b", "c")
+DEFAULT_RANK = "v1"
+RANK_ENV = "REPACT_VAULT_RANK"
+FIELD_WEIGHTS_V2 = {"title": 3, "stem": 3, "tags": 3, "headings": 2, "sm": 2, "keys": 3, "body": 1}
+RRF_K = 60                       # reciprocal-rank fusion constant (the standard value)
+FUSION_POOL = 50                 # ranks taken from each side before fusing
+PROJECT_BOOST = 1.25             # score factor for a page serving the query's project
+NON_CURRENT_FACTOR = 0.5         # score factor for wiki-status dated/superseded/archived pages
+NON_CURRENT = frozenset({"dated", "superseded", "archived"})
+ANCHOR_TITLE_MAX = 80
+SHOWN_TAGS = 4
+
+STOP_WORDS = frozenset("""
+a an and are as at be been but by can could did do does doing for from had has have how i if
+in into is it its itself just me my no not of on once only or our out over so some such than
+that the their them then there these they this those to too up us was we were what when where
+which while who why will with would you your vs via per use using used get got make made need
+""".split())
+
+FRONTMATTER_KEY = re.compile(r"^([A-Za-z][\w-]*):\s*(.*)$")
+LIST_ITEM = re.compile(r"^\s+-\s+(.*)$")
+MOC_LINE = re.compile(r"^- \[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]\s*(?:—|--|–|-)?\s*(.*)$")
+CAMEL = re.compile(r"([a-z0-9])([A-Z])")
+NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+# ---------------------------------------------------------------------------
+# Tokenising
+# ---------------------------------------------------------------------------
+
+def tokenize(text: str) -> list[str]:
+    """Lowercase, split camelCase and non-alphanumerics, drop stop words, strip a plural s."""
+    tokens = []
+    for raw in NON_ALNUM.split(CAMEL.sub(r"\1 \2", text).lower()):
+        if len(raw) < 2 or raw in STOP_WORDS:
+            continue
+        if len(raw) > 3 and raw.endswith("s") and not raw.endswith("ss"):
+            raw = raw[:-1]
+        tokens.append(raw)
+    return tokens
+
+
+# ---------------------------------------------------------------------------
+# Page parsing
+# ---------------------------------------------------------------------------
+
+def split_frontmatter(text: str) -> tuple[dict, str]:
+    """Return (frontmatter dict, body). Lists (block or inline) become Python lists."""
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}, text
+    meta: dict = {}
+    current = None
+    for line in text[3:end].splitlines():
+        item = LIST_ITEM.match(line)
+        if item and current is not None:
+            meta.setdefault(current, [])
+            if isinstance(meta[current], list):
+                meta[current].append(item.group(1).strip().strip("'\""))
+            continue
+        match = FRONTMATTER_KEY.match(line)
+        if not match:
+            continue
+        current, value = match.group(1), match.group(2).strip()
+        if value.startswith("[") and value.endswith("]"):
+            meta[current] = [v.strip().strip("'\"") for v in value[1:-1].split(",") if v.strip()]
+        elif value:
+            meta[current] = value.strip("'\"")
+        else:
+            meta[current] = []
+    body_start = text.find("\n", end + 4)
+    return meta, text[body_start + 1:] if body_start != -1 else ""
+
+
+def as_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value if str(v).strip()]
+    return [str(value)] if value else []
+
+
+def first_sentence(body: str) -> str:
+    """First body line that is prose: not a heading, rule, table, quote marker or code fence."""
+    in_code = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or not stripped or stripped[0] in "#|>" or stripped.startswith("---"):
+            continue
+        text = re.sub(r"^[-*]\s+", "", stripped)
+        text = re.sub(r"[*_`]|\[\[|\]\]", "", text)
+        match = re.match(r"(.+?[.!?])(\s|$)", text)
+        return (match.group(1) if match else text).strip()
+    return ""
+
+
+def page_lessons(text: str, relpath: str, title: str, body_text: str) -> list[dict]:
+    """The page's lessons (bin/_kb/lessons.py, the shared unit) as index records: id, title, first
+    line and term frequencies over title (x LESSON_TITLE_WEIGHT) plus claim. A page with no lesson
+    unit gets one fallback lesson, its whole body."""
+    lines = text.split("\n")
+    records = []
+    for lesson in parse_lessons(text, relpath):
+        claim = "\n".join(lines[lesson.start:lesson.end])      # the lines after the first one
+        counts: dict[str, int] = {}
+        for token in tokenize(lesson.title):
+            counts[token] = counts.get(token, 0) + LESSON_TITLE_WEIGHT
+        for token in tokenize(claim):
+            counts[token] = counts.get(token, 0) + 1
+        if counts:
+            records.append({"id": lesson.id, "title": lesson.title, "line": lesson.start, "tf": counts,
+                            "state": lesson.state, "ctx": lesson.ctx})
+    if not records:
+        counts = {}
+        for token in tokenize(body_text):
+            counts[token] = counts.get(token, 0) + 1
+        if counts:
+            records.append({"id": f"{relpath}#page", "title": title, "line": 1, "tf": counts,
+                            "state": "current", "ctx": None})
+    return records
+
+
+def parse_page(text: str, relpath: str) -> dict:
+    """Extract the indexed fields of one wiki page."""
+    meta, body = split_frontmatter(text)
+    title = ""
+    headings = []
+    for line in body.splitlines():
+        if line.startswith("# ") and not title:
+            title = line[2:].strip()
+        elif line.startswith("## "):
+            headings.append(line[3:].strip())
+    tags = as_list(meta.get("tags"))
+    extra = as_list(meta.get("tool")) + as_list(meta.get("category")) + as_list(meta.get("type"))
+    body_text = "\n".join(ln for ln in body.splitlines() if not ln.startswith("#"))
+    return {
+        "relpath": relpath,
+        "folder": relpath.split("/", 1)[0] if "/" in relpath else "",
+        "stem": Path(relpath).stem,
+        "title": title,
+        "tags": tags,
+        "meta_terms": extra,
+        "headings": headings,
+        "body": body_text[:BODY_CHARS],
+        "first_sentence": first_sentence(body),
+        "status": str(meta.get("status", "")),
+        # D9.7(3): exposed for recall, never scored (P1 changes no ranking).
+        "keys": [k.lower().strip() for k in as_list(meta.get("wiki-topic-keys")) if k.strip()],
+        "superseded_by": str(meta.get("wiki-superseded-by") or ""),
+        "lessons": page_lessons(text, relpath, title, body_text),
+        # KB-RANK modes b/c only (v1 never reads these).
+        "summary": meta.get("wiki-summary") if isinstance(meta.get("wiki-summary"), str) else "",
+        "wiki_status": str(meta.get("wiki-status") or "current").strip().lower(),
+        "declared_projects": as_list(meta.get("wiki-projects")),
+    }
+
+
+def moc_path(vault: Path) -> Path | None:
+    """The MOC (kb.index_page), unless none is configured or it is missing, a symlink, or
+    resolves outside the vault root."""
+    name = kb_index_page()
+    if not name:
+        return None
+    path = vault / name
+    return path if path.is_file() and not path.is_symlink() and is_within(path, vault) else None
+
+
+def parse_moc(vault: Path) -> dict[str, str]:
+    """{page stem: description} from the MOC. A later line for the same stem wins."""
+    summaries: dict[str, str] = {}
+    path = moc_path(vault)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace") if path else ""
+    except OSError:
+        return summaries
+    for line in text.splitlines():
+        match = MOC_LINE.match(line.strip())
+        if match and match.group(2).strip():
+            summaries[match.group(1).strip()] = match.group(2).strip()
+    return summaries
+
+
+# ---------------------------------------------------------------------------
+# Index
+# ---------------------------------------------------------------------------
+
+def weighted_terms(page: dict) -> dict[str, int]:
+    """Term frequencies over the weighted field concatenation."""
+    fields = {
+        "title": page["title"],
+        "stem": page["stem"].replace("-", " "),
+        "tags": " ".join(page["tags"] + page["meta_terms"]),
+        "headings": " ".join(page["headings"]),
+        "moc": page.get("moc", ""),
+        "body": page["body"],
+    }
+    counts: dict[str, int] = {}
+    for field, text in fields.items():
+        weight = FIELD_WEIGHTS[field]
+        for token in tokenize(text):
+            counts[token] = counts.get(token, 0) + weight
+    return counts
+
+
+def field_terms(page: dict) -> dict[str, dict[str, int]]:
+    """Unweighted term counts per field, for the KB-RANK modes: v1's fields plus `sm` (the page's
+    wiki-summary, else its MOC line) and `keys` (wiki-topic-keys). v1 itself reads page["tf"]."""
+    fields = {
+        "title": page["title"],
+        "stem": page["stem"].replace("-", " "),
+        "tags": " ".join(page["tags"] + page["meta_terms"]),
+        "headings": " ".join(page["headings"]),
+        "moc": page.get("moc", ""),
+        "sm": page.get("summary") or page.get("moc", ""),
+        "keys": " ".join(page.get("keys") or []),
+        "body": page["body"],
+    }
+    out: dict[str, dict[str, int]] = {}
+    for field, text in fields.items():
+        counts: dict[str, int] = {}
+        for token in tokenize(text):
+            counts[token] = counts.get(token, 0) + 1
+        out[field] = counts
+    return out
+
+
+# The KB-RANK field views: {view: {field: weight}}. "v1nb" is KB-REACH arm B's page part.
+RANK_VIEWS = {
+    "v1nb": {f: w for f, w in FIELD_WEIGHTS.items() if f != "body"},
+    "v2": FIELD_WEIGHTS_V2,
+    "v2nb": {f: w for f, w in FIELD_WEIGHTS_V2.items() if f != "body"},
+}
+
+
+def view_len(page: dict, weights: dict[str, int]) -> int:
+    return sum(w * sum(page["ftf"][f].values()) for f, w in weights.items())
+
+
+def page_projects(page: dict, projects: dict) -> list[str]:
+    """Project slugs a page serves: its lessons' provenance mapped through the project
+    vocabulary (KB schema section 4.4), plus its declared wiki-projects."""
+    found = set(page.get("declared_projects") or [])
+    for lesson in page.get("lessons", []):
+        ctx = lesson.get("ctx")
+        slug = projects.get(ctx, projects.get(ctx.lower())) if ctx else None
+        if slug:
+            found.add(slug)
+    return sorted(found)
+
+
+def is_control(name: str) -> bool:
+    """A TOP-LEVEL entry of the KB whose name starts with `_`, except `_Archive/`, is a control
+    file or folder (`_schema.md`, `_kb/`): never a page, never indexed, never a result (KB schema
+    section 2). Nested `_`-names are ordinary pages."""
+    return name.startswith("_") and name != ARCHIVE_DIR
+
+
+def iter_pages(vault: Path):
+    """Yield (relpath, path, stat) for every wiki page except the MOC and control files.
+
+    Symlinked files are skipped, and os.walk never descends a symlinked directory, so a link
+    inside the KB folder can never lead a scan into the private vault (D26). Every yielded
+    file is also re-checked to resolve inside the root.
+    """
+    moc_name = kb_index_page()
+    for directory, dirnames, filenames in os.walk(vault):
+        at_root = Path(directory) == Path(vault)
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and not (at_root and is_control(d)))
+        for name in sorted(filenames):
+            if not name.endswith(".md") or name == moc_name or (at_root and is_control(name)):
+                continue
+            path = Path(directory) / name
+            if path.is_symlink() or not is_within(path, vault):
+                continue
+            yield path.relative_to(vault).as_posix(), path, path.stat()
+
+
+def load_index(index_path: Path, vault: Path) -> dict:
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        if index.get("version") == INDEX_VERSION and index.get("vault") == str(vault) \
+                and index.get("excluding") == EXCLUDE_CREDENTIALS \
+                and index.get("detector") == detector_fingerprint():
+            return index
+    except (OSError, ValueError):
+        pass
+    return {"version": INDEX_VERSION, "vault": str(vault), "excluding": EXCLUDE_CREDENTIALS,
+            "detector": detector_fingerprint(), "moc_sig": None, "pages": {}, "withheld": {}}
+
+
+def withheld_entry(relpath: str, text: str, reason: str, sig: list) -> dict:
+    """Path, reason and path/H1 terms only: a withheld note's body is never stored."""
+    heading = next((line[2:] for line in text.splitlines() if line.startswith("# ")), "")
+    terms = sorted(set(tokenize(normalise_title(Path(relpath).stem) + " " + heading)))
+    return {"relpath": relpath, "reason": reason, "sig": sig, "terms": terms}
+
+
+def save_index(index_path: Path, index: dict) -> None:
+    """Atomic replace, so a concurrent reader never sees half a file."""
+    tmp = index_path.with_name(f".{index_path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(index, separators=(",", ":")), encoding="utf-8")
+    os.replace(tmp, index_path)
+
+
+def refresh_index(vault: Path, index_path: Path) -> dict:
+    """Bring the index up to date with the vault; re-parse only what changed."""
+    index = load_index(index_path, vault)
+    withheld = index.setdefault("withheld", {})
+    changed = False
+    moc = moc_path(vault)
+    moc_sig = [moc.stat().st_mtime, moc.stat().st_size] if moc else None
+    moc_changed = moc_sig != index.get("moc_sig")
+    summaries: dict[str, str] | None = parse_moc(vault) if moc_changed else None
+    seen = set()
+    texts: dict[str, str] = {}
+    for relpath, path, st in iter_pages(vault):
+        seen.add(relpath)
+        entry = index["pages"].get(relpath)
+        sig = [st.st_mtime, st.st_size]
+        if (withheld.get(relpath) or {}).get("sig") == sig:
+            continue
+        if entry is None or entry.get("sig") != sig:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            texts[relpath] = text
+            reason = credential_reason(relpath, text) if EXCLUDE_CREDENTIALS else None
+            changed = True
+            if reason:
+                withheld[relpath] = withheld_entry(relpath, text, reason, sig)
+                index["pages"].pop(relpath, None)
+                continue
+            withheld.pop(relpath, None)
+            if summaries is None:
+                summaries = parse_moc(vault)
+            entry = parse_page(text, relpath)
+            entry["sig"] = sig
+            entry["moc"] = summaries.get(entry["stem"], "")
+            entry["tf"] = weighted_terms(entry)
+            entry["ftf"] = field_terms(entry)
+            index["pages"][relpath] = entry
+        elif moc_changed:
+            moc_text = summaries.get(entry["stem"], "")
+            if moc_text != entry.get("moc", ""):
+                entry["moc"] = moc_text
+                entry["tf"] = weighted_terms(entry)
+                entry["ftf"] = field_terms(entry)
+            changed = True
+    for table in (index["pages"], withheld):
+        for relpath in [r for r in table if r not in seen]:
+            del table[relpath]
+            changed = True
+    if moc_changed:
+        index["moc_sig"] = moc_sig
+    projects, _state = kb_catalog.load_projects(vault)
+    projects_sig = json.dumps(projects, sort_keys=True)
+    if changed or projects_sig != index.get("projects_sig"):
+        index["projects_sig"] = projects_sig
+        for page in index["pages"].values():
+            page["projects"] = page_projects(page, projects)
+        index["doc_len"] = {r: sum(p["tf"].values()) for r, p in index["pages"].items()}
+        index["doc_len_views"] = {view: {r: view_len(p, weights) for r, p in index["pages"].items()}
+                                  for view, weights in RANK_VIEWS.items()}
+        lesson_lens = [sum(les["tf"].values()) for p in index["pages"].values() for les in p.get("lessons", [])]
+        index["lesson_stats"] = {"n": len(lesson_lens), "avg": (sum(lesson_lens) / len(lesson_lens)) if lesson_lens else 1.0}
+        save_index(index_path, index)
+    try:
+        kb_catalog.refresh(vault, catalog_path(index_path), index, texts, BODY_CHARS, EXCLUDE_CREDENTIALS)
+    except Exception:  # noqa: BLE001 - fail-open: search never depends on the catalog
+        pass
+    return index
+
+
+def default_index_path() -> Path:
+    return plugin_data_dir() / INDEX_NAME
+
+
+def catalog_path(index_path: Path) -> Path:
+    """The KB catalog sits beside the index (KB schema section 6.1)."""
+    return index_path.with_name(kb_catalog.CATALOG_NAME)
+
+
+def vault_root() -> Path:
+    """The KB root, or REPACT_VAULT narrowed inside it (raises VaultScopeError otherwise)."""
+    return vault_scope_root()
+
+
+# ---------------------------------------------------------------------------
+# Ranking
+# ---------------------------------------------------------------------------
+
+def is_archived(relpath: str) -> bool:
+    return f"/{ARCHIVE_DIR}/" in f"/{relpath}"
+
+
+def is_project_page(relpath: str) -> bool:
+    return relpath.split("/", 1)[0] == PROJECTS_DIR
+
+
+def out_of_default_pool(relpath: str, folder: str | None, include_archive: bool) -> bool:
+    """_Archive/ unless asked for; Projects/ unless it is the folder asked for (§15.6)."""
+    if not include_archive and is_archived(relpath):
+        return True
+    return is_project_page(relpath) and (folder or "").strip("/").lower() != PROJECTS_DIR.lower()
+
+
+def eligible(page: dict, folder: str | None, tags: list[str], include_archive: bool) -> bool:
+    if out_of_default_pool(page["relpath"], folder, include_archive):
+        return False
+    if folder and page["folder"].lower() != folder.strip("/").lower():
+        return False
+    page_tags = {t.lower() for t in page["tags"]}
+    return all(tag.lower() in page_tags for tag in tags)
+
+
+def bm25_doc(tf: dict, length: int, terms: list[str], doc_freq: dict, total: int, avg_len: float) -> float:
+    """One document's BM25 score for `terms` (k1 BM25_K1, b BM25_B)."""
+    score = 0.0
+    for term in terms:
+        freq = tf.get(term, 0)
+        if not freq:
+            continue
+        idf = math.log(1 + (total - doc_freq[term] + 0.5) / (doc_freq[term] + 0.5))
+        norm = freq + BM25_K1 * (1 - BM25_B + BM25_B * length / avg_len)
+        score += idf * freq * (BM25_K1 + 1) / norm
+    return score
+
+
+def best_lessons(index: dict, terms: list[str], pages: list[dict],
+                 skip_superseded: bool = False) -> dict[str, tuple[float, dict]]:
+    """{relpath: (score, lesson)}: each page's highest-scoring lesson, with BM25 statistics from
+    every lesson in the index. Ties go to the earlier lesson; a page where none scores is absent.
+    With skip_superseded (KB-RANK modes b/c) a lesson marked Superseded never scores."""
+    stats = index.get("lesson_stats") or {}
+    total = stats.get("n") or 1
+    avg_len = stats.get("avg") or 1.0
+    every = [lesson["tf"] for page in index["pages"].values() for lesson in page.get("lessons", [])]
+    doc_freq = {t: sum(1 for tf in every if t in tf) for t in terms}
+    best = {}
+    for page in pages:
+        top = None
+        for lesson in page.get("lessons", []):
+            if skip_superseded and lesson.get("state") == "superseded":
+                continue
+            score = bm25_doc(lesson["tf"], sum(lesson["tf"].values()), terms, doc_freq, total, avg_len)
+            if score > 0 and (top is None or score > top[0]):
+                top = (score, lesson)
+        if top:
+            best[page["relpath"]] = top
+    return best
+
+
+def bm25(index: dict, query: str, pages: list[dict]) -> list[tuple[float, dict]]:
+    """Score `pages` against `query`; document statistics come from the whole index."""
+    terms = list(dict.fromkeys(tokenize(query)))
+    if not terms:
+        return []
+    all_pages = index["pages"]
+    total = len(all_pages) or 1
+    lengths = index.get("doc_len") or {r: sum(p["tf"].values()) for r, p in all_pages.items()}
+    avg_len = (sum(lengths.values()) / total) or 1.0
+    doc_freq = {t: sum(1 for p in all_pages.values() if t in p["tf"]) for t in terms}
+    scored = []
+    for page in pages:
+        score = bm25_doc(page["tf"], lengths.get(page["relpath"], 0), terms, doc_freq, total, avg_len)
+        if score > 0:
+            scored.append((score, page))
+    scored.sort(key=lambda item: (-item[0], item[1]["relpath"]))
+    return scored
+
+
+# ---------------------------------------------------------------------------
+# KB-RANK modes (docs/test/kb-rank-prereg.md). v1 above is untouched and stays the fallback.
+# ---------------------------------------------------------------------------
+
+def rank_mode(requested: str | None = None) -> str:
+    """The explicit mode, else $REPACT_VAULT_RANK, else DEFAULT_RANK; an unknown value is ignored."""
+    for value in (requested, os.environ.get(RANK_ENV)):
+        if value and value.strip().lower() in RANK_MODES:
+            return value.strip().lower()
+    return DEFAULT_RANK
+
+
+def bm25_view(index: dict, terms: list[str], pages: list[dict], view: str) -> dict[str, float]:
+    """{relpath: BM25} over one field view (RANK_VIEWS), statistics from the whole index."""
+    weights = RANK_VIEWS[view]
+    all_pages = index["pages"]
+    total = len(all_pages) or 1
+    lengths = (index.get("doc_len_views") or {}).get(view) or {r: view_len(p, weights) for r, p in all_pages.items()}
+    avg_len = (sum(lengths.values()) / total) or 1.0
+
+    def tf_of(page: dict) -> dict[str, int]:
+        return {t: sum(w * page["ftf"][f].get(t, 0) for f, w in weights.items()) for t in terms}
+
+    doc_freq = {t: 0 for t in terms}
+    for page in all_pages.values():
+        for term, freq in tf_of(page).items():
+            doc_freq[term] += freq > 0
+    scores = {}
+    for page in pages:
+        score = bm25_doc(tf_of(page), lengths.get(page["relpath"], 0), terms, doc_freq, total, avg_len)
+        if score > 0:
+            scores[page["relpath"]] = score
+    return scores
+
+
+def frontmatter_factor(page: dict, project: str | None) -> float:
+    """Modes b/c: demote a page that is not current, boost a page serving the query's project."""
+    factor = 1.0
+    if page.get("wiki_status") in NON_CURRENT or page.get("superseded_by"):
+        factor *= NON_CURRENT_FACTOR
+    if project and project in (page.get("projects") or []):
+        factor *= PROJECT_BOOST
+    return factor
+
+
+def ordered(scores: dict[str, float], by_path: dict[str, dict]) -> list[tuple[float, dict]]:
+    return sorted(((s, by_path[r]) for r, s in scores.items()), key=lambda item: (-item[0], item[1]["relpath"]))
+
+
+def fuse(first: list[tuple[float, dict]], second: list[tuple[float, dict]]) -> list[tuple[float, dict]]:
+    """Reciprocal-rank fusion of two rankings (top FUSION_POOL of each). The reported score is the
+    fused value rescaled so the top hit carries the first ranking's top score: monotonic in the
+    fused order and on the BM25 scale callers already read."""
+    fused: dict[str, float] = {}
+    by_path: dict[str, dict] = {}
+    for ranking in (first, second):
+        for rank, (_, page) in enumerate(ranking[:FUSION_POOL], start=1):
+            fused[page["relpath"]] = fused.get(page["relpath"], 0.0) + 1.0 / (RRF_K + rank)
+            by_path[page["relpath"]] = page
+    result = ordered(fused, by_path)
+    if not result:
+        return []
+    scale = (first or second)[0][0] / result[0][0]
+    return [(score * scale, page) for score, page in result]
+
+
+def rank_pages(index: dict, query: str, pool: list[dict], mode: str,
+               project: str | None = None) -> list[tuple[float, dict]]:
+    """The pool ranked by `mode`; v1 is bm25() unchanged."""
+    if mode == "v1":
+        return bm25(index, query, pool)
+    terms = list(dict.fromkeys(tokenize(query)))
+    if not terms:
+        return []
+    by_path = {p["relpath"]: p for p in pool}
+    aware = mode in ("b", "c")
+
+    def adjusted(scores: dict[str, float]) -> list[tuple[float, dict]]:
+        if aware:
+            scores = {r: s * frontmatter_factor(by_path[r], project) for r, s in scores.items()}
+        return ordered(scores, by_path)
+
+    first = bm25(index, query, pool) if mode == "a" else adjusted(bm25_view(index, terms, pool, "v2"))
+    if mode == "b":
+        return first
+    page_part = bm25_view(index, terms, pool, "v1nb" if mode == "a" else "v2nb")
+    lessons = best_lessons(index, terms, pool, skip_superseded=aware)
+    reach = {r: page_part.get(r, 0.0) + lessons.get(r, (0.0, None))[0] for r in set(page_part) | set(lessons)}
+    return fuse(first, adjusted({r: s for r, s in reach.items() if s > 0}))
+
+
+def project_for_cwd(vault: Path, cwd: Path | None = None) -> str | None:
+    """The live query's project: the project vocabulary's entry for this working directory
+    (Claude Code's dash-encoded project path, the longest matching entry), else the directory's
+    own slug when the vocabulary knows it. None when nothing maps (no boost)."""
+    projects, _state = kb_catalog.load_projects(vault)
+    here = cwd or Path.cwd()
+    encoded = re.sub(r"[^A-Za-z0-9]", "-", str(here))
+    matches = [k for k in projects if k.startswith("-") and projects[k]
+               and (encoded == k or encoded.startswith(k + "-"))]
+    if matches:
+        return projects[max(matches, key=len)]
+    slug = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]", "-", here.name.lower())).strip("-")
+    return slug if slug in set(projects.values()) else None
+
+
+def summary_of(page: dict) -> str:
+    """The one-line summary, redacted BEFORE it is cut (a cut could split a secret so that
+    no pattern matches the surviving half)."""
+    text = page.get("moc") or page.get("first_sentence") or page.get("title") or ""
+    text = scrub_text(" ".join(text.split()))
+    return text if len(text) <= SUMMARY_MAX else text[: SUMMARY_MAX - 1].rstrip() + "…"
+
+
+def key_matches(keys: list[str], query: str) -> bool:
+    """True when a whole key phrase occurs in the query (case-insensitive, word-bounded)."""
+    lowered = " ".join(query.lower().split())
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", lowered) for key in keys if key)
+
+
+def lesson_ref(page: dict, lesson: dict | None) -> dict | None:
+    """The lesson anchor {id, title, line, anchor = relpath#Title, ctx}; the title is redacted
+    before it is cut."""
+    if not lesson:
+        return None
+    title = scrub_text(" ".join(lesson["title"].split()))
+    if len(title) > ANCHOR_TITLE_MAX:
+        title = title[: ANCHOR_TITLE_MAX - 1].rstrip() + "…"
+    return {"id": scrub_text(lesson["id"]), "title": title, "line": lesson["line"],
+            "anchor": f"{page['relpath']}#{title}", "ctx": lesson.get("ctx")}
+
+
+def to_hit(score: float, page: dict, query: str = "", lesson: dict | None = None) -> dict:
+    """A result row; every text field leaves through scrub_text (D9.12 rule 3). `keys` and
+    `key_match` are recall's high-precision vault trigger (D9.7); they never change the order.
+    `lesson` is the best-matching lesson on the page (KB-REACH), or None."""
+    keys = page.get("keys") or []
+    return {"score": round(score, 2), "relpath": page["relpath"], "title": scrub_text(page["title"]),
+            "summary": summary_of(page), "tags": [scrub_text(t) for t in page["tags"][:SHOWN_TAGS]],
+            "keys": [scrub_text(k) for k in keys], "key_match": key_matches(keys, query),
+            "superseded_by": page.get("superseded_by") or "", "lesson": lesson_ref(page, lesson),
+            "origin": page_origin(page)}
+
+
+def keys_map(vault: Path | None = None, index_path: Path | None = None) -> dict:
+    """{key phrase: [relpath, ...]} plus {relpath: summary} for every in-scope page that is not
+    withheld or archived: the lookup table recall's T2 cache is built from. A superseded page stays
+    in (D9.7: superseded pages may only be demoted, and only behind the P4 gate)."""
+    vault = vault or vault_root()
+    index = refresh_index(vault, index_path or default_index_path())
+    keys: dict[str, list[str]] = {}
+    summaries: dict[str, str] = {}
+    for relpath, page in index["pages"].items():
+        if is_archived(relpath) or is_project_page(relpath):
+            continue
+        for key in page.get("keys") or []:
+            keys.setdefault(scrub_text(key), []).append(relpath)
+        if page.get("keys"):
+            summaries[relpath] = summary_of(page)
+    return {"root": str(vault), "keys": keys, "summaries": summaries}
+
+
+def withheld_matches(index: dict, query: str, folder: str | None, include_archive: bool) -> list[dict]:
+    """Withheld notes the query NAMES: at least half of a note's path/H1 terms appear in it."""
+    terms = set(tokenize(query))
+    if not terms:
+        return []
+    found = []
+    for entry in (index.get("withheld") or {}).values():
+        relpath = entry["relpath"]
+        if out_of_default_pool(relpath, folder, include_archive):
+            continue
+        if folder and (relpath.split("/", 1)[0] if "/" in relpath else "").lower() != folder.strip("/").lower():
+            continue
+        needed = max(1, math.ceil(len(entry["terms"]) / 2))
+        if len(terms & set(entry["terms"])) >= needed:
+            found.append({"path": relpath, "reason": entry["reason"]})
+    return sorted(found, key=lambda item: item["path"])
+
+
+def search_with_withheld(query: str, k: int = DEFAULT_K, folder: str | None = None,
+                         tags: list[str] | None = None, include_archive: bool = False,
+                         vault: Path | None = None, index_path: Path | None = None,
+                         rank: str | None = None,
+                         project: str | None = None) -> tuple[list[dict], list[dict]]:
+    """(top-k hits, withheld notes the query names as {path, reason}). `rank` picks the KB-RANK
+    mode (see rank_mode); `project` is the query's project slug for modes b/c (None: no boost).
+
+    Raises:
+        VaultScopeError: the root lies outside the knowledge folder.
+        FileNotFoundError: the vault directory does not exist.
+    """
+    vault = vault or vault_root()
+    if not vault.is_dir():
+        raise FileNotFoundError(str(vault))
+    index = refresh_index(vault, index_path or default_index_path())
+    pool = [p for p in index["pages"].values() if eligible(p, folder, tags or [], include_archive)]
+    mode = rank_mode(rank)
+    ranked = rank_pages(index, query, pool, mode, project)[: max(k, 0)]
+    # Modes b/c anchor to the best lesson that is not superseded, when one scores.
+    terms = list(dict.fromkeys(tokenize(query)))
+    pages = [p for _, p in ranked]
+    anchors = best_lessons(index, terms, pages)
+    if mode in ("b", "c"):
+        anchors.update(best_lessons(index, terms, pages, skip_superseded=True))
+    hits = [to_hit(s, p, query, anchors.get(p["relpath"], (0.0, None))[1]) for s, p in ranked]
+    withheld = [] if tags else withheld_matches(index, query, folder, include_archive)
+    return hits, withheld
+
+
+def search(query: str, k: int = DEFAULT_K, folder: str | None = None, tags: list[str] | None = None,
+           include_archive: bool = False, vault: Path | None = None,
+           index_path: Path | None = None, rank: str | None = None,
+           project: str | None = None) -> list[dict]:
+    """Public API: the top-k hits as dicts {score, relpath, title, summary, tags}."""
+    return search_with_withheld(query, k, folder, tags, include_archive, vault, index_path, rank, project)[0]
+
+
+def term_coverage(query: str, hit: dict) -> float:
+    """Share of query terms present in a hit's stem, title and tags (duplicate detection)."""
+    terms = set(tokenize(query))
+    if not terms:
+        return 0.0
+    names = set(tokenize(" ".join([Path(hit["relpath"]).stem.replace("-", " "), hit["title"]]
+                                  + list(hit["tags"]))))
+    return len(terms & names) / len(terms)
+
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="vault-find", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Search the knowledge base; prints wiki paths with one-line summaries.",
+        epilog="examples:\n"
+               '  vault-find "n8n http pagination only 100 records"\n'
+               '  vault-find "supabase rls anon grant" --tag supabase --k 5\n'
+               '  vault-find "helm deploy verify" --folder Gotchas --json\n'
+               "  vault-find --catalog orphans\n"
+               "exit: 0 hits, 1 no match, 2 usage, 3 KB off, missing or outside the knowledge folder.\n"
+               "Root: the KB folder (profile paths.kb, or the legacy paths.vault); "
+               "$REPACT_VAULT may only narrow it.")
+    parser.add_argument("query", nargs="?", help="topic words: tool or API name plus the symptom")
+    parser.add_argument("--refresh", action="store_true", help="only bring the index up to date")
+    parser.add_argument("--catalog", nargs="?", const="health", choices=kb_catalog.VIEWS, metavar="VIEW",
+                        help="print the KB catalog's health counts, or one path list: "
+                             + ", ".join(kb_catalog.VIEWS[1:]))
+    parser.add_argument("--keys-map", action="store_true",
+                        help="machine output for recall: JSON {root, keys, summaries} (no byte cap)")
+    parser.add_argument("--k", type=int, default=DEFAULT_K, help="max results (default 8)")
+    parser.add_argument("--folder", help="top-level folder, e.g. Gotchas, APIs, Patterns")
+    parser.add_argument("--tag", action="append", default=[], help="require a frontmatter tag (repeatable)")
+    parser.add_argument("--archive", action="store_true", help="include _Archive pages")
+    parser.add_argument("--json", action="store_true", help="emit JSON {root, terms, hits, withheld}")
+    parser.add_argument("--rank", choices=RANK_MODES,
+                        help=f"ranking mode (default ${RANK_ENV}, else {DEFAULT_RANK}); see kb-rank-prereg.md")
+    parser.add_argument("--project", help="project slug to boost in modes b/c (default: from the cwd)")
+    args = parser.parse_args(argv)
+    if args.k < 1:
+        parser.error("--k must be at least 1")
+    if not args.query and not args.refresh and not args.keys_map and not args.catalog:
+        parser.error('a query is required, e.g. vault-find "n8n pagination"')
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        vault = vault_root()
+    except VaultScopeError as exc:
+        print(f"vault-find: {exc}", file=sys.stderr)
+        return 3
+    if args.refresh:
+        if not vault.is_dir():
+            print(f"vault-find: vault not found: {vault} (set REPACT_VAULT)", file=sys.stderr)
+            return 3
+        pages = len(refresh_index(vault, default_index_path())["pages"])
+        print(f"index up to date: {pages} pages")
+        return 0
+    if args.catalog:
+        if not vault.is_dir():
+            print(f"vault-find: vault not found: {vault} (set REPACT_VAULT)", file=sys.stderr)
+            return 3
+        index_path = default_index_path()
+        index = refresh_index(vault, index_path)
+        kb_catalog.refresh(vault, catalog_path(index_path), index, None, BODY_CHARS, EXCLUDE_CREDENTIALS)
+        print("\n".join(kb_catalog.render(kb_catalog.load(catalog_path(index_path)), args.catalog)))
+        return 0
+    if args.keys_map:
+        if not vault.is_dir():
+            print(f"vault-find: vault not found: {vault} (set REPACT_VAULT)", file=sys.stderr)
+            return 3
+        print(json.dumps(keys_map(vault), ensure_ascii=False))
+        return 0
+    mode = rank_mode(args.rank)
+    project = args.project or (project_for_cwd(vault) if mode in ("b", "c") and vault.is_dir() else None)
+    try:
+        hits, withheld = search_with_withheld(args.query, args.k, args.folder, args.tag, args.archive,
+                                              vault, rank=mode, project=project)
+    except FileNotFoundError:
+        print(f"vault-find: vault not found: {vault} (set REPACT_VAULT)", file=sys.stderr)
+        return 3
+    terms = len(set(tokenize(args.query)))
+    print(render_json(hits, vault, terms, withheld) if args.json else render_text(hits, vault, withheld))
+    if not hits:
+        print(f'vault-find: no page matched "{args.query}"', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

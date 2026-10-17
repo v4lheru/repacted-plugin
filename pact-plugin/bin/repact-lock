@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""repact-lock: one holder at a time for a shared resource on this machine.
+
+Location: pact-plugin/bin/repact-lock. A Docker daemon, a port or a device can serve one
+agent at a time. Agents take this lock themselves instead of asking the lead for a grant by
+message: a message lands only at turn end, so a teammate that asks mid-turn cannot see the answer.
+The rule that sends agents here lives in skills/teammate/references/teammate-messaging.md and
+skills/pact-lead-playbook/references/dispatch-briefs-and-premises.md.
+
+  repact-lock acquire <name> --owner <name@team> [--wait SECONDS] [--ttl MINUTES]
+  repact-lock release <name> --owner <name@team>
+  repact-lock status [<name>]
+
+This helper runs no command and inspects no process. One hook reads it: hooks/docker_lock_gate.py
+refuses a command that starts Docker containers for tests unless its caller holds the lock named
+'docker', and reads the records through hooks/shared/lock_records.py, as this command does, so the
+two always agree.
+Each lock is one JSON file in ${CLAUDE_PLUGIN_DATA}/locks/ (never in a worktree), so every session
+that shares the plugin data directory sees it. The holder is the --owner name, not a pid: an
+agent's shell exits after each command. Give the owner as name@team: two sessions each have a
+'backend-coder', and one owner name is one holder whoever types it. A lock or owner name is
+matched without regard to case or spacing; a lock name is hashed into the file name, so no name can
+reach outside the lock directory.
+
+A lock older than its holder's ttl (default 30 minutes) is reclaimed by the next acquire, which
+says whose it was; so is a lock file that is not a lock record (it does not parse, a number in it
+is out of range, or it is a symbolic link, which is replaced and never written through). A lock
+stamped up to 10 minutes ahead of the clock (the clock was set back) is still HELD until its ttl
+runs out; a stamp further ahead is not a lock record.
+Acquiring a lock you already hold restarts its ttl. Release by anyone but the holder is refused.
+
+Exit codes: 0 done; 1 busy (another owner holds it, after any --wait); 64 usage; 65 refused
+(release by a non-holder, or of an unreadable lock file); 74 the lock directory is unusable.
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime
+import fcntl
+import json
+import math
+import os
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Iterator, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(1, str(Path(__file__).resolve().parent.parent / "hooks"))   # bin -> shared, the allowed direction
+from shared.lock_records import (LOCK_SUFFIX, LOCKS_DIRNAME, MAX_TTL_MINUTES, duration,  # noqa: E402
+                                 label_problem, lock_path, read_lock, same_owner)
+from _repact_common import data_subdir, plugin_data_dir  # noqa: E402
+
+GUARD_NAME = ".guard"
+DEFAULT_TTL_MINUTES = 30.0
+POLL_SECONDS = 0.5
+EXIT_OK, EXIT_BUSY, EXIT_USAGE, EXIT_REFUSED, EXIT_IO = 0, 1, 64, 65, 74
+
+EXAMPLE_BY_VERB = {
+    "acquire": "repact-lock acquire docker --owner backend-coder@session-1a2b3c4d --wait 600",
+    "release": "repact-lock release docker --owner backend-coder@session-1a2b3c4d",
+    "status": "repact-lock status",
+}
+EXAMPLES = (
+    "examples:\n"
+    + "".join(f"  {line}\n" for line in EXAMPLE_BY_VERB.values())
+    + "  repact-lock acquire port-5432 --owner test-engineer@session-1a2b3c4d --ttl 10\n"
+    "exit: 0 done, 1 busy, 64 usage, 65 refused, 74 lock directory unusable."
+)
+
+
+class LockError(Exception):
+    code = EXIT_REFUSED
+
+
+class Usage(LockError):
+    code = EXIT_USAGE
+
+
+class Refused(LockError):
+    """Nothing was changed."""
+    code = EXIT_REFUSED
+
+
+# --- names, files and durations ------------------------------------------------------------------
+
+def checked_label(value: str, what: str) -> str:
+    problem = label_problem(value)
+    if problem:
+        raise Usage(f"the {what} {problem}")
+    return value.strip()
+
+
+def write_lock(path: Path, record: dict, exclusive: bool) -> None:
+    """Put the whole record at `path` in one step. `exclusive` creates and raises FileExistsError
+    if a lock file is already there; otherwise the file is replaced."""
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, suffix=".tmp",
+                                     encoding="utf-8") as tmp:
+        json.dump(record, tmp, ensure_ascii=False)
+    try:
+        if exclusive:
+            os.link(tmp.name, path)
+        else:
+            os.replace(tmp.name, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp.name)
+
+
+@contextlib.contextmanager
+def guarded(directory: Path) -> Iterator[None]:
+    """One reader-then-writer at a time in the lock directory. The flock dies with its process,
+    so a killed helper leaves no guard behind."""
+    fd = os.open(directory / GUARD_NAME, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+# --- the three commands ----------------------------------------------------------------------------
+
+def try_acquire(directory: Path, name: str, owner: str, ttl_s: float) -> Tuple[bool, str]:
+    """(acquired, message). Takes a free lock, restarts the caller's own, and reclaims an expired
+    or unreadable one; a live lock of another owner is left alone."""
+    path = lock_path(directory, name)
+    with guarded(directory):
+        record, damage = read_lock(path)
+        now = time.time()
+        fresh = {"name": name, "owner": owner, "acquired": now, "ttl_s": ttl_s,
+                 "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        taken = f"acquired {name} (owner {owner}, ttl {duration(ttl_s)})"
+        if record is None and damage is None:
+            try:
+                write_lock(path, fresh, exclusive=True)
+            except FileExistsError:
+                return False, f"busy: {name} was taken a moment ago"
+            return True, taken
+        if record is None:
+            note = f"replaced an unreadable lock file ({damage})"
+        elif same_owner(record["owner"], owner):
+            note = "already yours, ttl restarted"
+        else:
+            age = now - record["acquired"]
+            left = record["ttl_s"] - age
+            if left > 0:
+                return False, (f"busy: {name} is held by {record['owner']} "
+                               f"(for {duration(age)}, expires in {duration(left)})")
+            note = f"reclaimed from {record['owner']}, whose lock expired {duration(-left)} ago"
+        write_lock(path, fresh, exclusive=False)
+        return True, f"{taken}; {note}"
+
+
+def acquire(name: str, owner: str, wait_s: float, ttl_s: float) -> int:
+    directory = data_subdir(LOCKS_DIRNAME)
+    deadline = time.monotonic() + wait_s
+    while True:
+        acquired, message = try_acquire(directory, name, owner, ttl_s)
+        remaining = deadline - time.monotonic()
+        if acquired or remaining <= 0:
+            if not acquired and wait_s > 0:
+                message += f"; gave up after {duration(wait_s)}"
+            print(message)
+            return EXIT_OK if acquired else EXIT_BUSY
+        time.sleep(min(POLL_SECONDS, remaining))
+
+
+def release(name: str, owner: str) -> int:
+    directory = data_subdir(LOCKS_DIRNAME)
+    path = lock_path(directory, name)
+    with guarded(directory):
+        record, damage = read_lock(path)
+        if record is None and damage is None:
+            print(f"{name} was not held")
+            return EXIT_OK
+        if record is None:
+            raise Refused(f"the lock file of {name} is unreadable ({damage}); nothing released "
+                          "(the next acquire replaces it)")
+        if not same_owner(record["owner"], owner):
+            raise Refused(f"{name} is held by {record['owner']}, not {owner}; nothing released")
+        path.unlink()
+    print(f"released {name} (owner {owner}, held {duration(time.time() - record['acquired'])})")
+    return EXIT_OK
+
+
+def status(name: Optional[str]) -> int:
+    directory = plugin_data_dir(create=False) / LOCKS_DIRNAME
+    paths = [lock_path(directory, name)] if name else sorted(directory.glob("*" + LOCK_SUFFIX))
+    lines = []
+    for path in paths:
+        record, damage = read_lock(path)
+        if record is None and damage is None:
+            if name:
+                lines.append(f"{name}  free")
+            continue
+        if record is None:
+            lines.append(f"{name or path.name}  unreadable lock file ({damage}); the next acquire replaces it")
+            continue
+        age = time.time() - record["acquired"]
+        left = record["ttl_s"] - age
+        state = f"expires in {duration(left)}" if left > 0 else \
+            f"expired {duration(-left)} ago, reclaimable"
+        lines.append(f"{record['name']}  held by {record['owner']} for {duration(age)}, {state}")
+    print("\n".join(lines) if lines else "no locks held")
+    return EXIT_OK
+
+
+# --- CLI ------------------------------------------------------------------------------------------
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        example = EXAMPLE_BY_VERB.get(self.prog.split()[-1], EXAMPLE_BY_VERB["acquire"])
+        raise Usage(f"{message}\n\n  {example}")
+
+
+def build_parser() -> Parser:
+    parser = Parser(prog="repact-lock", formatter_class=argparse.RawDescriptionHelpFormatter,
+                    description="Take, release or list an advisory machine-wide lock on a shared "
+                                "single-instance resource (a Docker daemon, a port, a device).",
+                    epilog=EXAMPLES)
+    sub = parser.add_subparsers(dest="verb", required=True)
+    take = sub.add_parser("acquire", help="take the lock, or say who holds it (exit 1)")
+    take.add_argument("name")
+    take.add_argument("--owner", required=True, metavar="NAME@TEAM",
+                      help="your agent name and team; the same owner releases")
+    take.add_argument("--wait", type=float, default=0.0, metavar="SECONDS",
+                      help="keep trying this long before giving up (default 0)")
+    take.add_argument("--ttl", type=float, default=DEFAULT_TTL_MINUTES, metavar="MINUTES",
+                      help=f"after this long another agent may reclaim it (default "
+                           f"{DEFAULT_TTL_MINUTES:g}, at most {MAX_TTL_MINUTES:g})")
+    free = sub.add_parser("release", help="give the lock back; only its holder may")
+    free.add_argument("name")
+    free.add_argument("--owner", required=True, metavar="NAME@TEAM")
+    show = sub.add_parser("status", help="who holds what, and for how much longer")
+    show.add_argument("name", nargs="?")
+    return parser
+
+
+def run(args) -> int:
+    if args.verb == "status":
+        return status(checked_label(args.name, "lock name") if args.name is not None else None)
+    name = checked_label(args.name, "lock name")
+    owner = checked_label(args.owner, "owner")
+    if args.verb == "release":
+        return release(name, owner)
+    if not (math.isfinite(args.wait) and args.wait >= 0):
+        raise Usage(f"--wait must be zero or more seconds, not {args.wait:g}\n\n  "
+                    f"{EXAMPLE_BY_VERB['acquire']}")
+    if not (math.isfinite(args.ttl) and 0 < args.ttl <= MAX_TTL_MINUTES):
+        raise Usage(f"--ttl must be more than 0 and at most {MAX_TTL_MINUTES:g} minutes, not "
+                    f"{args.ttl:g}\n\n  {EXAMPLE_BY_VERB['acquire']}")
+    return acquire(name, owner, args.wait, args.ttl * 60)
+
+
+def main(argv) -> int:
+    try:
+        return run(build_parser().parse_args(argv))
+    except LockError as err:
+        print(f"repact-lock: {err}", file=sys.stderr)
+        return err.code
+    except OSError as err:
+        print(f"repact-lock: the lock directory is unusable ({err})", file=sys.stderr)
+        return EXIT_IO
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

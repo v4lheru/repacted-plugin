@@ -562,11 +562,11 @@ def _deny_with_no_context(monkeypatch, tmp_path, capsys, frame, registered_as=""
 
 
 def test_rule_6_tells_a_lead_to_rerun_bootstrap(tmp_path, monkeypatch, capsys):
-    frame = {**_make_input(), "agent_type": "PACT:pact-orchestrator"}
+    frame = {**_make_input(), "agent_type": "repacted:pact-orchestrator"}
 
     reason = _deny_with_no_context(monkeypatch, tmp_path, capsys, frame)
     assert "session team_name is unavailable" in reason
-    assert "Re-run /PACT:bootstrap" in reason
+    assert "Re-run /repacted:bootstrap" in reason
 
 
 def test_rule_6_tells_a_teammate_to_ask_the_team_lead(tmp_path, monkeypatch, capsys):
@@ -587,7 +587,7 @@ def test_rule_6_keeps_the_bootstrap_text_for_a_solo_specialist(tmp_path, monkeyp
     frame = {**_make_input(), "agent_type": "pact-backend-coder"}
 
     reason = _deny_with_no_context(monkeypatch, tmp_path, capsys, frame)
-    assert "Re-run /PACT:bootstrap" in reason
+    assert "Re-run /repacted:bootstrap" in reason
     assert str(tmp_path / "pact-session-context.json") in reason
 
 
@@ -606,12 +606,12 @@ def test_rule_6_keeps_the_bootstrap_text_when_team_resolution_raises(
     reason = _deny_with_no_context(
         monkeypatch, tmp_path, capsys, frame, registered_as="tmux-subject"
     )
-    assert "Re-run /PACT:bootstrap" in reason
+    assert "Re-run /repacted:bootstrap" in reason
 
 
 def test_rule_6_keeps_the_bootstrap_text_for_a_frame_with_no_role(tmp_path, monkeypatch, capsys):
     reason = _deny_with_no_context(monkeypatch, tmp_path, capsys, _make_input())
-    assert "Re-run /PACT:bootstrap" in reason
+    assert "Re-run /repacted:bootstrap" in reason
     assert str(tmp_path / "pact-session-context.json") in reason
 
 
@@ -770,6 +770,41 @@ def test_warn_when_prompt_exceeds_800_chars(tmp_path, monkeypatch, capsys):
         or "lacks a TaskList reference" in hso["additionalContext"]
 
 
+_SPAWN_OPENING = "YOUR PACT ROLE: teammate (tester).\n\nYou are joining team t. "
+_SPAWN_CLOSING = "Then check `TaskList` for tasks assigned to you."
+_FIRST_SKILL = 'As your FIRST action, Invoke Skill("repacted:{skill}") to record your identity. '
+
+
+@pytest.mark.parametrize("first_instruction", [
+    _FIRST_SKILL.format(skill="pact-" + "team-registration"),   # a lead session started before 1.3.8
+    _FIRST_SKILL.format(skill="teammate"),                      # the 1.3.8 spawn template
+    "",                                                         # a prompt that names neither skill
+], ids=["old-skill-name", "new-skill-name", "neither"])
+def test_the_spawn_verdict_does_not_depend_on_the_first_skill_named(
+    first_instruction, tmp_path, monkeypatch,
+):
+    """The gate reads a spawn prompt for its length and its TaskList reference only. A running
+    lead keeps the persona it started with while this hook updates at once, so the 1.3.7 template,
+    the 1.3.8 template and a prompt with no first skill all get the verdict 1.3.7 gave: ALLOW,
+    in the strictest inline-mission mode."""
+    import dispatch_gate
+
+    monkeypatch.setattr(dispatch_gate, "INLINE_MISSION_MODE", "deny")
+    _full_setup(monkeypatch, tmp_path)
+    frame = _make_input(prompt=_SPAWN_OPENING + first_instruction + _SPAWN_CLOSING)
+    assert dispatch_gate.evaluate_dispatch(frame["tool_input"], frame) == ("ALLOW", None, None)
+
+
+def test_the_secretary_spawn_advisory_names_the_teammate_skill():
+    """The one hook text that carries a spawn template gives the same first instruction as the
+    persona and the SubagentStart block."""
+    import bootstrap_gate
+
+    advisory = bootstrap_gate._SECRETARY_SPAWN_ADVISORY
+    assert 'Invoke Skill(\\"repacted:teammate\\") to record your identity' in advisory
+    assert "team-registration" not in advisory
+
+
 def test_deny_in_deny_mode(tmp_path, monkeypatch, capsys):
     """Mode='deny' promotes WARN → DENY."""
     import dispatch_gate
@@ -918,7 +953,7 @@ def test_a_namespaced_spawn_gets_the_bare_spellings_verdict(case, tmp_path, monk
 def test_a_namespaced_spawns_journal_row_names_the_rule(tmp_path, monkeypatch, capsys):
     captured = _capture_journal(monkeypatch)
     _full_setup(monkeypatch, tmp_path)
-    _run_main(_make_input(subagent_type="PACT:pact-architect", name=""), capsys)
+    _run_main(_make_input(subagent_type="repacted:pact-architect", name=""), capsys)
 
     rows = [e for e in captured if e.get("type") == "dispatch_decision"]
     assert [(row["decision"], row["rule"]) for row in rows] == [("DENY", "name_required")]
@@ -927,10 +962,10 @@ def test_a_namespaced_spawns_journal_row_names_the_rule(tmp_path, monkeypatch, c
 def test_the_journal_keeps_the_spelling_the_caller_used(tmp_path, monkeypatch, capsys):
     captured = _capture_journal(monkeypatch)
     _full_setup(monkeypatch, tmp_path)
-    _run_main(_make_input(subagent_type="PACT:pact-architect"), capsys)
+    _run_main(_make_input(subagent_type="repacted:pact-architect"), capsys)
 
     rows = [e for e in captured if e.get("type") == "dispatch_decision"]
-    assert [row["subagent_type"] for row in rows] == ["PACT:pact-architect"]
+    assert [row["subagent_type"] for row in rows] == ["repacted:pact-architect"]
 
 
 def test_a_non_string_subagent_type_still_falls_through():
@@ -1417,3 +1452,76 @@ def test_env_fallback_rescues_plugin_root_and_team_deny_names_cause(
     # ...with the shared diagnosis appended naming the missing file.
     assert str(ctx_path) in reason
     assert "session_init may have failed" in reason
+
+
+# =============================================================================
+# team_config_absent — the host never wrote the team to disk (T-3b0b2543)
+# =============================================================================
+
+def _drop_team_config(tmp_path, team_name=_TEAM):
+    (tmp_path / ".claude" / "teams" / team_name / "config.json").unlink()
+
+
+def test_warn_when_the_team_config_is_absent(tmp_path, monkeypatch, capsys):
+    """Desktop Code tab: the session names a team that is never on disk, so the teammate gets
+    no Task tools. The spawn is allowed and the lead is told how to brief instead."""
+    _full_setup(monkeypatch, tmp_path)
+    _drop_team_config(tmp_path)
+    journal = _capture_journal(monkeypatch)
+    code, out = _run_main(_make_input(prompt="x" * 5000), capsys)   # a long prompt is right here
+    assert code == 0
+    context = out["hookSpecificOutput"]["additionalContext"]
+    assert "no teams/pact-test/config.json" in context and "no TaskList" in context
+    assert "spawn prompt" in context and "final message" in context
+    assert "TaskCreate(description" not in context                  # not the inline-mission advice
+    assert [e.get("rule") for e in journal if e.get("decision") == "WARN"] == ["team_config_absent"]
+
+
+def test_a_team_on_disk_gets_no_team_config_advisory(tmp_path, monkeypatch, capsys):
+    _full_setup(monkeypatch, tmp_path)
+    code, out = _run_main(_make_input(), capsys)
+    assert (code, out) == (0, _SUPPRESS_EXPECTED)
+
+
+@pytest.mark.parametrize("case", ["config-is-a-dir", "teams-dir-gone", "stale-team-name",
+                                  "empty-session-id", "damaged-config-present"])
+def test_team_config_absent_boundaries(case, tmp_path, monkeypatch, capsys):
+    from dispatch_gate import evaluate_dispatch
+    team = "session-old" if case == "stale-team-name" else _TEAM
+    _full_setup(monkeypatch, tmp_path, team_name=team)
+    config = tmp_path / ".claude" / "teams" / team / "config.json"
+    frame = _make_input(team_name=team)
+    if case == "config-is-a-dir":
+        config.unlink()
+        config.mkdir()
+    elif case == "teams-dir-gone":
+        config.unlink()
+        config.parent.rmdir()
+    elif case == "stale-team-name":            # the context names a gone team; a live one exists
+        config.unlink()
+        _seed_team(tmp_path, team_name="session-live")
+    elif case == "empty-session-id":
+        config.unlink()
+        frame["session_id"] = ""
+    else:
+        config.write_text("{not json")
+    decision, reason, rule = evaluate_dispatch(frame["tool_input"], frame)
+    if case == "damaged-config-present":       # a file is there: the team is on disk
+        assert (decision, rule) == ("ALLOW", None)
+    else:
+        assert (decision, rule) == ("WARN", "team_config_absent"), reason
+        assert repr(team) in reason
+
+
+@pytest.mark.parametrize("team", ["", "../other", "a/b", "..", "x" * 200, "tëam", None, 7])
+def test_an_unusable_team_name_is_never_looked_up(team, monkeypatch, tmp_path):
+    import dispatch_gate
+    monkeypatch.setattr(dispatch_gate, "get_claude_config_dir",
+                        lambda: pytest.fail("the filesystem was consulted"))
+    assert dispatch_gate._team_config_absent(team) is False
+
+
+def test_an_empty_session_team_is_still_the_rule_6_deny(tmp_path, monkeypatch, capsys):
+    _full_setup(monkeypatch, tmp_path, team_name="")
+    code, out = _run_main(_make_input(), capsys)
+    assert code == 2 and "team_name is unavailable" in out["hookSpecificOutput"]["permissionDecisionReason"]

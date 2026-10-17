@@ -41,7 +41,7 @@ import task_lifecycle_gate as tlg  # noqa: E402
 import shared.session_journal as sj  # noqa: E402
 
 TEAM = "test-team"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
 
 MEMBERS = [

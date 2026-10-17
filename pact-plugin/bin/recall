@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""recall: replay recall moments offline, and report the shadow log's online signals.
+
+Location: pact-plugin/bin/recall (D9b; design the design notes D9.4, D9.11).
+Used by: the D9.4 measurement (dev/recall-eval/) and D3's report (--signals).
+
+  recall --replay MOMENTS.json --types T1,T2 [--dates CORPUS.json] [--t1k] --out RUN.json
+      Runs each moment through the SAME dispatcher the hook uses (bin/_recall/dispatch.py),
+      with a fresh ledger per moment. It reads only `mid`, `type`, `src`, `ts` and
+      `moment_input` from the moments file, never labels. `--dates` drops candidates created
+      after the moment (D9a's rule; unknown items are dropped). Output: per moment, the ranked
+      candidates (<= 5) and the surfaced keys (<= 3). Nothing is scored here.
+  recall --signals [--session ID]
+      Agreement and miss per session from the shadow log (JSON).
+
+The on-demand pull (`recall <cue>`) and the awareness builder are D9f.
+Exit codes: 0 ok; 2 usage error; 4 input file unreadable.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _recall import dispatch, merge, shadow, signals  # noqa: E402
+from _repact_common import claude_config_dir  # noqa: E402
+
+TOOL_PREFIX = re.compile(r"^(\w+):\s*(.*)$", re.S)
+FIELD = re.compile(r'"(command|file_path|path|url)"\s*:\s*"((?:[^"\\]|\\.)*)')
+
+
+def parse_input(text: str) -> tuple[str, dict]:
+    """`<Tool>: {json}` (possibly truncated) -> (tool name, tool_input)."""
+    match = TOOL_PREFIX.match(text or "")
+    if not match:
+        return "", {}
+    name, rest = match.group(1), match.group(2)
+    try:
+        data = json.loads(rest)
+        if isinstance(data, dict):
+            return name, data
+    except ValueError:
+        pass
+    fields = {}
+    for key, value in FIELD.findall(rest):
+        try:
+            fields.setdefault(key, json.loads(f'"{value}"'))
+        except ValueError:
+            fields.setdefault(key, value)
+    if "path" in fields and "file_path" not in fields:
+        fields["file_path"] = fields["path"]
+    return name, fields
+
+
+def _when(value: str) -> float:
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return float("inf")
+
+
+def load_dates(path: Path) -> dict:
+    """{item key: created timestamp} from D9a's corpus index (keys are already `store:id`,
+    and a skill's SKILL.md carries its own dated entry)."""
+    items = json.loads(path.read_text(encoding="utf-8"))
+    return {item["key"]: _when(item.get("created")) for item in items}
+
+
+def replay(moments: list[dict], types: set[str], dates: dict | None, t1k: bool = False) -> list[dict]:
+    """With `t1k`, a T1 moment runs the T1k arm (d9v3-prereg §7) instead of T1."""
+    home = claude_config_dir()
+    data_dir = shadow.recall_dir()
+    out = []
+    for moment in moments:
+        if moment.get("type") not in types:
+            continue
+        tool_name, tool_input = parse_input(moment.get("moment_input", ""))
+        project = home / "projects" / str(moment.get("src", "")).split("/")[0] / "memory"
+        cutoff = _when(moment.get("ts"))
+        keep = (lambda c: dates.get(c["key"], float("inf")) <= cutoff) if dates is not None else None
+        if moment["type"] == "T1":
+            found = (dispatch.t1k_moment(tool_name, tool_input, data_dir) if t1k
+                     else dispatch.t1_moment(tool_name, tool_input))
+            if found and keep:
+                found["candidates"] = [c for c in found["candidates"] if keep(c)]
+        else:
+            seen: set = set()
+            found = dispatch.t2_moment(tool_name, tool_input, lambda t: not (t in seen or seen.add(t)),
+                                       data_dir, home, project if project.is_dir() else None, keep)
+        candidates = (found or {}).get("candidates") or []
+        chosen, _ = merge.surface(candidates, set())
+        out.append({"mid": moment["mid"], "type": moment["type"], "tool": tool_name,
+                    "candidates": [{k: c[k] for k in ("store", "id", "key", "title", "summary", "score")}
+                                   for c in candidates],
+                    "surfaced": [c["key"] for c in chosen], "withheld": len((found or {}).get("withheld") or []),
+                    "notes": (found or {}).get("notes") or []})
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="recall", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Replay recall moments offline, or report the shadow log's online signals.",
+        epilog="examples:\n"
+               "  recall --replay moments.json --types T1,T2 --dates corpus_index.json --out run.json\n"
+               "  recall --signals --session <session-id>\n"
+               "exit: 0 ok, 2 usage, 4 input unreadable.")
+    parser.add_argument("--replay", help="moments JSON (a list, or an object with `moments`)")
+    parser.add_argument("--types", default="T1,T2", help="moment types to replay (default T1,T2)")
+    parser.add_argument("--dates", help="item dates JSON: drop candidates created after the moment")
+    parser.add_argument("--out", help="write the replay here (default stdout)")
+    parser.add_argument("--t1k", action="store_true", help="run T1 moments through the T1k arm")
+    parser.add_argument("--signals", action="store_true", help="agreement and miss from the shadow log")
+    parser.add_argument("--session", help="with --signals: one session only")
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.signals:
+        print(json.dumps(signals.session_signals(shadow.read_log(), args.session), indent=1))
+        return 0
+    if not args.replay:
+        parser.error("give --replay MOMENTS.json or --signals")
+    try:
+        data = json.loads(Path(args.replay).read_text(encoding="utf-8"))
+        dates = load_dates(Path(args.dates)) if args.dates else None
+    except (OSError, ValueError) as exc:
+        print(f"recall: cannot read input ({type(exc).__name__})", file=sys.stderr)
+        return 4
+    moments = data.get("moments") if isinstance(data, dict) else data
+    result = replay(moments or [], {t.strip() for t in args.types.split(",") if t.strip()}, dates, t1k=args.t1k)
+    text = json.dumps(result, ensure_ascii=False, indent=1)
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"replayed {len(result)} moment(s) -> {args.out}")
+    else:
+        print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

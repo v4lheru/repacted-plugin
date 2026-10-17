@@ -176,17 +176,20 @@ def _assert_deny_text(reason, *, rule_text, enumeration):
 # ── Marker liveness ───────────────────────────────────────────────────────
 
 
-def test_load_failure_marker_is_live():
+def test_load_failure_marker_is_live(capsys):
     """The load-failure marker asserted ABSENT elsewhere must be a real
     substring of the gate's load-failure text, else every such assertion is
-    vacuous. Read from source rather than imported so this still means
-    something if the constant is restructured."""
-    src = (Path(__file__).parent.parent / "hooks" / "dispatch_gate.py").read_text(
-        encoding="utf-8"
-    )
-    assert _LOAD_FAILURE_MARKER in src, (
-        "load-failure marker no longer appears in dispatch_gate.py — every "
-        "absence assertion using it is now vacuous"
+    vacuous. The text now lives in hooks/_fail_closed.py, shared by the gates,
+    so the gate's own load-failure path is run and its deny reason read."""
+    import dispatch_gate
+
+    with pytest.raises(SystemExit) as exited:
+        dispatch_gate._emit_load_failure_deny("module imports", RuntimeError("probe"))
+    assert exited.value.code == 2
+    reason = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _LOAD_FAILURE_MARKER in reason, (
+        "load-failure marker no longer appears in dispatch_gate's load-failure "
+        "deny; every absence assertion using it is now vacuous"
     )
 
 

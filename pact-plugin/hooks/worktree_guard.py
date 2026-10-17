@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Location: pact-plugin/hooks/worktree_guard.py
-Summary: PreToolUse hook matching Edit|Write that blocks edits to application
-         code outside the active worktree boundary.
-Used by: hooks.json PreToolUse hook (matcher: Edit|Write)
+Summary: PreToolUse hook matching Edit|Write|MultiEdit|NotebookEdit that blocks
+         edits to application code outside the active worktree boundary.
+Used by: hooks.json PreToolUse hook (matcher: Edit|Write|MultiEdit|NotebookEdit)
 
-Only active when PACT_WORKTREE_PATH env var is set (by /PACT:worktree-setup).
+Only active when PACT_WORKTREE_PATH env var is set (by /repacted:worktree-setup).
 Complete no-op otherwise.
 
-Input: JSON from stdin with tool_input.file_path
+Input: JSON from stdin with tool_input.file_path (notebook_path for NotebookEdit)
 Output: JSON with hookSpecificOutput.permissionDecision if blocking
 """
 
@@ -18,46 +18,15 @@ import json
 import sys
 import os
 from pathlib import Path
-from typing import NoReturn
+from functools import partial
 
 _SUPPRESS_OUTPUT = json.dumps({"suppressOutput": True})
 
 
-def _emit_load_failure_deny(stage: str, error: BaseException) -> NoReturn:
-    """Stdlib-only fail-closed deny. Mirrors the ``dispatch_gate`` /
-    ``bootstrap_gate`` analogue.
+# The one fail-closed emitter (hooks/_fail_closed.py, stdlib only); bound to this check's name.
+from _fail_closed import emit_load_failure_deny
 
-    This module imports only stdlib, so there is no cross-package import to
-    wrap (an import wrapper here would be vacuous). The live fail-open
-    exposure is RUNTIME: an uncaught gate-logic exception crashes the hook
-    (exit 1), which the platform treats as a NON-blocking PreToolUse hook —
-    the Edit/Write would PROCEED outside the worktree boundary. main() wraps
-    everything after stdin parsing in ``except Exception`` routing here
-    (stdin-parse failure stays fail-open: input-side failure is the
-    harness's domain and cannot be evaluated, mirroring bootstrap_gate).
-
-    Residual not covered here: an in-file SyntaxError / parse-time crash
-    still exits 1 → fail-open; no in-file code can close that (a file cannot
-    wrap its own parse). That class is held closed by the static
-    annotation-compat guard in tests/ (Python 3.9 importability rules).
-    hookEventName MUST be present.
-    """
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                f"PACT worktree_guard {stage} failure — blocking for safety. "
-                f"{type(error).__name__}: {error}. Check hook installation "
-                "and shared module availability."
-            ),
-        }
-    }))
-    print(
-        f"Hook load error (worktree_guard / {stage}): {error}",
-        file=sys.stderr,
-    )
-    sys.exit(2)
+_emit_load_failure_deny = partial(emit_load_failure_deny, "worktree_guard")
 
 # Paths always allowed regardless of worktree
 ALLOW_PATTERNS = [
@@ -92,6 +61,17 @@ def is_allowed_path(file_path: str) -> bool:
         if clean in parts or name == clean:
             return True
     return False
+
+
+def _always_allowed(resolved_file: str, resolved_worktree: str) -> bool:
+    """is_allowed_path, anchored at the project root when the file is inside it: only the
+    root's own .claude/ and docs/ (or a CLAUDE.md / .gitignore file) pass, so an app dir that
+    happens to be named docs (src/api/docs/routes.py) is still guarded."""
+    root = _find_project_root(resolved_worktree)
+    if not root or not resolved_file.startswith(root.rstrip(os.sep) + os.sep):
+        return is_allowed_path(resolved_file)
+    parts = Path(resolved_file).relative_to(root).parts
+    return parts[0] in (".claude", "docs") or parts[-1] in ("CLAUDE.md", ".gitignore")
 
 
 def is_application_code(file_path: str) -> bool:
@@ -205,21 +185,24 @@ def check_worktree_boundary(file_path: str, worktree_path: str) -> str | None:
     if not worktree_path:
         return None  # No worktree active, no-op
 
-    # Always allow certain paths
-    if is_allowed_path(file_path):
-        return None
-
-    # Check if inside worktree
+    # Every test below reads the RESOLVED path: "<main>/docs/../src/app.py" is src/app.py.
     try:
         resolved_file = str(Path(file_path).resolve())
         resolved_worktree = str(Path(worktree_path).resolve())
-        if resolved_file.startswith(resolved_worktree):
-            return None  # Inside worktree, OK
     except (ValueError, OSError):
         return None  # Can't resolve, allow by default
 
+    if _always_allowed(resolved_file, resolved_worktree):
+        return None
+
+    # The separator keeps a peer tree whose name extends this one's (feat2 beside feat) outside.
+    if resolved_file == resolved_worktree or resolved_file.startswith(
+        resolved_worktree.rstrip(os.sep) + os.sep
+    ):
+        return None  # Inside worktree, OK
+
     # Outside worktree — only block if it's application code
-    if is_application_code(file_path):
+    if is_application_code(resolved_file):
         suggestion = _suggest_worktree_path(file_path, worktree_path)
         msg = (
             f"Edit blocked: {file_path} is outside the active worktree "
@@ -245,7 +228,8 @@ def main():
         sys.exit(0)
 
     try:
-        file_path = input_data.get("tool_input", {}).get("file_path", "")
+        tool_input = input_data.get("tool_input", {})
+        file_path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
         if not file_path:
             print(_SUPPRESS_OUTPUT)
             sys.exit(0)

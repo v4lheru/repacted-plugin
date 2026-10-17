@@ -23,7 +23,7 @@ import task_lifecycle_gate as tlg  # noqa: E402
 from fixtures.emitter import VALID_HANDOFF  # noqa: E402
 
 TEAM = "pact-test"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 
 # The case issue #1543 reports: legacy-spelled and otherwise perfect.
 LEGACY_HANDOFF = {
@@ -114,8 +114,15 @@ class TestCompletionTimeSchema:
 
 
 class TestWriteTimeSchema:
-    def test_fires_on_legacy_spelling(self, tmp_path, monkeypatch, pact_context):
+    def test_a_legacy_spelling_is_judged_as_repaired(self, tmp_path, monkeypatch,
+                                                     pact_context):
+        """1.5.0, D3: handoff_ordering_gate renames key_decisions before the write
+        lands, so the write-time check judges the repaired object. A field with no
+        alias still draws the advisory."""
         rules = _rules(_write(LEGACY_HANDOFF), tmp_path, monkeypatch, pact_context)
+        assert "handoff_schema_invalid_at_write_time" not in rules
+        missing = {k: v for k, v in VALID_HANDOFF.items() if k != "integration"}
+        rules = _rules(_write(missing), tmp_path, monkeypatch, pact_context)
         assert "handoff_schema_invalid_at_write_time" in rules
 
     def test_silent_on_valid_handoff(self, tmp_path, monkeypatch, pact_context):

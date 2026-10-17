@@ -1,4 +1,0 @@
-{
-  "name": "PACT Plugin",
-  "install": "bash .cursor/install.sh"
-}

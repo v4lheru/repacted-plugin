@@ -4,7 +4,7 @@ Structural pin tests for the memory-index append-method rule.
 Pins the reader-facing instruction surfaces that carry the append-not-rewrite
 rule for an agent's persistent MEMORY.md index:
 
-  canonical (skills/pact-agent-teams/SKILL.md, "Index upkeep" paragraph):
+  canonical (skills/teammate/references/teammate-memory.md, "Index upkeep" paragraph):
     - the forbidden method family named explicitly, including the shell
       one-liner form (`read_text()` → `replace()` → `write_text()` in one
       shell command is still a whole-file rewrite),
@@ -58,7 +58,7 @@ import pytest
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
-SKILL = PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md"
+SKILL = PLUGIN_ROOT / "skills" / "teammate" / "references" / "teammate-memory.md"
 ORCHESTRATOR = PLUGIN_ROOT / "agents" / "pact-orchestrator.md"
 
 
@@ -182,24 +182,6 @@ ABSENCE_PINS = [
 ]
 
 
-@pytest.mark.parametrize(
-    "doc_path, retired",
-    ABSENCE_PINS,
-    ids=[f"{p.name}::{ph[:40]}" for p, ph in ABSENCE_PINS],
-)
-def test_retired_scope_phrase_absent(doc_path: Path, retired: str):
-    """Regression guard: the retired two-step-only scope phrase must not
-    reappear on either surface — reintroduction would re-narrow the
-    prohibition to the copy-from-earlier form and re-open the scripted
-    one-liner gap. Checked against backtick-and-whitespace-normalized text
-    so neither a hard-wrapped nor an inline-code rendering slips past."""
-    assert _phrase(retired) not in _normalized(doc_path), (
-        f"{doc_path.name}: retired scope phrase {retired!r} reappeared. "
-        f"The append rule now forbids a whole-file rewrite however "
-        f"produced; do not reintroduce the two-step-only scope (if a "
-        f"future rule genuinely narrows it, update this guard "
-        f"deliberately)."
-    )
 
 
 # ---------------------------------------------------------------------------

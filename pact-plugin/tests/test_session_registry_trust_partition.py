@@ -65,7 +65,8 @@ _FORBIDDEN_AUTHORITY_CALLS = ("_registry_resolve", "resolve_agent_name")
 # The four sanctioned consumers are all LABELING / coordination / lifecycle uses
 # (the registry value never reaches an authority decision through any of them):
 #   * shared/pact_context.py — resolve_agent_name Step 3.5 (human-readable label)
-#   * session_init.py        — teammate-branch lead-team resolution (peer display)
+#   * shared/session_init_teammate.py — teammate-branch lead-team resolution
+#     (peer display; moved out of session_init.py in A4b)
 #   * session_end.py         — prune (imports REGISTRY_PATH only, no resolver)
 #   * task_claim_gate.py     — F2 strict identity resolve() for the #961 claim
 #     gate: a COORDINATION use, never authority. The resolved name only gates a
@@ -107,10 +108,13 @@ _FORBIDDEN_AUTHORITY_CALLS = ("_registry_resolve", "resolve_agent_name")
 # the module does not import itself, so the detector does not flag it.
 _ALLOWED_REGISTRY_IMPORTERS = frozenset({
     "shared/pact_context.py",
-    "session_init.py",
+    "shared/session_init_teammate.py",
     "session_end.py",
     "task_claim_gate.py",
     "shared/background_work.py",
+    # Frame.registry_name: the docker lock's caller label for a separate-process
+    # teammate. Frame.actor (the authority signal) never reads it.
+    "shared/frame.py",
 })
 
 

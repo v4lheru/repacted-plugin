@@ -16,7 +16,6 @@ import pytest
 
 import scripts.memory_api as memory_api  # noqa: E402
 import scripts.working_memory as wm  # noqa: E402
-import staleness  # noqa: E402
 
 _PLUGIN = Path(__file__).resolve().parent.parent
 _SEED = "# Project Memory\n\n## Working Memory\n"
@@ -122,20 +121,6 @@ def test_resolve_display_claude_md_with_base_common_dir_call_ignores_an_inherite
     )
 
 
-def test_resolve_project_claude_md_with_base_ignores_an_inherited_GIT_DIR(
-    tmp_path, monkeypatch, unrelated
-):
-    repo = _repo(tmp_path / "R")
-    monkeypatch.chdir(repo)
-    _inherit_git_dir(monkeypatch, unrelated)
-
-    found, base = staleness._resolve_project_claude_md_with_base()
-
-    assert _same(found, repo / ".claude" / "CLAUDE.md") and _same(base, repo), (
-        f"staleness resolved {found} (base {base}) from the inherited GIT_DIR"
-    )
-
-
 def test_main_repo_root_ignores_an_inherited_GIT_DIR(tmp_path, monkeypatch, unrelated):
     repo = _repo(tmp_path / "R")
     monkeypatch.chdir(repo)
@@ -153,7 +138,6 @@ def test_main_repo_root_ignores_an_inherited_GIT_DIR(tmp_path, monkeypatch, unre
 _RESOLVER_GIT_CALLS = {
     ("skills/pact-memory/scripts/working_memory.py", "_get_claude_md_path"): 1,
     ("skills/pact-memory/scripts/working_memory.py", "_resolve_display_claude_md_with_base"): 2,
-    ("hooks/staleness.py", "_resolve_project_claude_md_with_base"): 1,
     ("skills/pact-memory/scripts/memory_api.py", "main_repo_root"): 1,
 }
 

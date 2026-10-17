@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""distill-inbox: the wrap-up pass that empties agent-memory inboxes (repacted:memory-hygiene).
+
+Location: pact-plugin/bin/distill-inbox. The lead runs
+it at /repacted:wrap-up or whenever check-index --all fails. The MODEL decides every row;
+this tool only collects, records and removes.
+
+  list    collect every inbox lesson line, plus any head line beyond the router block (an
+          agent following the old "append below the preamble" rule), across all dirs
+  plan    write distill-plan.json: one item per line, kind/destination left for the model;
+          --suggest adds a local duplicate shortlist: the 5 skill rules closest by TF-IDF
+          (bin/rule_match.py; the model reads them and decides). Fail-open
+  apply   remove exactly the planned lines (sha-guarded), record `line | destination | date`
+          in ARCHIVE_distilled-YYYY-MM.md, archive any leaf a removed head line linked, then
+          run check-index on the touched heads and scrub-check on the touched skill files
+
+A plan item is applied only when the model filled `kind` (skill | project | vault |
+duplicate) and `destination`. Anything else stays where it is.
+Exit codes: 0 ok; 1 a check failed or a planned line could not be applied; 2 usage.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+BIN_DIR = Path(__file__).resolve().parent
+PLUGIN_ROOT = BIN_DIR.parent
+sys.path.insert(0, str(BIN_DIR))
+
+HEAD_FILE = "MEMORY.md"
+INBOX_FILE = "MEMORY-inbox.md"
+MIGRATED_TABLE = "ARCHIVE_migrated-to-skills.md"
+KEPT_PREFIX = "Kept in the head: "
+LESSON_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \| .+")
+LINK_RE = re.compile(r"\]\(([^)\s#]+)\)")
+KINDS = ("skill", "project", "vault", "duplicate")
+PLAN_VERSION = 1
+EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
+ROUTER_FIXED = (
+    "`MEMORY-*.md` and `INDEX_*.md` roll up a topic; `ARCHIVE_*.md` holds retired entries.",
+    "Skills for this role are listed in the agent definition. "
+    "Project facts live in each project's docs/agent-notes/.",
+    "New lessons: append ONE line to [MEMORY-inbox.md](MEMORY-inbox.md) as "
+    "`YYYY-MM-DD | lesson | evidence path`.",
+    "Do not add lessons to this file. The distill pass moves inbox lines into skills "
+    "and records where each went.",
+    "Migrated entries: ARCHIVE_migrated-to-skills.md lists every old file and its new home.",
+    "## Role notes",
+)
+EXAMPLES = """examples:
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/distill-inbox" list
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/distill-inbox" plan --suggest --out distill-plan.json
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/distill-inbox" apply distill-plan.json
+"""
+USAGE_EXAMPLES = {
+    "list": 'example: python3 "${CLAUDE_PLUGIN_ROOT}/bin/distill-inbox" list',
+    "plan": 'example: python3 "${CLAUDE_PLUGIN_ROOT}/bin/distill-inbox" plan --suggest --out distill-plan.json',
+    "apply": 'example: python3 "${CLAUDE_PLUGIN_ROOT}/bin/distill-inbox" apply distill-plan.json',
+}
+
+
+class DistillError(RuntimeError):
+    """A plan cannot be applied as written."""
+
+
+# ---------------------------------------------------------------------------
+# list
+# ---------------------------------------------------------------------------
+
+def default_root() -> Path:
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+    return Path(config).expanduser() / "agent-memory"
+
+
+def item_id(directory: str, source: str, line: str) -> str:
+    return hashlib.sha1(f"{directory}\0{source}\0{line}".encode("utf-8")).hexdigest()[:12]
+
+
+def kept_files(directory: Path) -> Optional[set[str]]:
+    """The KEEP leaves the migration recorded for this dir, or None when it never ran."""
+    table = directory / MIGRATED_TABLE
+    if not table.is_file():
+        return None
+    for line in table.read_text(encoding="utf-8").splitlines():
+        if line.startswith(KEPT_PREFIX):
+            names = line[len(KEPT_PREFIX):].strip()
+            return {n.strip() for n in names.split(",") if n.strip() and n.strip() != "(none)"}
+    return None
+
+
+def head_extras(directory: Path) -> list[str]:
+    """Head lines that are not the router block: the title, the fixed lines, KEEP links."""
+    head = directory / HEAD_FILE
+    if not head.is_file():
+        return []
+    kept = kept_files(directory)
+    extras = []
+    for index, line in enumerate(head.read_text(encoding="utf-8").splitlines()):
+        stripped = line.strip()
+        if not stripped or stripped in ROUTER_FIXED or (index == 0 and stripped.startswith("# ")):
+            continue
+        targets = LINK_RE.findall(stripped)
+        if targets and stripped.startswith("- [") and (
+                kept is None or all(target in kept for target in targets)):
+            continue          # a KEEP pointer (every link line counts before a migration)
+        extras.append(line)
+    return extras
+
+
+def collect(root: Path) -> list[dict]:
+    """Every inbox lesson and head extra under root, in dir order."""
+    items = []
+    for directory in sorted(p for p in root.iterdir() if p.is_dir()):
+        inbox = directory / INBOX_FILE
+        if inbox.is_file():
+            for line in inbox.read_text(encoding="utf-8").splitlines():
+                if LESSON_RE.match(line):
+                    items.append(_item(directory.name, "inbox", line))
+        for line in head_extras(directory):
+            items.append(_item(directory.name, "head", line))
+    return items
+
+
+def _item(directory: str, source: str, line: str) -> dict:
+    return {"id": item_id(directory, source, line), "dir": directory, "source": source,
+            "line": line, "kind": None, "destination": None}
+
+
+# ---------------------------------------------------------------------------
+# plan
+# ---------------------------------------------------------------------------
+
+def suggest_duplicates(items: list[dict], skills_dir: Path = PLUGIN_ROOT / "skills") -> None:
+    """Attach a local TF-IDF shortlist of the closest skill rules (never a kind)."""
+    try:
+        from rule_match import extract_rules, tfidf_top
+        rules = extract_rules(skills_dir)
+    except Exception as exc:  # fail-open: the pass works without the duplicate check
+        for item in items:
+            item["duplicate_check"] = {"status": f"unchecked ({exc.__class__.__name__})"}
+        return
+
+    for item in items:
+        item["duplicate_check"] = {"status": "shortlist", "candidates": tfidf_top(item["line"], rules, 5)}
+
+
+def build_plan(root: Path, with_suggest: bool) -> dict:
+    items = collect(root)
+    if with_suggest and items:
+        suggest_duplicates(items)
+    return {"version": PLAN_VERSION, "root": str(root),
+            "created": datetime.date.today().isoformat(), "items": items,
+            "instructions": "Fill kind (skill|project|vault|duplicate) and destination for each "
+                            "item you have distilled: a skill reference path relative to the plugin "
+                            "root, a project doc path, a vault page, or where the duplicate lives. "
+                            "Leave both null to keep the line. duplicate_check lists the closest skill "
+                            "rules as a hint: read them and decide; only kind and destination are "
+                            "applied. Then run: distill-inbox apply <plan>."}
+
+
+# ---------------------------------------------------------------------------
+# apply
+# ---------------------------------------------------------------------------
+
+def validate_item(item: dict, plugin_root: Path) -> Optional[str]:
+    """Why a filled item cannot be applied, or None."""
+    if item.get("kind") not in KINDS:
+        return f"kind must be one of {KINDS}"
+    destination = (item.get("destination") or "").strip()
+    if not destination:
+        return "destination is empty"
+    if item["kind"] == "skill" and not (plugin_root / destination).is_file():
+        return f"skill reference not found under the plugin root: {destination}"
+    if item["kind"] == "project" and not Path(destination).expanduser().exists():
+        return f"project path not found: {destination}"
+    return None
+
+
+def remove_lines(path: Path, lines: list[str]) -> tuple[list[str], list[str]]:
+    """Remove each line once, guarded by the file's sha; returns (removed, not_found)."""
+    raw = path.read_bytes()
+    kept = raw.decode("utf-8").splitlines(keepends=True)
+    removed, not_found = [], []
+    for line in lines:
+        for index, existing in enumerate(kept):
+            if existing.rstrip("\r\n") == line:
+                del kept[index]
+                removed.append(line)
+                break
+        else:
+            not_found.append(line)
+    if not removed:
+        return removed, not_found
+    new = "".join(kept).encode("utf-8")
+    original = raw.decode("utf-8").splitlines()
+    remaining = new.decode("utf-8").splitlines()
+    if len(original) - len(remaining) != len(removed):
+        raise DistillError(f"{path}: removal changed {len(original) - len(remaining)} lines, "
+                           f"planned {len(removed)}")
+    if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256(raw).digest():
+        raise DistillError(f"{path}: changed while distilling (a concurrent write); re-plan")
+    tmp = path.with_name(path.name + ".distill-tmp")
+    tmp.write_bytes(new)
+    os.chmod(tmp, path.stat().st_mode & 0o777)
+    os.replace(tmp, path)
+    return removed, not_found
+
+
+def record(directory: Path, rows: list[tuple[str, str]], date: str) -> Path:
+    """Append `line | destination | date` rows to this month's ARCHIVE_distilled file."""
+    path = directory / f"ARCHIVE_distilled-{date[:7]}.md"
+    if not path.exists():
+        path.write_text(f"# Distilled lessons, {date[:7]}\n\nline | destination | date\n",
+                        encoding="utf-8")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("".join(f"{line} | {dest} | {date}\n" for line, dest in rows))
+    return path
+
+
+def archive_linked_leaves(directory: Path, lines: list[str], archive_root: Path) -> list[str]:
+    """Move leaves that removed head lines linked into the distill archive (never delete)."""
+    moved = []
+    for line in lines:
+        for target in LINK_RE.findall(line):
+            leaf = directory / target
+            if leaf.is_file() and leaf.name not in (INBOX_FILE, HEAD_FILE):
+                dest = archive_root / directory.name / leaf.name
+                if dest.exists():
+                    raise DistillError(f"archive copy already exists: {dest}")
+                dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                os.rename(leaf, dest)
+                moved.append(str(dest))
+    return moved
+
+
+def apply_plan(plan: dict, root: Path, plugin_root: Path, archive_root: Path,
+               run_checks: bool = True, denylist: Optional[Path] = None) -> dict:
+    date = datetime.date.today().isoformat()
+    result = {"applied": 0, "skipped": 0, "not_found": [], "invalid": [], "archived_leaves": [],
+              "touched_dirs": [], "checks": {}}
+    by_file: dict[tuple[str, str], list[dict]] = {}
+    for item in plan.get("items", []):
+        if item.get("kind") is None and item.get("destination") is None:
+            result["skipped"] += 1
+            continue
+        problem = validate_item(item, plugin_root)
+        if problem:
+            result["invalid"].append({"id": item.get("id"), "problem": problem})
+            continue
+        by_file.setdefault((item["dir"], item["source"]), []).append(item)
+    skill_files: set[Path] = set()
+    for (dir_name, source), items in sorted(by_file.items()):
+        directory = root / dir_name
+        path = directory / (INBOX_FILE if source == "inbox" else HEAD_FILE)
+        present = set(path.read_text(encoding="utf-8").splitlines()) if path.is_file() else set()
+        applied = [item for item in items if item["line"] in present]
+        result["not_found"] += [f"{dir_name}/{path.name}: {i['line'][:80]}"
+                                for i in items if i["line"] not in present]
+        if not applied:
+            continue
+        # Record first: a crash between the two steps leaves a record, never a lost line.
+        record(directory, [(i["line"], f"{i['kind']}: {i['destination']}") for i in applied], date)
+        removed, missed = remove_lines(path, [item["line"] for item in applied])
+        if missed:
+            raise DistillError(f"{path}: {len(missed)} recorded line(s) vanished before removal")
+        if source == "head":
+            result["archived_leaves"] += archive_linked_leaves(
+                directory, [item["line"] for item in applied], archive_root)
+        result["applied"] += len(applied)
+        result["touched_dirs"].append(dir_name)
+        skill_files |= {plugin_root / i["destination"] for i in applied if i["kind"] == "skill"}
+    if run_checks:
+        result["checks"] = run_post_checks(root, sorted(set(result["touched_dirs"])),
+                                           sorted(skill_files), denylist)
+    return result
+
+
+def run_post_checks(root: Path, dirs: list[str], skill_files: list[Path],
+                    denylist: Optional[Path] = None) -> dict:
+    checks = {}
+    heads = [str(root / d) for d in dirs if (root / d / HEAD_FILE).is_file()]
+    if heads:
+        proc = subprocess.run([sys.executable, str(BIN_DIR / "check-index"), "--quiet", *heads],
+                              capture_output=True, text=True)
+        checks["check-index"] = {"exit": proc.returncode, "output": proc.stdout.strip()[-2000:]}
+    if skill_files:
+        extra = ["--denylist", str(denylist)] if denylist else []
+        proc = subprocess.run([sys.executable, str(BIN_DIR / "scrub-check"), *extra,
+                               *map(str, skill_files)], capture_output=True, text=True)
+        checks["scrub-check"] = {"exit": proc.returncode,
+                                 "output": (proc.stdout + proc.stderr).strip()[-2000:]}
+    return checks
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="distill-inbox", epilog=EXAMPLES,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     description="Collect, plan and apply the memory distill pass.")
+    parser.add_argument("--root", type=Path, help="agent-memory root (default: the config dir's)")
+    sub = parser.add_subparsers(dest="command")
+    list_cmd = sub.add_parser("list", help="show every pending lesson line")
+    list_cmd.add_argument("--json", action="store_true")
+    plan_cmd = sub.add_parser("plan", help="write a distill plan for the model to fill")
+    plan_cmd.add_argument("--suggest", action="store_true",
+                          help="add the closest skill rules as a duplicate shortlist (fail-open)")
+    plan_cmd.add_argument("--out", type=Path, default=Path("distill-plan.json"))
+    apply_cmd = sub.add_parser("apply", help="apply a filled plan")
+    apply_cmd.add_argument("plan", type=Path)
+    apply_cmd.add_argument("--plugin-root", type=Path, default=PLUGIN_ROOT)
+    apply_cmd.add_argument("--archive-root", type=Path,
+                           help="where linked leaves go (default: <config>/_archive/distilled)")
+    apply_cmd.add_argument("--denylist", type=Path, help="scrub-check denylist (default: scrub-check's)")
+    apply_cmd.add_argument("--no-checks", action="store_true", help="skip check-index and scrub-check")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_USAGE if exc.code else EXIT_OK
+    if not args.command:
+        print(f"distill-inbox: choose list, plan or apply\n\n{USAGE_EXAMPLES['list']}", file=sys.stderr)
+        return EXIT_USAGE
+    root = (args.root or default_root()).expanduser()
+    if not root.is_dir():
+        print(f"distill-inbox: no agent-memory root at {root}\n\n{USAGE_EXAMPLES[args.command]}",
+              file=sys.stderr)
+        return EXIT_USAGE
+    if args.command == "list":
+        items = collect(root)
+        if args.json:
+            print(json.dumps(items, indent=1, ensure_ascii=False))
+        else:
+            for item in items:
+                print(f"{item['dir']}  {item['source']}  {item['id']}  {item['line'][:140]}")
+            print(f"distill-inbox: {len(items)} line(s) pending")
+        return EXIT_OK
+    if args.command == "plan":
+        plan = build_plan(root, args.suggest)
+        args.out.write_text(json.dumps(plan, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"distill-inbox: {len(plan['items'])} item(s) planned in {args.out}; fill kind and "
+              "destination for each, then run apply")
+        return EXIT_OK
+    try:
+        plan = json.loads(args.plan.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"distill-inbox: cannot read plan: {exc}\n\n{USAGE_EXAMPLES['apply']}", file=sys.stderr)
+        return EXIT_USAGE
+    archive_root = args.archive_root or root.parent / "_archive" / "distilled"
+    try:
+        result = apply_plan(plan, root, args.plugin_root, archive_root, not args.no_checks,
+                            args.denylist)
+    except DistillError as exc:
+        print(f"distill-inbox: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    print(json.dumps(result, indent=1, ensure_ascii=False))
+    failed = result["invalid"] or result["not_found"] or any(
+        check.get("exit") for check in result["checks"].values())
+    return EXIT_FAILED if failed else EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

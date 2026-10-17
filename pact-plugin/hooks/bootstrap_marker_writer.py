@@ -2,20 +2,20 @@
 """
 Location: pact-plugin/hooks/bootstrap_marker_writer.py
 Summary: Dual-event hook that writes the bootstrap-complete marker once the
-         bootstrap ritual's pre-conditions are observable on disk (team config
-         exists AND `secretary` is in members[]). Verify-and-refuse semantic:
-         hook does NOT create pre-conditions; LLM ritual (commands/bootstrap.md
-         Steps 1-2) still owns team resolution + secretary spawn (the platform
-         provisions the session team).
+         session team is identified on disk (the team config lists at least one
+         member, or, config-less, the team's inboxes/ dir exists). The marker is
+         keyed on the TEAM, not on the secretary: the secretary spawns on demand
+         (build plan §3 SECRETARY), so a session that never uses memory never
+         spawns one and must still bootstrap. Verify-and-refuse semantic: the
+         hook does NOT create pre-conditions (the platform provisions the team).
 Used by: hooks.json — registered under TWO events, both running this same
          verify-and-refuse logic (#975):
            - UserPromptSubmit (no matcher — fires every prompt): steady-state
              turn-2+ self-heal; the semantically-strongest "ritual
              demonstrably completed" surface.
            - PostToolUse matched on `Agent`: stamps the marker WITHIN the
-             bootstrapping turn — fires after the secretary spawn returns and
-             the platform has written `secretary` into members[], before the
-             next specialist dispatch is gate-checked.
+             bootstrapping turn when a spawn is what made the team appear on
+             disk, before the next specialist dispatch is gate-checked.
          The marker CONTENT is byte-identical regardless of which event fired
          (same _write_marker + signature SSOT); the firing event affects ONLY
          the echoed hookEventName, never the digest.
@@ -24,7 +24,7 @@ Layer in the four-layer bootstrap gate enforcement (#401, #664). On each
 user message, checks:
   - Marker already exists (valid stamp) → suppressOutput (idempotent fast path)
   - No session dir → suppressOutput (non-PACT session)
-  - Team config absent OR secretary not in members[] → suppressOutput
+  - Team not identified (no member in config, no inboxes/ dir) → suppressOutput
     (verify-and-refuse: pre-conditions unmet, sibling bootstrap_prompt_gate
     owns the user-visible advisory)
   - Pre-conditions met, marker absent → atomic-write marker, suppressOutput
@@ -36,8 +36,8 @@ failure modes (mistype, missing substitution, stale session-dir, skip,
 rationalization-skip). Moving the writer into a hook lifts the gate
 contract from "marker presence == ritual presumed" to "marker presence ==
 ritual demonstrably completed" because the producer can verify the
-ritual's load-bearing artifacts (team config + secretary member entry)
-exist on disk before stamping.
+ritual's load-bearing artifact (the session team) exists on disk before
+stamping.
 
 Atomic write: tempfile.mkstemp(dir=session_dir) + os.fdopen.write +
 os.replace (modeled on shared.pact_context.write_context but using
@@ -167,7 +167,7 @@ try:
 
     import shared.pact_context as pact_context
     from bootstrap_gate import is_marker_set
-    from shared import BOOTSTRAP_MARKER_NAME
+    from shared.constants import BOOTSTRAP_MARKER_NAME
     from shared.claude_md_manager import resolve_project_claude_md_path
     from shared.marker_schema import (
         MARKER_MAX_BYTES,
@@ -254,6 +254,37 @@ def _team_has_secretary(team_name: str) -> bool:
     except Exception:
         return False
     return False
+
+
+def _team_is_identified(team_name: str) -> bool:
+    """Return True iff the session team exists on disk: its config.json lists
+    at least one member (the platform writes the lead as a member when it
+    provisions the team), or, on the config-less Desktop / print substrate,
+    ``teams/<team_name>/inboxes/`` exists.
+
+    This is the marker pre-condition since the secretary became on-demand
+    (build plan §3 SECRETARY: "the bootstrap marker is keyed on the team, not
+    on the secretary"). Requiring the secretary here would block Edit/Write/
+    Agent for the whole of every session that never uses memory.
+
+    Member-shape semantics come from the shared ``pact_context._iter_members``
+    (missing config, malformed JSON, non-list members and non-dict entries all
+    yield nothing), and a member counts only when it carries a non-empty string
+    ``name`` (the platform always writes one), so an empty or malformed roster
+    is NOT an identified team.
+    Fail-safe ``False`` on any error.
+    """
+    if not team_name:
+        return False
+    try:
+        for member in pact_context._iter_members(team_name):
+            name = member.get("name")
+            if isinstance(name, str) and name.strip():
+                return True
+        teams_dir = pact_context.get_claude_config_dir() / "teams"
+        return (teams_dir / team_name / "inboxes").is_dir()
+    except Exception:
+        return False
 
 
 def _debug_log_if_derived_team_dir_missing(team_name: str) -> None:
@@ -508,14 +539,15 @@ def _try_write_marker(input_data: dict) -> None:
 
     # Self-heal the persisted team name to the identity-matched one (#989),
     # lead-gated like the marker write below. No-op when they already match
-    # (the normal CLI case). Never raises. Done BEFORE the secretary check so
+    # (the normal CLI case). Never raises. Done BEFORE the team check so
     # the check (and the marker's session_id) read the aligned team.
     _write_back_aligned_team_name()
 
-    # Pre-condition: team config + secretary member exist on disk.
+    # Pre-condition: the session team exists on disk (keyed on the team, not
+    # on the secretary, which spawns on demand).
     team_name = pact_context.get_team_name()
-    if not _team_has_secretary(team_name):
-        # Best-effort, fail-safe rename-detector (#979): the secretary-absent
+    if not _team_is_identified(team_name):
+        # Best-effort, fail-safe rename-detector (#979): the team-absent
         # refuse is exactly where a FUTURE platform team-naming change would
         # surface as a silent marker-never-written deadlock. Emit a DEBUG
         # signal IFF the derived team dir is absent AND a sibling session-* dir

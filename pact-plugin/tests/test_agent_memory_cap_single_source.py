@@ -74,7 +74,8 @@ import pytest
 PLUGIN_ROOT = Path(__file__).parent.parent
 
 # The single source, and the file whose table points at it.
-SINGLE_SOURCE = "skills/pact-agent-teams/SKILL.md"
+# TEAMMATE (m6): the index-upkeep rule moved into the teammate skill's memory reference.
+SINGLE_SOURCE = "skills/teammate/references/teammate-memory.md"
 REFERRER = "skills/pact-memory/SKILL.md"
 
 # Unit vocabulary of the size ceiling.
@@ -221,7 +222,10 @@ POINTER_TOKEN = "index-upkeep rule"
 RULE_HEADING = "Index upkeep"
 
 # --- the memory-block selection rule (see the second docstring block below) ---
-SELECTOR_FILE = SINGLE_SOURCE
+# TEAMMATE (m6): the spawn-time site is On Start in the teammate SKILL.md (read every spawn);
+# the wrap-up site is the memory reference. One site each, same wording.
+SELECTOR_FILES = ("skills/teammate/SKILL.md", SINGLE_SOURCE)
+SELECTOR_FILE = " + ".join(SELECTOR_FILES)
 # The discriminator, backtick-anchored and deliberately carrying NO UNEXPANDED
 # ROOT TOKEN and no config-root NAME -- see the rationale block below.
 DISCRIMINATOR = "`/agent-memory/`"
@@ -1560,14 +1564,15 @@ def _selector_slices():
     """
     import re
 
-    text = (PLUGIN_ROOT / SELECTOR_FILE).read_text(encoding="utf-8")
     out = []
-    for lineno, line in enumerate(text.splitlines(), 1):
-        if DISCRIMINATOR not in line:
-            continue
-        for sentence in re.split(r'(?<=\.)\s+(?=[A-Z`“"*])', line):
-            if DISCRIMINATOR in sentence:
-                out.append((lineno, sentence))
+    for name in SELECTOR_FILES:
+        text = (PLUGIN_ROOT / name).read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if DISCRIMINATOR not in line:
+                continue
+            for sentence in re.split(r'(?<=\.)\s+(?=[A-Z`“"*])', line):
+                if DISCRIMINATOR in sentence:
+                    out.append((f"{name}:{lineno}", sentence))
     return out
 
 
@@ -1635,10 +1640,11 @@ def test_discriminator_keeps_its_leading_slash():
     belt-and-braces -- it is the only thing holding that margin, and the edit
     that breaks it is a single keystroke.
     """
-    text = (PLUGIN_ROOT / SELECTOR_FILE).read_text(encoding="utf-8")
     bare_sites = [
-        lineno
-        for lineno, line in enumerate(text.splitlines(), 1)
+        f"{name}:{lineno}"
+        for name in SELECTOR_FILES
+        for lineno, line in enumerate(
+            (PLUGIN_ROOT / name).read_text(encoding="utf-8").splitlines(), 1)
         if BARE_DISCRIMINATOR in line.replace(DISCRIMINATOR, "")
     ]
     assert not bare_sites, (

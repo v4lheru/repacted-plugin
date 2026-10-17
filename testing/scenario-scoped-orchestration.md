@@ -13,7 +13,7 @@ Verify the scoped orchestration flow: scope detection fires after PREPARE, the o
 1. PACT plugin installed with all orchestration commands and protocols
 2. `PACT_AUTONOMOUS_SCOPE_DETECTION=1` set (e.g. in `settings.json`'s `env` block, or a shell export) for testing the autonomous tier, or unset / `0` for testing the confirmed tier
 3. No active worktrees for the test feature branch
-4. Familiarity with `pact-plugin/protocols/pact-scope-detection.md` (scoring heuristics) and `pact-plugin/protocols/pact-scope-phases.md` (ATOMIZE/CONSOLIDATE phases)
+4. Familiarity with `pact-plugin/protocols/workflows.md` §Scope Detection (scoring heuristics) and §Scoped Phases (ATOMIZE/CONSOLIDATE phases)
 5. All verification scripts passing
 
 ## Steps
@@ -23,7 +23,7 @@ Verify the scoped orchestration flow: scope detection fires after PREPARE, the o
 Choose a task that touches 2+ independent domains to trigger scope detection. Example:
 
 ```
-/PACT:orchestrate Build a user profile feature: REST API endpoint for profile CRUD, React component for profile display, and database migration for the profiles table
+/repacted:orchestrate Build a user profile feature: REST API endpoint for profile CRUD, React component for profile display, and database migration for the profiles table
 ```
 
 This task has distinct domain boundaries (backend API, frontend UI, database migration) and non-overlapping work areas -- both strong signals in the detection heuristics.
@@ -39,7 +39,7 @@ This task has distinct domain boundaries (backend API, frontend UI, database mig
 
 ### Step 3: Observe Scope Detection
 
-**What happens**: After PREPARE completes, the orchestrator evaluates the output against the heuristics in `pact-plugin/protocols/pact-scope-detection.md`.
+**What happens**: After PREPARE completes, the orchestrator evaluates the output against the heuristics in `pact-plugin/protocols/workflows.md` §Scope Detection.
 
 **Expected scoring** for the example task:
 | Signal | Points |
@@ -82,7 +82,7 @@ Select **Option A** (or let autonomous proceed) to continue the scenario.
 
 ### Step 4: Observe Scope Contract Generation
 
-**What happens**: The orchestrator generates a scope contract for each sub-scope per `pact-plugin/protocols/pact-scope-contract.md`. Contracts define owned files, expected outputs, and cross-scope interfaces.
+**What happens**: The orchestrator generates a scope contract for each sub-scope per `pact-plugin/protocols/workflows.md` §Scoped Phases. Contracts define owned files, expected outputs, and cross-scope interfaces.
 
 **Expected outcome**: 3 scope contracts generated:
 - Backend scope: owns API endpoint files, exports REST interface
@@ -102,8 +102,8 @@ Standard ARCHITECT and CODE tasks are marked `completed` with `{"skipped": true,
 ### Step 6: Observe ATOMIZE Phase
 
 **What happens**: The orchestrator dispatches sub-scopes for execution. Each sub-scope gets:
-1. Its own worktree via `/PACT:worktree-setup` (e.g., `feature/user-profile--backend`)
-2. A `/PACT:rePACT` invocation with the scope contract
+1. Its own worktree via `/repacted:worktree-setup` (e.g., `feature/user-profile--backend`)
+2. A `/repacted:rePACT` invocation with the scope contract
 3. Independent execution of a full P, A, C, T cycle within its scope
 
 **Expected outcome**:
@@ -133,13 +133,13 @@ Should show 4 entries: main directory + 3 sub-scope worktrees:
 - Contract items fulfilled
 - Any cross-scope dependencies discovered
 
-**Failure handling**: If one sub-scope fails, sibling scopes continue. The failed scope routes through `/PACT:imPACT` independently.
+**Failure handling**: If one sub-scope fails, sibling scopes continue. The failed scope routes through `/repacted:imPACT` independently.
 
 ### Step 8: Observe CONSOLIDATE Phase
 
 **What happens**: After all sub-scopes complete, CONSOLIDATE runs:
 1. Merges each sub-scope's suffix branch back to the feature branch
-2. Cleans up sub-scope worktrees via `/PACT:worktree-cleanup`
+2. Cleans up sub-scope worktrees via `/repacted:worktree-cleanup`
 3. Dispatches two agents in parallel:
    - `pact-architect`: Verifies cross-scope contract compatibility
    - `pact-test-engineer`: Runs cross-scope integration tests

@@ -76,16 +76,15 @@ HOOKS_DIR = Path(__file__).parent.parent / "hooks"
 # Hooks that make a lead/teammate role decision and MUST route it through
 # is_lead. Each entry is a top-level hook filename relative to hooks/. This
 # set IS the migrated Class-A (session_init, postcompact_archive) + Class-B
-# (the 5 teammate-bypass gates) surface. A migrated hook dropping its is_lead
+# (the teammate-bypass gates; the two pin gates went with the 1.5.0 cut) surface. A migrated hook dropping its is_lead
 # call (regressing to the old heuristic) is caught here.
 MIGRATED_HOOKS: tuple[str, ...] = (
     "session_init.py",          # Class-A: 4 lead-only writes
     "postcompact_archive.py",   # Class-A2 (#881): compact-summary write
     "bootstrap_gate.py",        # Class-B DENY
-    "pin_staleness_gate.py",    # Class-B DENY
-    "pin_caps_gate.py",         # Class-B DENY
     "bootstrap_prompt_gate.py", # Class-B inject
     "bootstrap_marker_writer.py",  # Class-B marker write
+    "evidence_gate.py",         # D10 acceptance bridge: only the lead's acceptance closes a project task
 )
 
 
@@ -121,12 +120,43 @@ _SANCTIONED_RESOLVE_AGENT_NAME_SITES: frozenset[tuple[str, str]] = frozenset({
     ("shared/pact_context.py", "resolve_agent_name"),
 })
 
+# Named-site allowlist for ``agent_id`` reads used as a LABEL, never a role
+# signal. Keyed (hook file, enclosing function), like the set above, so any
+# OTHER agent_id read in the same file is still flagged.
+#
+# Why each site is sanctioned:
+#   run_ledger.py / _attribution_agent_id:
+#       the run ledger records which agent ran a test command. The helper
+#       returns the payload's raw ``agent_id`` for the record's agent_id field
+#       and never branches on it. In-process teammates share the lead's
+#       session_id, and session_registry skips in-process writes, so agent_id
+#       is the only name source. Same class as file_tracker's sanctioned label
+#       use above. (repacted M2 add-on; evidence: wu10-shell's HANDOFF.)
+#       TestSanctionedAgentIdSitesAreReal keeps the site real and read-only.
+#   amendment_relay.py / _actor_agent_id:
+#       the amendment relay reads the raw agent_id only to ADDRESS amendments:
+#       whose owned in_progress tasks to read and whose stamp file to use. Two
+#       shapes name a teammate: an in-process "a" + agent_type + "-" + 16 hex,
+#       compared whole against one built from agent_type and never parsed, and
+#       an older "name@team". It never grants or denies anything; a missing or
+#       malformed value relays nothing. The branch is on the returned value, in
+#       addressee().
+#       (repacted phase D D2; lead-approved one-line fork-test change.)
+_SANCTIONED_AGENT_ID_LABEL_SITES: frozenset[tuple[str, str]] = frozenset({
+    ("run_ledger.py", "_attribution_agent_id"),
+    ("amendment_relay.py", "_actor_agent_id"),
+    # Identity confidence for the auto-claim: an agent_id on a separate-process
+    # session marks a frame the registry row does not name (T-d79f0e31).
+    ("task_claim_gate.py", "_frame_agent_id"),
+})
+
 
 def _hook_files() -> list[Path]:
-    """All top-level hook .py files (excludes __init__, shared/, tests)."""
+    """All top-level hook .py files (excludes __init__, shared/, tests), plus
+    the shared/session_init_*.py modules that hold session_init's frame code."""
     return sorted(
-        p for p in HOOKS_DIR.glob("*.py")
-        if p.name != "__init__.py"
+        [p for p in HOOKS_DIR.glob("*.py") if p.name != "__init__.py"]
+        + list(HOOKS_DIR.glob("shared/session_init_*.py"))
     )
 
 
@@ -217,6 +247,13 @@ def _find_agent_id_role_uses(
         if kw.arg == "agent_id"
     }
     offending: list[tuple[str, int]] = []
+
+    def flag(node: ast.AST) -> None:
+        fn = _enclosing_function(tree, node)
+        if (file_label, fn) in _SANCTIONED_AGENT_ID_LABEL_SITES:
+            return
+        offending.append((fn, node.lineno))
+
     for node in ast.walk(tree):
         if id(node) in member_check_ids:
             continue
@@ -227,12 +264,12 @@ def _find_agent_id_role_uses(
                     and node.args):
                 arg0 = node.args[0]
                 if isinstance(arg0, ast.Constant) and arg0.value == "agent_id":
-                    offending.append((_enclosing_function(tree, node), node.lineno))
+                    flag(node)
         # input_data["agent_id"]
         if isinstance(node, ast.Subscript):
             sl = node.slice
             if isinstance(sl, ast.Constant) and sl.value == "agent_id":
-                offending.append((_enclosing_function(tree, node), node.lineno))
+                flag(node)
     return offending
 
 
@@ -340,8 +377,14 @@ class TestPositiveLeg:
         calls_is_lead = any(
             isinstance(n, ast.Call)
             and (
-                (isinstance(n.func, ast.Name) and n.func.id == "is_lead")
-                or (isinstance(n.func, ast.Attribute) and n.func.attr == "is_lead")
+                # is_lead_frame (shared/frame.py) is the lead predicate that wraps
+                # is_lead and adds a lead launched without --agent; resolve_actor
+                # (shared/actor.py) is the policy layer over it (a gate reads
+                # actor.is_lead or a predicate such as bridge_writes()).
+                (isinstance(n.func, ast.Name)
+                 and n.func.id in ("is_lead", "is_lead_frame", "resolve_actor"))
+                or (isinstance(n.func, ast.Attribute)
+                    and n.func.attr in ("is_lead", "is_lead_frame", "resolve_actor"))
             )
             for n in ast.walk(tree)
         )
@@ -356,15 +399,19 @@ class TestPositiveLeg:
 
     def test_migrated_set_is_the_full_class_a_and_class_b_surface(self):
         """Documentation-in-code: the migrated set is exactly the 7 hooks the
-        plan enumerates (2 Class-A + 5 Class-B). Pinning the cardinality means
-        a future edit that drops a hook from the positive leg is a deliberate,
-        reviewed change — not a silent omission that would weaken the leg.
+        plan enumerates (2 Class-A + 5 Class-B), plus evidence_gate.py, whose
+        D10 acceptance bridge closes a project task only on the lead's
+        acceptance (repacted D10 P2, #180 amend_1). Pinning the cardinality
+        means a future edit that drops a hook from the positive leg is a
+        deliberate, reviewed change — not a silent omission that would weaken
+        the leg.
         """
-        assert len(MIGRATED_HOOKS) == 7, (
-            f"MIGRATED_HOOKS has {len(MIGRATED_HOOKS)} entries; expected 7 "
-            f"(session_init + postcompact_archive + 5 Class-B gates). If the "
-            f"migrated surface genuinely changed, update this count with a "
-            f"documented reason."
+        assert len(MIGRATED_HOOKS) == 6, (
+            f"MIGRATED_HOOKS has {len(MIGRATED_HOOKS)} entries; expected 6 "
+            f"(session_init + postcompact_archive + 3 Class-B gates + the D10 "
+            f"acceptance bridge in evidence_gate; the two pin gates went with "
+            f"the 1.5.0 cut). If the migrated surface "
+            f"genuinely changed, update this count with a documented reason."
         )
 
 
@@ -502,6 +549,30 @@ class TestNegativeLegDetectorsFire:
         assert hits == [], (
             "validate_handoff.py agent_id read was flagged — the #812 "
             "role-class exemption is not being honored."
+        )
+
+    def test_agent_id_detector_exempts_the_run_ledger_attribution_helper(self):
+        """run_ledger's attribution helper returns agent_id as a record label
+        and never branches on it, so it is a sanctioned named site."""
+        src = (
+            "def _attribution_agent_id(payload):\n"
+            "    return payload.get('agent_id')\n"
+        )
+        tree = ast.parse(src)
+        assert _find_agent_id_role_uses(tree, "run_ledger.py") == []
+
+    def test_agent_id_detector_still_fires_elsewhere_in_run_ledger(self):
+        """The sanction is the named FUNCTION, not the file: an agent_id read
+        anywhere else in run_ledger.py is still flagged."""
+        src = (
+            "def main(payload):\n"
+            "    if payload.get('agent_id'):\n"
+            "        return None\n"
+        )
+        tree = ast.parse(src)
+        assert _find_agent_id_role_uses(tree, "run_ledger.py"), (
+            "an agent_id role read outside _attribution_agent_id in "
+            "run_ledger.py was NOT flagged."
         )
 
     def test_env_var_detector_fires_on_role_token(self):
@@ -666,6 +737,39 @@ class TestAgentIdDetectorExemptsOnlyTheMemberCheckKeyword:
     )
     def test_every_other_read_is_flagged(self, body):
         assert self._hits(*body) == [("main", 2)]
+
+
+class TestSanctionedAgentIdSitesAreReal:
+    """Each sanctioned agent_id label site exists, holds its file's only
+    agent_id read, and only returns it, so the sanction can neither rot into
+    an exemption for nothing nor cover a branch."""
+
+    @pytest.mark.parametrize("rel_file, fn_name", sorted(_SANCTIONED_AGENT_ID_LABEL_SITES))
+    def test_the_site_exists_and_is_the_files_only_read(self, rel_file, fn_name):
+        path = HOOKS_DIR / rel_file
+        assert path.is_file(), f"{rel_file} is sanctioned but does not exist"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions = {
+            node.name: node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert fn_name in functions, f"{rel_file} no longer defines {fn_name}"
+        saved = _SANCTIONED_AGENT_ID_LABEL_SITES
+        try:
+            globals()["_SANCTIONED_AGENT_ID_LABEL_SITES"] = frozenset()
+            unsanctioned = _find_agent_id_role_uses(tree, rel_file)
+        finally:
+            globals()["_SANCTIONED_AGENT_ID_LABEL_SITES"] = saved
+        assert unsanctioned and {fn for fn, _ in unsanctioned} == {fn_name}, (
+            f"the agent_id reads in {rel_file} are {unsanctioned}; the sanctioned "
+            f"site must hold them all, or the sanction is inert"
+        )
+        body = functions[fn_name].body
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+            body = body[1:]
+        assert len(body) == 1 and isinstance(body[0], ast.Return), (
+            f"{fn_name} must only return the raw value; a branch there is a role decision"
+        )
 
 
 # ===========================================================================

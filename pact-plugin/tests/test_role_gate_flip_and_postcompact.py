@@ -141,14 +141,14 @@ class TestBootstrapGateFlip:
     def test_lead_no_marker_enforces(self, frame_builder, monkeypatch, tmp_path):
         from bootstrap_gate import _check_tool_allowed, _DENY_REASON
         self._setup_session_no_marker(monkeypatch, tmp_path)
-        result = _check_tool_allowed(self._input(frame_builder()))
+        result = _check_tool_allowed(self._input(frame_builder(), tool_name="Agent"))
         assert result == _DENY_REASON, (
             "lead frame, no marker, blocked tool → must ENFORCE (deny)"
         )
 
     @pytest.mark.parametrize("frame, role", [
         (teammate_frame(), "teammate"),
-        (teammate_frame(agent_type="PACT:pact-backend-coder"), "teammate-qualified"),
+        (teammate_frame(agent_type="repacted:pact-backend-coder"), "teammate-qualified"),
         (plain_frame(), "plain"),
     ])
     def test_non_lead_passes_through(self, frame, role, monkeypatch, tmp_path):
@@ -205,7 +205,7 @@ class TestClassBGateBypassFlip:
     ], ids=["lead-q", "lead-u", "teammate", "plain"])
     def test_marker_writer_flip(self, frame, expect_write, monkeypatch, tmp_path):
         """_try_write_marker(input_data) reads session_dir internally; is_lead
-        gates BEFORE the team-has-secretary / plugin-version pre-conditions.
+        gates BEFORE the team-is-identified / plugin-version pre-conditions.
         Stub the whole post-is_lead chain so a lead frame reaches _write_marker
         and a non-lead frame bypasses before any of it. The write function is
         _write_marker (underscore)."""
@@ -216,7 +216,7 @@ class TestClassBGateBypassFlip:
         monkeypatch.setattr(g.pact_context, "get_session_dir", lambda: str(sess))
         monkeypatch.setattr(g, "is_marker_set", lambda _p: False)
         # Post-is_lead pre-conditions — stub so a lead frame reaches _write_marker.
-        monkeypatch.setattr(g, "_team_has_secretary", lambda _t: True)
+        monkeypatch.setattr(g, "_team_is_identified", lambda _t: True)
         monkeypatch.setattr(g.pact_context, "get_team_name", lambda: "t1")
         monkeypatch.setattr(g.pact_context, "get_plugin_root", lambda: str(tmp_path))
         monkeypatch.setattr(g, "_read_plugin_version", lambda _r: "9.9.9")
@@ -226,71 +226,6 @@ class TestClassBGateBypassFlip:
             assert mock_write.called, "lead must proceed to write the marker"
         else:
             assert not mock_write.called, "non-lead must bypass (no marker write)"
-
-    # --- pin_caps_gate._check_tool_allowed ---
-
-    @pytest.mark.parametrize("frame, expect_bypass", [
-        (lead_frame_qualified(), False),
-        (teammate_frame(), True),
-        (plain_frame(), True),
-    ], ids=["lead", "teammate", "plain"])
-    def test_pin_caps_gate_bypass(self, frame, expect_bypass, monkeypatch, tmp_path):
-        """A non-lead frame returns None at the is_lead bypass BEFORE reading
-        tool_input / calling match_project_claude_md. Make the post-is_lead
-        path observable via a sentinel on match_project_claude_md: non-lead must
-        return None without hitting it; lead must hit it."""
-        import pin_caps_gate as g
-
-        monkeypatch.setattr(g.pact_context, "init", lambda _d: None)
-        reached = {"hit": False}
-        def _sentinel(_path):
-            reached["hit"] = True
-            return None  # no claude_md match → gate ultimately returns None
-        monkeypatch.setattr(g, "match_project_claude_md", _sentinel)
-
-        # tool_name must be a _GATED_TOOLS member ({Edit, Write}) to pass the
-        # gate's first guard and reach the is_lead branch.
-        inp = {"session_id": _SESSION_ID, "tool_name": "Edit",
-               "tool_input": {"file_path": "/x/CLAUDE.md"}, **frame}
-        result = g._check_tool_allowed(inp)
-        assert result is None  # empty match → no deny regardless of role
-        assert reached["hit"] is (not expect_bypass), (
-            "non-lead must bypass before match_project_claude_md; "
-            "lead must reach it"
-        )
-
-    # --- pin_staleness_gate._check_tool_allowed ---
-
-    @pytest.mark.parametrize("frame, expect_bypass", [
-        (lead_frame_qualified(), False),
-        (teammate_frame(), True),
-        (plain_frame(), True),
-    ], ids=["lead", "teammate", "plain"])
-    def test_pin_staleness_gate_bypass(self, frame, expect_bypass, monkeypatch, tmp_path):
-        """For a non-lead frame the gate returns None at the is_lead bypass —
-        BEFORE it would read session_dir. We assert the bypass by making the
-        post-is_lead path (get_session_dir) raise: a non-lead frame must return
-        None WITHOUT hitting it, a lead frame must hit it (and we catch the
-        sentinel)."""
-        import pin_staleness_gate as g
-
-        _SENTINEL = RuntimeError("reached post-is_lead path")
-        monkeypatch.setattr(g.pact_context, "init", lambda _d: None)
-        def _boom():
-            raise _SENTINEL
-        monkeypatch.setattr(g.pact_context, "get_session_dir", _boom)
-
-        # tool_name must be a _GATED_TOOLS member ({Edit, Write}) to pass the
-        # gate's first guard and reach the is_lead branch.
-        inp = {"session_id": _SESSION_ID, "tool_name": "Edit",
-               "tool_input": {}, **frame}
-        if expect_bypass:
-            # Non-lead → returns None at is_lead, never calls get_session_dir.
-            assert g._check_tool_allowed(inp) is None
-        else:
-            # Lead → proceeds past is_lead and hits the sentinel.
-            with pytest.raises(RuntimeError, match="reached post-is_lead path"):
-                g._check_tool_allowed(inp)
 
 
 # ===========================================================================
@@ -325,7 +260,7 @@ class TestAgentIdDriftFixture:
         from shared.pact_context import classify_session_role, is_lead
 
         cases = [
-            ("PACT:pact-orchestrator", "lead", True),
+            ("repacted:pact-orchestrator", "lead", True),
             ("pact-orchestrator", "lead", True),
             ("pact-backend-coder", "teammate", False),
             ("pact-secretary", "teammate", False),
@@ -367,7 +302,7 @@ class TestAgentIdDriftFixture:
         from fixtures.role_frames import captured_postcompact_lead_manual
 
         synth = postcompact_frame(
-            "PACT:pact-orchestrator", session_id="sid"
+            "repacted:pact-orchestrator", session_id="sid"
         )["_meta"]["capture_method"]
         assert "synthesized" in synth.lower(), (
             f"postcompact_frame must KEEP its SYNTHESIZED stamp (the "

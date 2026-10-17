@@ -3,7 +3,7 @@ Location: pact-plugin/hooks/shared/variety_scorer.py
 Summary: Deterministic variety scoring for PACT orchestration.
 Used by: Tests, hooks, potential CLI tooling.
 
-Codifies the canonical variety scoring thresholds from pact-variety.md.
+Codifies the canonical variety scoring thresholds from protocols/workflows.md §Variety.
 The orchestrator continues reasoning about variety; this module provides
 the deterministic scoring backbone.
 

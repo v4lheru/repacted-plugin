@@ -12,7 +12,7 @@ runbook is that run. **Do not declare the fix done on tests alone.**
 The smoke validates, for BOTH a standard teammate AND the secretary:
 
 - The spawned teammate's **first tool action** is
-  `Invoke Skill("PACT:pact-team-registration")` (before `TaskList`).
+  `Invoke Skill("repacted:teammate")` (before `TaskList`).
 - The loaded skill body runs the register `Bash` command (pre-teachback, via
   the skill's teachback-`Bash`-exempt note).
 - The global registry file
@@ -101,16 +101,16 @@ cp -a ~/.claude/pact-sessions/.teammate-registry.jsonl /tmp/registry.before 2>/d
 
 1. Start a fresh PACT session/team (SessionStart re-points the symlink at the
    overlaid cache and loads the overlaid agent-defs/commands).
-2. Dispatch one standard teammate via the normal flow (e.g. `/PACT:orchestrate`
-   PREPARE, or `/PACT:comPACT` — any path that emits the canonical spawn
+2. Dispatch one standard teammate via the normal flow (e.g. `/repacted:orchestrate`
+   PREPARE, or `/repacted:comPACT` — any path that emits the canonical spawn
    prompt). A `preparer` or any coder is fine.
 3. **Observe the teammate's first turn**: its first tool call is
-   `Invoke Skill("PACT:pact-team-registration")`, then it runs the register
+   `Invoke Skill("repacted:teammate")`, then it runs the register
    `Bash` command, then it proceeds to `TaskList`.
 
 ## Step 3 — Spawn the SECRETARY (operator)
 
-1. Trigger the bootstrap secretary spawn (`/PACT:bootstrap`, or it occurs at
+1. Trigger the bootstrap secretary spawn (`/repacted:bootstrap`, or it occurs at
    session start).
 2. **Observe**: the secretary self-supplies `secretary@<team>` and runs the
    register command **before** emitting its session-briefing `SendMessage`
@@ -149,7 +149,7 @@ PY
 **Pass criteria**:
 
 - [ ] Standard teammate's first action is
-      `Invoke Skill("PACT:pact-team-registration")` (before `TaskList`).
+      `Invoke Skill("repacted:teammate")` (before `TaskList`).
 - [ ] Secretary registers `secretary@<team>` **before** its briefing
       `SendMessage`.
 - [ ] `~/.claude/pact-sessions/.teammate-registry.jsonl` is **non-empty** and
@@ -189,7 +189,7 @@ ls "$LIVE/skills/pact-team-registration/SKILL.md" 2>/dev/null \
 
 ## Implementation references
 
-- New skill: [pact-plugin/skills/pact-team-registration/SKILL.md](../../skills/pact-team-registration/SKILL.md)
+- New skill: `pact-plugin/skills/pact-team-registration/SKILL.md` (later folded into the teammate skill; not shipped)
 - Registry leaf module: `pact-plugin/hooks/shared/session_registry.py`
   (`register --name '<name>@<team>'`; `REGISTRY_PATH`; fail-safe no-op)
 - Spawn-prompt directive (canonical source): [pact-plugin/agents/pact-orchestrator.md](../../agents/pact-orchestrator.md) §Agent Teams Dispatch

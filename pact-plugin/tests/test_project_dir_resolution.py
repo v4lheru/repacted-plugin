@@ -7,8 +7,8 @@ Location: pact-plugin/tests/test_project_dir_resolution.py
 Summary: Phase B of claude-project-dir-once. The read contract gains a
 session-record rung (env -> session record -> git -> cwd -> home-with-warning)
 shared by every consumer (memory_api._detect_project_id,
-working_memory's two CLAUDE.md resolvers, backlog.project_root), and WRITES
-(backlog set, memory save, WM sync) refuse when CLAUDE_PROJECT_DIR and the
+working_memory's two CLAUDE.md resolvers), and WRITES
+(memory save, WM sync) refuse when CLAUDE_PROJECT_DIR and the
 session record disagree.
 
 Used by/with:
@@ -62,14 +62,12 @@ from scripts import pact_session
 from scripts import working_memory as wm
 from scripts.memory_api import PACTMemory
 from scripts.pact_session import ProjectScopeDisagreementError
-from shared import backlog
 from clock_shift.clock_shift_env import carry_clock_shift
 
 
 _MEMORY_CLI = (
     Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts" / "cli.py"
 )
-_BACKLOG_CLI = Path(__file__).parent.parent / "hooks" / "shared" / "backlog.py"
 _SESSION_INIT = Path(__file__).parent.parent / "hooks" / "session_init.py"
 _PACT_MEMORY_ROOT = Path(__file__).parent.parent / "skills" / "pact-memory"
 SID = "record-rung-session-0001"
@@ -413,78 +411,6 @@ class TestWriteRefusalOnDisagreement:
         assert pact_session.env_record_project_dir_disagreement() is None
 
 
-class TestBacklogRecordRung:
-    def test_record_anchors_project_root_when_env_is_unset(self, tmp_path, monkeypatch):
-        """The #1613-curing arm: an umbrella session whose env var never
-        arrived resolves the session's own scope instead of refusing."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        assert backlog.project_root() == umbrella.project.resolve()
-
-    def test_record_naming_a_deleted_dir_refuses_with_the_right_source(self, tmp_path, monkeypatch):
-        gone = tmp_path / "deleted-between-sessions"
-        _arm_record(monkeypatch, tmp_path, gone)
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        with pytest.raises(backlog.BacklogWriteError) as excinfo:
-            backlog.project_root()
-        text = str(excinfo.value)
-        assert "session record" in text, (
-            f"the refusal attributed the anchor to the wrong source: {text}"
-        )
-        assert str(gone) in text, "the refusal does not echo the rejected value"
-
-    def test_disagreement_refuses_before_any_write(self, tmp_path, monkeypatch):
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        other = tmp_path / "other"
-        other.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(other))
-        with pytest.raises(backlog.BacklogWriteError) as excinfo:
-            backlog.project_root()
-        text = str(excinfo.value)
-        assert str(other) in text and str(umbrella.project) in text
-        assert "Nothing was written" in text
-
-    def test_agreement_proceeds(self, tmp_path, monkeypatch):
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella.project) + "/")
-        assert backlog.project_root() == umbrella.project.resolve()
-
-    def test_cli_add_under_record_then_set_under_disagreement(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """End-to-end through backlog.main: the write keyed on the record
-        succeeds unprefixed (the umbrella acceptance shape), and the same
-        session with a disagreeing prefix refuses on stderr with exit 65."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        store = tmp_path / "store"
-        store.mkdir()
-
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        assert backlog.main(["--backlog-dir", str(store), "add", "umbrella item"]) == 0
-        written = store / "umbrella.json"
-        assert written.exists(), (
-            f"add did not key on the record basename; store holds {list(store.iterdir())}"
-        )
-        item_id = json.loads(written.read_text(encoding="utf-8"))["items"][0]["id"]
-        before = written.read_bytes()
-
-        other = tmp_path / "other"
-        other.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(other))
-        capsys.readouterr()  # drain the add output so the refusal text is isolated
-        rc = backlog.main(["--backlog-dir", str(store), "set", item_id, "--status", "active"])
-        assert rc == backlog._EXIT_REFUSED
-        err = capsys.readouterr().err
-        assert str(other) in err and str(umbrella.project) in err, (
-            f"the stderr refusal must name both values; got: {err!r}"
-        )
-        assert written.read_bytes() == before, "a refused set still mutated the file"
-
-
 # ---------------------------------------------------------------------------
 # Working-memory resolvers: the record rung preserves the existence coupling
 # ---------------------------------------------------------------------------
@@ -647,7 +573,7 @@ def _memory_store_scopes(store: Path) -> list:
 
 class TestR1UmbrellaAcceptance:
     """The #1613 acceptance shape end-to-end: env var ABSENT, session record
-    armed, cwd = the umbrella. backlog set, memory save, and WM sync all run
+    armed, cwd = the umbrella. memory save and WM sync both run
     unprefixed and land under the recorded scope. Every leg is a real
     subprocess with a constructed env — the boundary the issue measured."""
 
@@ -659,31 +585,6 @@ class TestR1UmbrellaAcceptance:
             memory_dir=memory_dir,
         )
 
-    def test_r1_backlog_add_and_set_unprefixed_key_on_the_record(self, tmp_path):
-        umbrella = make_umbrella(tmp_path)
-        write_session_context(umbrella.config_root, SID, umbrella.project)
-        store = tmp_path / "store"
-        store.mkdir()
-        env = self._env(umbrella, tmp_path, None)
-
-        add = subprocess.run(
-            [sys.executable, str(_BACKLOG_CLI), "--backlog-dir", str(store),
-             "add", "umbrella item"],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(umbrella.project),
-        )
-        assert add.returncode == 0, f"unprefixed add refused: {add.stderr!r}"
-        written = store / "umbrella.json"
-        assert written.exists(), (
-            f"add did not key on the record basename; store holds "
-            f"{sorted(p.name for p in store.iterdir())}"
-        )
-        item_id = json.loads(written.read_text(encoding="utf-8"))["items"][0]["id"]
-        set_ = subprocess.run(
-            [sys.executable, str(_BACKLOG_CLI), "--backlog-dir", str(store),
-             "set", item_id, "--status", "active"],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(umbrella.project),
-        )
-        assert set_.returncode == 0, f"unprefixed set refused: {set_.stderr!r}"
 
     def test_r1_memory_save_and_sync_unprefixed_scope_the_record(self, tmp_path):
         """The acceptance shape faithfully: the DEFAULT store (a real session
@@ -906,27 +807,6 @@ class TestR4BimodalGit:
         )
         assert save.returncode == 0, f"child save failed: {save.stderr[:400]!r}"
         assert _memory_store_scopes(store) == [parent_answer] == ["umbrella"]
-
-    def test_r4_backlog_set_with_record_and_broken_git(self, tmp_path):
-        """backlog's writer runs git twice (main-root + worktree list); with
-        git dead and the env absent, the record anchor plus the stat-based
-        enclosing-checkout walk still resolve the umbrella — no refusal."""
-        umbrella = make_umbrella(tmp_path)
-        write_session_context(umbrella.config_root, SID, umbrella.project)
-        store = tmp_path / "store"
-        store.mkdir()
-        shim = git_flake_shim(tmp_path)
-        env = child_env(umbrella.config_root, home=tmp_path, session_id=SID)
-        env["PATH"] = f"{shim}{os.pathsep}{env['PATH']}"
-        add = subprocess.run(
-            [sys.executable, str(_BACKLOG_CLI), "--backlog-dir", str(store),
-             "add", "broken-git item"],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(umbrella.project),
-        )
-        assert add.returncode == 0, (
-            f"backlog add refused under broken git despite the record: {add.stderr!r}"
-        )
-        assert (store / "umbrella.json").exists()
 
 
 # ---------------------------------------------------------------------------

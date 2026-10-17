@@ -1,0 +1,14 @@
+{
+  "_doc": "Tested host matrix (V9). bin/_doctor_host.py reads it and repact-doctor prints one host line; an untested host is a note, never a refusal. Add a Claude Code version here only after the plugin suite passed on it.",
+  "as_of": "2026-10-16",
+  "claude_code": {
+    "tested": ["2.1.302"]
+  },
+  "python": {
+    "min": "3.9"
+  },
+  "os": {
+    "tested": ["macos"],
+    "expected": ["linux", "wsl"]
+  }
+}

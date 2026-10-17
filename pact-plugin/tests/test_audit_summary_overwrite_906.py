@@ -292,3 +292,24 @@ class TestUnknownRankRecover:
             "unrankable authored → cannot rank → no downgrade escalation"
         )
         assert _read_back(tmp_path)["metadata"]["audit_summary_authored"] == UNRANKABLE, "preserved"
+
+
+class TestWritebackFailureIsReported:
+    """rv4 MED-2: a writeback that returns False (task lock held past its wait) must not be
+    reported as done."""
+
+    def test_recover_says_the_lead_value_was_not_routed(self, tmp_path, monkeypatch, pact_context):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        pact_context(team_name=TEAM, session_id="test-session")
+        _seed(tmp_path, metadata={"audit_summary": RED, "audit_summary_authored": RED})
+        monkeypatch.setattr(tlg, "_writeback_audit_recovery", lambda tid, upd: False)
+        message = _msg(tlg.evaluate_lifecycle(_update("pact-orchestrator", GREEN)))
+        assert "could NOT be copied" in message and "was routed" not in message
+
+    def test_a_failed_mirror_raises_an_advisory(self, tmp_path, monkeypatch, pact_context):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        pact_context(team_name=TEAM, session_id="test-session")
+        _seed(tmp_path, metadata={})
+        monkeypatch.setattr(tlg, "_writeback_audit_recovery", lambda tid, upd: False)
+        adv = tlg.evaluate_lifecycle(_update("pact-auditor", RED))
+        assert _has(adv, "audit_summary_mirror_failed")

@@ -127,8 +127,8 @@ def store_scope(db_path: Optional[Path]) -> Iterator[None]:
     A REDIRECT, NEVER A REFUSAL. An unbound resolution falls through to the
     environment variable and then to the home directory, so a production caller
     that passes no path keeps reaching the real store. That rule outranks the
-    isolation this scope provides: `archive_pin --index N` is a documented
-    production command that passes no path on purpose.
+    isolation this scope provides: the documented production CLI commands pass
+    no path on purpose.
 
     ⚠️ A `db_path` of None INHERITS the enclosing scope. IT MUST NOT RESET TO
     THE DEFAULT, and the obvious spelling does exactly that. An unconditional

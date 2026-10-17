@@ -28,40 +28,44 @@ from pathlib import Path
 
 from shared.plugin_manifest import format_plugin_banner
 from shared.paths import get_claude_config_dir
+from shared.pact_context import member_agent_type, strip_pact_namespace
 
 
+# The two notes below are rendered from hooks/shared/protocol_descriptor.py
+# (the one source of the teachback / HANDOFF / wait contract) and pinned by
+# tests/contract/test_protocol_rendered.py. Edit the descriptor, then run
+# `python3 dev/protocol/render.py --write`; never edit inside the region.
+# <!-- protocol:spawn-notes -->
 _TEACHBACK_REMINDER = (
-    "\n\nTEACHBACK TIMING: Submit your teachback via metadata.teachback_submit "
-    "on Task A BEFORE any Edit/Write/Bash calls. Teachback is a gate — "
-    "Task B stays blocked until the team-lead accepts. See the "
-    "pact-teachback skill for the exact format. If you haven't submitted "
-    "a teachback yet, do it now before any implementation work."
+    "\n\nTEACHBACK TIMING: write metadata.teachback_submit on Task A BEFORE any Edit/Write/Bash "
+    "call; the only shell exceptions are `date -u +%Y-%m-%dT%H:%M:%S+00:00` (the wait's `since`) "
+    "and `repact-wait` after the notify. The teachback is a gate: Task B stays blocked until "
+    "the team-lead accepts. The teammate skill holds the format."
 )
-
 
 _COMPLETION_AUTHORITY_NOTE = (
-    "\n\nCOMPLETION AUTHORITY: You do NOT mark your own tasks `completed`. "
-    "When your work is done, write your HANDOFF (or teachback metadata) to "
-    "the task and remain `in_progress`. The team-lead reads your output, judges "
-    "acceptance, and transitions status to `completed` only on accept. "
-    "Your dispatch may be a Task A (teachback) + Task B (work) pair: claim A, "
-    "submit teachback, idle on `intentional_wait{reason=awaiting_lead_completion}`. "
-    "Do NOT begin Task B until A.status == 'completed' (team-lead's wake-signal "
-    "SendMessage confirms; you cannot self-wake to poll TaskList while idle)."
+    "\n\nCOMPLETION AUTHORITY: you do NOT mark your own tasks `completed`. Write the HANDOFF "
+    "(metadata.handoff) or the teachback to the task and stay `in_progress`; the team-lead "
+    "transitions status to `completed` on accept. On a Task A (teachback) + Task B (work) pair: "
+    "claim A, submit, SET `intentional_wait{reason=awaiting_lead_completion}`, run "
+    "`repact-wait <A id> --until completed,rejection,amend` in the foreground, and begin B only when A "
+    "is `completed` on disk."
 )
+# <!-- /protocol -->
 
 
 # Prelude split into two independently-emittable lines so the role marker is
 # CONDITIONAL (see include_role_marker on get_peer_context):
 #   _ROLE_MARKER_TEMPLATE  — the "YOUR PACT ROLE: teammate (...)" line; emitted
 #                            ONLY when include_role_marker=True.
-#   _CHARTER_CROSSREF_LINE — the communication-charter pointer; emitted on BOTH
-#                            surfaces (every spawn needs the messaging contract).
+#   _CHARTER_CROSSREF_LINE — the reach line to the teammate skill (and its
+#                            messaging contract); emitted on BOTH surfaces.
 _ROLE_MARKER_TEMPLATE = "YOUR PACT ROLE: teammate ({agent_name}).\n\n"
 
 _CHARTER_CROSSREF_LINE = (
-    "TEAM COMMUNICATION: read protocols/pact-communication-charter.md "
-    "for the inter-agent messaging contract before sending teammate messages.\n\n"
+    "TEAM PROTOCOL: invoke Skill(\"repacted:teammate\") before anything else: it "
+    "registers you and holds the teachback gate, HANDOFF, waiting and messaging "
+    "rules (messaging contract: skills/teammate/references/teammate-messaging.md).\n\n"
 )
 
 # Back-compat composite — byte-identical to the pre-split single template.
@@ -101,7 +105,7 @@ def _sanitize_agent_name(agent_name: str) -> str:
     # `str.splitlines()` and by LLM tokenizers — a name containing
     # U+2028 can inject a fake line into the PACT ROLE prelude
     # template (see security-engineer memory
-    # patterns_symmetric_sanitization.md). Matches the sibling filter
+    # the symmetric-sanitisation rule). Matches the sibling filter
     # in session_state._sanitize_rendered_string.
     sanitized = re.sub(r"[\x00-\x1f\x7f\u0085\u2028\u2029]", "_", agent_name)
     return sanitized.replace(")", "_")
@@ -190,11 +194,14 @@ def get_peer_context(
         # Fallback: filter by agentType. This excludes ALL agents of the same
         # type, not just the spawning agent. This is a known limitation when
         # the hook input does not include agent_name/agent_id. O2 (#806):
-        # the emitted peer name is sanitized here too.
+        # the emitted peer name is sanitized here too. BOTH sides are compared
+        # without their plugin namespace: the config and the hook's
+        # agent_type can each carry one, independently.
+        own_type = strip_pact_namespace(agent_type) if isinstance(agent_type, str) else agent_type
         peers = [
             _sanitize_agent_name(m["name"])
             for m in members
-            if m.get("agentType") != agent_type
+            if member_agent_type(m) != own_type
         ]
 
     if not peers:

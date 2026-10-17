@@ -80,10 +80,10 @@ class TestMintParityRoundTrip:
     def test_faithful_click_mints_and_token_authorizes(self, label, cmd):
         question = {
             "question": "Proceed?",
-            "options": [{"label": "Yes, do it", "description": "Run `%s` now" % cmd}],
+            "options": [{"label": "Yes", "description": "Run `%s` now" % cmd}],
             "multiSelect": False,
         }
-        ctx, refusal = _mint_context_from_bundle([question], {"Proceed?": "Yes, do it"})
+        ctx, refusal = _mint_context_from_bundle([question], {"Proceed?": "Yes"})
         assert ctx is not None, (
             "faithful click STOPPED MINTING (%s): %r — gated-but-unmintable is a "
             "cardinal over-block" % (refusal, cmd)

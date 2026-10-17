@@ -1,0 +1,62 @@
+{"base": "3972bb5f", "blob_id": "2c29f088ff5fc03626a7ad5e31c976cc15d8012a", "captured_from": "3f27b2c6", "rows": 61, "sha256": "2535722090643eb416408ed9986adf0c0dfd6814e5a19034a41238d8d11a241c"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["gh issue create --title \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh issue create --title \"as of $(date): git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr create --title \"$(date) release; drop git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git cherry-pick -m 1 abc123 && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --m \"run git branch -D victim later\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit --me \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --mes \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --mess 'run git branch -D victim later'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --mess \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --mess \"ok\" && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --mess \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --mess git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --messa \"ok\" ; gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --messa \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --messag \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"$(date) and $(whoami): git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"`git branch -D victim`\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"as of $(date +%F): stop git push --force origin main shim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"build $(echo $(date)) then git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"doc \\$(date); note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"don't $(date): git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"fix $(basename \"$d\") then git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"fix $(basename \\\"$d\\\") then git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"it's Bob's $(date) fix; git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"it's ok $(date)\" && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"it's the $(date) build; note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"ok $(date)\" && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"pre $(git branch -D victim) post\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"ran on `hostname`, then git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"the $(date) build\" ; gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"use \\\"$(date)\\\" then git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge --mess \"run git branch -D victim later\" feat"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge --message \"run git branch -D victim later\" feat"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge -m \"$(git branch -D victim)\" feat"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge -m \"as of $(date): run git branch -D victim later\" feat"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge -m \"ok\" feat && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge -m \"run git branch -D victim later\" feat"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git notes --ref refs/notes/x add -m \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git notes add -m \"ok\" | git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git notes add -m \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git notes append -m \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git revert -m 1 HEAD ; gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash push --message \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash push -m \"ok\" && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash push -m \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash save -u \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash save \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash save \"ok\" ; gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash save \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash store -m \"run git branch -D victim later\" abc123"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag --merged mainbranch && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag --mes \"run git branch -D victim later\" v1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag --mess \"ok\" v1 && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag --mess \"run git branch -D victim later\" v1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag --messa \"run git branch -D victim later\" v1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -m \"$(git branch -D victim)\" v1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -m \"built $(date), see git branch -D victim\" v1"], {}], "result": true}

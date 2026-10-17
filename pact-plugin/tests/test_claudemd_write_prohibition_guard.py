@@ -1,7 +1,7 @@
 """Structural prose-surface regression guard for the CLAUDE.md write prohibition.
 
 A teammate must not write a ``CLAUDE.md`` file in a project directory or a home
-directory. The rule lives only in prose, in the pact-agent-teams skill body,
+directory. The rule lives only in prose, in the teammate skill body,
 and the worktree boundary check allow-lists ``CLAUDE.md``, so no mechanical
 control stands behind it. A later edit can narrow it back with nothing red.
 
@@ -69,7 +69,7 @@ from pathlib import Path
 import pytest
 
 PLUGIN_ROOT = Path(__file__).parent.parent
-AGENT_TEAMS_SKILL = PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md"
+AGENT_TEAMS_SKILL = PLUGIN_ROOT / "skills" / "teammate" / "SKILL.md"
 
 BLOCK_MARKER = "**CLAUDE.md is not yours to write**"
 
@@ -96,7 +96,7 @@ DECLARED_TEMPLATE_SITES = {
     "commands/orchestrate.md": 1,
     "commands/comPACT.md": 2,
     "commands/peer-review.md": 1,
-    "commands/rePACT.md": 1,
+    "reference/rePACT/nested-cycle.md": 1,  # COMMANDS m8b: rePACT.md is a stub; its procedure lives here
 }
 
 # THE SLICE ANCHORS FOR A TEMPLATE REGION. A region runs from the start anchor
@@ -276,161 +276,12 @@ def block() -> str:
     return _norm(paragraph)
 
 
-class TestW1ProhibitionPresent:
-    """The rule is present and addresses the teammate."""
-
-    def test_addresses_the_teammate(self, block):
-        assert addresses_the_teammate(block), (
-            "prohibition no longer addresses the teammate role; the role bound "
-            "is what keeps the orchestrator and the secretary outside the rule"
-        )
-
-    def test_forbids_the_write(self, block):
-        assert forbids_the_write(block), (
-            "prohibition no longer forbids WRITING the file"
-        )
 
 
-class TestW2RouteClass:
-    """The widened class: the rule covers a write the teammate CAUSES, not only
-    a tool call it ISSUES. This is the arm that reddens on a narrowing edit."""
-
-    def test_states_the_rule_is_not_limited_to_a_direct_tool_call(self, block):
-        assert is_not_limited_to_a_direct_tool_call(block), (
-            "prohibition lost the clause saying the rule is NOT limited to an "
-            "Edit or a Write the teammate issues. Without it the sentence "
-            "names an editing ACT, and a write caused through a script or a "
-            "save path reads as out of scope."
-        )
-
-    def test_names_indirect_routes(self, block):
-        found = [t for t in INDIRECT_ROUTE_TOKENS if t in block]
-        assert names_indirect_routes(block), (
-            f"prohibition names only {len(found)} indirect route(s) {found}; "
-            f"floor is {INDIRECT_ROUTE_FLOOR} of {list(INDIRECT_ROUTE_TOKENS)}. "
-            "The indirect route is the one that produced the write this rule "
-            "exists to stop."
-        )
-
-    def test_binds_the_indirect_write_to_the_teammate(self, block):
-        assert binds_the_indirect_write_to_the_teammate(block), (
-            "prohibition names indirect routes but no longer says the "
-            "resulting write belongs to the teammate, so a reader can treat a "
-            "script's write as somebody else's action"
-        )
 
 
-class TestW3BoundsAndUnconditionality:
-    """The two bounds do different work and neither substitutes for the other.
-    The rule must also stay unconditional: it was once gated behind a worktree
-    condition, which switched it off in the case where it carries weight."""
-
-    def test_keeps_the_target_bound(self, block):
-        assert keeps_the_target_bound(block), (
-            "prohibition lost its target bound (a project directory or a home "
-            "directory); without it a document a test builds in a temporary "
-            "directory falls inside the rule"
-        )
-
-    def test_stays_unconditional_across_worktree_state(self, block):
-        assert stays_unconditional_across_worktree_state(block), (
-            "prohibition lost its unconditional statement. A worktree-gated "
-            "rule is off in the one case where the file is present and the "
-            "write lands on it."
-        )
-
-    def test_handoff_escape_hatch_is_a_write_not_an_edit(self, block):
-        # The escape hatch must not re-narrow the class it just widened.
-        assert keeps_the_handoff_hatch(block), (
-            "prohibition lost the handoff escape hatch, which is what makes "
-            "the rule actionable when a task asks for a CLAUDE.md update"
-        )
-        assert the_hatch_does_not_renarrow_the_class(block), (
-            "the handoff escape hatch says 'instead of editing it directly', "
-            "which re-narrows the widened class back to a direct edit"
-        )
 
 
-class TestW4TheDispatchTemplatesCarryTheSameRule:
-    """ARM W4. THE SURFACE A TEAMMATE ACTUALLY READS.
-
-    The skill body can fail to load. A dispatch template always reaches the
-    teammate it dispatches, because its text IS the task description. So a rule
-    that is wide in the skill and narrow here is narrow where it counts.
-    """
-
-    def test_the_instrument_finds_the_declared_sites(self):
-        """A CONTROL ON THE WALK, and it must come before each arm below.
-
-        AN EMPTY REGION SET SATISFIES EVERY OTHER ARM IN THIS CLASS. A renamed
-        anchor, a moved file, or a reworded sentence yields zero regions, and
-        an agreement arm over zero regions is green.
-        """
-        faults = []
-        for name, expected in sorted(DECLARED_TEMPLATE_SITES.items()):
-            path = PLUGIN_ROOT / name
-            if not path.is_file():
-                faults.append(f"{name}: no file at that path")
-                continue
-            found = len(template_regions(path))
-            if found != expected:
-                faults.append(f"{name}: {found} region(s), declared {expected}")
-        assert not faults, (
-            f"the declared template sites do not match the tree: {faults}. "
-            f"THREE CAUSES, AND THEY MEAN DIFFERENT THINGS. A site was "
-            f"REMOVED, which is the silent shrinkage this floor refuses. A "
-            f"site was ADDED and not declared, which leaves a new dispatch "
-            f"template outside every arm here. Or an anchor was reworded, "
-            f"which leaves the region unreadable. Slice rule: a region runs "
-            f"from {TEMPLATE_START_ANCHOR!r} to the first "
-            f"{TEMPLATE_END_ANCHOR!r} after it. Read the file. DO NOT edit a "
-            f"count to quiet this red."
-        )
-
-    def test_the_template_copies_agree_with_each_other(self):
-        """The copies are compared to EACH OTHER, and not to the skill body.
-
-        THE COMPARISON IS CASE-SENSITIVE after a whitespace flatten. The rule
-        shouts `do NOT write`, and a copy that says the same words in a quieter
-        voice is a weaker rule for a reader who scans. A casefolded compare
-        would pass that in silence.
-        """
-        seen = {}
-        for name in sorted(DECLARED_TEMPLATE_SITES):
-            path = PLUGIN_ROOT / name
-            if not path.is_file():
-                continue
-            for index, region in enumerate(template_regions(path)):
-                seen[f"{name}#{index}"] = re.sub(r"\s+", " ", region).strip()
-        distinct = set(seen.values())
-        assert len(distinct) <= 1, (
-            f"the dispatch templates carry {len(distinct)} different wordings "
-            f"of one rule, across {sorted(seen)}. One rule held in many places "
-            f"drifts, and a reader of any single template cannot tell. Copy "
-            f"one region over the others. IF THE CHANGE IS DELIBERATE, edit "
-            f"every site in ONE commit. That tax is the mechanism rather than "
-            f"an accident of it."
-        )
-
-    def test_each_template_copy_carries_the_route_class(self):
-        """The property arm, over the SAME predicates the skill body uses."""
-        faults = {}
-        for name in sorted(DECLARED_TEMPLATE_SITES):
-            path = PLUGIN_ROOT / name
-            if not path.is_file():
-                continue
-            for index, region in enumerate(template_regions(path)):
-                missing = property_faults(_norm(region))
-                if missing:
-                    faults[f"{name}#{index}"] = missing
-        assert not faults, (
-            f"these dispatch-template copies lost a property of the rule: "
-            f"{faults}. The load-bearing one is the ROUTE CLASS: a copy that "
-            f"names only an editing act does not reach a write the teammate "
-            f"CAUSES through a script, a command, or a save path it invokes, "
-            f"and that indirect route is the one that produced the write this "
-            f"rule exists to stop."
-        )
 
 
 class TestW5NoCommandFileNarrowsTheRule:

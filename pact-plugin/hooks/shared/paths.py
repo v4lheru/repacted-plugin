@@ -4,8 +4,7 @@ Summary: Single source of truth for PACT's state roots.
          get_claude_config_dir() resolves $CLAUDE_CONFIG_DIR (fail-loud,
          monkeypatch-safe, single-path), falling back to ~/.claude; every PACT
          hook that reads/writes state under the config dir derives its base
-         from it. get_backlog_dir() is the one deliberate exception — it is
-         home-pinned so the backlog does not fragment per backend.
+         from it.
 Used by: shared/{constants,session_registry,failure_log,merge_guard_common,
          task_utils,pact_context,...}.py and the hook entrypoints
          (dispatch_gate, session_init, session_end, ...).
@@ -14,7 +13,59 @@ Used by: shared/{constants,session_registry,failure_log,merge_guard_common,
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
+
+# One path segment the plugin may join under a trusted root: a positive allowlist, so `.`,
+# `..`, separators, controls, whitespace and shell or URL metacharacters all reject by
+# construction (an `x.name == x` identity check admits `..`). Lives here, in the lightest
+# shared module, so the task store and the fast hooks can import it without the package.
+SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+# Characters stripped from every string that flows into model-visible
+# output (custom_instructions, systemMessage). Covers:
+#   - C0 control chars 0x00-0x1F (includes NUL, BEL, tab 0x09,
+#     LF 0x0A, CR 0x0D, ESC 0x1B, etc.)
+#   - DEL (0x7F)
+#   - NEL (U+0085), LINE SEPARATOR (U+2028), PARAGRAPH SEPARATOR
+#     (U+2029) — Unicode line terminators recognized by
+#     `str.splitlines()` and by LLM tokenizers; crafted names
+#     containing these survive a naive C0-only filter and can inject
+#     new lines into the rendered output.
+# Single SSOT for the strip set: this regex IS the canonical
+# SESSION_ID_CONTROL_CHARS_RE. It lives here, in a leaf, because pact_context imports it and
+# session_state imports pact_context. Producer-side sanitizers in
+# pact_context.init() (S9 defense) and session_init.py's
+# classification ladder share one regex; previously each module
+# defined its own copy and asymmetric strip sets across interpolation
+# sinks could become the attacker's entry point. See security-engineer
+# the symmetric-sanitisation rule.
+#
+# \ud83d\udd34 IT IS NARROWER THAN `_PROMPT_CONTROL_CHARS_RE`, ON PURPOSE, AND A WIDENING
+# OF THAT ONE MUST NOT BE COPIED HERE. The two are different objects with
+# different jobs, and the differences are the design:
+#   - THIS one is a DETECTOR. Every call site uses `.search()`, so it answers
+#     `does this identifier carry a line breaker`. It carries NO `+`, and that
+#     is correct: for a search predicate a one-or-more quantifier matches the
+#     same set of strings and buys nothing.
+#   - THE OTHER one is a REPLACER. Its call sites use `.sub(" ", value)`, and
+#     there the `+` IS load-bearing: without it a run of N control characters
+#     becomes N spaces rather than one.
+# ON LINE BREAKERS THE TWO ARE EQUAL. The other one covers U+0085 inside its
+# `\x7f-\x9f` range, and this one names U+0085 by codepoint. This one omits
+# ONLY the non-line-breaking C1 characters, which is what the list above says
+# it intends. Making them one definition changes behaviour in either
+# direction: the replacer would stop removing `\x80-\x84` and `\x86-\x9f` from
+# model-visible prose, or this detector would start refusing session ids for
+# C1 characters that break no line.
+SESSION_ID_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
+
+def is_safe_path_component(value) -> bool:
+    """True iff `value` is a non-empty string that is one safe path segment."""
+    if not isinstance(value, str) or not value:
+        return False
+    return SAFE_PATH_COMPONENT_RE.fullmatch(value) is not None
 
 
 def get_claude_config_dir(env=None, home=None) -> Path:
@@ -48,21 +99,3 @@ def get_claude_config_dir(env=None, home=None) -> Path:
     if raw.startswith("~/"):
         return home / raw[2:]          # exact 2-char prefix — NOT lstrip, NOT removeprefix
     return Path(raw)
-
-
-def get_backlog_dir(home=None) -> Path:
-    """Resolve the cross-session backlog store root.
-
-    Home-pinned, and deliberately NOT routed through get_claude_config_dir():
-    the user switches LLM backends by switching CLAUDE_CONFIG_DIR across six
-    directories (.claude, -zai, -deepseek, -kimi, -qwen, -local), and a
-    config-dir-scoped backlog would fragment six ways — one per backend — when
-    the whole point is one backlog per project. Mirrors get_memory_dir() in
-    skills/pact-memory/scripts/config.py, which is home-pinned for the same
-    reason. Do NOT "fix" this to use get_claude_config_dir().
-
-    Param-style home matches get_claude_config_dir: monkeypatch-safe for
-    tests, and the form the config-dir AST guard does not flag.
-    """
-    home = Path.home() if home is None else home
-    return home / ".claude" / "pact-backlog"

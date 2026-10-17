@@ -1,0 +1,5 @@
+# Known failures of the `run-tests --full` merge gate: `<suite> <node id> # <reason>`, one per line.
+# The gate passes only when each suite's failing ids EQUAL this list: a new failure fails it, and so
+# does a listed id that now passes or no longer exists (baseline drift). Remove a line in the same
+# commit that fixes it. Suite: plugin (ids relative to pact-plugin).
+# Never list a failure someone is fixing now; fix it instead.

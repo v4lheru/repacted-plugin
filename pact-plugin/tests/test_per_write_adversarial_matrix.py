@@ -91,7 +91,7 @@ from shared.task_metadata_snapshot import (  # noqa: E402
 _LINE_ENVELOPE_ALLOWANCE = 16 * 1024
 
 TEAM = "pact-perwrite-adv"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TEAMMATE = "pact-backend-coder"
 
 LEAD_SID = "lead-session-0001"
@@ -239,16 +239,16 @@ class TestPerWriteCapEdges:
         # value stays below the per-value cap, or this row measures stage 1.
         assert len(_canonical_bytes(big_scope)) <= PER_VALUE_CAP
         assert len(
-            _canonical_bytes({**disk_md, "scope_contract": big_scope})
+            _canonical_bytes({**disk_md, "handoff_rejection": big_scope})
         ) > PAYLOAD_CAP
-        tlg.evaluate_lifecycle(_open_write("42", {"scope_contract": big_scope}))
+        tlg.evaluate_lifecycle(_open_write("42", {"handoff_rejection": big_scope}))
         snaps = _snapshots()
         assert len(snaps) == 1
         payload = snaps[0]["metadata"]
-        assert _is_marker_shape(payload["scope_contract"]), (
+        assert _is_marker_shape(payload["handoff_rejection"]), (
             "largest-first eviction picks the largest targeted value"
         )
-        assert payload["scope_contract"]["original_bytes"] == len(
+        assert payload["handoff_rejection"]["original_bytes"] == len(
             _canonical_bytes(big_scope)
         )
         for key in disk_md:
@@ -285,12 +285,12 @@ class TestMarkerLookalikeThroughPerWrite:
 
     def test_small_lookalike_carried_verbatim_and_dedups(self, home):
         _seed_task(home, "44")
-        payload = _open_write("44", {"scope_contract": dict(self.LOOKALIKE)})
+        payload = _open_write("44", {"handoff_rejection": dict(self.LOOKALIKE)})
         tlg.evaluate_lifecycle(payload)
         tlg.evaluate_lifecycle(payload)  # unchanged rewrite → dedup no-op
         snaps = _snapshots()
         assert len(snaps) == 1
-        assert snaps[0]["metadata"]["scope_contract"] == self.LOOKALIKE, (
+        assert snaps[0]["metadata"]["handoff_rejection"] == self.LOOKALIKE, (
             "an under-cap lookalike is ordinary data — carried verbatim, "
             "never re-interpreted as OUR marker"
         )
@@ -313,10 +313,10 @@ class TestMarkerLookalikeThroughPerWrite:
             "head": "h" * (PER_VALUE_CAP),  # canonical size > PER_VALUE_CAP
         }
         _seed_task(home, "45")
-        tlg.evaluate_lifecycle(_open_write("45", {"scope_contract": hostile}))
+        tlg.evaluate_lifecycle(_open_write("45", {"handoff_rejection": hostile}))
         snaps = _snapshots()
         assert len(snaps) == 1
-        marker = snaps[0]["metadata"]["scope_contract"]
+        marker = snaps[0]["metadata"]["handoff_rejection"]
         assert _is_marker_shape(marker)
         assert marker["original_bytes"] == len(_canonical_bytes(hostile)), (
             "OUR marker, computed from the hostile value's serialization — "
@@ -344,7 +344,7 @@ class TestHostileTaskIdsThroughClaimPath:
         emitted = 0
         for task_id in self.HOSTILE_IDS:
             advisories = tlg.evaluate_lifecycle(
-                _open_write(task_id, {"scope_contract": SCOPE})
+                _open_write(task_id, {"handoff_rejection": SCOPE})
             )
             assert isinstance(advisories, list), (
                 f"exit-0 contract violated for task_id {task_id!r}"
@@ -368,7 +368,7 @@ class TestHostileTaskIdsThroughClaimPath:
         payload = {
             "tool_name": "TaskCreate",
             "tool_input": {"subject": "scope: sub-scope",
-                           "metadata": {"scope_contract": SCOPE}},
+                           "metadata": {"handoff_rejection": SCOPE}},
             "tool_response": {"task": {"id": "../../marker-escape"}},
             "agent_type": LEAD,
             "session_id": LEAD_SID,
@@ -399,10 +399,10 @@ class TestPathologicalMetadataShapes:
         for _ in range(300):
             nested = {"d": nested}
         _seed_task(home, "47")
-        tlg.evaluate_lifecycle(_open_write("47", {"scope_contract": nested}))
+        tlg.evaluate_lifecycle(_open_write("47", {"handoff_rejection": nested}))
         snaps = _snapshots()
         assert len(snaps) == 1
-        node = snaps[0]["metadata"]["scope_contract"]
+        node = snaps[0]["metadata"]["handoff_rejection"]
         for _ in range(300):
             node = node["d"]
         assert node == "leaf"
@@ -418,14 +418,14 @@ class TestPathologicalMetadataShapes:
             nested = {"d": nested}
         _seed_task(home, "48")
         advisories = tlg.evaluate_lifecycle(
-            _open_write("48", {"scope_contract": nested})
+            _open_write("48", {"handoff_rejection": nested})
         )
         assert isinstance(advisories, list), "exit-0 contract: no raise"
         assert _snapshots() == []
         assert _marker_files(home) == [], (
             "validate-before-claim: the failed build must claim nothing"
         )
-        tlg.evaluate_lifecycle(_open_write("48", {"scope_contract": SCOPE}))
+        tlg.evaluate_lifecycle(_open_write("48", {"handoff_rejection": SCOPE}))
         assert len(_snapshots()) == 1, "recovery fire must not be suppressed"
 
     def test_none_riddled_delta_top_level_dropped_nested_preserved(
@@ -436,7 +436,7 @@ class TestPathologicalMetadataShapes:
         _seed_task(home, "49", metadata={"note": "existing",
                                          "worktree_path": "/old"})
         delta = {
-            "scope_contract": {"a": None, "b": {"c": None}},
+            "handoff_rejection": {"a": None, "b": {"c": None}},
             "nesting_depth": None,
             "junk": None,
         }
@@ -444,15 +444,15 @@ class TestPathologicalMetadataShapes:
         snaps = _snapshots()
         assert len(snaps) == 1
         payload = snaps[0]["metadata"]
-        assert payload["scope_contract"] == {"a": None, "b": {"c": None}}
+        assert payload["handoff_rejection"] == {"a": None, "b": {"c": None}}
         assert "nesting_depth" not in payload
         assert "junk" not in payload
         assert payload["note"] == "existing"
         assert payload["worktree_path"] == "/old"
 
     @pytest.mark.parametrize("bad_delta", [
-        "scope_contract",            # a STRING that equals a targeted key
-        ["scope_contract"],          # a LIST carrying a targeted-key string
+        "handoff_rejection",            # a STRING that equals a targeted key
+        ["handoff_rejection"],          # a LIST carrying a targeted-key string
         7,
         True,
     ], ids=["str", "list-with-targeted-token", "int", "bool"])
@@ -479,7 +479,7 @@ class TestExitZeroAdvisoryNonInterference:
         _seed_task(home, "51")
         _seed_task(home, "52")
         ok_advisories = tlg.evaluate_lifecycle(
-            _open_write("51", {"scope_contract": SCOPE})
+            _open_write("51", {"handoff_rejection": SCOPE})
         )
         assert len(_snapshots()) == 1
         markers_after_success = len(_marker_files(home))
@@ -490,7 +490,7 @@ class TestExitZeroAdvisoryNonInterference:
 
         monkeypatch.setattr(tms, "append_event", _raise)
         fail_advisories = tlg.evaluate_lifecycle(
-            _open_write("52", {"scope_contract": {"other": "content"}})
+            _open_write("52", {"handoff_rejection": {"other": "content"}})
         )
         assert fail_advisories == ok_advisories, (
             "a mirror failure must never alter the advisory output"
@@ -514,7 +514,9 @@ class TestExitZeroAdvisoryNonInterference:
             "most_likely_wrong": "m",
             "least_confident_item": "l",
             "first_action": "f",
-            "variety_acknowledgment": "free-text string — wrong shape",
+            # a bare "no" (no concern text) is a shape the write gate cannot
+            # repair (1.5.0, D3), so it still draws the write-time advisory
+            "variety_acknowledgment": "no",
         }}
         fired = tlg.evaluate_lifecycle(
             _open_write("53", copy.deepcopy(delta),
@@ -603,14 +605,14 @@ class TestCompletingWriteDisjointnessBoundary:
         leg also fired, its overlay would be a second, distinct content
         key → TWO events. Exactly one event, carrying the completion
         payload, proves the status split routes rather than dedups."""
-        _seed_task(home, "57", metadata={"scope_contract": SCOPE})
-        final_md = {"scope_contract": SCOPE, "final_extra": "final"}
+        _seed_task(home, "57", metadata={"handoff_rejection": SCOPE})
+        final_md = {"handoff_rejection": SCOPE, "final_extra": "final"}
         payload = {
             "tool_name": "TaskUpdate",
             "tool_input": {
                 "taskId": "57",
                 "status": "completed",
-                "metadata": {"scope_contract": SCOPE},
+                "metadata": {"handoff_rejection": SCOPE},
             },
             "tool_response": {"task": {
                 "id": "57",
@@ -692,7 +694,7 @@ def _sub_run_gate(stdin_text, home):
 
 
 def _sub_open_write_frame(task_id, metadata, *,
-                          agent_type="PACT:pact-orchestrator",
+                          agent_type="repacted:pact-orchestrator",
                           session_id=SUB_SID):
     return {
         "hook_event_name": "PostToolUse",
@@ -729,7 +731,7 @@ class TestPerWriteSubprocessDepth:
         home, _session_dir, tasks_dir = _sub_seed_home(tmp_path)
         _sub_write_task(tasks_dir, "70")
         frame = json.dumps(
-            _sub_open_write_frame("70", {"scope_contract": SCOPE})
+            _sub_open_write_frame("70", {"handoff_rejection": SCOPE})
         )
         first = _sub_run_gate(frame, home)
         second = _sub_run_gate(frame, home)
@@ -771,7 +773,7 @@ class TestPerWriteSubprocessDepth:
         home, _session_dir, tasks_dir = _sub_seed_home(tmp_path)
         result = _sub_run_gate(
             json.dumps(_sub_open_write_frame(
-                "../../marker-escape", {"scope_contract": SCOPE}
+                "../../marker-escape", {"handoff_rejection": SCOPE}
             )),
             home,
         )
@@ -793,7 +795,7 @@ class TestPerWriteSubprocessDepth:
         exit 0, and NOTHING lands in any journal (no partial parse can
         reach the emit path)."""
         home, _session_dir, _tasks_dir = _sub_seed_home(tmp_path)
-        frame = _sub_open_write_frame("72", {"scope_contract": SCOPE})
+        frame = _sub_open_write_frame("72", {"handoff_rejection": SCOPE})
         frame["padding"] = "P" * (9 * 1024 * 1024)  # over the 8MB read cap
         result = _sub_run_gate(json.dumps(frame), home)
         assert result.returncode == 0, result.stderr

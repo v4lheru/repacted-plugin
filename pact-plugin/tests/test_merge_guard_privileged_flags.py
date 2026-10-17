@@ -48,6 +48,9 @@ Non-vacuity (counter-test-by-revert; measured cardinality in the TEST HANDOFF):
 """
 
 import pytest
+from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
+from merge_guard_repo_fixture import minted_context  # noqa: E402  (amend_3 on #141: mint-side repo binding)
+from merge_guard_repo_fixture import git_bound  # noqa: E402  (1.4.1 U13: git checkout/remote binding)
 
 
 def _refuses(token_context: dict, command: str) -> bool:
@@ -56,13 +59,13 @@ def _refuses(token_context: dict, command: str) -> bool:
     production SSOT; only the approval side is hand-built."""
     from merge_guard_pre import _token_matches_command
 
-    return not _token_matches_command({"context": token_context}, command)
+    return not _token_matches_command({"context": git_bound(token_context, command)}, command)
 
 
 def _authorizes(token_context: dict, command: str) -> bool:
     from merge_guard_pre import _token_matches_command
 
-    return _token_matches_command({"context": token_context}, command)
+    return _token_matches_command({"context": git_bound(token_context, command)}, command)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -79,28 +82,28 @@ class TestReadArmBypassRefuses:
     _BYPASS = [
         # --admin (branch-protection bypass) added past a flagless approval.
         ("admin_add_bf_empty",
-         {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh pr merge 5 --admin"),
         # A pre-fix token with NO bound_flags key defaults to the empty set, so a
         # privileged execution still mismatches (over-block-safe; tokens expire).
         ("admin_add_no_key",
-         {"operation_type": "merge", "pr_number": "5"},
+         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"},
          "gh pr merge 5 --admin"),
         # -R/--repo cross-repo redirect — the headline bug — in every form.
         ("repo_redirect_global_long",
-         {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh --repo victim/repo pr merge 5"),
         ("repo_redirect_attached_short",
-         {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh pr merge 5 -Rvictim/repo"),
         ("repo_redirect_equals_joined",
-         {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh pr merge 5 --repo=victim/repo"),
         # SHORT =-joined (-R=value) — a DISTINCT scanner branch from the long
         # =-joined form: the short-cluster value path strips a leading `=` off the
         # cluster remainder. Exercises that `=`-strip (otherwise uncovered).
         ("repo_redirect_short_equals_joined",
-         {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh pr merge 5 -R=victim/repo"),
         # Approved one repo, executed a DIFFERENT repo → still REFUSE.
         ("repo_redirect_different_repo",
@@ -109,7 +112,7 @@ class TestReadArmBypassRefuses:
         # -d/--delete-branch on MERGE is a post-merge side-effect (deletes the
         # source branch) — bound on the merge op-class.
         ("delete_branch_add_short",
-         {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh pr merge 5 -d"),
         # --no-verify (pre-push-hook bypass) added on a force-push.
         ("no_verify_add",
@@ -117,7 +120,7 @@ class TestReadArmBypassRefuses:
          "git push --no-verify origin main --force"),
         # Cross-repo redirect on the CLOSE op-class.
         ("close_repo_redirect",
-         {"operation_type": "close", "pr_number": "5", "bound_flags": []},
+         {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "5", "bound_flags": []},
          "gh -R victim/repo pr close 5"),
         # --force-with-lease added past a PLAIN push-to-main approval (#1064 fold:
         # plain and lease pushes share the push-to-main op-class; this presence
@@ -175,7 +178,7 @@ class TestReadArmCombinedShortClusterRefuses:
         unapproved --repo=owner/repo → REFUSE. (The cluster yields
         {--delete-branch, --repo=owner/repo} vs the approved {--delete-branch}.)"""
         assert _refuses(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--delete-branch"]},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--delete-branch"]},
             "gh pr merge 5 -dR owner/repo",
         )
 
@@ -185,7 +188,7 @@ class TestReadArmCombinedShortClusterRefuses:
         {--delete-branch} never matches {--repo=d} → REFUSE. Pins that the cluster
         walk follows real pflag value-consumption, not naive per-char booleans."""
         assert _refuses(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--delete-branch"]},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--delete-branch"]},
             "gh pr merge 5 -Rd owner/repo",
         )
 
@@ -194,7 +197,7 @@ class TestReadArmCombinedShortClusterRefuses:
         binds {--delete-branch, --repo=owner/repo}; a flagless approval REFUSES —
         no bound short is dropped from the attached-value cluster form."""
         assert _refuses(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
             "gh pr merge 5 -dRowner/repo",
         )
 
@@ -206,7 +209,7 @@ class TestReadArmDroppedConstraintRefuses:
 
     def test_approved_admin_executed_bare_refuses(self):
         assert _refuses(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
             "gh pr merge 5",
         )
 
@@ -250,9 +253,7 @@ class TestMatchHeadCommitDroppedConstraint:
         """Build the approval token by SCANNING the approval command through the
         production SSOT, so bound_flags reflect the LIVE denylist (couples the
         dropped-constraint refusal to the --match-head-commit binding)."""
-        from shared.merge_guard_common import extract_command_context
-
-        return {"context": extract_command_context(approval_command)}
+        return {"context": minted_context(approval_command)}
 
     def test_dropped_constraint_refuses(self):
         """Approve WITH the safety constraint, execute WITHOUT it → REFUSE — the
@@ -300,13 +301,13 @@ class TestReadArmExactMatchAuthorizes:
 
     def test_admin_exact_match_authorizes(self):
         assert _authorizes(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
             "gh pr merge 5 --admin",
         )
 
     def test_clean_no_flag_match_authorizes(self):
         assert _authorizes(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
             "gh pr merge 5",
         )
 
@@ -322,7 +323,7 @@ class TestReadArmExactMatchAuthorizes:
         """Approve the canonical --repo=owner/repo; every equivalent -R/--repo form
         of the same repo AUTHORIZES (all normalize to one token)."""
         assert _authorizes(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--repo=owner/repo"]},
+            {"host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--repo=owner/repo"]},
             command,
         )
 
@@ -345,7 +346,7 @@ class TestReadArmExactMatchAuthorizes:
     ], ids=["short", "long"])
     def test_delete_branch_form_invariant_match_authorizes(self, command):
         assert _authorizes(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--delete-branch"]},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--delete-branch"]},
             command,
         )
 
@@ -353,7 +354,7 @@ class TestReadArmExactMatchAuthorizes:
         """Two bound flags approved and executed (order/placement-invariant) →
         AUTHORIZE."""
         assert _authorizes(
-            {"operation_type": "merge", "pr_number": "5",
+            {"host": "github.com", "operation_type": "merge", "pr_number": "5",
              "bound_flags": ["--admin", "--repo=owner/repo"]},
             "gh --repo owner/repo pr merge 5 --admin",
         )
@@ -527,7 +528,7 @@ class TestEndOfOptionsMarkerOverBlock:
         """approve `... -- --admin` / execute the SAME → AUTHORIZE: both arms bind
         --admin, so the over-block does not perturb a faithful re-execution."""
         assert _authorizes(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
             "gh pr merge 5 -- --admin",
         )
 
@@ -536,7 +537,7 @@ class TestEndOfOptionsMarkerOverBlock:
         (still bound past `--`) was never approved. Over-block-safe — re-approval
         recovers; this is never an under-block."""
         assert _refuses(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": []},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
             "gh pr merge 5 -- --admin",
         )
 

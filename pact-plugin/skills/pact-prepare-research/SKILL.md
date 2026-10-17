@@ -1,12 +1,6 @@
 ---
 name: pact-prepare-research
-description: |
-  Research methodologies and documentation gathering workflows for PACT Prepare phase.
-  Use when: conducting technology research, evaluating API documentation,
-  comparing framework options, analyzing library choices, gathering requirements,
-  or creating technology comparison matrices.
-  Triggers on: research, requirements gathering, API exploration, documentation
-  review, technology evaluation, library comparison, prepare phase.
+description: "Use when researching in the PREPARE phase: technology and library evaluation, comparison matrices, API documentation, framework options, requirements gathering."
 ---
 
 # PACT Prepare Research Methodology

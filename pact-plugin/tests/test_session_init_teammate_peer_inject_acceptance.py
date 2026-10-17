@@ -187,7 +187,7 @@ class TestTeammateReceivesPeerBodyViaRealResolution:
         )
         assert _PEER_LIST_PREFIX in additional
         # Charter cross-ref + the two trailing reminders compose in.
-        assert "pact-communication-charter.md" in additional
+        assert "teammate-messaging.md" in additional
         assert "TEACHBACK TIMING" in additional
         assert "COMPLETION AUTHORITY" in additional
         # Mis-roling fix: a teammate must NOT be told it is the orchestrator,
@@ -265,7 +265,7 @@ class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
     the two roles into one claim, which is the grouping the role gate removed."""
 
     @pytest.mark.parametrize(
-        "agent_type", ["PACT:pact-orchestrator", "pact-orchestrator"]
+        "agent_type", ["repacted:pact-orchestrator", "pact-orchestrator"]
     )
     def test_lead_frame_emits_orchestrator_block_not_peer_body(self, agent_type, tmp_path):
         additional, _ = _run_real_session_init(_teammate_frame(agent_type), tmp_path)
@@ -286,7 +286,7 @@ class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
         }
         additional, _ = _run_real_session_init(frame, tmp_path)
         assert _ORCH_MARKER in additional
-        assert "relaunch with `--agent PACT:pact-orchestrator`" in additional
+        assert "relaunch with `--agent repacted:pact-orchestrator`" in additional
         assert _PEER_LIST_PREFIX not in additional
 
 

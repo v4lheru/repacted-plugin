@@ -1,16 +1,16 @@
 """
 Location: pact-plugin/tests/test_merge_guard_vendored_baselines.py
-Summary: pins the vendored merge_guard_common.py bases that the baked-SHA
-         certification files load through `load_vendored`.
+Summary: pins the certification bases that the baked-SHA certification files load
+         through `load_vendored`. Each base is a captured decision table
+         (tests/fixtures/shell/decisions/base_<sha8>.jsonl; integrity and size are
+         pinned in tests/test_shell_decision_tables.py).
 Used by: the suite. Path setup is conftest-owned; see tests/test_path_setup_pin.py.
 
-A certification file certifies nothing unless three things hold:
-  1. each vendored fixture still has the git blob id it was pinned with, so the
-     base under test is the commit the cert names;
-  2. every commit a cert file loads is in the vendored table, so no cert reaches
-     for a base that is not stored;
-  3. no cert file reads git history or carries a skip marker, so a missing base
-     is a failure and never a silent pass.
+A certification file certifies nothing unless two things hold:
+  1. every commit a cert file loads is in the loader's table, so no cert reaches
+     for a base that has no decision table;
+  2. no cert file reads git history or carries a skip marker, so a missing base
+     or row is a failure and never a silent pass.
 """
 
 import ast
@@ -25,11 +25,8 @@ TESTS_DIR = Path(__file__).resolve().parent
 # Certification files that load their bases through load_vendored. A file joins
 # this list in the same commit that removes its skips and its git calls.
 _CERT_FILES = [
-    "test_merge_guard_1118_recert.py",
-    "test_merge_guard_1129_r2_cert.py",
-    "test_merge_guard_1129_r3_cert.py",
-    "test_merge_guard_1140_carrier5_cert.py",
-    "test_merge_guard_1178_f2_cert.py",
+    "test_merge_guard_1118_mechanism.py",
+    "test_merge_guard_1129_r2_mechanism.py",
 ]
 
 
@@ -90,18 +87,6 @@ def _history_and_skip_sites(tree):
     return sites
 
 
-@pytest.mark.parametrize("sha8", sorted(loader._VENDORED))
-def test_each_vendored_file_matches_its_blob_id(sha8):
-    name, blob_id = loader._VENDORED[sha8]
-    path = loader._VENDORED_DIR / name
-    assert path.is_file(), "vendored fixture %s is missing" % path
-    got = loader._git_blob_id(path.read_bytes())
-    assert got == blob_id, (
-        "%s has git blob id %s, pinned %s: its bytes are no longer the commit "
-        "%s's merge_guard_common.py" % (name, got, blob_id, sha8)
-    )
-
-
 @pytest.mark.parametrize("cert", _CERT_FILES)
 def test_every_sha_a_cert_file_loads_is_vendored(cert):
     shas = _loaded_shas(_cert_tree(cert))
@@ -121,32 +106,3 @@ def test_no_cert_file_reads_git_history_or_skips(cert):
         "its bases through load_vendored and fail, never skip, when one is "
         "missing" % (cert, sites)
     )
-
-
-def _copy_fixture(tmp_path, key, change_one_byte):
-    source = loader._VENDORED_DIR / "merge_guard_common_b4041ccf.py"
-    data = source.read_bytes()
-    pinned = loader._git_blob_id(data)
-    if change_one_byte:
-        data = data[:-1] + (b"#" if data[-1:] != b"#" else b" ")
-    copy = tmp_path / ("merge_guard_common_%s.py" % key)
-    copy.write_bytes(data)
-    return copy, pinned
-
-
-def test_the_loader_fails_loudly_on_a_drifted_fixture(tmp_path, monkeypatch):
-    copy, pinned = _copy_fixture(tmp_path, "drift000", change_one_byte=True)
-    monkeypatch.setattr(loader, "_VENDORED_DIR", tmp_path)
-    monkeypatch.setitem(loader._VENDORED, "drift000", (copy.name, pinned))
-    with pytest.raises(pytest.fail.Exception, match="git blob id mismatch"):
-        loader.load_vendored("drift000")
-
-
-def test_the_loader_loads_an_intact_copy(tmp_path, monkeypatch):
-    """The control for the arm above: the same setup with the bytes unchanged
-    loads, so that arm fails on the drift and not on the setup."""
-    copy, pinned = _copy_fixture(tmp_path, "intact00", change_one_byte=False)
-    monkeypatch.setattr(loader, "_VENDORED_DIR", tmp_path)
-    monkeypatch.setitem(loader._VENDORED, "intact00", (copy.name, pinned))
-    module = loader.load_vendored("intact00")
-    assert callable(module.is_dangerous_command)

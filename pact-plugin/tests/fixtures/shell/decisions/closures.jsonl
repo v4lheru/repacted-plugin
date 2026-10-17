@@ -1,0 +1,501 @@
+{"replayed": 1199, "rows": 500, "sha256": "95c17ffa4301d9f13d4e3b1d0fbca5a265d8c953d1012b89cc3009d54ef224f2"}
+{"args": ["gh gist create -d \"gh pr merge 5\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh gist create f.txt --desc \"git branch -D main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh gist create f.txt -d \"git branch -D main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr comment 1 --body $'git push --force origin main'"], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr create --title \"Fix \"'gh pr merge 5'"], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr edit 123 --body \"git branch -D main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr edit 123 --title \"git branch -D main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr edit 123 -b \"git branch -D main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh release create v1 --notes \"git push --force origin main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh release create v1 --title \"git branch -D main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh release create v1 -n \"git push --force origin main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh release edit v1 --notes \"git push --force origin main\""], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag --message \"git branch -D main\" v1"], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag -m \"git branch -D main\" v1"], "base": "023ee2c3", "fn": "is_dangerous_command", "was": true}
+{"args": ["cd . && gh pr close 5 -R owner/repo -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && gh pr close 5 -d -R owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && gh pr close 5 -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && gh pr close 5 -dR owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && gh pr close feature -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && gh pr close https://github.com/o/r/pull/5 -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git branch --delete -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git branch -Df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git branch -d -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git branch -df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git branch -fD temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git branch -fd temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push --delete origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push --mirror origin"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push --prune origin --all"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push -d origin a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push -d origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push -du origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push -ud origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push origin --delete a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push origin --delete main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push origin -d main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push origin :a :b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push origin :main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /repo && gh pr close 5 -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /repo && git push origin --delete feature"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && gh pr close 5 -R owner/repo -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && gh pr close 5 -d -R owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && gh pr close 5 -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && gh pr close 5 -dR owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git branch --delete -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git branch -Df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git branch -d -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git branch -df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git branch -fD temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git branch -fd temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push --delete origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push --mirror origin"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push --prune origin --all"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push -d origin a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push -d origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push -du origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push -ud origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push origin --delete a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push origin --delete main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push origin -d main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push origin :a :b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r && git push origin :main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; gh pr close 5 -R owner/repo -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; gh pr close 5 -d -R owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; gh pr close 5 -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; gh pr close 5 -dR owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git branch --delete -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git branch -Df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git branch -d -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git branch -df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git branch -fD temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git branch -fd temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push --delete origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push --mirror origin"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push --prune origin --all"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push -d origin a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push -d origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push -du origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push -ud origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push origin --delete a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push origin --delete main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push origin -d main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push origin :a :b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd /tmp/r ; git push origin :main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && gh pr close 5 -R owner/repo -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && gh pr close 5 -d -R owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && gh pr close 5 -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && gh pr close 5 -dR owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git branch --delete -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git branch -Df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git branch -d -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git branch -df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git branch -fD temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git branch -fd temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push --delete origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push --mirror origin"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push --prune origin --all"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push -d origin a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push -d origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push -du origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push -ud origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push origin --delete a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push origin --delete main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push origin -d main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push origin :a :b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo hi && git push origin :main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || gh pr close 5 -R owner/repo -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || gh pr close 5 -d -R owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || gh pr close 5 -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || gh pr close 5 -dR owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git branch --delete -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git branch -Df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git branch -d -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git branch -df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git branch -fD temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git branch -fd temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push --delete origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push --mirror origin"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push --prune origin --all"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push -d origin a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push -d origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push -du origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push -ud origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push origin --delete a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push origin --delete main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push origin -d main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push origin :a :b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["false || git push origin :main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh pr close 5 -Rd owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh pr close 5"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && gh pr close 5 -R owner/repo -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && gh pr close 5 -d -R owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && gh pr close 5 -d"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && gh pr close 5 -dR owner/repo"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git branch --delete -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git branch -Df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git branch -d -f temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git branch -df temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git branch -fD temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git branch -fd temp"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push --delete origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push --mirror origin"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push --prune origin --all"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push -d origin a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push -d origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push -du origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push -ud origin main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push origin --delete a b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push origin --delete main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push origin -d main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push origin :a :b"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git status && git push origin :main"], "base": "172a77dd", "fn": "is_dangerous_command", "was": false}
+{"args": ["git commit -m $'don\\'t run git branch -D victim'"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m $'don\\'t' && git branch -D victim && git commit -m 'x'"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": false}
+{"args": ["git commit -m $'don\\'t' ; gh pr merge 5 --delete-branch ; git commit -m 'x'"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": false}
+{"args": ["git commit -m $'don\\'t' | git branch -D real | git commit -m 'x'"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": false}
+{"args": ["git commit -m 'don'\\''t run git branch -D victim later'"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m 'don'\\''t' && git branch -D victim && git commit -m 'x'"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": false}
+{"args": ["git commit -m 'don'\\''t' ; gh pr merge 5 --delete-branch ; git commit -m 'x'"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": false}
+{"args": ["git commit -m 'don'\\''t' | git branch -D real | git commit -m 'x'"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m $'don\\'t run git branch -D victim' v1"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag -m 'don'\\''t run git branch -D victim later' v1"], "base": "2d7fcd07", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], "base": "38f76965", "fn": "_split_into_legs", "was": ["gh api repos/o/r/pulls/5/merge -X GET -q 'STRIPPED' r\" && gh api \"x/y\" -X POST -f a='STRIPPED'"]}
+{"args": ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], "base": "38f76965", "fn": "detect_command_operation_type", "was": "merge"}
+{"args": ["gh api --hostname=merge.example.com -f q=x repos/o/r/pulls/1"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api -f q=x --preview=merge-info repos/o/r/pulls/1"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api graphql -f query=x --jq=.mergeable"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api graphql -f query=x -q.mergeable"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api graphql -f query=x -q=.mergeable"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r/git/refs/heads/x -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r/merges --input b.json -q .a+\" \"+.b && gh api \"repos/o/r\" -X GET"], "base": "38f76965", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh api repos/o/r/merges --input b.json -q x\"y z\" && gh api \"repos/o/r\" -X GET"], "base": "38f76965", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh api repos/o/r/merges --input b.json -t {{.n}}\" \"{{.t}} && gh api \"repos/o/r\" -X GET"], "base": "38f76965", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh api repos/o/r/merges -f k=x\"y z\" && gh api \"o/r\" -X GET"], "base": "38f76965", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh api repos/o/r/pulls/1 -f q=x --header=X-merge:1"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r/pulls/1 -f q=x --template=.mergeable"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], "base": "38f76965", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh issue create --title \"as of $(date): git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr create --title \"$(date) release; drop git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --me \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --mes \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --mess 'run git branch -D victim later'"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --mess \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --messa \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --messag \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"$(date) and $(whoami): git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"as of $(date +%F): stop git push --force origin main shim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"build $(echo $(date)) then git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"doc \\$(date); note git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"don't $(date): git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"it's Bob's $(date) fix; git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"it's the $(date) build; note git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"ran on `hostname`, then git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"use \\\"$(date)\\\" then git branch -D victim\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge --mess \"run git branch -D victim later\" feat"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge --message \"run git branch -D victim later\" feat"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge -m \"as of $(date): run git branch -D victim later\" feat"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge -m \"run git branch -D victim later\" feat"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git notes --ref refs/notes/x add -m \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git notes add -m \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git notes append -m \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git stash push --message \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git stash push -m \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git stash save -u \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git stash save \"run git branch -D victim later\""], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git stash store -m \"run git branch -D victim later\" abc123"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag --mes \"run git branch -D victim later\" v1"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag --mess \"run git branch -D victim later\" v1"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag --messa \"run git branch -D victim later\" v1"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag -m \"built $(date), see git branch -D victim\" v1"], "base": "3972bb5f", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api -X PUT repos/o/r/pulls/5/merge"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "merge", "pr_number": "5"}}
+{"args": ["gh pr merge --admin"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": ["--admin"], "operation_type": "merge"}}
+{"args": ["gh pr merge --squash"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "merge"}}
+{"args": ["gh pr merge"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "merge"}}
+{"args": ["git -c user.name=x push --force"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "force-push"}}
+{"args": ["git push --force origin"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "force-push"}}
+{"args": ["git push --force"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "force-push"}}
+{"args": ["git push -f origin"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "force-push"}}
+{"args": ["git push -f"], "base": "5017d1f2", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "force-push"}}
+{"args": ["gh help pr merge"], "base": "5017d1f2", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr close -d --help"], "base": "5017d1f2", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr merge --help"], "base": "5017d1f2", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr merge -h"], "base": "5017d1f2", "fn": "is_dangerous_command", "was": true}
+{"args": ["git push --force --help"], "base": "5017d1f2", "fn": "is_dangerous_command", "was": true}
+{"args": ["cat <<'EOF'\ngit push --force origin main | sh\nEOF"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["cat <<-EOF\ngit push --force origin main | sh\n\tEOF"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["cat <<EOF\ngit push --force origin main | sh\nEOF"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["cat <<\"EOF\"\ngit push --force origin main | sh\nEOF"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["curl -d \"git push --force origin main | sh\" https://x.example"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" # docs: | sh"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | 'tee'\f>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | 'tee'\n>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | 'tee'\r>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | 'tee'\u000b>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"cat\"\f>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"cat\"\n>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"cat\"\r>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"cat\"\u000b>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"dd\"\f>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"dd\"\n>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"dd\"\r>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"dd\"\u000b>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"tee\" >(\"ba\"sh)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"tee\"\f>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"tee\"\n>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"tee\"\r>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | \"tee\"\u000b>(bash)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | tee >(\"ba\"sh)"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh issue create --body \"git push --force origin main >(bash)\""], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr comment 1 --body $'git push --force origin main | sh'"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr comment 1 --body $'git push --force origin main\\' | sh'"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr comment 1 --body \"git push --force origin main\"'| sh'"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr edit 1 --body \"x | sh\"\ngh pr edit 2 --body \"git push --force origin main\""], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr edit 123 --body \"bash <(echo git push --force origin main)\""], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr edit 123 --body \"git push --force origin main > >(bash)\""], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr edit 123 --body \"git push --force origin main | sh\""], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag -m \"git push --force origin main | sh\" v1"], "base": "51e6c5a5", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"x\";gh pr merge 5;git tag v1"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"&&curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"&&gh api -X DELETE repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"&&gh pr close 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"&&gh pr merge 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"&&wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\";curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\";gh api -X DELETE repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\";gh pr close 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\";gh pr merge 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\";wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"|curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"|gh api -X DELETE repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"|gh pr close 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"|gh pr merge 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -a v1 -m \"Release v1.0\"|wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note&&curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note&&gh api -X DELETE repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note&&gh pr close 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note&&gh pr merge 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note&&wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note;curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note;gh api -X DELETE repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note;gh pr close 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note;gh pr merge 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note;wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note|curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note|gh api -X DELETE repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note|gh pr close 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note|gh pr merge 5 --delete-branch"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m note|wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], "base": "6f404f2e", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" # docs: | sh"], "base": "72bacaf8", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | 'tee' >(bash)"], "base": "72bacaf8", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"cat\" >(bash)"], "base": "72bacaf8", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"dd\" >(bash)"], "base": "72bacaf8", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"tee\" >(bash)"], "base": "72bacaf8", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh pr comment 1 --body $'git push --force origin main\\' | sh'"], "base": "72bacaf8", "fn": "is_dangerous_command", "was": true}
+{"args": ["busybox mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo ok && busybox mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["hush -c \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": false}
+{"args": ["hush \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": false}
+{"args": ["ionice -c2 mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["lash -c \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": false}
+{"args": ["lash \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": false}
+{"args": ["msh -c \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": false}
+{"args": ["msh \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": false}
+{"args": ["nice -n5 mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["nocache -n3 mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["rlwrap -Oregexp mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["stdbuf --output=L mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["stdbuf -e0 -oL mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["stdbuf -eL mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["stdbuf -o 0 mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["stdbuf -o L mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["stdbuf -oL mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["sudo -uroot mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["timeout -s9 mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["torsocks -d5 mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["xargs -n1 mycmd \"git branch -D victim\""], "base": "89061755", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo 'a' 'note git branch -D victim'"], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo 'a' \"note git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"a\" 'note git branch -D victim'"], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"a\" \"b\" \"drop git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"first arg\" \"note $(date) git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"first arg\" \"note git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"first\" \"ran `hostname`, then git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["printf \"%s\" \"note $(date) git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["printf \"%s\" \"note git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["printf \"%s\\n\" \"note $(date) git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["printf \"%s\\n\" \"note git branch -D victim\""], "base": "a542e21b", "fn": "is_dangerous_command", "was": true}
+{"args": ["cat <<< \"as of $(date): note git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["cat <<< \"ran `hostname`: git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["curl --data \"$(date) drop git branch -D victim\" http://example.com/api"], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["curl -d \"as of $(date): note git branch -D victim\" http://example.com/api"], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"$(date) $(whoami): git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"as of $(date): note git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"it's $(date); git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"ran on `hostname`, then git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r --jq \"$(date) git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r -q \"as of $(date): git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["printf \"as of $(date): note git branch -D victim\""], "base": "a62703f1", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" | 'tee' \t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | 'tee'\t >(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | 'tee'\t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | 'tee'\t\t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"cat\" \t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"cat\"\t >(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"cat\"\t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"cat\"\t\t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"dd\" \t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"dd\"\t >(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"dd\"\t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"dd\"\t\t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"tee\" \t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"tee\"\t >(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"tee\"\t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" | \"tee\"\t\t>(bash)"], "base": "b313ecaa", "fn": "is_dangerous_command", "was": false}
+{"args": ["git commit -m \"note: gh pr merge 5 --admin later\" # reviewed, do not pipe | sh"], "base": "b4041ccf", "fn": "_executed_surface_view", "was": "git commit -m                                     # reviewed, do not pipe | sh"}
+{"args": ["cd . && git push origin +feature"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["cd . && git push origin +main"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["gh pr close 5 # weighed gh pr merge 5"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": "merge"}
+{"args": ["gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": "merge"}
+{"args": ["git push origin '+notaforce'"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin +feature"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin +feature:main"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin +main"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin +master"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin +refs/heads/main"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin HEAD:refs/heads/main"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin develop:main"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin feature:main"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["git push origin refs/heads/main"], "base": "b4041ccf", "fn": "detect_command_operation_type", "was": null}
+{"args": ["gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"], "base": "b4041ccf", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "merge", "pr_number": "5"}}
+{"args": ["git push --force origin"], "base": "b4041ccf", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "force-push"}}
+{"args": ["git push origin main feature"], "base": "b4041ccf", "fn": "extract_command_context", "was": {"bound_flags": [], "operation_type": "push-to-main"}}
+{"args": ["awk '/gh pr merge 5 --admin/ {print}' f"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["cd . && gh pr close 5 -d"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git branch -Df temp"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push origin --delete feature"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push origin --delete main"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": false}
+{"args": ["cd . && git push origin :main"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": false}
+{"args": ["echo \"git push --force origin main\" # docs: | sh"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" #x | sh"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\" ;# c | sh"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\"\\\\ #x | sh"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\"\\\r\n#x | sh"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["echo \"git push --force origin main\"\n#x | sh"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["find . -iname 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["find . -ipath 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["find . -iregex 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["find . -name 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["find . -path 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["find . -regex 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh issue list --author 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh issue list --search 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh issue list -A 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh issue list -l 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr list --author 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr list --base 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr list --label 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr list --search 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr list -S 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr merge\\\n5"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search code 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search commits 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search commits --author 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search commits --committer 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search issues 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search issues --label 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search prs 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search prs --author 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search repos 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh search repos --owner 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git --no-pager log --grep 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git -C /p grep -e 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git -C /p log --grep 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git -C /p merge -m 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git -c 'user.name=A B' merge -m 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git -c core.pager=x log --grep 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git -c merge.tool=x merge -m 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"note: gh pr merge 5 --admin later\" # reviewed, do not pipe | sh"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git fetch && git push --mirror origin"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": false}
+{"args": ["git grep 'gh pr merge 5 --admin' -- src/"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git grep 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git grep -e 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git grep -f 'gh pr merge 5 --admin' src/"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --author 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --committer 'gh pr close 5 --delete-branch'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --committer 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --committer 'git branch -D victim'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --committer 'git push --force origin main'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --grep 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --grep 'git push --force origin main'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --grep \"gh pr merge 5 --admin\""], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log --walk-reflogs --grep-reflog 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log -G 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log -G'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log -S 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log -S'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log -n5 -S'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log -nS'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git log -wG'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge --no-ff feature -m 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge -m 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge -m 'note' -m 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge feature -m 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git pus\\\nh --force origin main"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": false}
+{"args": ["git push\\\n--force origin main"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git shortlog --author 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git shortlog --committer 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git shortlog --grep \"gh pr merge 5 --admin\""], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git show --author 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git show --committer 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git show --grep \"gh pr merge 5 --admin\""], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git show -S'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["nice git log --grep 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["timeout 5 git grep 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["timeout 5 git log --grep 'gh pr merge 5 --admin'"], "base": "b4041ccf", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -Sam \"run git branch -D victim later\""], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -aaaaaaaaaaaaaaaaaaaaaaaam \"run git branch -D victim later\""], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -am \"run git branch -D victim later\""], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m'run git branch -D victim later'"], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m\"run git branch -D victim later\""], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -qam \"run git branch -D victim later\""], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -sam \"run git branch -D victim later\""], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag -am \"run git branch -D victim later\" v1"], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag -m\"run git branch -D victim later\" v1"], "base": "b6418727", "fn": "is_dangerous_command", "was": true}
+{"args": ["FOO=\"$(date) just note git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["FOO=\"$(date) note git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh gist create --desc=\"$(date) note git branch -D victim\" f.txt"], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh issue create --title=\"as of $(date): git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh pr create --body=\"$(date) note git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh release create v1 --notes=\"$(date) drop git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --message=\"$(date) and $(whoami): git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --message=\"$(date) just note git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --message=\"as of $(date): note git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --message=\"it's $(date); git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --message=\"ran on `hostname`, then git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m=\"$(date) note git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git merge --message=\"$(date) git branch -D victim\" feat"], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git notes add --message=\"$(date) git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["git stash push --message=\"$(date) git branch -D victim\""], "base": "bf7c8786", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], "base": "c5e9b324", "fn": "_split_into_legs", "was": ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" ", " gh api \"x/y\" -X POST -f a='STRIPPED'"]}
+{"args": ["gh api --hostname=merge.example.com -f q=x repos/o/r/pulls/1"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api -f q=x --preview=merge-info repos/o/r/pulls/1"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api graphql -f query='mutation{ mergePullRequest(input:{}) { number } }'"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh api graphql -f query=x --jq=.mergeable"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api graphql -f query=x -q.mergeable"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api graphql -f query=x -q=.mergeable"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r/merges -f k=x\"y z\" && gh api \"o/r\" -X GET"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": false}
+{"args": ["gh api repos/o/r/pulls/1 -f q=x --header=X-merge:1"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": true}
+{"args": ["gh api repos/o/r/pulls/1 -f q=x --template=.mergeable"], "base": "c5e9b324", "fn": "is_dangerous_command", "was": true}
+{"args": ["git -C /some/repo commit -m \"fix: describe git branch -D victim in prose\""], "base": "f6e3639a", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit --message \"fix: describe git branch -D victim in prose\""], "base": "f6e3639a", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m $'fix: describe git branch -D victim in prose'"], "base": "f6e3639a", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m $\"run git branch -D victim later\""], "base": "f6e3639a", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"prefix \"\"git branch -D victim\""], "base": "f6e3639a", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"run \"\"git branch -D victim\""], "base": "f6e3639a", "fn": "is_dangerous_command", "was": true}
+{"args": ["git commit -m \"subj\" -m \"body: run git branch -D victim to clean up\""], "base": "f6e3639a", "fn": "is_dangerous_command", "was": true}
+{"args": ["git tag -m $'don\\'t' v1 && git branch -D victim && git tag -m 'x' v2"], "base": "f6e3639a", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m $'don\\'t' v1 ; gh pr merge 5 --delete-branch ; git tag -m 'x' v2"], "base": "f6e3639a", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m 'don'\\''t' v1 && git branch -D victim && git tag -m 'x' v2"], "base": "f6e3639a", "fn": "is_dangerous_command", "was": false}
+{"args": ["git tag -m 'don'\\''t' v1 ; gh pr merge 5 --delete-branch ; git tag -m 'x' v2"], "base": "f6e3639a", "fn": "is_dangerous_command", "was": false}

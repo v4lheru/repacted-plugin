@@ -1,25 +1,32 @@
 {
-  "name": "pact-plugin",
+  "name": "repacted",
   "owner": {
-    "name": "Synaptic Labs",
-    "url": "https://github.com/Synaptic-Labs-AI"
+    "name": "Uros Pesic"
   },
   "metadata": {
-    "description": "Orchestration harness that turns Claude Code into a coordinated team of specialist AI agents"
+    "description": "Marketplace for rePACTed (repacted), an independent fork of PACT-Plugin 4.8.1"
   },
   "plugins": [
     {
-      "name": "PACT",
+      "name": "repacted",
       "source": "./pact-plugin",
-      "description": "Orchestration harness that turns Claude Code into a coordinated team of specialist AI agents",
-      "version": "4.8.1",
+      "description": "rePACTed: a compact orchestration harness for Claude Code, forked from PACT 4.8.1",
+      "version": "1.7.0",
       "author": {
-        "name": "Synaptic-Labs-AI"
+        "name": "Uros Pesic",
+        "url": "https://github.com/v4lheru"
       },
       "category": "development",
-      "keywords": ["pact", "vsm", "viable-system-model", "agents", "orchestration", "development", "architecture", "testing", "n8n"],
+      "keywords": [
+        "pact",
+        "agents",
+        "orchestration",
+        "development",
+        "architecture",
+        "testing"
+      ],
       "license": "MIT",
-      "repository": "https://github.com/Synaptic-Labs-AI/PACT-Plugin"
+      "repository": "https://github.com/v4lheru/repacted-plugin"
     }
   ]
 }

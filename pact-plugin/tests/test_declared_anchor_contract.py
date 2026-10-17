@@ -20,7 +20,9 @@ Used by: pytest.
 """
 import ast
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,9 +41,8 @@ def _pin_the_model_cache(monkeypatch):
     """Point this module's children at the operator cache, and refuse network.
 
     SET ON THE PARENT PROCESS RATHER THAN ON A CHILD `env` DICT, because the
-    children here are spawned by PRODUCTION code — `archive_pin._run_memory_cli`
-    — which inherits this process's environment. There is no child dict to bind,
-    and putting test-cache variables into production would be the wrong fix.
+    children here inherit this process's environment through the CLI wiring
+    below.
 
     MODULE-SCOPED AND NOT GLOBAL, deliberately. A conftest-wide autouse would
     also force offline on IN-PROCESS loads elsewhere in the suite, where a
@@ -55,7 +56,6 @@ def _pin_the_model_cache(monkeypatch):
 
 
 _REPO = Path(__file__).resolve().parent.parent
-_ARCHIVE_PIN = _REPO / "scripts" / "archive_pin.py"
 _MEMORY_CLI = _REPO / "skills" / "pact-memory" / "scripts" / "cli.py"
 
 SCAFFOLD = (
@@ -188,8 +188,7 @@ class TestOmittingTheAnchorChangesNothing:
 class TestAnchorIsEnforceableThroughTheCliWiring:
     """Plumbing and containment THROUGH THE TEST WIRING. NOT a production replay.
 
-    Production does not reach the sync on this path: the archive save carries
-    `--no-sync` and the other leg is a read. What these arms certify is that
+    What these arms certify is that
     when a caller DOES declare an anchor through this wiring, the declaration
     is consulted at the write and can refuse it.
 
@@ -226,38 +225,33 @@ class TestAnchorIsEnforceableThroughTheCliWiring:
             subprocess.run(cmd, cwd=str(repo), capture_output=True, check=True)
         return repo
 
-    def _archive_pin(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "_ap_probe", str(_ARCHIVE_PIN)
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
 
-    def _save_through_wiring(self, ap, cwd, db_path, tag):
-        """`db_path` IS A STORE THAT IS PRESENT. `cli.main` refuses a
+    def _save_through_wiring(self, cwd, db_path, tag):
+        """Spawn the CLI `save` with `cwd` declared as `--claude-md-root`, the
+        way a caller that knows its project supplies the anchor.
+
+        `db_path` IS A STORE THAT IS PRESENT. `cli.main` refuses a
         `--db-path` naming a store that is absent, for each command other
         than `setup`, so callers pass the `memory_store` fixture result."""
-        rc, stdout, stderr = ap._run_memory_cli(
-            ["save", "--stdin"],
-            db_path=str(db_path),
-            stdin_data=json.dumps({"context": tag}),
-            cwd=str(cwd),
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=str(cwd))
+        proc = subprocess.run(
+            [sys.executable, str(_MEMORY_CLI), "save", "--stdin",
+             "--db-path", str(db_path), "--claude-md-root", str(cwd)],
+            input=json.dumps({"context": tag}), capture_output=True,
+            text=True, cwd=str(cwd), env=env, timeout=300,
         )
-        assert rc == 0, f"CLI failed: {stderr[:300]}"
-        return json.loads(stdout)["result"]
+        assert proc.returncode == 0, f"CLI failed: {proc.stderr[:300]}"
+        return json.loads(proc.stdout)["result"]
 
     def test_target_outside_the_declared_root_is_refused(
         self, nested, memory_store
     ):
         """The declared root is the sandbox; the target resolves to the repo."""
-        ap = self._archive_pin()
         repo_md = nested / "CLAUDE.md"
         before = repo_md.read_bytes()
 
         result = self._save_through_wiring(
-            ap, nested / "sandbox", memory_store("probe.db"), "must be refused"
+            nested / "sandbox", memory_store("probe.db"), "must be refused"
         )
 
         assert result["sync_status"] == "failed", (
@@ -278,12 +272,11 @@ class TestAnchorIsEnforceableThroughTheCliWiring:
         Same wiring, same child, anchor moved to the repo so it CONTAINS the
         target. This must both report `wrote` AND change the file.
         """
-        ap = self._archive_pin()
         repo_md = nested / "CLAUDE.md"
         before = repo_md.read_bytes()
 
         result = self._save_through_wiring(
-            ap, nested, memory_store("probe.db"), "must be written"
+            nested, memory_store("probe.db"), "must be written"
         )
 
         assert result["sync_status"] == "wrote", (
@@ -298,52 +291,6 @@ class TestAnchorIsEnforceableThroughTheCliWiring:
 # Item 4 + addendum: the population bounds two dated observations rested on.
 # ---------------------------------------------------------------------------
 
-def _module_calls(path: Path, func: str):
-    """Every call to `func` in the module, by AST rather than by grep.
-
-    MODULE-LEVEL ON PURPOSE. A spy installed around one function bounds THAT
-    FUNCTION's call population and says nothing about the module's -- which is
-    how the existing argv pin came to look stronger than it is.
-    """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    out = []
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Call):
-            f = n.func
-            name = f.attr if isinstance(f, ast.Attribute) else (
-                f.id if isinstance(f, ast.Name) else None)
-            if name == func:
-                out.append(n.lineno)
-    return out
-
-
-class TestModuleLevelCallPopulations:
-    """Bounds, not samples. The residual's wording leans on these."""
-
-    def test_run_memory_cli_has_exactly_one_call_site_in_archive_pin(self):
-        """A second, unwrapped call site would bypass the anchor supply.
-
-        The automatic `--claude-md-root` is added inside `_run_memory_cli`, so
-        every route through it is anchored. A caller that spawned the CLI
-        directly would not be, and this bound is what makes that visible.
-        """
-        calls = _module_calls(_ARCHIVE_PIN, "_run_memory_cli")
-        assert len(calls) == 1, (
-            f"expected exactly 1 module-level call to _run_memory_cli, found "
-            f"{len(calls)} at lines {calls}. A new call site must be reviewed "
-            f"for anchor supply, not merely counted."
-        )
-
-    def test_the_save_leg_still_suppresses_its_sync(self):
-        """Production's archive save must not start syncing.
-
-        Read from the SOURCE rather than from a spy, so it bounds the module.
-        """
-        src = _ARCHIVE_PIN.read_text(encoding="utf-8")
-        assert '"--no-sync"' in src or "'--no-sync'" in src, (
-            "the archive save leg no longer carries --no-sync, so the "
-            "production path now reaches the sync"
-        )
 
 
 class TestCliSearchDoesNotSync:

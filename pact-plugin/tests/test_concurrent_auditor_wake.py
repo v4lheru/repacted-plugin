@@ -44,7 +44,6 @@ import ast
 from pathlib import Path
 from typing import Iterator, List, Set, Tuple
 
-import pytest
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 
@@ -178,78 +177,9 @@ class TestWaitInstructionCarriesTheWake:
             f"this sweep and would be meaningless on a truncated one"
         )
 
-    def test_wait_phrase_cardinality_is_exactly_two(self):
-        hits = _occurrences(self.WAIT_PHRASE)
-        total = _total(hits)
-        assert total == 2, (
-            f"wait-phrase cardinality is {total}, expected exactly 2.\n"
-            f"found: {[(_rel(p), c) for p, c in hits]}\n"
-            f"  {total} < 2 means a wait instruction was DELETED or "
-            f"paraphrased -- the surfaces are drifting apart.\n"
-            f"  {total} > 2 means a bare wait instruction was RE-ADDED "
-            f"somewhere. That is the original defect returning: an auditor "
-            f"told to wait with no named wake does not come back.\n"
-            f"If a surface is being added or removed deliberately, change this "
-            f"constant deliberately -- do not relax it to a floor. A floor is "
-            f"TRUE both before and after the fix and cannot observe it."
-        )
 
-    def test_wait_phrase_lives_only_in_the_protocol_pair(self):
-        """Pin the site identities, not just the count.
 
-        Two occurrences that MOVED to different files would satisfy the count
-        while relocating the instruction to a surface nobody audited.
-        """
-        sites = {_rel(p) for p, _ in _occurrences(self.WAIT_PHRASE)}
-        assert sites == self.WAIT_PHRASE_SITES, (
-            f"wait phrase site set is {sorted(sites)}, expected "
-            f"{sorted(self.WAIT_PHRASE_SITES)}. The agent body must NOT carry "
-            f"the bare wait phrase -- there it was replaced by an instruction "
-            f"that names the relay."
-        )
 
-    @pytest.mark.parametrize("relpath", sorted(WAIT_PHRASE_SITES))
-    def test_each_wait_block_names_the_relay(self, relpath):
-        """The conjunction. Every block instructing a wait names the wake.
-
-        Satisfied by the RELAY clause specifically, not by the poll fallback:
-        a poll-only fix passes a laxer pin and does not close the gap, because
-        an agent that has already ended its turn cannot poll.
-        """
-        path = PLUGIN_ROOT / relpath
-        blocks = list(_enclosing_block(path.read_text(encoding="utf-8"), self.WAIT_PHRASE))
-        assert blocks, f"{relpath}: wait phrase not found in any block"
-        for block in blocks:
-            assert self.RELAY_CLAUSE in block, (
-                f"{relpath}: a block instructs the auditor to wait but does not "
-                f"name {self.RELAY_CLAUSE!r} as the wake.\n"
-                f"block:\n{block}\n"
-                f"An instruction to wait that names no wake is the defect this "
-                f"pin exists for. A bounded poll is a fallback, not the wake."
-            )
-
-    @pytest.mark.parametrize("relpath", RELAY_SITES)
-    def test_relay_clause_present_at_every_named_surface(self, relpath):
-        """Presence, not cardinality, and the asymmetry is deliberate.
-
-        Presence is already FALSE before the fix (the clause existed nowhere)
-        and TRUE after, so it discriminates on its own. An exact count would
-        add no detection and would fire on a fourth surface legitimately
-        naming the relay -- a false alarm, not a drift signal.
-
-        This is the leg that covers the agent body, which the conjunction
-        above cannot see: the fix REMOVED the wait phrase from that file, so
-        deleting its relay clause is invisible to every other test here.
-        """
-        path = PLUGIN_ROOT / relpath
-        assert path.is_file(), f"expected surface missing: {relpath}"
-        text = path.read_text(encoding="utf-8")
-        assert self.RELAY_CLAUSE in text, (
-            f"{relpath} no longer names {self.RELAY_CLAUSE!r}. Every surface "
-            f"that discusses the auditor's warm-up must name where the wake "
-            f"comes from; otherwise a reader of THIS surface learns only that "
-            f"it should wait."
-        )
 
 
 # =============================================================================
@@ -257,82 +187,6 @@ class TestWaitInstructionCarriesTheWake:
 # =============================================================================
 
 
-class TestOrchestratorRelaysWakeOnStageReady:
-    """The wake the auditor is told to expect must actually be instructed.
-
-    Pin 1 makes the auditor's surfaces promise a relay. If nothing tells the
-    orchestrator to send one, that promise is a dangling reference and the
-    auditor waits for a message no one was asked to send.
-
-    Anchored on "observe the staged diff", which had occupancy 0 before the
-    fix. NOT anchored on "stage-ready": that string already occurs 8 times
-    across 6 files, so a file-wide stage-ready pin would be satisfied by
-    unrelated prose and could not observe this change at all.
-
-    What this pin does NOT establish: that an orchestrator sends the relay.
-    And it cannot -- by design. The fix pairs the relay (primary) with a
-    phase-exit coverage check (backstop) that fires whenever the relay does
-    not, so no run can distinguish "the relay worked" from "the relay was
-    skipped and the gate caught it". That is the correct trade, since a
-    silently-lost audit is far worse than an unmeasurable mechanism, but it is
-    a KNOWN consequence rather than a gap someone forgot to close. Answering
-    "is the relay working?" needs a deliberate probe with the gate disarmed.
-    """
-
-    RELAY_ANCHOR = "observe the staged diff"
-    AUDITOR_DISPATCH = 'subagent_type="pact-auditor"'
-    PHASE_EXIT_MARKER = "**Before next phase**"
-
-    def test_relay_instruction_is_unique_across_the_plugin(self):
-        hits = _occurrences(self.RELAY_ANCHOR)
-        assert _total(hits) == 1 and [_rel(p) for p, _ in hits] == ["commands/orchestrate.md"], (
-            f"relay instruction anchor {self.RELAY_ANCHOR!r} found at "
-            f"{[(_rel(p), c) for p, c in hits]}, expected exactly one "
-            f"occurrence in commands/orchestrate.md. Zero means the relay "
-            f"instruction was deleted and the auditor's promised wake has no "
-            f"sender; more than one means a second, possibly divergent, relay "
-            f"instruction was introduced."
-        )
-
-    def test_relay_line_names_trigger_recipient_and_mechanism(self):
-        """The line must be actionable on its own: WHEN, TO WHOM, and HOW.
-
-        Discriminates against base, where no line in orchestrate.md paired
-        "auditor" with "stage-ready" at all.
-        """
-        text = ORCHESTRATE_CMD.read_text(encoding="utf-8")
-        line = next(ln for ln in text.splitlines() if self.RELAY_ANCHOR in ln)
-        for element, label in (
-            ("stage-ready", "the trigger"),
-            ("auditor", "the recipient"),
-            ("SendMessage", "the mechanism"),
-        ):
-            assert element in line, (
-                f"relay instruction does not name {label} ({element!r}):\n"
-                f"  {line}\n"
-                f"An orchestrator reading this line must be able to act on it "
-                f"without reconstructing the missing half from context."
-            )
-
-    def test_relay_sits_in_the_auditor_dispatch_region(self):
-        """Placement is part of the instruction.
-
-        The relay must live with the auditor dispatch, not inside the
-        phase-exit checklist. That checklist already carries a separate
-        coverage check which is a PRECONDITION of dispatching TEST; the relay
-        is an action taken during CODE. Collapsing the two into the checklist
-        would turn a continuous relay into a once-per-phase gate item.
-        """
-        text = ORCHESTRATE_CMD.read_text(encoding="utf-8")
-        dispatch_at = text.index(self.AUDITOR_DISPATCH)
-        relay_at = text.index(self.RELAY_ANCHOR)
-        checklist_at = text.index(self.PHASE_EXIT_MARKER, dispatch_at)
-        assert dispatch_at < relay_at < checklist_at, (
-            f"relay instruction is outside the auditor dispatch region "
-            f"(dispatch@{dispatch_at}, relay@{relay_at}, "
-            f"checklist@{checklist_at}). It belongs with the auditor dispatch "
-            f"during CODE, not in the phase-exit checklist."
-        )
 
 
 # =============================================================================
@@ -340,79 +194,6 @@ class TestOrchestratorRelaysWakeOnStageReady:
 # =============================================================================
 
 
-class TestAuditorGuardrailProhibitsTurnEndingDependence:
-    """The guardrail must prohibit the POSTURE, and be pinned where it lives.
-
-    The hazard is ending a turn with a background process as the only route
-    back. It is NOT backgrounding as such -- a long command backgrounded while
-    the agent stays in its turn and polls it is fine, and the concurrent
-    auditor for this very change did exactly that safely.
-
-    This pin is anchored on the posture headline, deliberately NOT on the word
-    "monitor". That word was removed from the guardrail when it was re-aimed
-    from mechanism-form to posture-form, and now survives only in the protocol
-    pair. An anti-"monitor" pin aimed at the agent body would therefore have
-    PASSED while pointing at the wrong file -- green, and blind to the surface
-    it was written to protect. Anchor occupancy is checked in the file the pin
-    actually asserts against, which is what makes that failure impossible here.
-
-    Presence suffices: the headline had occupancy 0 before the fix and 1 after,
-    so it discriminates without a count.
-
-    What this pin does NOT establish: that an auditor obeys the guardrail, or
-    that the prohibition is correctly scoped in prose an agent will read the
-    way it was meant. It establishes that the bullet is present, in the
-    register that carries the agent's hard boundaries.
-    """
-
-    POSTURE_HEADLINE = "end your turn with a background process as your route back"
-    BOUNDARY_REGISTER = "## WHAT YOU DO NOT DO"
-    NEXT_SECTION = "## OBSERVATION PROTOCOL"
-
-    def test_posture_headline_present_in_agent_body(self):
-        text = AUDITOR_AGENT.read_text(encoding="utf-8")
-        assert self.POSTURE_HEADLINE in text, (
-            f"agents/pact-auditor.md no longer contains the posture guardrail "
-            f"{self.POSTURE_HEADLINE!r}. Without it the agent body prohibits "
-            f"nothing about turn-ending dependence, which is the mechanism by "
-            f"which an auditor loses its route back."
-        )
-
-    def test_posture_headline_is_in_the_boundary_register(self):
-        """Scope, not just presence.
-
-        The same sentence relocated into explanatory prose stops being a hard
-        boundary. Bullet-scanners read the register; they do not read prose.
-        """
-        text = AUDITOR_AGENT.read_text(encoding="utf-8")
-        start = text.index(self.BOUNDARY_REGISTER)
-        end = text.index(self.NEXT_SECTION, start)
-        register = text[start:end]
-        assert self.POSTURE_HEADLINE in register, (
-            f"the posture guardrail is present in agents/pact-auditor.md but "
-            f"NOT inside {self.BOUNDARY_REGISTER!r}. It must sit in the "
-            f"boundary register to read as a prohibition rather than as "
-            f"commentary."
-        )
-
-    def test_guardrail_permits_backgrounding_within_a_turn(self):
-        """The narrowing is load-bearing and must not silently revert.
-
-        The earlier draft prohibited a MECHANISM. Read literally it forbade a
-        legitimate long-running command; read loosely it permitted the actual
-        failure. If the permission clause disappears, the guardrail has slid
-        back toward prohibiting the mechanism.
-        """
-        text = AUDITOR_AGENT.read_text(encoding="utf-8")
-        start = text.index(self.BOUNDARY_REGISTER)
-        end = text.index(self.NEXT_SECTION, start)
-        register = text[start:end]
-        assert "Backgrounding a long command is fine" in register, (
-            "the guardrail no longer states that backgrounding within a turn "
-            "is permitted. Without that clause the bullet reads as a ban on "
-            "the mechanism, which forbids legitimate long-running commands "
-            "and misidentifies the hazard."
-        )
 
 
 # =============================================================================

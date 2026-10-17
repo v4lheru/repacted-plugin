@@ -79,19 +79,18 @@ def _run_main_capture(stdin_data, monkeypatch, tmp_path, *, peer_return=_PEER_SE
     monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    with patch("session_init.setup_plugin_symlinks", return_value=None), \
-         patch("session_init.ensure_project_memory_md", return_value=None), \
-         patch("session_init.check_pinned_staleness", return_value=None), \
+    with patch("shared.session_init_common.setup_plugin_symlinks", return_value=None), \
+         patch("shared.session_init_common.ensure_project_memory_md", return_value=None), \
          patch("session_init.get_task_list", return_value=None), \
-         patch("session_init.restore_last_session", return_value=None), \
-         patch("session_init.build_context_cache",
+         patch("shared.session_init_lead.restore_last_session", return_value=None), \
+         patch("shared.session_init_lead.build_context_cache",
                return_value=(Path("/tmp/ctx.json"), {})), \
-         patch("session_init.persist_context", return_value=None), \
-         patch("session_init.append_event"), \
-         patch("session_init.update_session_info", return_value=None), \
-         patch("session_init.check_resume_state", return_value=None), \
-         patch("session_init._registry_resolve", return_value=resolver_return), \
-         patch("session_init.get_peer_context",
+         patch("shared.session_init_lead.persist_context", return_value=None), \
+         patch("shared.session_init_lead.append_event"), \
+         patch("shared.session_init_lead.update_session_info", return_value=None), \
+         patch("shared.session_init_lead.check_resume_state", return_value=None), \
+         patch("shared.session_init_teammate._registry_resolve", return_value=resolver_return), \
+         patch("shared.session_init_teammate.get_peer_context",
                side_effect=(RuntimeError("peer-build boom") if peer_raises else None),
                return_value=peer_return) as mock_gpc, \
          patch("sys.stdin", io.StringIO(stdin_data)), \
@@ -206,7 +205,7 @@ class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
             "keep the orchestrator block: without it no bootstrap marker is "
             "stamped and bootstrap_gate denies Edit, Write and Agent"
         )
-        assert "relaunch with `--agent PACT:pact-orchestrator`" in additional, (
+        assert "relaunch with `--agent repacted:pact-orchestrator`" in additional, (
             "the unknown frame must also receive the unknown-role notice, "
             "which is what separates it from a genuine lead frame"
         )
@@ -239,7 +238,7 @@ class TestInProcessSubagentSurfaceUnchanged:
         )
         assert result is not None
         assert "YOUR PACT ROLE: teammate (architect)" in result
-        assert "pact-communication-charter.md" in result
+        assert "teammate-messaging.md" in result
         assert "backend-coder" in result  # peer list present
 
     def test_marker_free_drops_only_the_marker_line(self, tmp_path):
@@ -253,7 +252,7 @@ class TestInProcessSubagentSurfaceUnchanged:
         # else (charter + peer list + banner + reminders).
         assert "YOUR PACT ROLE: teammate" in with_marker
         assert "YOUR PACT ROLE: teammate" not in without_marker
-        assert "pact-communication-charter.md" in without_marker
+        assert "teammate-messaging.md" in without_marker
         assert "backend-coder" in without_marker
         # The with-marker output is exactly the marker line prepended.
         assert with_marker.endswith(without_marker)
@@ -319,28 +318,42 @@ class TestIdempotency:
 # ===========================================================================
 
 class TestStructuralInvariant:
-    def _tree(self):
+    def _tree(self, module="session_init.py"):
+        # A4b: main() stays in session_init.py; the teammate branch body is
+        # shared/session_init_teammate.py::inject_peer_context.
         import session_init
-        return ast.parse(Path(session_init.__file__).read_text(encoding="utf-8"))
+        path = Path(session_init.__file__).parent / module
+        return ast.parse(path.read_text(encoding="utf-8"))
 
-    def _get_peer_context_calls(self, tree):
+    def _calls(self, tree, name):
         return [
             n for n in ast.walk(tree)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-            and n.func.id == "get_peer_context"
+            and n.func.id == name
         ]
 
+    def _get_peer_context_calls(self, tree):
+        return self._calls(tree, "get_peer_context")
+
     def test_single_builder_call_is_marker_free(self):
-        calls = self._get_peer_context_calls(self._tree())
-        assert len(calls) == 1, "expected exactly one get_peer_context call in session_init"
+        calls = self._get_peer_context_calls(self._tree("shared/session_init_teammate.py"))
+        assert len(calls) == 1, "expected exactly one get_peer_context call in session_init_teammate"
         kw = {k.arg: k.value for k in calls[0].keywords}
         assert "include_role_marker" in kw, "must pass include_role_marker explicitly"
         assert isinstance(kw["include_role_marker"], ast.Constant)
         assert kw["include_role_marker"].value is False
 
     def test_builder_call_is_gated_by_frame_role_teammate(self):
+        # The builder call lives only inside inject_peer_context ...
+        mate = self._tree("shared/session_init_teammate.py")
+        (fn,) = [n for n in mate.body
+                 if isinstance(n, ast.FunctionDef) and n.name == "inject_peer_context"]
+        assert len(self._get_peer_context_calls(fn)) == len(self._get_peer_context_calls(mate)) == 1
+        # ... and main() calls inject_peer_context exactly once, under the gate.
         tree = self._tree()
-        call = self._get_peer_context_calls(tree)[0]
+        calls = self._calls(tree, "inject_peer_context")
+        assert len(calls) == 1, "expected exactly one inject_peer_context call in session_init"
+        call = calls[0]
         # Find the enclosing `if` whose body contains the call, and assert its
         # test is `frame_role == "teammate"`. (m3 dedup: the gate REUSES the
         # single captured classify_session_role verdict instead of recomputing

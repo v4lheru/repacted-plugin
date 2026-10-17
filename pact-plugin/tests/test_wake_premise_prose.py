@@ -27,8 +27,10 @@ UNIVERSAL_NOT_WOKEN_PHRASES = (
 SCOPED_SURFACES = {
     "agents/pact-auditor.md",
     "agents/pact-orchestrator.md",
-    "skills/pact-agent-teams/SKILL.md",
-    "skills/pact-teachback/SKILL.md",
+    # TEAMMATE (m6): the teammate-side wake prose moved into skills/teammate.
+    "skills/teammate/SKILL.md",
+    "skills/teammate/references/teammate-waiting.md",
+    "skills/teammate/references/teammate-teachback.md",
 }
 
 

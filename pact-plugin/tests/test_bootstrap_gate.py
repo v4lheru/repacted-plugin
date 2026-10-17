@@ -45,7 +45,7 @@ Blocked tool set completeness (P2 — post-#662):
 33. Read is NOT in blocked set (exploration tool)
 
 Deny reason content (P2):
-34. Deny reason mentions Skill("PACT:bootstrap")
+34. Deny reason mentions Skill("repacted:bootstrap")
 35. Deny reason mentions available tools (Bash, Read, Glob, Grep)
 
 is_marker_set() — public helper:
@@ -71,11 +71,13 @@ import io
 import json
 import sys
 from pathlib import Path
+
+_FAIL_CLOSED_SRC = Path(__file__).parent.parent / "hooks" / "_fail_closed.py"
 from unittest.mock import patch
 
 import pytest
 
-from shared import BOOTSTRAP_MARKER_NAME
+from shared.constants import BOOTSTRAP_MARKER_NAME
 
 _SUPPRESS_EXPECTED = {
     "suppressOutput": True,
@@ -95,12 +97,12 @@ _SLUG = "project"
 # bootstrap_gate._DENY_REASON — that two-site edit is the load-bearing review
 # surface for deny-reason drift.
 _CANONICAL_DENY_REASON_LITERAL = (
-    "PACT bootstrap required. Invoke Skill(\"PACT:bootstrap\") first. "
-    "Code-editing tools (Edit, Write) and agent dispatch (Agent) are blocked "
-    "until bootstrap completes. Bash, Read, Glob, Grep are available. "
+    "PACT bootstrap required. Invoke Skill(\"repacted:bootstrap\") first. "
+    "Agent dispatch (Agent) is blocked until bootstrap completes. "
+    "Every other tool is available. "
     "If bootstrap cannot complete because the task-management tools are "
     "unavailable, see "
-    "https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn"
+    "https://github.com/v4lheru/repacted-plugin#if-specialist-agents-will-not-spawn"
 )
 
 
@@ -223,7 +225,7 @@ class TestCheckToolAllowed:
 
     @pytest.mark.parametrize("tool_name", ["Edit", "Write", "Agent", "NotebookEdit", "Read", "Bash"])
     def test_marker_exists_allows_any_tool(self, monkeypatch, tmp_path, tool_name):
-        """Marker exists → None for any tool (including normally-blocked ones)."""
+        """Marker exists → None for any tool (including usually-blocked ones)."""
         from bootstrap_gate import _check_tool_allowed
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=True)
@@ -233,7 +235,16 @@ class TestCheckToolAllowed:
 
     # --- No marker: blocked tools ---
 
-    @pytest.mark.parametrize("tool_name", ["Edit", "Write", "Agent", "NotebookEdit"])
+    @pytest.mark.parametrize("tool_name", ["Edit", "Write", "NotebookEdit", "MultiEdit"])
+    def test_editing_tools_are_allowed_before_bootstrap(self, monkeypatch, tmp_path, tool_name):
+        """1.4.1 (design rule): only dispatch waits for bootstrap."""
+        from bootstrap_gate import _check_tool_allowed
+
+        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
+
+        assert _check_tool_allowed(_make_input(tool_name)) is None
+
+    @pytest.mark.parametrize("tool_name", ["Agent", "Task"])
     def test_blocked_tools_return_deny_reason(self, monkeypatch, tmp_path, tool_name):
         """No marker + blocked tool → deny reason string."""
         from bootstrap_gate import _check_tool_allowed
@@ -326,7 +337,7 @@ class TestCheckToolAllowed:
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
-        input_data = _make_input("Write", agent_type="PACT:pact-backend-coder")
+        input_data = _make_input("Write", agent_type="repacted:pact-backend-coder")
 
         result = _check_tool_allowed(input_data)
         assert result is None
@@ -376,14 +387,14 @@ class TestMainEntryPoint:
         """Blocked tool → exit 2 (PreToolUse deny convention)."""
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
-        exit_code, output = _run_main(_make_input("Edit"), capsys)
+        exit_code, output = _run_main(_make_input("Agent"), capsys)
         assert exit_code == 2
 
     def test_blocked_tool_outputs_deny_json(self, monkeypatch, tmp_path, capsys):
         """Blocked tool → deny JSON with permissionDecision."""
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
-        _, output = _run_main(_make_input("Write"), capsys)
+        _, output = _run_main(_make_input("Agent"), capsys)
         hso = output["hookSpecificOutput"]
         assert hso["hookEventName"] == "PreToolUse"
         assert hso["permissionDecision"] == "deny"
@@ -539,7 +550,7 @@ class TestErrorSuppressMutualExclusivity:
         """Deny path → hookSpecificOutput, NOT suppressOutput."""
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
-        _, output = _run_main(_make_input("Edit"), capsys)
+        _, output = _run_main(_make_input("Agent"), capsys)
         assert "hookSpecificOutput" in output
         assert "suppressOutput" not in output
 
@@ -567,33 +578,13 @@ class TestErrorSuppressMutualExclusivity:
 class TestBlockedToolSet:
     """P2: Verify the blocked tool set is correct and complete (post-#662)."""
 
-    def test_blocked_set_exact_cardinality(self):
-        """Exactly 4 tools in the blocked set."""
-        from bootstrap_gate import _BLOCKED_TOOLS
-
-        assert len(_BLOCKED_TOOLS) == 4
-
     def test_blocked_set_exact_members(self):
-        """Blocked set contains exactly Edit, Write, Agent, NotebookEdit (#662).
-
-        The agent-dispatch tool name is `Agent` — the canonical Claude Code
-        platform name (verified against code.claude.com docs as of 2026-05-06).
-        Earlier `Task` literal (commit 4c286c1f) was the wrong rename
-        direction; #662 reverts it.
-        """
+        """Blocked set is the spawn tool only (1.4.1): `Agent`, the
+        canonical name (#662), and `Task`, in case a harness still names it so.
+        The bootstrap_gate registry matcher lists the same two names."""
         from bootstrap_gate import _BLOCKED_TOOLS
 
-        assert _BLOCKED_TOOLS == frozenset({"Edit", "Write", "Agent", "NotebookEdit"})
-
-    def test_blocked_set_does_not_contain_task(self):
-        """Regression-prevention: Task is NOT in the blocked set (#662).
-
-        Pre-#662, commit 4c286c1f wrongly renamed Agent→Task here.
-        This test fails-closed if anyone reverses the rename direction.
-        """
-        from bootstrap_gate import _BLOCKED_TOOLS
-
-        assert "Task" not in _BLOCKED_TOOLS
+        assert _BLOCKED_TOOLS == frozenset({"Agent", "Task"})
 
     def test_bash_not_blocked(self):
         """Bash must NOT be in blocked set (circular dependency)."""
@@ -727,8 +718,18 @@ class TestCanonicalSecretarySpawnCarveOut:
         result = _check_tool_allowed(_canonical_secretary_input(team_name="t1"))
         assert result is None
 
+    def test_a_task_named_spawn_tool_gets_the_same_carve_out(self, monkeypatch, tmp_path):
+        """1.4.1: Task is blocked beside Agent, so the carve-out must accept it too,
+        or a harness naming the spawn tool Task deadlocks bootstrap."""
+        from bootstrap_gate import _check_tool_allowed
+
+        _setup_pact_session_with_team(monkeypatch, tmp_path, team_name="t1", members=[])
+        frame = {**_canonical_secretary_input(team_name="t1"), "tool_name": "Task"}
+        assert _check_tool_allowed(frame) is None
+        assert _check_tool_allowed({**frame, "tool_input": {**frame["tool_input"], "name": "coder"}})
+
     def test_namespaced_secretary_spawn_allowed(self, monkeypatch, tmp_path):
-        """subagent_type "PACT:pact-secretary" (the plugin-namespaced
+        """subagent_type "repacted:pact-secretary" (the plugin-namespaced
         spelling the Agent tool lists) + all other bindings match → allow."""
         from bootstrap_gate import _check_tool_allowed
 
@@ -737,7 +738,7 @@ class TestCanonicalSecretarySpawnCarveOut:
         )
 
         result = _check_tool_allowed(_canonical_secretary_input(
-            team_name="t1", overrides={"subagent_type": "PACT:pact-secretary"},
+            team_name="t1", overrides={"subagent_type": "repacted:pact-secretary"},
         ))
         assert result is None
 
@@ -754,14 +755,14 @@ class TestCanonicalSecretarySpawnCarveOut:
         )
 
         result = _check_tool_allowed(_canonical_secretary_input(
-            team_name="t1", overrides={"subagent_type": "PACT:pact-secretary"},
+            team_name="t1", overrides={"subagent_type": "repacted:pact-secretary"},
         ))
         assert result == _DENY_REASON
 
     # --- subagent_type mismatch → predicate False → deny ---
 
     def test_non_secretary_agent_still_blocked(self, monkeypatch, tmp_path):
-        """subagent_type neither 'pact-secretary' nor 'PACT:pact-secretary'
+        """subagent_type neither 'pact-secretary' nor 'repacted:pact-secretary'
         → predicate False → deny."""
         from bootstrap_gate import _check_tool_allowed, _DENY_REASON
 
@@ -1329,9 +1330,13 @@ class TestPrematureInboxCarveOutRegression:
 
         monkeypatch.setattr(ctx_module, "_iter_members", _boom)
 
-        # (a) plain Edit — fails binding 1 (tool_name != Agent) → DENY,
-        # the witness is never consulted.
-        assert _check_tool_allowed(_make_input("Edit")) == _DENY_REASON
+        # (a) Agent with the wrong name — fails binding 3 → DENY, the witness is
+        # never consulted. (Was a plain Edit: since #243 Edit/Write/NotebookEdit
+        # pass once SessionStart resolved the team, so Edit no longer reaches the
+        # deny and cannot pin this invariant; Agent still requires the marker.)
+        assert _check_tool_allowed(_canonical_secretary_input(
+            team_name="t1", overrides={"name": "coder"},
+        )) == _DENY_REASON
 
         # (b) Agent with wrong subagent_type → fails binding 2 → DENY.
         assert _check_tool_allowed(_canonical_secretary_input(
@@ -1423,9 +1428,9 @@ class TestDenyReasonContent:
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
-        reason = _check_tool_allowed(_make_input("Edit"))
+        reason = _check_tool_allowed(_make_input("Agent"))
         assert reason is not None
-        assert 'Skill("PACT:bootstrap")' in reason
+        assert 'Skill("repacted:bootstrap")' in reason
 
     def test_deny_reason_mentions_available_tools(self, monkeypatch, tmp_path):
         """Deny reason should mention tools that ARE available."""
@@ -1433,12 +1438,9 @@ class TestDenyReasonContent:
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
-        reason = _check_tool_allowed(_make_input("Edit"))
+        reason = _check_tool_allowed(_make_input("Agent"))
         assert reason is not None
-        assert "Bash" in reason
-        assert "Read" in reason
-        assert "Glob" in reason
-        assert "Grep" in reason
+        assert "Every other tool is available" in reason
 
 
 # =============================================================================
@@ -1450,14 +1452,14 @@ class TestMarkerLifecycle:
     """P3: Gate transitions based on marker presence."""
 
     def test_gate_transitions_deny_to_allow(self, monkeypatch, tmp_path, capsys):
-        """Before marker: deny Edit. After marker stamp: allow Edit."""
+        """Before marker: deny Agent. After marker stamp: allow Agent."""
         import shared.pact_context as ctx_module
 
         session_dir = _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
         plugin_root = tmp_path / "plugin"
 
-        # Before marker — Edit denied
-        exit_code_before, output_before = _run_main(_make_input("Edit"), capsys)
+        # Before marker — Agent denied
+        exit_code_before, output_before = _run_main(_make_input("Agent"), capsys)
         assert exit_code_before == 2
         assert "permissionDecision" in output_before.get("hookSpecificOutput", {})
 
@@ -1467,8 +1469,8 @@ class TestMarkerLifecycle:
         # Reset cache for second call
         ctx_module._cache = None
 
-        # After marker — Edit allowed
-        exit_code_after, output_after = _run_main(_make_input("Edit"), capsys)
+        # After marker — Agent allowed
+        exit_code_after, output_after = _run_main(_make_input("Agent"), capsys)
         assert exit_code_after == 0
         assert output_after == _SUPPRESS_EXPECTED
 
@@ -1478,7 +1480,7 @@ class TestMarkerLifecycle:
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
-        for tool in ["Edit", "Write", "Agent"]:
+        for tool in ["Agent", "Task", "Agent"]:
             ctx_module._cache = None
 
             exit_code, output = _run_main(_make_input(tool), capsys)
@@ -1842,6 +1844,8 @@ def _run_degraded_subprocess(tmp_path, stdin_text, interpreter=None,
     hook_src = Path(__file__).parent.parent / "hooks" / "bootstrap_gate.py"
     scaffold = tmp_path / "scaffold"
     scaffold.mkdir(parents=True)
+    # The hook's stdlib-only fail-closed sibling travels with it.
+    (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
     (scaffold / "bootstrap_gate.py").write_text(
         hook_src.read_text(encoding="utf-8"), encoding="utf-8"
     )
@@ -2452,6 +2456,8 @@ class TestHostileStrCrashPath:
         hook_src = Path(__file__).parent.parent / "hooks" / "bootstrap_gate.py"
         scaffold = tmp_path / "scaffold"
         scaffold.mkdir(parents=True)
+        # The hook's stdlib-only fail-closed sibling travels with it.
+        (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
         (scaffold / "bootstrap_gate.py").write_text(
             hook_src.read_text(encoding="utf-8"), encoding="utf-8"
         )
@@ -2581,6 +2587,8 @@ class TestHostileNameCrashPath:
         hook_src = Path(__file__).parent.parent / "hooks" / "bootstrap_gate.py"
         scaffold = tmp_path / "scaffold"
         scaffold.mkdir(parents=True)
+        # The hook's stdlib-only fail-closed sibling travels with it.
+        (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
         (scaffold / "bootstrap_gate.py").write_text(
             hook_src.read_text(encoding="utf-8"), encoding="utf-8"
         )
@@ -2734,6 +2742,8 @@ class TestHostileNameReturnCrashPath:
         hook_src = Path(__file__).parent.parent / "hooks" / "bootstrap_gate.py"
         scaffold = tmp_path / "scaffold"
         scaffold.mkdir(parents=True)
+        # The hook's stdlib-only fail-closed sibling travels with it.
+        (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
         (scaffold / "bootstrap_gate.py").write_text(
             hook_src.read_text(encoding="utf-8"), encoding="utf-8"
         )
@@ -2854,6 +2864,8 @@ class TestBaseExceptionBreadthAtImport:
         hook_src = Path(__file__).parent.parent / "hooks" / "bootstrap_gate.py"
         scaffold = tmp_path / "scaffold"
         scaffold.mkdir(parents=True)
+        # The hook's stdlib-only fail-closed sibling travels with it.
+        (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
         (scaffold / "bootstrap_gate.py").write_text(
             hook_src.read_text(encoding="utf-8"), encoding="utf-8"
         )
@@ -2988,6 +3000,8 @@ class TestStrSubclassNameReturnCrashPath:
         hook_src = Path(__file__).parent.parent / "hooks" / "bootstrap_gate.py"
         scaffold = tmp_path / "scaffold"
         scaffold.mkdir(parents=True)
+        # The hook's stdlib-only fail-closed sibling travels with it.
+        (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
         (scaffold / "bootstrap_gate.py").write_text(
             hook_src.read_text(encoding="utf-8"), encoding="utf-8"
         )
@@ -3174,7 +3188,7 @@ class TestMarkerVerifyEnvFallback:
             self, monkeypatch, tmp_path):
         """Integration through the real gate: context file PRESENT with
         plugin_root='' (the heal-without-env shape) + env exported → the
-        marker fast path allows a normally-blocked tool; with the env
+        marker fast path allows a usually-blocked tool; with the env
         absent the SAME scaffold denies — the discriminating pair pins
         that the env fallback is what carries the fast path."""
         from bootstrap_gate import _check_tool_allowed
@@ -3183,12 +3197,12 @@ class TestMarkerVerifyEnvFallback:
             monkeypatch, tmp_path, "empty-plugin-root")
 
         # Without the env var (scrubbed baseline): marker unverifiable →
-        # lead+no-marker branch → Edit denied.
-        assert _check_tool_allowed(_make_input("Edit")) is not None
+        # lead+no-marker branch → Agent denied.
+        assert _check_tool_allowed(_make_input("Agent")) is not None
 
-        # With the env var: marker verifies → fast path allows Edit.
+        # With the env var: marker verifies → fast path allows Agent.
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
-        assert _check_tool_allowed(_make_input("Edit")) is None
+        assert _check_tool_allowed(_make_input("Agent")) is None
 
 
 # =============================================================================
@@ -3503,7 +3517,7 @@ class TestCanonicalSecretarySpawnAdversarial:
             ("subagent_type", 123),
             ("subagent_type", None),
             ("subagent_type", ["pact-secretary"]),
-            ("subagent_type", b"PACT:pact-secretary"),
+            ("subagent_type", b"repacted:pact-secretary"),
             ("name", False),
             ("name", 0),
             ("name", {"value": "secretary"}),
@@ -3630,14 +3644,16 @@ class TestCanonicalSecretarySpawnAdversarial:
             "pact-Secretary",
             "pact-secretary ",
             "pact-secretary\x00",
-            "PACT:secretary",
+            "repacted:" "secretary",
             "secretary",
+            "repacted:" "repacted:pact-secretary",
+            "PACT:repacted:pact-secretary",
             "PACT:PACT:pact-secretary",
             "pact:pact-secretary",
             "OTHER:pact-secretary",
             "xPACT:pact-secretary",
-            " PACT:pact-secretary",
-            "PACT:pact-secretary ",
+            " repacted:pact-secretary",
+            "repacted:pact-secretary ",
             "PACT::pact-secretary",
         ],
         ids=[
@@ -3649,6 +3665,8 @@ class TestCanonicalSecretarySpawnAdversarial:
             "colon_separator",
             "missing_prefix",
             "double_namespace",
+            "legacy_then_current_namespace",
+            "double_legacy_namespace",
             "lowercase_namespace",
             "other_namespace",
             "namespace_not_leading",
@@ -4060,7 +4078,7 @@ class TestCanonicalSecretarySpawnAdversarial:
             monkeypatch, tmp_path, team_name="t1", members=[],
         )
 
-        sensitive = "secret-token-deadbeef /Users/victim/.ssh/id_rsa"
+        sensitive = "secret-token-deadbeef /Users/bob/.ssh/id_rsa"
 
         def _raiser(team_name, teams_dir=None):
             raise OSError(sensitive)
@@ -4164,7 +4182,7 @@ class TestSummaryReadSettleSeat:
         assert kwargs == {"wait_s": compaction_owner.READ_WAIT_S}
 
     @pytest.mark.parametrize("tool_name, with_marker, denied", [
-        ("Read", False, False), ("Edit", False, True), ("Read", True, False),
+        ("Read", False, False), ("Agent", False, True), ("Read", True, False),
     ], ids=["allow-unmarked", "deny-unmarked", "allow-marked"])
     def test_a_failing_settle_or_import_changes_no_decision(self, monkeypatch, tmp_path, capsys, tool_name, with_marker, denied):
         import shared
@@ -4212,3 +4230,92 @@ class TestSummaryReadSettleSeat:
         }
         assert runs["intact"].returncode == 0, runs["intact"].stderr
         assert (runs["broken"].returncode, runs["broken"].stdout) == (runs["intact"].returncode, runs["intact"].stdout)
+
+
+# =============================================================================
+# On-demand secretary advisory
+# =============================================================================
+
+
+def _secretary_owner_update(agent_type="pact-orchestrator", owner="secretary"):
+    data = _make_input("TaskUpdate", agent_type=agent_type)
+    data["tool_input"] = {"taskId": "7", "owner": owner}
+    return data
+
+
+class TestSecretarySpawnAdvisory:
+    """A lead TaskUpdate(owner="secretary") while no secretary member exists is
+    ALLOWED and silent (dispatch_gate rule 8 needs the owner before the Agent
+    spawn). The spawn template arrives as additionalContext once, on the lead's
+    next call that is neither the spawn nor a task-list call. Never a deny."""
+
+    _LEAD_ONLY = [{"name": "team-lead", "agentType": "pact-orchestrator"}]
+    _SILENT = {"hookEventName": "PreToolUse"}
+
+    def test_advises_once_when_the_lead_does_not_spawn_next(self, monkeypatch, tmp_path, capsys):
+        _setup_pact_session_with_team(monkeypatch, tmp_path, members=self._LEAD_ONLY,
+                                      with_marker=True)
+        code, output = _run_main(_secretary_owner_update(), capsys)
+        assert (code, output["hookSpecificOutput"]) == (0, self._SILENT)
+
+        code, output = _run_main(_make_input("Read"), capsys)
+        hso = output["hookSpecificOutput"]
+        assert code == 0
+        assert "permissionDecision" not in hso
+        assert "the secretary is not on the team yet" in hso["additionalContext"]
+        assert "a send to a member that does not exist is not delivered" in hso["additionalContext"]
+        assert 'Agent(name="secretary", subagent_type="pact-secretary"' in hso["additionalContext"]
+        assert "You are joining team t1." in hso["additionalContext"]
+
+        assert _run_main(_make_input("Read"), capsys)[1]["hookSpecificOutput"] == self._SILENT
+
+    def test_the_prescribed_order_carries_no_advisory(self, monkeypatch, tmp_path, capsys):
+        """TaskCreate -> TaskUpdate(owner) -> Agent(secretary), then any later call."""
+        _setup_pact_session_with_team(monkeypatch, tmp_path, members=self._LEAD_ONLY,
+                                      with_marker=True)
+        create = _make_input("TaskCreate")
+        create["tool_input"] = {"subject": "secretary: harvest", "description": "x"}
+        frames = (create, _secretary_owner_update(), _canonical_secretary_input(), _make_input("Read"))
+        outputs = [_run_main(frame, capsys)[1]["hookSpecificOutput"] for frame in frames]
+        assert outputs == [self._SILENT] * 4
+
+    def test_silent_once_the_secretary_is_a_member(self, monkeypatch, tmp_path, capsys):
+        _setup_pact_session_with_team(
+            monkeypatch, tmp_path, with_marker=True,
+            members=self._LEAD_ONLY + [{"name": "secretary", "agentType": "pact-secretary"}])
+        code, output = _run_main(_secretary_owner_update(), capsys)
+        assert code == 0
+        assert output["hookSpecificOutput"] == {"hookEventName": "PreToolUse"}
+
+    @pytest.mark.parametrize("frame", [
+        _secretary_owner_update(owner="backend-coder"),
+        _secretary_owner_update(agent_type="pact-backend-coder"),
+    ], ids=["other-owner", "teammate-frame"])
+    def test_silent_outside_its_case(self, monkeypatch, tmp_path, capsys, frame):
+        _setup_pact_session_with_team(monkeypatch, tmp_path, members=self._LEAD_ONLY,
+                                      with_marker=True)
+        code, output = _run_main(frame, capsys)
+        assert code == 0
+        assert output["hookSpecificOutput"] == {"hookEventName": "PreToolUse"}
+
+    @pytest.mark.parametrize("with_marker", [True, False], ids=["marker", "pre-marker"])
+    def test_canonical_order_passes_with_no_deny(self, monkeypatch, tmp_path, capsys,
+                                                 with_marker):
+        """TaskCreate -> TaskUpdate(owner) -> Agent: the lazy spawn order."""
+        _setup_pact_session_with_team(monkeypatch, tmp_path, members=self._LEAD_ONLY,
+                                      with_marker=with_marker)
+        create = _make_input("TaskCreate")
+        create["tool_input"] = {"subject": "secretary: harvest", "description": "x"}
+        decisions = []
+        for frame in (create, _secretary_owner_update(), _canonical_secretary_input()):
+            code, output = _run_main(frame, capsys)
+            decisions.append((code, output["hookSpecificOutput"].get("permissionDecision")))
+        assert decisions == [(0, None)] * 3
+
+    def test_a_broken_team_read_degrades_to_silence(self, monkeypatch):
+        import bootstrap_gate as gate
+
+        def boom():
+            raise RuntimeError("HOME unresolvable")
+        monkeypatch.setattr(gate.pact_context, "get_team_name", boom)
+        assert gate._secretary_spawn_advisory(_secretary_owner_update()) is None

@@ -414,7 +414,7 @@ def create_peer_review_transcript(
 
     # User triggers peer-review
     lines.append(make_user_message(
-        "/PACT:peer-review",
+        "/repacted:peer-review",
         timestamp=base_time,
     ))
 
@@ -506,7 +506,7 @@ def create_orchestrate_transcript(
 
     # User triggers orchestrate
     lines.append(make_user_message(
-        f"/PACT:orchestrate {include_task}",
+        f"/repacted:orchestrate {include_task}",
         timestamp="2025-01-22T10:00:00Z",
     ))
 
@@ -604,7 +604,7 @@ def create_malformed_transcript() -> str:
     Returns:
         JSONL string with some invalid lines
     """
-    valid_line = make_user_message("/PACT:peer-review")
+    valid_line = make_user_message("/repacted:peer-review")
     lines = [
         json.dumps(valid_line),
         "{ invalid json",
@@ -733,3 +733,17 @@ def make_claude_md_with_pins(entries: list[str]) -> str:
         f"{MEMORY_END_MARKER}\n"
         f"{MANAGED_END_MARKER}\n"
     )
+
+
+def effective_hooks_config() -> dict:
+    """hooks.json as separate hooks: every dispatcher entry expanded to one entry per
+    check, with the matcher and command that check had as its own hook
+    (dispatch_registry.expand_hooks_json). Registration tests read this view."""
+    from pathlib import Path
+
+    import dispatch_registry  # hooks/ is on the path (tests/conftest.py)
+
+    hooks_dir = Path(__file__).resolve().parent.parent / "hooks"
+
+    config = json.loads((hooks_dir / "hooks.json").read_text(encoding="utf-8"))
+    return dispatch_registry.expand_hooks_json(config)

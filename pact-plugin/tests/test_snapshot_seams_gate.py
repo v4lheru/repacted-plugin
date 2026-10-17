@@ -25,7 +25,7 @@ import task_lifecycle_gate as tlg  # noqa: E402
 from fixtures.emitter import VALID_HANDOFF  # noqa: E402
 
 TEAM = "pact-test"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
 
 SIBLINGS = {
@@ -316,9 +316,9 @@ class TestSeamBPostCompletionBackstop:
     def test_late_metadata_write_on_completed_task_snapshots(
         self, tmp_path, monkeypatch, pact_context, snapshot_events
     ):
-        """A metadata-only TaskUpdate landing on an already-completed task
-        (the write-after-completion class) emits a snapshot with the merged
-        disk+incoming payload."""
+        """A metadata-only TaskUpdate carrying a targeted key (a late
+        rejection) on an already-completed task emits a snapshot with the
+        merged disk+incoming payload."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s1")
         _seed_task(
@@ -332,7 +332,7 @@ class TestSeamBPostCompletionBackstop:
         )
         tlg.evaluate_lifecycle(
             _metadata_only_payload(
-                "55", {"r2_verification": {"verified": True}}
+                "55", {"handoff_rejection": {"reason": "redo"}}
             )
         )
         snaps = _snapshots(snapshot_events)
@@ -340,8 +340,82 @@ class TestSeamBPostCompletionBackstop:
         assert snaps[0]["task_id"] == "55"
         assert snaps[0]["metadata"] == {
             "variety": {"total": 8},
-            "r2_verification": {"verified": True},
+            "handoff_rejection": {"reason": "redo"},
         }
+
+    @pytest.mark.parametrize("late", [
+        {"intentional_wait": None},
+        {"memory_saved": True},
+        {"r2_verification": {"verified": True}},
+    ])
+    def test_late_untargeted_write_on_completed_task_no_snapshot(
+        self, tmp_path, monkeypatch, pact_context, snapshot_events, late
+    ):
+        """Journal diet: a late write of a key outside PER_WRITE_MIRROR_KEYS
+        (a cleared wait, memory_saved, an ad-hoc record) on a completed task
+        writes no snapshot. These were most of the backstop's rows and no
+        reader used them; the completion seams already mirrored the task."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        pact_context(team_name=TEAM, session_id="s1")
+        _seed_task(
+            tmp_path,
+            TEAM,
+            "54",
+            subject="devops: late untargeted write",
+            owner="devops",
+            status="completed",
+            metadata={"variety": {"total": 8}},
+        )
+        tlg.evaluate_lifecycle(_metadata_only_payload("54", late))
+        assert _snapshots(snapshot_events) == []
+
+    @pytest.mark.parametrize("key", ["amend_1", "docker_grant", "lead_flag_disposition"])
+    def test_late_lead_key_on_completed_task_snapshots(
+        self, tmp_path, monkeypatch, pact_context, snapshot_events, key
+    ):
+        """T-6dfc17b0: a ruling, a grant or a lead_ record written after
+        acceptance is mirrored, so a drained task store does not take it."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        pact_context(team_name=TEAM, session_id="s1")
+        _seed_task(tmp_path, TEAM, "57", subject="devops: late lead key", owner="devops",
+                   status="completed", metadata={"variety": {"total": 8}})
+        tlg.evaluate_lifecycle(_metadata_only_payload("57", {key: "verified 12 of 12 runs"}))
+        snaps = _snapshots(snapshot_events)
+        assert len(snaps) == 1
+        assert snaps[0]["metadata"] == {"variety": {"total": 8}, key: "verified 12 of 12 runs"}
+
+    @pytest.mark.parametrize("key", [
+        "lead_", "_grant", "amend_0", "amend_1x", "amend_", "leadership", "grant", "Lead_note",
+        "my_lead_note", "docker_grant ", "amend_\u0661",
+    ])
+    def test_a_key_that_only_resembles_a_lead_key_is_not_mirrored(
+        self, tmp_path, monkeypatch, pact_context, snapshot_events, key
+    ):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        pact_context(team_name=TEAM, session_id="s1")
+        _seed_task(tmp_path, TEAM, "58", subject="devops: lookalike key", owner="devops",
+                   status="completed", metadata={"variety": {"total": 8}})
+        tlg.evaluate_lifecycle(_metadata_only_payload("58", {key: "x"}))
+        assert _snapshots(snapshot_events) == []
+
+    def test_the_late_key_shapes_are_the_amendment_modules(self):
+        from shared import amendments
+        from shared.task_metadata_snapshot import late_mirror_key
+        for key in ["amend_1", "amend_12", "amend_0", "amend_01", "amend_1\n", "docker_grant",
+                    "_grant", "a_grant", "Docker_grant", "x" * 60 + "_grant", "gpu-0_grant"]:
+            known = amendments.amendment_number(key) is not None or key in amendments.grants({key: "x"})
+            assert late_mirror_key(key) is known, key
+        assert [late_mirror_key(key) for key in (None, 7, b"amend_1", ("lead_x",), "lead_a b")] == [False] * 5
+
+    def test_a_late_lead_key_on_an_open_task_fires_no_seam(
+        self, tmp_path, monkeypatch, pact_context, snapshot_events
+    ):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        pact_context(team_name=TEAM, session_id="s1")
+        _seed_task(tmp_path, TEAM, "59", subject="devops: open", owner="devops",
+                   status="in_progress", metadata={})
+        tlg.evaluate_lifecycle(_metadata_only_payload("59", {"amend_1": "a ruling"}))
+        assert _snapshots(snapshot_events) == []
 
     def test_open_task_metadata_write_no_backstop_fire(
         self, tmp_path, monkeypatch, pact_context, snapshot_events
@@ -429,9 +503,10 @@ class TestSeamBPostCompletionBackstop:
     def test_delete_only_late_write_mirrors_disk_without_phantom_null(
         self, tmp_path, monkeypatch, pact_context, snapshot_events
     ):
-        """A late delete-only TaskUpdate (all incoming values None — the
-        platform's DELETE op) must mirror the disk state as-is: the deleted
-        key appears neither as a value nor as a phantom null."""
+        """A late delete-only TaskUpdate of a targeted key (all incoming
+        values None — the platform's DELETE op) must mirror the disk state
+        as-is: the deleted key appears neither as a value nor as a phantom
+        null."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         pact_context(team_name=TEAM, session_id="s1")
         _seed_task(
@@ -444,12 +519,12 @@ class TestSeamBPostCompletionBackstop:
             metadata={"variety": {"total": 8}},
         )
         tlg.evaluate_lifecycle(
-            _metadata_only_payload("60", {"obsolete_note": None})
+            _metadata_only_payload("60", {"teachback_rejection": None})
         )
         snaps = _snapshots(snapshot_events)
         assert len(snaps) == 1
         assert snaps[0]["metadata"] == {"variety": {"total": 8}}
-        assert "obsolete_note" not in snaps[0]["metadata"]
+        assert "teachback_rejection" not in snaps[0]["metadata"]
 
     def test_delete_only_late_write_on_empty_disk_no_emit(
         self, tmp_path, monkeypatch, pact_context, snapshot_events
@@ -497,7 +572,7 @@ class TestSeamBPostCompletionBackstop:
                 "59",
                 {
                     "handoff": VALID_HANDOFF,
-                    "r2_verification": {"verified": True},
+                    "handoff_rejection": {"reason": "redo"},
                 },
             )
         )
@@ -507,4 +582,4 @@ class TestSeamBPostCompletionBackstop:
         snaps = _snapshots(snapshot_events)
         assert len(handoffs) == 1
         assert len(snaps) == 1
-        assert snaps[0]["metadata"] == {"r2_verification": {"verified": True}}
+        assert snaps[0]["metadata"] == {"handoff_rejection": {"reason": "redo"}}

@@ -103,7 +103,6 @@ def test_a_write_that_fails_midway_leaves_the_previous_registry_intact(
 STATE_WRITER_MODULES = (
     "shared/state_file.py",
     "shared/background_work.py",
-    "teammate_idle.py",
     "track_files.py",
     "file_tracker.py",
 )
@@ -325,8 +324,6 @@ def test_a_file_directly_in_its_root_still_writes(tmp_path):
 # ---------------------------------------------------------------------------
 
 OLDER_WRITER_SEEDS = {
-    "write_idle_counts": '{"seed": 1}',
-    "_atomic_update_idle_counts": '{"seed": 1}',
     "save_tracked_files": '{"files": [], "session_id": "seed"}',
     "track_file": '{"files": [], "session_id": "seed"}',
     "track_edit": "[]",
@@ -356,21 +353,12 @@ def test_a_serialisation_failure_leaves_the_previous_file_intact(writer, tmp_pat
     so a serialiser fault leaves nothing behind.
     """
     import file_tracker
-    import teammate_idle
     import track_files
 
     path = tmp_path / "state.json"
     path.write_text(OLDER_WRITER_SEEDS[writer], encoding="utf-8")
     stand_in = _json_that_cannot_serialise()
-    if writer == "write_idle_counts":
-        monkeypatch.setattr(teammate_idle, "json", stand_in)
-        call = lambda: teammate_idle.write_idle_counts(str(path), {"coder": 1})  # noqa: E731
-    elif writer == "_atomic_update_idle_counts":
-        monkeypatch.setattr(teammate_idle, "json", stand_in)
-        call = lambda: teammate_idle._atomic_update_idle_counts(  # noqa: E731
-            str(path), lambda counts: {**counts, "coder": 1}
-        )
-    elif writer in ("save_tracked_files", "track_file"):
+    if writer in ("save_tracked_files", "track_file"):
         monkeypatch.setattr(track_files, "get_session_tracking_file", lambda: path)
         monkeypatch.setattr(track_files, "json", stand_in)
         if writer == "save_tracked_files":
@@ -393,11 +381,6 @@ def test_a_serialisation_failure_leaves_the_previous_file_intact(writer, tmp_pat
 # path. Their `root` defaults to the path's own directory, so a production call
 # that omits `root=` would silently give up containment.
 OLDER_WRITER_HELPERS = frozenset({
-    "write_idle_counts",
-    "_atomic_update_idle_counts",
-    "read_idle_counts",
-    "check_idle_cleanup",
-    "reset_idle_count",
     "track_edit",
     "check_conflict",
     "get_environment_delta",
@@ -428,7 +411,7 @@ def _older_writer_calls():
 def test_every_production_call_to_an_older_state_writer_passes_a_root():
     """Production code must pass `root=`, so the tests-only default never ships."""
     calls = _older_writer_calls()
-    assert len(calls) >= 5, f"found only {len(calls)} production calls; the scan is not seeing hooks/"
+    assert len(calls) >= 2, f"found only {len(calls)} production calls; the scan is not seeing hooks/"
     missing = [site for site, passes_root in calls if not passes_root]
     assert missing == [], (
         "these production calls omit root=, so their writes are not contained "
@@ -464,7 +447,7 @@ def test_file_tracker_main_writes_nothing_through_a_symlinked_team_directory(
 def test_teammate_idle_main_writes_nothing_through_a_symlinked_team_directory(
     config_root, monkeypatch
 ):
-    """The production entry point refuses idle counts in a team directory linked outside teams/."""
+    """The production entry point writes no state in a team directory linked outside teams/."""
     import io
 
     import teammate_idle
@@ -482,5 +465,5 @@ def test_teammate_idle_main_writes_nothing_through_a_symlinked_team_directory(
         teammate_idle.main()
     assert exc.value.code == 0
     assert sorted(p.name for p in outside.iterdir()) == [], (
-        "teammate_idle.main wrote idle counts through a symlinked team directory"
+        "teammate_idle.main wrote state through a symlinked team directory"
     )

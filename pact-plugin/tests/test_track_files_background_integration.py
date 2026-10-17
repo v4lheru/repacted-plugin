@@ -395,3 +395,17 @@ class TestTrackFilesBackgroundSeam:
         result = _run(seam, _frame())
         assert result.returncode == 0
         assert _registry(seam) == []
+
+    @pytest.mark.parametrize("spelling", sorted(LEAD_AGENT_TYPES))
+    def test_an_orchestrator_type_teammates_launch_is_that_teammates(self, seam, spelling):
+        """T-0a57360a: a separate-process teammate spawned with the orchestrator type
+        carries a lead spelling and no agent_id in its own session. Its launch is
+        recorded as its own, never as the lead's."""
+        registry = seam / "pact-sessions" / ".teammate-registry.jsonl"
+        registry.write_text(json.dumps({"session_id": "tmux-sid",
+                                        "value": f"seam-coder@{TEAM}"}) + "\n")
+        result = _run(seam, _frame(session_id="tmux-sid", agent_type=spelling, agent_id=None))
+        assert result.returncode == 0, result.stderr
+        records = _registry(seam)
+        assert len(records) == 1 and records[0]["agent_name"] == "seam-coder"
+        assert records[0].get("owner_role") != "lead"

@@ -34,7 +34,7 @@ matching this runbook's filename.
 Implementation references:
 
 - Persona dispatch contract: [pact-plugin/agents/pact-orchestrator.md](../../agents/pact-orchestrator.md) §Agent Teams Dispatch
-- Self-completion carve-out: [pact-plugin/agents/pact-orchestrator.md](../../agents/pact-orchestrator.md) §Completion Authority (secretary session briefing + memory-save self-complete carve-out) + [pact-plugin/protocols/pact-completion-authority.md](../../protocols/pact-completion-authority.md)
+- Self-completion carve-out: [pact-plugin/agents/pact-orchestrator.md](../../agents/pact-orchestrator.md) §Completion Authority (secretary session briefing + memory-save self-complete carve-out) + `pact-plugin/protocols/pact-completion-authority.md` (not shipped)
 - Bootstrap ritual: [pact-plugin/commands/bootstrap.md](../../commands/bootstrap.md) §Step 2 — Spawn `pact-secretary` (the SSOT for the current dispatch shape)
 - Dispatch gate: `pact-plugin/hooks/dispatch_gate.py` (rule ⑧
   `has_task_assigned`, rule ⑨ `long_inline_mission`)
@@ -67,7 +67,7 @@ the marker; marker-fingerprint regressions are diagnosed in
    detected" line in the SessionStart context.) If a prior session paused
    without resolution, the orchestrator surfaces it before the secretary
    spawn and Section 4 below does not execute cleanly.
-4. Start a **fresh** `claude --agent PACT:pact-orchestrator` session in
+4. Start a **fresh** `claude --agent repacted:pact-orchestrator` session in
    a project that has the plugin installed. Do not reuse a session that
    authored the merge of the bootstrap change under test — its hook
    registrations are stale (see §6.5).
@@ -88,14 +88,14 @@ self-completion transition.
 **Steps**:
 
 1. In the fresh session, allow the orchestrator to execute its first
-   action (it should auto-invoke `Skill("PACT:bootstrap")`). Observe
+   action (it should auto-invoke `Skill("repacted:bootstrap")`). Observe
    the session-init system reminder is delivered.
 2. Watch the orchestrator's tool calls during bootstrap Step 2. The
    canonical sequence per the persona's Agent Teams Dispatch contract is
    three calls (single-task, teachback-exempt — NO Task A):
    1. `TaskCreate(subject="secretary: deliver session briefing", description=...)` — single work task (mission lives in `description`)
    2. `TaskUpdate(taskId, owner="secretary")` — assign to the secretary; NO `addBlockedBy` (no teachback gate)
-   3. `Agent(name="secretary", team_name=<team>, subagent_type="pact-secretary", description="Spawn session secretary", prompt="YOUR PACT ROLE: teammate (secretary).\n\nYou are joining team <team>. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you.")`
+   3. `Agent(name="secretary", team_name=<team>, subagent_type="pact-secretary", description="Spawn session secretary", prompt="YOUR PACT ROLE: teammate (secretary).\n\nYou are joining team <team>. As your FIRST action, Invoke Skill(\"repacted:teammate\") to record your identity. Then check `TaskList` for tasks assigned to you.")`
 
    > The secretary spawn prompt carries the register first-action directive
    > (the secretary self-supplies `secretary@<team>` and registers before its

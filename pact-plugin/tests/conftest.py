@@ -45,8 +45,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "pact-coding-st
 # Add plugin-level scripts to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
+# Live decision capture (tests/tools/live_capture.py): wraps the classifiers BEFORE any
+# module below binds their names. Off unless PACT_CAPTURE_LIVE=1 (a milestone capture).
+if os.environ.get("PACT_CAPTURE_LIVE") == "1":
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "live_capture", Path(__file__).parent / "tools" / "live_capture.py")
+    _live_capture = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_live_capture)
+    _live_capture.install()
+
 # The clock-shift census; tests/ is on sys.path from the insert above.
 from clock_shift import clock_shift_census  # noqa: E402
+# The live project registry's paths and snapshot, for _isolate_plugin_data_to_tmp.
+from fixtures import plugin_data  # noqa: E402
 
 # These copy names from shared modules at first import; loading them here keeps a test patch from being copied.
 # tests/test_conftest_import_guard.py derives which modules need a line here.
@@ -61,6 +73,19 @@ import postcompact_archive  # noqa: E402, F401
 import session_end  # noqa: E402, F401
 import session_init  # noqa: E402, F401
 import shared.background_work  # noqa: E402, F401
+import shared.evidence  # noqa: E402, F401
+import shared.evidence.check  # noqa: E402, F401
+import shared.evidence.files  # noqa: E402, F401
+import shared.evidence.ledger  # noqa: E402, F401
+import shared.evidence.notes  # noqa: E402, F401
+import shared.failure_log  # noqa: E402, F401
+import shared.prompt_kind  # noqa: E402, F401
+import shared.session_init_common  # noqa: E402, F401
+import shared.session_init_lead  # noqa: E402, F401
+import shared.session_init_resume  # noqa: E402, F401
+import shared.session_init_teammate  # noqa: E402, F401
+import shared.session_resume  # noqa: E402, F401
+import shared.stored_line  # noqa: E402, F401
 import shared.task_metadata_snapshot  # noqa: E402, F401
 import shared.task_utils  # noqa: E402, F401
 import task_lifecycle_gate  # noqa: E402, F401
@@ -132,6 +157,13 @@ def pytest_configure(config):
     # would point the whole suite at the very store this exists to protect. The
     # fail direction of `setdefault` here is ALLOW, and it is silent.
     os.environ[_MEMORY_DIR_ENV] = _SESSION_MEMORY_DIR
+
+    # SCRATCH PRUNER FLOOR, same reasoning. hooks/doctor_brief.py starts
+    # `repact-scratch-prune --auto`, which deletes build output under the real
+    # Claude temp root. Every child that inherits this environment prunes a
+    # missing root instead; a test with an explicit env sets its own.
+    os.environ["REPACT_SCRATCH_ROOT"] = os.path.join(
+        tempfile.mkdtemp(prefix="pact-scratch-suite-"), "root")
 
     # CLOCK-SHIFT CENSUS. Inert unless PACT_TEST_CLOCK_SHIFT_SECONDS is set; the
     # sweep command is in tests/clock_shift/clock_shift_shim.py.
@@ -266,57 +298,6 @@ def _reset_specialist_registry_cache():
 
 
 @pytest.fixture(autouse=True)
-def _resync_staleness_resolver_bindings():
-    """Unconditional cross-test isolation for the project-CLAUDE.md staleness
-    resolver (#928). Runs for EVERY test (autouse).
-
-    ROOT CAUSE (instrumented): a test elsewhere in the suite replaces
-    ``sys.modules['staleness']`` with a fresh module object (e.g. a delete +
-    re-import), ORPHANING the staleness functions that ``session_init`` bound at
-    its own import time: ``session_init._staleness_check`` (==
-    ``staleness.check_pinned_staleness``) and the re-imported
-    ``session_init._get_project_claude_md_path`` keep pointing at the OLD
-    staleness module's ``__dict__``. Then
-    ``test_staleness.py::test_no_claude_md_returns_none`` patches the CURRENT
-    ``staleness._get_project_claude_md_path`` to None, but
-    ``session_init.check_pinned_staleness`` delegates to its orphaned
-    ``_staleness_check``, which resolves ``_get_project_claude_md_path`` in the
-    OLD module's globals (UNPATCHED) → reads the REAL project CLAUDE.md instead
-    of None. Order-dependent + cumulative (needs session_init imported BEFORE the
-    staleness replacement), so it only surfaces under certain suite orderings —
-    a PRE-EXISTING latent defect, not specific to any one PR.
-
-    FIX: before AND after every test, re-align ``session_init``'s bound staleness
-    functions to whatever ``sys.modules['staleness']`` currently is (NOT a value
-    captured at conftest-import, which would itself be the stale module). This is
-    a no-op in the normal case (the bindings already match) and repairs the
-    orphaning after a replacement, so a test that patches ``staleness`` reaches
-    the resolution ``session_init`` actually uses. Also re-point the underscore
-    alias to the current public resolver so the two never diverge within a
-    module. Gated on ``sys.modules`` so this fixture never forces the heavy
-    ``session_init`` import itself.
-    """
-    def _resync():
-        st = sys.modules.get("staleness")
-        si = sys.modules.get("session_init")
-        if st is not None:
-            real = getattr(st, "get_project_claude_md_path", None)
-            if real is not None:
-                st._get_project_claude_md_path = real
-                if si is not None:
-                    si._get_project_claude_md_path = real
-        if st is not None and si is not None:
-            if hasattr(st, "check_pinned_staleness"):
-                si._staleness_check = st.check_pinned_staleness
-            if hasattr(st, "check_pinned_block_signal"):
-                si._staleness_block_check = st.check_pinned_block_signal
-
-    _resync()
-    yield
-    _resync()
-
-
-@pytest.fixture(autouse=True)
 def _scrub_claude_project_dir_env():
     """Pop + restore ``os.environ['CLAUDE_PROJECT_DIR']`` around every test.
     Runs for EVERY test (autouse).
@@ -328,7 +309,7 @@ def _scrub_claude_project_dir_env():
        DIRECT assignment (NOT ``monkeypatch.setenv``), so it is never restored
        and LEAKS into later tests — an order-dependent pollution vector that
        redirects ``CLAUDE_PROJECT_DIR``-keyed resolvers (e.g.
-       ``staleness.get_project_claude_md_path``) away from the test's intended
+       ``working_memory._get_claude_md_path``) away from the test's intended
        root. The setup-time POP makes every test start from a
        guaranteed-unset baseline regardless of what an earlier test left
        behind — strictly stronger than the snapshot/restore-only posture this
@@ -337,16 +318,12 @@ def _scrub_claude_project_dir_env():
 
     2. AMBIENT-ENV LEAK (the machine-state family). ``CLAUDE_PROJECT_DIR`` is
        a LIVE input to production code under test: ``pact_context.init()``
-       derives the session context path from it, and
-       ``backlog.project_root()`` anchors project resolution on it (NOT the
-       process cwd). Running the suite inside a shell that exports the var
+       derives the session context path from it (NOT the process cwd). Running the suite inside a shell that exports the var
        (a Claude Code hook process, or a developer shell that sourced one)
        therefore flips environment-sensitive tests from deterministic to
        machine-dependent: measured as three pre-existing red failures on dev
-       machines that are green on CI (where the var is unset) —
-       test_backlog's "refusal: no root" exit-code arm (reconcile
-       unexpectedly succeeds against the real repo), and both
-       test_bootstrap_prompt_gate no-session tests (init() re-derives a
+       machines that are green on CI (where the var is unset), among them
+       both test_bootstrap_prompt_gate no-session tests (init() re-derives a
        path the test's ``_context_path = None`` patch cannot prevent, and
        the heal path can then WRITE a context file through the live root).
        Same posture as the sibling ``_scrub_claude_plugin_root_env`` /
@@ -357,8 +334,7 @@ def _scrub_claude_project_dir_env():
        (they set it after setup, inside the test body).
 
     Co-located with the other env/module-state autouse resets
-    (``_reset_pact_context_state`` / ``_reset_specialist_registry_cache`` /
-    ``_resync_staleness_resolver_bindings``).
+    (``_reset_pact_context_state`` / ``_reset_specialist_registry_cache``).
     """
     _UNSET = object()
     original = os.environ.pop("CLAUDE_PROJECT_DIR", _UNSET)
@@ -513,6 +489,72 @@ def _isolate_config_root_to_tmp(tmp_path, monkeypatch):
         os.environ.pop("CLAUDE_CONFIG_DIR", None)
     else:
         os.environ["CLAUDE_CONFIG_DIR"] = original_cfg
+
+
+# Every hooks module that holds its own copy of the merge guard's token directory.
+_TOKEN_DIR_HOLDERS = (
+    "shell.merge.tokens", "shared.merge_guard_common", "shared.session_init_common",
+    "merge_guard_pre", "merge_guard_post",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_merge_token_dir_to_tmp(tmp_path, monkeypatch):
+    """Point the merge guard's DEFAULT token directory at this test's own config root.
+
+    ``TOKEN_DIR`` is read once at import, which under pytest is collection time, before
+    ``_isolate_config_root_to_tmp`` redirects ``Path.home()``: so it held the operator's REAL
+    config directory for the whole run. A test that called the guard without a ``token_dir``
+    then read the operator's live approvals (any approval given in a live session during the
+    run turned every explicit-rule refusal into ``mg.token.mismatch``), removed their expired
+    ones, and could write a live approval there. The copies are by-value, so each holder is
+    patched; the directory is the one a hook would resolve under the redirected home, and it is
+    not created here (a test of a fresh install must still see none).
+    """
+    token_dir = tmp_path / ".claude"
+    for name in _TOKEN_DIR_HOLDERS:
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "TOKEN_DIR"):
+            monkeypatch.setattr(module, "TOKEN_DIR", token_dir)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_plugin_data_to_tmp(tmp_path, tmp_path_factory, monkeypatch):
+    """Give EVERY test its own CLAUDE_PLUGIN_DATA, and fail any test that changes the LIVE project
+    registry anyway. Runs for EVERY test (autouse).
+
+    ``bin/_repact_common.plugin_data_dir()`` honors ``$CLAUDE_PLUGIN_DATA`` and otherwise falls back
+    to ``~/.claude/plugins/data/repacted-repacted-local``. That is where ``repact-task init``
+    records a checkout in ``projects.json`` (D10 §15.3), and the real atlas renders ``_index.md``
+    from that file. ``_isolate_config_root_to_tmp`` above does not cover it for a CHILD process:
+    ``Path.home`` is patched in-process only, and the scrub removes ``CLAUDE_CONFIG_DIR``, so a child
+    that inherits no ``CLAUDE_PLUGIN_DATA`` resolves the operator's real HOME. That is how P3's early
+    runs left 12 pytest temp paths in the live registry.
+
+    The env var is set with ``monkeypatch.setenv``, so in-process writers AND every child inherit
+    ``tmp_path / "plugin-data"`` (the same convention as tests/user_layer/conftest.py). A test that
+    sets its own value still wins, because its patch runs after this one.
+
+    The guard snapshots the live registry before the test and fails it only when the registry gained
+    a path inside this run's tmp tree (pytest's base temp, which holds every tmp_path). The paths come
+    from tests/fixtures/plugin_data.py and are computed once, at import, from the environment the
+    suite started with. test_plugin_data_isolation.py pins them against the real resolver in a child,
+    so the guard cannot quietly watch the wrong file. A failure here means a test reached the real
+    registry. Fix the test's environment; never widen or skip this check.
+
+    T-1f0a70f2: other live sessions write the same file mid-run (the atlas's `set_known`, `repact-task
+    init`, `vault-note apply`); a byte diff failed whichever test was running. Their writes add only
+    real checkouts, so they pass. Known limit: a test leaking a path outside the tmp tree is not seen.
+    """
+    before = plugin_data.snapshot(plugin_data.LIVE_REGISTRIES)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    yield
+    leaked = plugin_data.leaked(before, (tmp_path_factory.getbasetemp(),))
+    assert not leaked, (
+        f"this test wrote a tmp path into the LIVE project registry {', '.join(leaked)}: something it started ran "
+        "without the per-test CLAUDE_PLUGIN_DATA. Give that call the test's environment."
+    )
 
 
 # (module, test) pairs whose bodies INSPECT the writer's identity and therefore

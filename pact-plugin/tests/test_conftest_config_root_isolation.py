@@ -134,12 +134,10 @@ class TestAutouseProjectDirScrubPinned:
     """Pin the autouse ``_scrub_claude_project_dir_env`` fixture's scrub.
 
     ``CLAUDE_PROJECT_DIR`` is a live production input, not just test plumbing:
-    ``pact_context.init()`` derives the session context path from it and
-    ``backlog.project_root()`` anchors project resolution on it (NOT the
+    ``pact_context.init()`` derives the session context path from it (NOT the
     process cwd). An ambient value leaking into the suite flips
     environment-sensitive tests from deterministic to machine-dependent — the
-    measured shape was three dev-machine-red / CI-green failures
-    (test_backlog's "refusal: no root" exit-code arm; both
+    measured shape was dev-machine-red / CI-green failures (among them both
     test_bootstrap_prompt_gate no-session tests, where init() re-derives a
     path the test's ``_context_path = None`` patch cannot prevent). This
     class is the delete-the-fix counter-test for the scrub: restore the old
@@ -163,8 +161,8 @@ class TestAutouseProjectDirScrubPinned:
         assert "CLAUDE_PROJECT_DIR" not in os.environ, (
             "CLAUDE_PROJECT_DIR survived into the test body although the "
             "ambient environment carried one at collection — the autouse scrub "
-            "did not fire, and env-keyed resolvers (pact_context.init, "
-            "backlog.project_root) are resolving against the developer's live "
+            "did not fire, and env-keyed resolvers (pact_context.init) "
+            "are resolving against the developer's live "
             "project instead of the test's inputs."
         )
 

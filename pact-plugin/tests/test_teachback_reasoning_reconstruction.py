@@ -302,11 +302,11 @@ class TestExemption:
 class TestOrderingInvariantRegression:
     """Pin the structural ordering invariant against the 5-field shape."""
 
-    SKILL_FILE = Path(__file__).parent.parent / "skills" / "pact-teachback" / "SKILL.md"
+    SKILL_FILE = Path(__file__).parent.parent / "skills" / "teammate" / "references" / "teammate-teachback.md"
 
     def test_step_ordering_unchanged_by_5_field_shape(self):
         """The Step 1 -> Step 2 -> Step 3 ordering prose in
-        pact-teachback/SKILL.md is field-count-agnostic. Adding a nested
+        the teammate teachback reference is field-count-agnostic. Adding a nested
         sub-object inside the Step 1 JSON payload MUST NOT introduce a
         second metadata write, a re-ordered step sequence, or a second
         "Ordering invariant" phrase anchor. See architect §5.2.
@@ -345,8 +345,9 @@ class TestBackwardCompat:
         from test_skills_structure import TestOrderingInvariantPhraseCount
 
         counts = TestOrderingInvariantPhraseCount.EXPECTED_COUNTS
-        assert counts["pact-teachback/SKILL.md"] == 1
-        assert counts["pact-agent-teams/SKILL.md"] == 3
+        # TEAMMATE (m6): the sites moved into skills/teammate (1 inline + 3 references).
+        assert counts["teammate/references/teammate-teachback.md"] == 1
+        assert sum(counts.values()) == 4
 
 
 class TestLeadSideConsistencyCheck:

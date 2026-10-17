@@ -8,11 +8,11 @@
 
 Verify that the three memory layers (auto-memory, pact-memory, agent persistent memory) coexist correctly: no token duplication causes context overflow, Working Memory in CLAUDE.md syncs from pact-memory SQLite, and agent persistent memory loads for specialist agents.
 
-> **The index limits below are literals on purpose.** A verification step needs a value to check against, so do not convert the line-count and code-unit figures in the steps below into a cross-reference. They are a second copy of a constant whose single source is `pact-plugin/skills/pact-agent-teams/SKILL.md`, and this directory sits outside the population guarded by `pact-plugin/tests/test_agent_memory_cap_single_source.py` — no test fails if they go stale. When that single source changes, update both occurrences in this file in the same commit.
+> **The index limits below are literals on purpose.** A verification step needs a value to check against, so do not convert the line-count and code-unit figures in the steps below into a cross-reference. They are a second copy of a constant whose single source is `pact-plugin/skills/teammate/references/teammate-memory.md`, and this directory sits outside the population guarded by `pact-plugin/tests/test_agent_memory_cap_single_source.py` — no test fails if they go stale. When that single source changes, update both occurrences in this file in the same commit.
 
 ## Prerequisites
 
-1. PACT plugin installed with memory hooks active (`staleness.py`, `session_init.py`)
+1. PACT plugin installed with memory hooks active (`session_init.py`)
 2. pact-memory database exists at `~/.claude/pact-memory/memory.db`
 3. Project `CLAUDE.md` contains a Working Memory section (with up to 3 entries)
 4. Auto-memory file exists at `~/.claude/projects/{hash}/memory/MEMORY.md` (created by platform after at least one prior session)
@@ -67,7 +67,7 @@ Content should be complementary. Auto-memory captures broad patterns; Working Me
 Run a task that completes successfully, triggering the memory enforcement hook.
 
 ```
-/PACT:comPACT backend Fix a typo in the README introduction
+/repacted:comPACT backend Fix a typo in the README introduction
 ```
 
 **What happens**: After the agent completes, the orchestrator sends completed task IDs to `pact-secretary` for HANDOFF review. The secretary reads HANDOFF metadata, extracts institutional knowledge, and saves structured memories to pact-memory.
@@ -113,19 +113,7 @@ ls ~/.claude/agent-memory/
 ```
 Should contain directories for agents that have accumulated persistent memory (e.g., `pact-backend-coder/`, `pact-test-engineer/`).
 
-### Step 7: Verify Staleness Detection
-
-**What happens**: The `staleness.py` hook checks Pinned Context entries in CLAUDE.md for staleness (entries older than 30 days).
-
-**Expected outcome**: Pinned Context entries older than 30 days are marked with a staleness indicator. Entries within 30 days are left unmarked.
-
-**Verification**:
-```bash
-# Check for staleness markers in Pinned Context
-grep -A 2 "Pinned Context" CLAUDE.md | grep -i "stale"
-```
-
-### Step 8: Verify pact-memory Search
+### Step 7: Verify pact-memory Search
 
 Test semantic search across the memory database to confirm structured retrieval works.
 

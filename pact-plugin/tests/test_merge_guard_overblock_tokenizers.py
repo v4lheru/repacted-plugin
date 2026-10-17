@@ -71,6 +71,8 @@ from shared.merge_guard_common import (
     is_compound_destructive_command,
     is_dangerous_command,
 )
+from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
+from merge_guard_repo_fixture import git_bound  # noqa: E402  (1.4.1 U13: git checkout/remote binding)
 
 # The canonical benign-continuation family Fix A / Fix B must tolerate (same 13
 # forms as TestBenignContinuationGuarantee._BENIGN_CONTINUATIONS): pipe-to-viewer,
@@ -88,7 +90,11 @@ _BENIGN_CONTINUATIONS = [
 # whole-command first-match scan bled pr_number=1058 (from the close leg) into the
 # merge context, so a token approved for merge 1058 authorized merging 999. Exactly
 # one leg is dangerous (the merge), so is_compound does NOT catch it.
-_LATENT_UNDERBLOCK_EXEC = "gh pr close 1058\ngh pr merge 999 --squash"
+# FIX-MERGE f3 (amend_1 a): a bare `gh pr close 1058` now gates, which would make the old
+# exec a COMPOUND (refused before the read seam) and void these pins' premise. The
+# neighbor is now the inert help form: still carries the bleed-able `gh pr close 1058`
+# literal for the whole-command first-match scan, and still not dangerous.
+_LATENT_UNDERBLOCK_EXEC = "gh pr close 1058 --help\ngh pr merge 999 --squash"
 
 
 # ───────────────────────────── envelope helpers (real seam, no mocks) ─────────
@@ -179,9 +185,11 @@ class TestMintReadFlagParity1059:
     def test_backtick_value_flag_click_authorizes_e2e(self, tmp_path):
         """Real seam: a token minted with the stripped flag-scan surface authorizes
         the faithful bare command (mint==read parity → AUTHORIZE)."""
-        mint_ctx = extract_command_context(
+        from shared.merge_guard_common import command_repo_binding
+
+        mint_ctx = command_repo_binding(extract_command_context(          # the post hook's binding (#141)
             self._BARE, flag_scan_text=_strip_command_wrapper(self._OPTION_TEXT)
-        )
+        ), self._BARE)
         assert write_token(dict(mint_ctx), token_dir=tmp_path) is not None
         assert check_merge_authorization(self._BARE, token_dir=tmp_path) is None  # AUTHORIZE
 
@@ -282,7 +290,7 @@ class TestFixBLatentUnderBlockClosure:
 
     def test_token_for_wrong_pr_refuses_function_seam(self, tmp_path):
         assert write_token(
-            {"operation_type": "merge", "pr_number": "1058"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "1058"}, token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(
             _LATENT_UNDERBLOCK_EXEC, token_dir=tmp_path
@@ -292,7 +300,7 @@ class TestFixBLatentUnderBlockClosure:
         # Non-vacuity control: a token for the PR actually merged (999) AUTHORIZES
         # the SAME exec — so the mismatch refusal above is target-discrimination.
         assert write_token(
-            {"operation_type": "merge", "pr_number": "999"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "999"}, token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(
             _LATENT_UNDERBLOCK_EXEC, token_dir=tmp_path
@@ -349,7 +357,7 @@ class TestFixBFlagScanNarrowing:
         # leg → dropped → no-flag token AUTHORIZES (the over-block fix).
         cmd = "gh pr merge 5 --squash ; gh pr view 5 --repo o/x"
         assert write_token(
-            {"operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(cmd, token_dir=tmp_path) is None  # AUTHORIZE
 
@@ -358,7 +366,7 @@ class TestFixBFlagScanNarrowing:
         # REFUSED (never-escalate preserved). The under-block guard.
         cmd = "gh pr merge 5 --admin ; gh pr view 5 --repo o/x"
         assert write_token(
-            {"operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(cmd, token_dir=tmp_path) is not None  # REFUSE
 
@@ -369,7 +377,7 @@ class TestFixBFlagScanNarrowing:
         cmd = f"gh pr merge 5 --admin {cont}"
         assert is_compound_destructive_command(cmd) is False
         assert write_token(
-            {"operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(cmd, token_dir=tmp_path) is not None  # REFUSE
 
@@ -378,7 +386,7 @@ class TestFixBFlagScanNarrowing:
         # REFUSE an exec adding a SECOND merge-privileged flag (--match-head-commit)
         # on the ISOLATED destructive leg — leg-isolation does not weaken the bind.
         assert write_token(
-            {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--admin"]},
             token_dir=tmp_path,
         ) is not None
         cmd = "gh pr merge 5 --admin --match-head-commit deadbeef ; gh pr view 5"
@@ -408,7 +416,7 @@ class TestForcePushBranchDeleteDefensiveWrongTarget:
 
     def test_forcepush_matching_target_authorizes_companion(self, tmp_path):
         assert write_token(
-            {"operation_type": "force-push", "target_ref": "feature"}, token_dir=tmp_path
+            git_bound({"operation_type": "force-push", "target_ref": "feature"}, self._FP_EXEC), token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(self._FP_EXEC, token_dir=tmp_path) is None  # AUTHORIZE
 
@@ -420,7 +428,7 @@ class TestForcePushBranchDeleteDefensiveWrongTarget:
 
     def test_branch_delete_matching_target_authorizes_companion(self, tmp_path):
         assert write_token(
-            {"operation_type": "branch-delete", "branch": "feature"}, token_dir=tmp_path
+            git_bound({"operation_type": "branch-delete", "branch": "feature"}, self._BD_EXEC), token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(self._BD_EXEC, token_dir=tmp_path) is None  # AUTHORIZE
 
@@ -467,7 +475,9 @@ class TestFixBCloseOpLegIsolation:
     close leg), so a token approved for closing+deleting 1058's branch would
     AUTHORIZE deleting 999's branch."""
 
-    _CLOSE_LATENT_EXEC = "gh pr close 1058\ngh pr close 999 --delete-branch"
+    # FIX-MERGE f3: the reversible neighbor is the inert help form (see the note on
+    # _LATENT_UNDERBLOCK_EXEC), so exactly one leg stays dangerous.
+    _CLOSE_LATENT_EXEC = "gh pr close 1058 --help\ngh pr close 999 --delete-branch"
 
     def test_discriminator_is_target_mismatch_not_compound(self):
         assert is_dangerous_command(self._CLOSE_LATENT_EXEC) is True
@@ -481,7 +491,7 @@ class TestFixBCloseOpLegIsolation:
         # deleting 999's branch. Non-vacuity (Fix-B revert): _single_destructive_leg
         # -> whole re-opens the bleed (whole pr_number=1058) -> AUTHORIZE = RED.
         assert write_token(
-            {"operation_type": "close", "pr_number": "1058",
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "1058",
              "bound_flags": ["--delete-branch"]},
             token_dir=tmp_path,
         ) is not None
@@ -493,7 +503,7 @@ class TestFixBCloseOpLegIsolation:
         # Non-vacuity control: a token for the PR actually delete-closed (999)
         # AUTHORIZES the same exec -> the mismatch refusal is target-discrimination.
         assert write_token(
-            {"operation_type": "close", "pr_number": "999",
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "999",
              "bound_flags": ["--delete-branch"]},
             token_dir=tmp_path,
         ) is not None
@@ -507,7 +517,7 @@ class TestFixBCloseOpLegIsolation:
         # delete-close AUTHORIZES with its matching token.
         cmd = "gh pr close 5 --delete-branch ; gh pr view 5 --repo o/x"
         assert write_token(
-            {"operation_type": "close", "pr_number": "5",
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "5",
              "bound_flags": ["--delete-branch"]},
             token_dir=tmp_path,
         ) is not None
@@ -522,7 +532,7 @@ class TestFixBCloseOpLegIsolation:
         # dropped -> AUTHORIZE = RED), NOT a whole-command revert (which binds MORE).
         cmd = "gh pr close 5 --delete-branch ; gh pr view 5"
         assert write_token(
-            {"operation_type": "close", "pr_number": "5"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "5"}, token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(cmd, token_dir=tmp_path) is not None  # REFUSE
 
@@ -532,7 +542,7 @@ class TestFixBCloseOpLegIsolation:
         # not a trivial no-match.
         cmd = "gh pr close 5 --delete-branch ; gh pr view 5"
         assert write_token(
-            {"operation_type": "close", "pr_number": "5",
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "5",
              "bound_flags": ["--delete-branch"]},
             token_dir=tmp_path,
         ) is not None
@@ -552,7 +562,7 @@ class TestDestructiveLegOrderIndependence:
         cmd = "gh pr view 5 ; gh pr merge 5 --admin"
         assert _single_destructive_leg(cmd) == "gh pr merge 5 --admin"
         assert write_token(
-            {"operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(cmd, token_dir=tmp_path) is not None  # REFUSE
 
@@ -562,7 +572,7 @@ class TestDestructiveLegOrderIndependence:
         cmd = "gh pr view 5 ; gh pr merge 999 ; gh pr view 6"
         assert _single_destructive_leg(cmd) == "gh pr merge 999"
         assert write_token(
-            {"operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(cmd, token_dir=tmp_path) is not None  # REFUSE
 
@@ -632,7 +642,7 @@ class TestFixADigitGluedRedirectUnderBlock:
         # Non-vacuity control: a token for the ACTUAL ref (`main2`) AUTHORIZES the
         # same exec -> the refusal above is target-discrimination, not a no-match.
         assert write_token(
-            {"operation_type": "force-push", "target_ref": "main2"}, token_dir=tmp_path
+            git_bound({"operation_type": "force-push", "target_ref": "main2"}, "git push --force origin main2"), token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(
             "git push --force origin main2>log", token_dir=tmp_path
@@ -643,7 +653,7 @@ class TestFixADigitGluedRedirectUnderBlock:
         # authorizes a token-`main` — so it is the DIGIT that shifts the target
         # (`main2>log` REFUSES, just above), not the bare `>` redirect.
         assert write_token(
-            {"operation_type": "force-push", "target_ref": "main"}, token_dir=tmp_path
+            git_bound({"operation_type": "force-push", "target_ref": "main"}, "git push --force origin main"), token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(
             "git push --force origin main>log", token_dir=tmp_path
@@ -659,7 +669,7 @@ class TestFixADigitGluedRedirectUnderBlock:
 
     def test_branch_delete_real_target_token_authorizes_control(self, tmp_path):
         assert write_token(
-            {"operation_type": "branch-delete", "branch": "feature2"}, token_dir=tmp_path
+            git_bound({"operation_type": "branch-delete", "branch": "feature2"}, "git branch -D feature2"), token_dir=tmp_path
         ) is not None
         assert check_merge_authorization(
             "git branch -D feature2>log", token_dir=tmp_path

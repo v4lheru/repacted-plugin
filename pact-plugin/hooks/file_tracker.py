@@ -24,6 +24,7 @@ import shared.pact_context as pact_context
 from shared.background_work import frame_team_and_name
 from shared.pact_context import get_session_id, resolve_agent_name
 from shared.paths import get_claude_config_dir
+from shared.task_store import TaskStore
 from shared import state_file
 
 # Suppress false "hook error" display in Claude Code UI on bare exit paths
@@ -49,6 +50,81 @@ def _state_root(tracking_file: Path, root: Path | None) -> Path:
     return root if root is not None else tracking_file.parent
 
 
+# The label track_edit gives a lead frame. It is not a member name, so its
+# absence from members[] does not mean the lead has stopped.
+_LEAD_LABEL = "orchestrator"
+
+
+def _advisory_exempt(file_path: str, input_data: dict) -> bool:
+    """Edits that never draw the advisory: an agent-memory inbox (append-only
+    by rule, and shared by every agent of one type) and the lead's own edits
+    under the top-level docs/ of the project dir or of a worktree root (a
+    directory holding a .git entry). A directory named docs deeper in the tree
+    (src/docs/) is code like any other. The edit is still tracked."""
+    path = Path(_normalize_path(file_path))
+    if path.name == "MEMORY-inbox.md" and "agent-memory" in path.parts:
+        return True
+    if not pact_context.is_lead(input_data):
+        return False
+    project_dir = pact_context.get_project_dir()
+    if not project_dir:
+        return False
+    project = Path(_normalize_path(project_dir))
+    try:
+        parents = path.relative_to(project).parts[:-1]
+    except ValueError:
+        return False
+    return any(
+        part == "docs" and (i == 0 or project.joinpath(*parents[:i], ".git").exists())
+        for i, part in enumerate(parents)
+    )
+
+
+def _finished_editors(tracking_file: Path, names: set[str]) -> set[str]:
+    """The editors among `names` whose work on the team is over: each owns at
+    least one task and every task it owns is completed. A fixer that follows
+    one of them on the same file is a handover, not an overlap.
+
+    An editor that owns no task is unknown, so it is still working: a listed
+    member between tasks, or a subagent with no member entry, tracked under
+    its agent_type. Absence from members[] alone finishes nobody. The lead
+    always is working. An unreadable or empty roster finishes nobody, so the
+    advisory stays.
+    """
+    try:
+        team = tracking_file.parent.name
+        teams_dir = tracking_file.parent.parent
+        roster = pact_context._iter_members(team, str(teams_dir))
+        members = {m.get("name") for m in roster if isinstance(m.get("name"), str)}
+        if not members:
+            return set()
+        leads = {_LEAD_LABEL} | {
+            m.get("name") for m in roster if m.get("agentType") == "team-lead"
+        }
+        owned: dict[str, list] = {}
+        for task in TaskStore.for_config(teams_dir.parent).iter_tasks(team):
+            if isinstance(task.get("owner"), str):
+                owned.setdefault(task["owner"], []).append(task.get("status"))
+        return {
+            name for name in names - leads
+            if name in owned and all(s == "completed" for s in owned[name])
+        }
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def _advised_keys(entry: dict) -> set[tuple[str, str]]:
+    """The editor keys an entry's advisory named; empty for any other shape."""
+    advised = entry.get("advised")
+    if not isinstance(advised, list):
+        return set()
+    return {
+        (key[0], key[1]) for key in advised
+        if isinstance(key, list) and len(key) == 2
+        and isinstance(key[0], str) and isinstance(key[1], str)
+    }
+
+
 def track_edit(
     file_path: str,
     agent_name: str,
@@ -56,6 +132,7 @@ def track_edit(
     tracking_path: str,
     session_id: str = "",
     root: Path | None = None,
+    advised: list | None = None,
 ) -> None:
     """Append a file edit record to the tracking file.
 
@@ -70,6 +147,10 @@ def track_edit(
     context. ``agent_name`` is retained as the human-readable LABEL; for a
     separate-process teammate ``resolve_agent_name`` recovers the member name
     from its session-registry entry.
+
+    ``advised`` is the list of editor keys this edit's advisory named (filled
+    by ``check_conflict``); it is stored on the entry so each pair of editors
+    is advised about a file once.
     """
     file_path = _normalize_path(file_path)
     tracking_file = Path(tracking_path)
@@ -81,6 +162,8 @@ def track_edit(
         "tool": tool_name,
         "ts": int(time.time()),
     }
+    if advised:
+        new_entry["advised"] = advised
 
     # One locked read-modify-write; the new list is swapped in whole, so a
     # failure part-way leaves the previous file intact.
@@ -101,6 +184,7 @@ def check_conflict(
     tracking_path: str,
     session_id: str = "",
     root: Path | None = None,
+    advised: list | None = None,
 ) -> str | None:
     """Check if another EDITOR INSTANCE has edited this file.
 
@@ -116,6 +200,11 @@ def check_conflict(
     ``session_id`` (same-type siblings under tmux), the label is disambiguated
     with a short session_id suffix so the message names two distinct editors
     rather than a confusing repeated name.
+
+    Two kinds of other editor are left out: one this editor has already been
+    paired with in an advisory for this file (in either direction), and one
+    whose work is over (``_finished_editors``). The keys the message names are
+    appended to ``advised`` for ``track_edit`` to store.
     """
     file_path = _normalize_path(file_path)
     if not agent_name:
@@ -135,18 +224,28 @@ def check_conflict(
     # disambiguated only when a name is genuinely shared across instances.
     other_keys: set[tuple[str, str]] = set()
     sessions_by_agent: dict[str, set[str]] = {}
+    already_advised: set[tuple[str, str]] = set()
     for entry in entries:
         if entry.get("file") != file_path:
             continue
         entry_agent = entry.get("agent", "")
         entry_session = entry.get("session_id", "")
+        named = _advised_keys(entry)
         if (entry_agent, entry_session) == self_key:
+            already_advised |= named
             continue
+        if self_key in named:
+            already_advised.add((entry_agent, entry_session))
         other_keys.add((entry_agent, entry_session))
         sessions_by_agent.setdefault(entry_agent, set()).add(entry_session)
 
+    other_keys -= already_advised
+    finished = _finished_editors(tracking_file, {agent for agent, _ in other_keys})
+    other_keys = {key for key in other_keys if key[0] not in finished}
     if not other_keys:
         return None
+    if advised is not None:
+        advised.extend([agent, session] for agent, session in sorted(other_keys))
 
     labels = []
     for entry_agent, entry_session in other_keys:
@@ -231,16 +330,20 @@ def main():
     # Check for conflict BEFORE recording this edit. Pass the same
     # (agent_name, session_id) composite so this instance's own prior edits are
     # excluded but a different instance's are detected.
-    conflict = check_conflict(
-        file_path, agent_name, tracking_path, session_id, root=teams_root
-    )
+    advised: list = []
+    conflict = None
+    if not _advisory_exempt(file_path, input_data):
+        conflict = check_conflict(
+            file_path, agent_name, tracking_path, session_id, root=teams_root,
+            advised=advised,
+        )
 
     # Record this edit. A refused or failed write skips tracking rather than
     # failing the hook: this PostToolUse hook must still exit 0.
     try:
         track_edit(
-            file_path, agent_name or "orchestrator", tool_name, tracking_path,
-            session_id, root=teams_root,
+            file_path, agent_name or _LEAD_LABEL, tool_name, tracking_path,
+            session_id, root=teams_root, advised=advised,
         )
     except OSError:
         pass

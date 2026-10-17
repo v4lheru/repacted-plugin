@@ -114,7 +114,7 @@ class Tree:
                                        "content": "This session is being continued from a previous conversation.\n\nSummary:\n" + body}})
 
     def frame(self, summary=SUMMARY):
-        return {"hook_event_name": "PostCompact", "agent_type": "PACT:pact-orchestrator", "session_id": SID,
+        return {"hook_event_name": "PostCompact", "agent_type": "repacted:pact-orchestrator", "session_id": SID,
                 "transcript_path": str(self.lead), "compact_summary": summary, "trigger": "auto"}
 
     def stage(self, summary=SUMMARY, at=STAGED, frame=None):
@@ -215,7 +215,7 @@ def test_a_record_in_the_lead_transcript_promotes_the_summary(tree):
     assert tree.settle(later(9)) == [(co.LEAD, co.CONTENT)]
     assert tree.canonical.read_text(encoding="utf-8") == SUMMARY
     assert stat.S_IMODE(tree.canonical.stat().st_mode) == 0o600
-    assert tree.names() == ["compact-summary.txt", "session-journal.jsonl"]
+    assert tree.names() == ["compact-summary.head.txt", "compact-summary.txt", "session-journal.jsonl"]
     [event] = tree.attributions()
     assert (event["verdict"], event["basis"], event["latency_s"]) == ("lead", "content", 9.0)
 
@@ -527,7 +527,7 @@ def test_a_summary_another_settler_claimed_first_is_skipped(tree, monkeypatch):
     assert tree.settle(later(9)) == []
     assert raced
     assert tree.verdicts() == [("lead", "content")]
-    assert tree.names() == ["compact-summary.txt", "session-journal.jsonl"]
+    assert tree.names() == ["compact-summary.head.txt", "compact-summary.txt", "session-journal.jsonl"]
 
 
 @pytest.mark.parametrize("error", [OSError("no space left on device"), KeyboardInterrupt()],
@@ -568,7 +568,7 @@ def test_a_base_exception_after_the_act_removes_the_claim_rather_than_restoring_
     with pytest.raises(KeyboardInterrupt):
         tree.settle(later(9))
     assert tree.canonical.read_text(encoding="utf-8") == SUMMARY
-    assert tree.names() == ["compact-summary.txt"], "the claim is gone, not returned to pending"
+    assert tree.names() == ["compact-summary.head.txt", "compact-summary.txt"], "the claim is gone, not returned to pending"
 
     monkeypatch.setattr(co.session_journal, "append_event", real_append)
     assert tree.settle(later(10)) == [], "nothing is left to settle a second time"
@@ -1254,7 +1254,7 @@ def test_no_sleep_is_reachable_from_stage_summary():
 
 _CONSUMER_ATTRIBUTES = {
     "postcompact_archive.py": {"settle", "stage_summary"},
-    "session_init.py": {"settle"},
+    "shared/session_init_resume.py": {"settle"},
     "bootstrap_gate.py": {"settle", "READ_WAIT_S"},
 }
 
@@ -1281,7 +1281,7 @@ def test_consumers_reach_the_module_through_its_name(hook):
     assert module_imports and not by_value
 
 
-@pytest.mark.parametrize("hook", ["session_init.py", "postcompact_archive.py"])
+@pytest.mark.parametrize("hook", ["shared/session_init_resume.py", "postcompact_archive.py"])
 def test_the_compaction_chain_settles_without_waiting(hook):
     calls = [node for node in ast.walk(ast.parse((HOOKS / hook).read_text(encoding="utf-8")))
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "settle"]

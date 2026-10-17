@@ -1,5 +1,5 @@
 """
-L2 non-mocked integration test for the #926 dispatch-unblock keystone (C2).
+L2 non-mocked integration test for the #926 dispatch-unblock keystone.
 
 Proves the dispatch gate resolves an owned task under a NON-DEFAULT
 CLAUDE_CONFIG_DIR, and that the re-anchored symlink-escape defense still

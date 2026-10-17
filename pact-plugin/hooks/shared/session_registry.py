@@ -7,7 +7,7 @@ Summary: Self-registration registry mapping {session_id -> name@team} so a
 Used by: pact_context.resolve_agent_name (Step 3.5), session_init.py
          teammate-branch (lead-team resolution); written by a teammate's
          first-action register call (invoked in script mode by direct path,
-         see pact-agent-teams skill On Start).
+         see the teammate skill, On Start).
 
 WHY THIS MODULE IS SELF-CONTAINED (zero ``shared.*`` imports):
     A teammate's first-action register call runs this module IN SCRIPT MODE
@@ -31,10 +31,14 @@ TRUST BOUNDARY (load-bearing): the registry value is SELF-ASSERTED by the
     value an authority signal.
 
 Write path: single ``os.write`` of one JSONL line (<=512B, the portable
-    PIPE_BUF bound) with O_APPEND and O_NOFOLLOW, no lock, last-wins-per-
-    session_id on read. A single <=PIPE_BUF write is atomic under concurrent
-    appenders, so no advisory lock is needed (verified: 0 tears / 32000
-    concurrent 512B appends on APFS).
+    PIPE_BUF bound) with O_APPEND and O_NOFOLLOW, last-wins-per-session_id on
+    read. A single <=PIPE_BUF write is atomic under concurrent appenders
+    (verified: 0 tears / 32000 concurrent 512B appends on APFS), so appenders
+    need no lock among themselves. The append still holds ``registry_lock``
+    (an exclusive flock on a ``.lock`` sidecar), because session_end's prune
+    rewrites the file by read, temp, rename: a line appended between its read
+    and its rename went to the replaced inode and was lost. The prune holds
+    the same lock across that span.
 
 File location: ~/.claude/pact-sessions/.teammate-registry.jsonl
     GLOBAL, fixed, team-agnostic — under pact-sessions/ (PACT-owned), NEVER
@@ -51,6 +55,7 @@ Fail-safe everywhere: register() is a no-op and never raises; resolve()
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -105,6 +110,30 @@ def get_registry_path() -> Path:
 # ~90-120B, so this ceiling is generous. A line at or under this bound needs
 # no flock — the OS writes it atomically even under concurrent O_APPEND.
 _MAX_LINE_BYTES = 512
+
+
+@contextlib.contextmanager
+def registry_lock(registry_path: Path):
+    """Hold an exclusive flock on ``<registry>.lock`` for the block. Without
+    fcntl, or when the sidecar cannot be opened, the block runs unlocked: the
+    registry is labelling-only, and a lost line is the pre-lock behaviour."""
+    fd = None
+    try:
+        import fcntl
+
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(registry_path.with_name(registry_path.name + ".lock")),
+                     os.O_RDWR | os.O_CREAT | nofollow, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except Exception:
+        if fd is not None:
+            os.close(fd)
+        fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)  # closing the descriptor releases the flock
 
 
 def _sanitize_agent_name(name: str) -> str:
@@ -215,11 +244,12 @@ def register(name_at_team: str) -> None:
         # redirect the write; getattr fallback for platforms that lack it.
         nofollow = getattr(os, "O_NOFOLLOW", 0)
         flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | nofollow
-        fd = os.open(str(registry_path), flags, 0o600)
-        try:
-            os.write(fd, encoded)  # single <=PIPE_BUF write → atomic, no lock
-        finally:
-            os.close(fd)
+        with registry_lock(registry_path):
+            fd = os.open(str(registry_path), flags, 0o600)
+            try:
+                os.write(fd, encoded)  # single <=PIPE_BUF write → atomic
+            finally:
+                os.close(fd)
     except Exception:
         return  # fail-safe: swallow everything, never raise
 

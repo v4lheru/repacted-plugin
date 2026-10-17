@@ -1,0 +1,35 @@
+{"base": "bf7c8786", "blob_id": "66e1a48e33604ff98903d1624914af3cace24f7a", "captured_from": "3f27b2c6", "rows": 34, "sha256": "40b488826fcd38e0b4390d91995ef66f8104f2a3634c596c2f85fb866630978f"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["FOO=\"$(date) git branch -D victim\" && $FOO"], {}], "result": true}
+{"call": ["is_dangerous_command", ["FOO=\"$(date) git branch -D victim\" ; eval $FOO"], {}], "result": true}
+{"call": ["is_dangerous_command", ["FOO=\"$(date) just note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["FOO=\"$(date) note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["FOO=\"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["FOO=\"`git branch -D victim`\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["FOO=\"drop git branch -D victim\" && $FOO"], {}], "result": true}
+{"call": ["is_dangerous_command", ["FOO=\"drop git branch -D victim\" ; eval $FOO"], {}], "result": true}
+{"call": ["is_dangerous_command", ["FOO=\"just note git branch -D victim\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["FOO=\"note wip\" && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh gist create --desc=\"$(date) note git branch -D victim\" f.txt"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh issue create --title=\"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh issue create --title=\"as of $(date): git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr create --body=\"$(date) note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh release create v1 --notes=\"$(date) drop git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c core.pager=\"$(git branch -D victim)\" commit"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c core.pager=\"git branch -D victim\" commit"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git -c user.name=\"$(date) git branch -D victim\" commit"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c user.name=\"$(date)\" commit"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit --message=\"$(date) and $(whoami): git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"$(date) just note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"as of $(date): note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"it's $(date); git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"just note git branch -D victim\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit --message=\"ok $(date)\" && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"ran on `hostname`, then git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m=\"$(date) note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge --message=\"$(date) git branch -D victim\" feat"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git notes add --message=\"$(date) git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git stash push --message=\"$(date) git branch -D victim\""], {}], "result": true}

@@ -55,9 +55,10 @@ from pathlib import Path
 
 import pytest
 
+import journal_emitter  # noqa: E402
 import missed_wake_scan as mw  # noqa: E402
 import teammate_idle  # noqa: E402
-from shared import task_utils  # noqa: E402
+from shared import prompt_kind as pk, session_journal, task_utils  # noqa: E402
 from shared.session_journal import read_events  # noqa: E402
 from fixtures.role_frames import (  # noqa: E402
     captured_lead_userpromptsubmit_qualified,
@@ -232,6 +233,20 @@ class TestForensicEmitRealJournal:
             "journal-read dedup suppresses a 2nd event"
         )
 
+    def test_the_full_alarm_shows_once_per_wait_then_one_line(self, live_task_env):
+        """1.4.1 (aud-bugs item 22): a legitimate hold re-injected the ~850 B alarm on
+        every prompt. Full text once per (task, since), then one line; a new wait on the
+        same task (a fresh since) gets the full text again."""
+        team_dir = live_task_env.dir_for(TEAM)
+        _write_task(team_dir, task_id="7", minutes_ago=STALE)
+        out1 = mw.run_surface(captured_lead_userpromptsubmit_qualified())
+        out2 = mw.run_surface(captured_lead_userpromptsubmit_qualified())
+        assert "THE CAUSE IS NOT KNOWN" in out1
+        assert "\n" not in out2 and "THE CAUSE IS NOT KNOWN" not in out2
+        assert out2.startswith("PACT missed-wake alarm, still open") and "#7 (test-engineer, ~" in out2
+        _write_task(team_dir, task_id="7", minutes_ago=STALE + 5)
+        assert "THE CAUSE IS NOT KNOWN" in mw.run_surface(captured_lead_userpromptsubmit_qualified())
+
     def test_auto_clears_when_task_resolved(self, live_task_env):
         # Stale -> surfaces + 1 event; then resolve (status flips) -> re-scan of
         # the REAL dir finds nothing -> None, no new event. THE auto-clear.
@@ -373,3 +388,91 @@ class TestTeammateIdleResolvesTeamTasks:
             "an empty read here means idle cleanup never runs"
         )
         assert {t["id"] for t in tasks} == {"3"}
+
+
+# ===========================================================================
+# IT-PROMPT — the prompt_kind row (the idle-turn experiment)
+#   Real append_event -> the real journal file under the tmp home (no mock).
+# ===========================================================================
+MARKER = "ZX-PROMPT-TEXT-91c4"       # stands in for prompt text; must never reach the journal
+IDLE = '{"type":"idle_notification","from":"coder","timestamp":"2026-01-01T00:00:00Z","idleReason":"available"}'
+
+
+def _teammate(body: str, attrs: str = ' teammate_id="coder"') -> str:
+    return f"<teammate-message{attrs}>\n{body}\n</teammate-message>"
+
+
+def _lead_prompt(prompt) -> dict:
+    frame = captured_lead_userpromptsubmit_qualified()
+    frame["prompt"] = prompt
+    return frame
+
+
+PROMPT_ROWS = [
+    # (prompt, kind, tag)
+    (f"please fix {MARKER}", "user_typed", None),
+    (f"  \n{MARKER} a < b and <b>bold</b>", "user_typed", None),
+    ("", "user_typed", None),
+    (_teammate(f"[coder→team-lead] HANDOFF {MARKER}"), "teammate_message", "teammate-message"),
+    (_teammate(IDLE), "idle_notification", "teammate-message"),
+    (_teammate(IDLE) + "\n\n" + _teammate(IDLE, ' teammate_id="qa"'), "idle_notification", "teammate-message"),
+    # an idle notice beside anything else is not a turn opened only by an idle notice
+    (_teammate(IDLE) + _teammate(f"done {MARKER}"), "teammate_message", "teammate-message"),
+    (_teammate(IDLE) + f"\n{MARKER}", "teammate_message", "teammate-message"),
+    (_teammate(IDLE).replace("</teammate-message>", ""), "teammate_message", "teammate-message"),
+    (_teammate(f'{{"type":"idle_notification","note":"{MARKER}"'), "teammate_message", "teammate-message"),
+    (_teammate(f'["idle_notification", "{MARKER}"]'), "teammate_message", "teammate-message"),
+    (f"<task-notification>\n<task-id>{MARKER}</task-id>\n</task-notification>", "task_notification",
+     "task-notification"),
+    (f"<scheduled-task>{MARKER}</scheduled-task>", "cron", "scheduled-task"),
+    (f"<command-name>/{MARKER}</command-name>", "user_typed", "command-name"),
+    (f"<system-reminder>{MARKER}</system-reminder>", "other", "system-reminder"),
+    # a tag off the allowlist: `other`, and its name is not journaled
+    (f"<{MARKER}>x</{MARKER}>", "other", None),
+    (f"<teammate-message-{MARKER}>x", "other", None),
+    (f"<Teammate-Message>{MARKER}", "other", None),
+    (f"<teammate-message{MARKER}", "user_typed", None),           # no tag is closed: plain text
+    (f"<teammate-message{MARKER}>", "other", None),
+    ("<" + "a" * 100_000 + f"{MARKER}>", "user_typed", None),      # no tag name is that long: plain text
+    (None, "other", None),
+    ([MARKER], "other", None),
+    ({"text": MARKER}, "other", None),
+    (float("nan"), "other", None),
+]
+
+
+class TestPromptKindRow:
+    """One journal row per lead UserPromptSubmit: the kind, the length, an
+    allowlisted tag. Never the prompt's text."""
+
+    @pytest.mark.parametrize("prompt, kind, tag", PROMPT_ROWS)
+    def test_the_row_holds_the_kind_the_length_and_no_prompt_text(self, live_task_env, prompt, kind, tag):
+        pk.journal_prompt_kind(_lead_prompt(prompt))
+        (event,) = read_events("prompt_kind")
+        chars = len(prompt) if isinstance(prompt, str) else 0
+        expected = {"kind": kind, "chars": chars, "straggler": False, **({"tag": tag} if tag else {})}
+        assert {key: event[key] for key in event if key not in ("v", "type", "ts")} == expected
+        journal = Path(session_journal.get_journal_path()).read_text(encoding="utf-8")
+        assert MARKER not in journal and "coder" not in journal
+
+    def test_main_journals_the_row_and_prints_what_it_printed_before(self, live_task_env, monkeypatch, capsys):
+        import io
+        for prompt in (f"hello {MARKER}", _teammate(IDLE)):
+            monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_lead_prompt(prompt))))
+            assert journal_emitter.main() == 0
+            assert json.loads(capsys.readouterr().out) == {"suppressOutput": True}
+        assert [event["kind"] for event in read_events("prompt_kind")] == ["user_typed", "idle_notification"]
+
+    def test_only_a_lead_prompt_is_journaled(self, live_task_env):
+        session_start = _lead_prompt("x")
+        session_start["hook_event_name"] = "SessionStart"
+        for frame in (captured_plain_userpromptsubmit(), captured_teammate_sessionstart(), session_start):
+            pk.journal_prompt_kind(frame)
+        assert read_events("prompt_kind") == []
+
+    def test_a_long_prompt_of_unclosed_blocks_is_read_in_one_pass(self, live_task_env):
+        import time
+        prompt = "<teammate-message>" * 200_000
+        started = time.monotonic()
+        assert pk.classify_prompt(prompt) == ("teammate_message", len(prompt), "teammate-message")
+        assert time.monotonic() - started < 2

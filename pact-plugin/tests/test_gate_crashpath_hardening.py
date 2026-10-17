@@ -320,9 +320,9 @@ class TestStdinCaps:
         genuinely denies when parsed.
         """
         cap = bg._STDIN_READ_MAX
-        base = _make_input(tool_name="Edit")  # lead frame, blocked tool
+        base = _make_input(tool_name="Agent")  # lead frame, blocked tool (Agent only since 1.4.1)
         text = _over_cap_frame(cap, base)
-        assert json.loads(text)["tool_name"] == "Edit"
+        assert json.loads(text)["tool_name"] == "Agent"
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
         code, out = _run_main_with_stdin(bg, text)
@@ -336,7 +336,7 @@ class TestStdinCaps:
         # DOES deny at exit 2 — proving the over-cap suppress is the cap's
         # doing, not an always-suppress gate.
         code2, out2 = _run_main_with_stdin(bg, json.dumps(base))
-        assert code2 == 2, "in-bounds blocked Edit must deny at exit 2"
+        assert code2 == 2, "in-bounds blocked Agent must deny at exit 2"
         assert json.loads(out2.strip())["hookSpecificOutput"][
             "permissionDecision"
         ] == "deny"
@@ -709,7 +709,7 @@ class TestBoundedErrorTextOutputIdentity:
 # docstring (inspect.getsource directly, NOT a logic-only body strip),
 # because the issue's constraint is literally "keep _bounded_error_text
 # byte-identical" and the two docstrings ARE currently identical. Mirrors
-# test_staleness.py:TestFileLockTwinCopyDrift (which strips docstrings only
+# test_working_memory_twin_drift.py:TestFileLockTwinCopyDrift (which strips docstrings only
 # because ITS twins live in differently-commented modules — not the case
 # here).
 # =============================================================================

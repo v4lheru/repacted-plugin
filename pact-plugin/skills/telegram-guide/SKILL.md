@@ -1,6 +1,6 @@
 ---
 name: telegram-guide
-description: Telegram notification integration guide for PACT. Use when telegram_notify is available in your tools — covers when to notify, when to ask, when to check replies, and multi-session behavior.
+description: "Use when telegram_notify is in your tools: when to notify, when to ask and wait, when to check replies, and how several sessions share one chat."
 ---
 
 # Telegram Notifications

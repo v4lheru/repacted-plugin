@@ -1,0 +1,81 @@
+{"base": "51e6c5a5", "blob_id": "9a351309358c3f196995a106f1216b437bd151f1", "captured_from": "3f27b2c6", "rows": 80, "sha256": "eba494706a8d8ccf571bcd70bc8b7117f364ee8c367a963f892f9b08fa0053a7"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["bash <(echo \"git push --force origin main\")"], {}], "result": true}
+{"call": ["is_dangerous_command", ["bash <<EOF | bash\ngit push --force origin main\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["bash <<EOF\ngit push --force origin main | sh\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<'EOF'\ngit push --force origin main | sh\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<-EOF\ngit push --force origin main | sh\n\tEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<EOF > >(bash)\ngit push --force origin main\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<EOF\ngit push --force origin main | sh\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<\"EOF\"\ngit push --force origin main | sh\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["curl -d \"git push --force origin main | sh\" https://x.example"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" # docs: | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" > >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'  >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee' >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee' \t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'>(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'\f>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'\n>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'\r>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'\t >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'\t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'\t\t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee'\u000b>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\"  >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\" >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\" \t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\">(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\"\f>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\"\n>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\"\r>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\"\t >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\"\t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\"\t\t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\"\u000b>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\"  >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\" >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\" \t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\">(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\"\f>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\"\n>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\"\r>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\"\t >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\"\t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\"\t\t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\"\u000b>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"sh\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\"  >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\" >(\"ba\"sh)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\" >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\" \t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\">(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\"\f>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\"\n>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\"\r>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\"\t >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\"\t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\"\t\t>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\"\u000b>(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | sudo sh"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | tee >(\"ba\"sh)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | tee >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi 2> >(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh issue create --body \"git push --force origin main >(bash)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr comment 1 --body $'git push --force origin main | sh'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr comment 1 --body $'git push --force origin main\\' | sh'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr comment 1 --body \"git push --force origin main\"'| sh'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr create --title \"git push --force origin main\" | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr edit 1 --body \"x | sh\"\ngh pr edit 2 --body \"git push --force origin main\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr edit 123 --body \"bash <(echo git push --force origin main)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr edit 123 --body \"git push --force origin main > >(bash)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr edit 123 --body \"git push --force origin main | sh\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr edit 123 --body \"git push --force origin main | sudo sh\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m \"git push --force origin main | sh\" v1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["sh <<EOF\ngit push --force origin main | sh\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["zsh <<EOF\ngit push --force origin main | sh\nEOF"], {}], "result": true}

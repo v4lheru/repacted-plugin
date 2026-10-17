@@ -1,0 +1,21 @@
+{
+  "base": {
+    "sha": "0cd9e88baa6275c988340920c9d5896d6b84350a",
+    "version": "4.8.1",
+    "date": "2026-09-26"
+  },
+  "reviewed_through": null,
+  "reviews": [],
+  "picks": [
+    {
+      "pr": "#1587",
+      "upstream": "705ae819235b2f988aad6ffe50f9101afe27433b",
+      "date": "2026-09-26"
+    },
+    {
+      "pr": "#1587",
+      "upstream": "2f0e2c7cc894155d2f06850fdb000d8d9d89456b",
+      "date": "2026-09-26"
+    }
+  ]
+}

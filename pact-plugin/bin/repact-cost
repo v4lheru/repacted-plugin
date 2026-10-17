@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""repact-cost: the session's per-agent context table, from <session dir>/context-cost.json.
+Location: pact-plugin/bin/repact-cost. Read-only, on demand. The rows are kept by
+hooks/shared/context_ledger.py from SIZES only (tool input and response bytes per actor, hook
+bytes, the transcript's stat size): no text is on file, so none is printed.
+Usage: repact-cost [--top N] [--session ID | --session-dir PATH] [--json]
+  est_context  BASE + in + out + injected bytes: a lower bound on the actor's next call
+  est_spend    sum of est_context over its calls, in MB-calls: what the re-reads cost
+  tier         the highest advisory already spoken for the actor ("" | advise | stop | hard)
+The session is $CLAUDE_CODE_SESSION_ID unless --session or --session-dir names another.
+Exit codes: 0 printed; 1 no agent row yet; 2 usage error; 3 no counter file found.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _repact_common as common  # noqa: E402
+
+EXAMPLE = "repact-cost --top 5"
+COST_FILE = "context-cost.json"
+COLUMNS = ("agent", "calls", "est_context", "est_spend", "in", "out", "injected", "transcript", "tier")
+
+
+def cost_path(session: str | None, session_dir: str | None) -> Path | None:
+    """The counter file of the session named, or None."""
+    if session_dir:
+        path = Path(session_dir).expanduser() / COST_FILE
+        return path if path.is_file() else None
+    session_id = session or os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not session_id or any(ch in session_id for ch in "/\\*?"):
+        return None
+    paths = [p for p in common.claude_config_dir().glob(f"pact-sessions/*/{session_id}/{COST_FILE}")
+             if p.is_file()]
+    return max(paths, key=lambda p: p.stat().st_mtime) if paths else None
+
+
+def read_agents(path: Path) -> dict:
+    try:
+        counters = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    agents = counters.get("agents") if isinstance(counters, dict) else None
+    return {name: row for name, row in (agents or {}).items() if isinstance(row, dict)} \
+        if isinstance(agents, dict) else {}
+
+
+def _int(row: dict, key: str) -> int:
+    value = row.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def rows_of(agents: dict, top: int) -> list[dict]:
+    """The agent rows sorted by est_spend, the top N, every field an int or the tier."""
+    ordered = sorted(agents.items(), key=lambda item: (-_int(item[1], "est_spend"), item[0]))
+    out = []
+    for name, row in ordered[:top]:
+        out.append({"agent": name, "calls": _int(row, "calls"),
+                    "est_context": _int(row, "est_context"), "est_spend": _int(row, "est_spend"),
+                    "in": _int(row, "in_bytes"), "out": _int(row, "out_bytes"),
+                    "injected": _int(row, "injected"), "transcript": _int(row, "transcript_bytes"),
+                    "tier": row.get("tier") if isinstance(row.get("tier"), str) else ""})
+    return out
+
+
+def _kb(size: int) -> str:
+    return f"{size / 1000:.0f} KB"
+
+
+def render(rows: list[dict]) -> list[str]:
+    lines = [f"{'agent':<24}{'calls':>7}{'context':>12}{'spend':>14}{'in':>10}{'out':>10}"
+             f"{'injected':>10}{'transcript':>12}  tier"]
+    for row in rows:
+        lines.append(f"{row['agent']:<24}{row['calls']:>7}{_kb(row['est_context']):>12}"
+                     f"{row['est_spend'] / 1e6:>11.1f} MB-c{_kb(row['in']):>10}{_kb(row['out']):>10}"
+                     f"{_kb(row['injected']):>10}{_kb(row['transcript']):>12}  {row['tier'] or '-'}")
+    total = sum(row["est_spend"] for row in rows)
+    lines.append(f"{'total':<24}{sum(row['calls'] for row in rows):>7}{'':>12}{total / 1e6:>11.1f} MB-c")
+    return lines
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="repact-cost", description=__doc__.split("\n")[0],
+                                     epilog=f"example: {EXAMPLE}")
+    parser.add_argument("--top", type=int, default=20, help="rows to show (default 20)")
+    parser.add_argument("--session", help="the session id (default: $CLAUDE_CODE_SESSION_ID)")
+    parser.add_argument("--session-dir", help="the session directory holding context-cost.json")
+    parser.add_argument("--json", action="store_true", help="machine output (the rows)")
+    args = parser.parse_args(argv)
+    if args.top < 1:
+        parser.error("--top must be at least 1")
+    path = cost_path(args.session, args.session_dir)
+    if path is None:
+        print("repact-cost: no context-cost.json found (give --session or --session-dir)",
+              file=sys.stderr)
+        return 3
+    rows = rows_of(read_agents(path), args.top)
+    if not rows:
+        print("repact-cost: no agent row yet (the table fills on tool frames)", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(rows, indent=1, sort_keys=True))
+        return 0
+    print("\n".join(render(rows)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

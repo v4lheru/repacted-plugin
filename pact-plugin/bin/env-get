@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""env-get: run a command with keys from a .env/key file, without sourcing or printing it (repacted:safe-ops).
+
+Location: pact-plugin/bin/env-get (on the Bash PATH while the plugin is enabled).
+It replaces `source .env`, `set -a; . file`, `cat .env` and `grep KEY .env`: a sourced
+file runs as shell (a stray prose line gets echoed, secrets with it), and a printed value
+lands in the transcript.
+
+Contract
+  env-get FILE KEY[,KEY...] -- <cmd> [args...]
+  env-get --keys FILE        list the key NAMES in FILE, one per line, sorted; never a value
+
+  - FILE is PARSED by the shared parser (_repact_common.parse_key_file): only lines
+    matching ^[A-Z_][A-Z0-9_]*= count, with no shell evaluation, no `export` handling,
+    and matching outer quotes stripped.
+  - The named keys are set in the child's environment and <cmd> is exec'd (it replaces
+    this process, so its exit code is the command's own).
+  - No value is ever printed. Errors name the file and the key only.
+  - A file readable by 'other' (mode & 0o004) is refused: chmod 600 it.
+  - Refer to the values inside <cmd> through the environment, in single quotes so YOUR
+    shell does not expand them first.
+  - For an API call that a string-matching guard must see (n8n writes, D19), keep the
+    guarded CLI as the program and feed only the header through env-get by process
+    substitution; never wrap the guarded call as `env-get ... -- sh -c 'curl ...'`
+    (the guard then sees `env-get` as the program and a quoted string, and stays silent).
+
+Exit codes
+  2    a key is missing or empty, or the file is missing, unreadable or world-readable
+  64   usage error
+  127  <cmd> not found or not executable
+  otherwise the exit code of <cmd>
+
+Examples
+  env-get ~/.config/n8n/instance.env N8N_API_KEY -- sh -c 'echo "len=${#N8N_API_KEY}"'
+  curl -sS -X PUT -H @<(env-get ~/.config/n8n/instance.env N8N_API_KEY -- sh -c 'printf "X-N8N-API-KEY: %s\n" "$N8N_API_KEY"') -H "Content-Type: application/json" --data @/tmp/wf.json "https://<host>/api/v1/workflows/<id>"
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _repact_common import KeyFileError, parse_key_file  # noqa: E402  shared parser
+
+EXIT_KEY_FILE, EXIT_USAGE, EXIT_NOT_FOUND = 2, 64, 127
+KEY_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+USAGE = ("usage: env-get FILE KEY[,KEY...] -- <cmd> [args...]\n"
+         "       env-get --keys FILE\n\nExample:\n"
+         "  env-get ~/.config/n8n/instance.env N8N_API_KEY -- sh -c 'echo \"len=${#N8N_API_KEY}\"'")
+
+
+class UsageError(Exception):
+    """Bad arguments; the message never contains a value."""
+
+
+def parse_argv(argv: list[str]) -> tuple[str, list[str], list[str]]:
+    """Split argv into (file, keys, command). Raises UsageError."""
+    if "--" not in argv:
+        raise UsageError("missing `--` before the command")
+    split = argv.index("--")
+    head, command = argv[:split], argv[split + 1:]
+    if len(head) != 2 or not command:
+        raise UsageError("expected FILE KEY[,KEY...] -- <cmd>")
+    file_arg, keys_arg = head
+    keys = [key.strip() for key in keys_arg.split(",") if key.strip()]
+    bad = [key for key in keys if not KEY_NAME_RE.match(key)]
+    if not keys or bad:
+        raise UsageError(f"invalid key name(s): {', '.join(bad) or '(none given)'}")
+    return file_arg, keys, command
+
+
+def list_keys(args: list[str]) -> int:
+    """`env-get --keys FILE`: the key names only, so a caller can see what a file holds
+    without its values entering the transcript (the ENV-GUARD deny message points here)."""
+    if len(args) != 1:
+        print(f"env-get: --keys takes exactly one FILE\n\n{USAGE}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        keys = sorted(parse_key_file(args[0]))
+    except KeyFileError as exc:
+        print(f"env-get: {exc}", file=sys.stderr)
+        return EXIT_KEY_FILE
+    print("\n".join(keys))
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv and argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    if argv and argv[0] == "--keys":
+        return list_keys(argv[1:])
+    try:
+        file_arg, keys, command = parse_argv(argv)
+    except UsageError as exc:
+        print(f"env-get: {exc}\n\n{USAGE}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        values = parse_key_file(file_arg, keys)
+    except KeyFileError as exc:
+        print(f"env-get: {exc}", file=sys.stderr)
+        return EXIT_KEY_FILE
+    child_env = {**os.environ, **values}
+    try:
+        os.execvpe(command[0], command, child_env)
+    except OSError as exc:
+        print(f"env-get: cannot run {command[0]!r}: {exc.strerror or exc.__class__.__name__}",
+              file=sys.stderr)
+        return EXIT_NOT_FOUND
+    return EXIT_NOT_FOUND   # unreachable: execvpe replaces the process
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -426,6 +426,62 @@ class TestCheckWorktreeBoundaryEdgeCases:
         assert "outside the active worktree" in result.lower()
 
 
+class TestSiblingWorktreePrefix:
+    """A peer worktree whose name extends this one's is outside it (1.4.1 bug audit item 9)."""
+
+    @pytest.fixture
+    def trees(self, tmp_path):
+        project = tmp_path / "project"
+        own = project / ".worktrees" / "feat"
+        for tree in (own, project / ".worktrees" / "feat2", project / ".worktrees" / "feat-é",
+                     project / ".worktrees" / "feat-éx"):
+            (tree / "src").mkdir(parents=True)
+        return project, own
+
+    @pytest.mark.parametrize("target", [
+        ".worktrees/feat2/src/x.py",
+        ".worktrees/feat/src/../../feat2/src/x.py",
+        ".worktrees/feat/../feat2/src/x.py",
+    ])
+    def test_sibling_with_longer_name_is_blocked(self, trees, target):
+        from worktree_guard import check_worktree_boundary
+
+        project, own = trees
+        result = check_worktree_boundary(str(project / target), str(own))
+        assert result is not None and "outside the active worktree" in result
+
+    def test_sibling_blocked_when_worktree_has_trailing_slash(self, trees):
+        from worktree_guard import check_worktree_boundary
+
+        project, own = trees
+        result = check_worktree_boundary(str(project / ".worktrees/feat2/src/x.py"), str(own) + "/")
+        assert result is not None
+
+    def test_unicode_sibling_is_blocked(self, trees):
+        from worktree_guard import check_worktree_boundary
+
+        project, _ = trees
+        result = check_worktree_boundary(
+            str(project / ".worktrees/feat-éx/src/x.py"), str(project / ".worktrees/feat-é"))
+        assert result is not None
+
+    def test_symlink_inside_worktree_into_sibling_is_blocked(self, trees):
+        from worktree_guard import check_worktree_boundary
+
+        project, own = trees
+        (own / "src" / "peer").symlink_to(project / ".worktrees" / "feat2" / "src")
+        result = check_worktree_boundary(str(own / "src" / "peer" / "x.py"), str(own))
+        assert result is not None
+
+    def test_own_tree_still_allowed(self, trees):
+        from worktree_guard import check_worktree_boundary
+
+        _, own = trees
+        assert check_worktree_boundary(str(own / "src" / "x.py"), str(own)) is None
+        assert check_worktree_boundary(str(own / "src" / "x.py"), str(own) + "/") is None
+        assert check_worktree_boundary(str(own), str(own)) is None
+
+
 class TestSuggestWorktreePathEdgeCases:
     """Additional edge cases for _suggest_worktree_path()."""
 
@@ -464,3 +520,72 @@ class TestSuggestWorktreePathEdgeCases:
         )
         # Should return something (the file is inside worktree, so suggestion = same location)
         assert result is not None
+
+
+class TestAllowListReadsTheResolvedPath:
+    """rv4 PART2-B: the allow-list ran on the RAW path, so a ../ through docs/ or .claude/, or
+    any app dir named docs, passed outside the worktree."""
+
+    @pytest.fixture
+    def project(self, tmp_path):
+        own = tmp_path / "main" / ".worktrees" / "feat"
+        own.mkdir(parents=True)
+        for sub in ("docs", ".claude", "src/api/docs"):
+            (tmp_path / "main" / sub).mkdir(parents=True, exist_ok=True)
+        return tmp_path / "main", own
+
+    @pytest.mark.parametrize("target", [
+        "docs/../src/app.py", ".claude/../src/app.py", "src/api/docs/routes.py",
+        "src/docs/../.claude/../app.py",
+    ])
+    def test_app_code_reached_through_an_allowed_name_is_blocked(self, project, target):
+        from worktree_guard import check_worktree_boundary
+
+        main, own = project
+        result = check_worktree_boundary(str(main / target), str(own))
+        assert result is not None and "outside the active worktree" in result
+
+    @pytest.mark.parametrize("target", ["docs/tool.py", ".claude/hooks/x.py", "src/CLAUDE.md"])
+    def test_the_root_allow_list_still_passes(self, project, target):
+        from worktree_guard import check_worktree_boundary
+
+        main, own = project
+        assert check_worktree_boundary(str(main / target), str(own)) is None
+
+    def test_a_notebook_path_is_checked(self, project, capsys):
+        from worktree_guard import main as guard_main
+
+        root, own = project
+        frame = json.dumps({"tool_name": "NotebookEdit",
+                            "tool_input": {"notebook_path": str(root / "src" / "nb.py")}})
+        with patch.dict("os.environ", {"PACT_WORKTREE_PATH": str(own)}), \
+             patch("sys.stdin", io.StringIO(frame)):
+            with pytest.raises(SystemExit) as exc_info:
+                guard_main()
+        assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize("tool, key", [("NotebookEdit", "notebook_path"), ("MultiEdit", "file_path")])
+def test_the_dispatcher_runs_the_guard_for_every_edit_tool(tmp_path, tool, key):
+    """rv4: hooks.json routed only Edit|Write to worktree_guard, so a NotebookEdit or MultiEdit
+    outside the worktree was never checked. Runs the real dispatcher from hooks.json's entry."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    plugin = Path(__file__).resolve().parents[1]
+    entry = next(hook["command"] for group in json.loads((plugin / "hooks" / "hooks.json")
+                                                         .read_text("utf-8"))["hooks"]["PreToolUse"]
+                 if tool in (group.get("matcher") or "").split("|") for hook in group["hooks"])
+    own = tmp_path / "main" / ".worktrees" / "feat"
+    own.mkdir(parents=True)
+    argv = [sys.executable, str(plugin / "hooks" / "dispatch.py"), *entry.split('"')[-1].split()]
+    frame = {"tool_name": tool, "session_id": "s1", "hook_event_name": "PreToolUse",
+             "tool_input": {key: str(tmp_path / "main" / "src" / "nb.py")}}
+    done = subprocess.run(argv, input=json.dumps(frame).encode(), capture_output=True, timeout=60,
+                          cwd=str(tmp_path), env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+                                                  "CLAUDE_CONFIG_DIR": str(tmp_path / ".claude"),
+                                                  "CLAUDE_PROJECT_DIR": str(tmp_path / "main"),
+                                                  "CLAUDE_PLUGIN_ROOT": str(plugin),
+                                                  "PACT_WORKTREE_PATH": str(own)})
+    assert b'"permissionDecision": "deny"' in done.stdout, (done.stdout[-500:], done.stderr[-500:])

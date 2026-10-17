@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""repact-doctor: one health check, and the user's open actions surfaced.
+
+Location: pact-plugin/bin/repact-doctor. Design: the design notes
+section D5. The checks live in bin/_doctor.py. hooks/doctor_brief.py reads the cache this writes
+and prints one SessionStart line when anything is not green, or nothing at all.
+
+  repact-doctor            every check; the slow ones (secrets, MCP scoping) only when their
+                           cached result is older than 7 days
+  repact-doctor --full     every check, the slow ones included
+  repact-doctor --quick    the fast checks only; the slow ones keep their cached result
+                           (what the SessionStart line starts in the background when stale)
+
+Checks, one line each (GREEN, AMBER, RED, or SKIP when it cannot run here):
+  1 links            the agent and protocol links resolve, share one root, and match the launcher
+                     in use; the global CLAUDE.md never carries the slim core (served per session)
+  2 memory split     one orchestrator memory dir, no *.split-* leftovers
+  3 index budgets    check-index over every agent-memory head
+  4 secrets          credential values in the memory dirs, the pact-memory DB and the vault KB
+                     folder ONLY (D26); kinds, counts and paths, never a value
+  5 stale references memory files citing a path or bin/ tool that no longer exists
+                     (skipped: a line marked "(remote host)" or "(not a local path)", and a
+                     quoted fragment its line calls truncated or cut off)
+  6 release position the release worktree's tag vs main's tags
+  7 MCP scoping      scope_mcp.py's dry-run plan: servers that would still move
+  8 open user actions  tasks open by D3's is_open_user_action (ALERT, HALT, BLOCKER, RELEASE GATE
+                     as a whole word, or an algedonic signal) and USER-OWNED backlog lines
+  9 release gates    tags beyond the release, against docs/release-gates.json
+ 11 state ownership  every store in docs/architecture/state-ownership.md has its writer in the
+                     plugin; a team whose task files vanished under a standing config.json while
+                     its journal recorded tasks
+
+Then two notes that are never a check state: `mode:` (guards-only, or full with the Agent Teams
+flag on) and the host line against reference/compat.json (an untested host is a note).
+
+  repact-doctor --clear task-store
+                     remove this session's task-store HALT marker (hooks/task_store_probe.py
+                     raised it after two host task writes that never reached disk); the
+                     session is $CLAUDE_CODE_SESSION_ID. No check runs.
+
+The result is cached at ${CLAUDE_PLUGIN_DATA}/doctor.json (mode 600). Only one run at a time:
+a second concurrent run exits 0 at once and changes nothing.
+
+Exit codes: 0 no red or amber, 1 at least one amber, 2 at least one red, 64 usage.
+
+Examples
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-doctor"
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-doctor" --full
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-doctor" --clear task-store
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _doctor  # noqa: E402
+import _doctor_host  # noqa: E402
+import _doctor_state  # noqa: E402
+
+EXIT_OK, EXIT_AMBER, EXIT_RED, EXIT_USAGE = 0, 1, 2, 64
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        print(f"repact-doctor: {message}\n\n"
+              'example: python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-doctor" --full', file=sys.stderr)
+        sys.exit(EXIT_USAGE)
+
+
+def _clear_task_store(parser: argparse.ArgumentParser) -> int:
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    if not session_id:
+        parser.error("--clear task-store needs CLAUDE_CODE_SESSION_ID: the session whose marker to clear")
+    removed = _doctor_state.clear_task_store_marker(_doctor.context_from_env(), session_id)
+    if removed:
+        print("task store: removed the HALT marker " + ", ".join(str(path) for path in removed))
+    else:
+        print(f"task store: no HALT marker for session {session_id}; nothing to clear")
+    return EXIT_OK
+
+
+def main(argv: list[str]) -> int:
+    parser = _Parser(prog="repact-doctor", formatter_class=argparse.RawDescriptionHelpFormatter,
+                     epilog="Examples" + __doc__.split("Examples", 1)[1])
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--full", action="store_true", help="also re-run the slow checks")
+    mode.add_argument("--quick", action="store_true", help="fast checks only; keep the cached slow ones")
+    parser.add_argument("--quiet", action="store_true", help="write the cache, print nothing")
+    parser.add_argument("--clear", choices=("task-store",),
+                        help="remove this session's task-store HALT marker and exit; no check runs")
+    args = parser.parse_args(argv)
+    if args.clear:
+        return _clear_task_store(parser)
+
+    data_dir = _doctor.plugin_data_dir()
+    lock = _doctor.try_run_lock(data_dir)
+    if lock is None:
+        if not args.quiet:
+            print("repact-doctor: another run is in progress; nothing done")
+        return EXIT_OK
+    try:
+        ctx = _doctor.context_from_env()
+        cache_file = _doctor.cache_path()
+        results = _doctor.run_checks(ctx, _doctor.read_cache(cache_file),
+                                     "full" if args.full else "quick" if args.quick else "default")
+        _doctor.write_cache(cache_file, results, repo=ctx.repo_root)
+    finally:
+        os.close(lock)
+    if not args.quiet:
+        print("\n".join(_doctor.render_report(results)))
+        print(_doctor_host.mode_line(ctx))
+        print(_doctor_host.compat_line(ctx))
+        print(f"cache: {cache_file}")
+    states = {r.state for r in results}
+    return EXIT_RED if "red" in states else EXIT_AMBER if "amber" in states else EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

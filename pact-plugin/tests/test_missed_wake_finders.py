@@ -42,7 +42,8 @@ from fixtures.role_frames import captured_lead_userpromptsubmit_qualified
 
 SOURCE = Path(__file__).resolve().parents[1] / "hooks" / "missed_wake_scan.py"
 ENTRY_POINT = "run_surface"
-FINDERS = ("find_stale_missed_wakes", "find_mutual_waits", "find_unanchored_waits")
+FINDERS = ("find_stale_missed_wakes", "find_mutual_waits", "find_unanchored_waits",
+           "find_idle_on_finished_runs")
 
 AGED_MIN = 90     # past the 30-minute staleness threshold
 FRESH_MIN = 2     # well inside it
@@ -352,3 +353,65 @@ class TestTheMutualWaitSurfaceReachesTheLead:
             "surface, so a single malformed task hid the lead's alarm for a "
             "real aged peer pair: %r" % (out,)
         )
+
+
+class TestATeammateIdleOnAFinishedRunReachesTheLead:
+    """2026-10-03: teammates backgrounded their own test runs and idled for hours with a
+    wait set; the lead found them by matching the run ledger against the waits by hand.
+    Driven through `run_surface` with a real ledger file and an in-memory journal."""
+
+    @pytest.fixture
+    def surface(self, tmp_path, monkeypatch):
+        monkeypatch.syspath_prepend(str(SOURCE.parents[1] / "bin"))
+        from _repact_common import ledger_append
+        from shared import pact_context
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(pact_context, "get_team_name", lambda: None)
+        journal: list = []
+        monkeypatch.setattr(mw, "read_events", lambda et: [e for e in journal if e.get("type") == et])
+        monkeypatch.setattr(mw, "append_event", lambda e: journal.append(e) or True)
+        monkeypatch.setattr(mw, "get_journal_path", lambda: str(tmp_path / "journal.jsonl"))
+        tree = tmp_path / "worktrees" / "unit-a"
+        wait_since = datetime.now(timezone.utc) - timedelta(minutes=40)
+        task = {"id": "66", "owner": "u3", "subject": "s", "status": "in_progress",
+                "description": f"comPACT mode.\nWorktree: {tree} (branch repacted/unit-a, at head).\n",
+                "metadata": {"intentional_wait": {
+                    "reason": "awaiting_lead_completion", "expected_resolver": "lead",
+                    "since": wait_since.isoformat(), "covers_since": wait_since.isoformat()}}}
+
+        def run(cwd, description=None, owner_call_dirs=None):
+            if description is not None:
+                task["description"] = description
+            if owner_call_dirs:
+                ledger_append({"ts": wait_since.isoformat(), "agent_name": "u3", "source": "hook",
+                               "call_dirs": [str(path) for path in owner_call_dirs], "log_path": None})
+            ledger_append({"ts": (wait_since + timedelta(minutes=20)).isoformat(), "cwd": str(cwd),
+                           "runner": "pytest", "passed": 12, "failed": 1, "errors": 0,
+                           "exit_code": 1, "count_parsed": True, "source": "tcount",
+                           "log_path": str(tmp_path / "runs" / "2026-10-03T143200Z-7-pytest.log")})
+            monkeypatch.setattr(mw, "get_task_list", lambda: [task])
+            return [mw.run_surface(captured_lead_userpromptsubmit_qualified()) or "" for _ in range(2)]
+
+        return tree, run
+
+    def test_a_run_from_the_worktree_that_ended_after_the_wait_is_shown_ONCE(self, surface):
+        tree, run = surface
+        first, second = run(tree / "repacted" / "pact-plugin")
+        assert ("u3 (#66) is idle on a finished run: 2026-10-03T143200Z-7-pytest.log, "
+                "12 passed, 1 failed, 0 errors, exit 1; nudge it") in first, first
+        assert "idle on a finished run" not in second, second
+
+    def test_a_run_from_ANOTHER_worktree_is_ignored(self, surface):
+        tree, run = surface
+        first, _ = run(tree.parent / "unit-a-other" / "repacted")
+        assert "idle on a finished run" not in first, first
+
+    def test_with_no_Worktree_line_the_owners_own_linked_worktree_is_used(self, surface):
+        """The measured U3 dispatch named its tree only in a shared brief file."""
+        tree, run = surface
+        (tree / "repacted").mkdir(parents=True)
+        (tree / ".git").write_text("gitdir: /elsewhere\n")
+        first, _ = run(tree / "repacted" / "pact-plugin", description="comPACT mode. Read the brief.",
+                       owner_call_dirs=[tree / "repacted"])
+        assert "u3 (#66) is idle on a finished run" in first, first

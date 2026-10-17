@@ -13,7 +13,7 @@ Verify the full PACT orchestration lifecycle: PREPARE, ARCHITECT, CODE, TEST pha
 1. PACT plugin installed at `~/.claude/plugins/cache/pact-plugin/PACT/`
 2. A git repository with `CLAUDE.md` containing the PACT orchestrator configuration
 3. No active worktrees for the test feature branch (run `git worktree list` to verify)
-4. All four verification scripts passing: `bash scripts/verify-scope-integrity.sh`, `bash scripts/verify-protocol-extracts.sh`, `bash scripts/verify-task-hierarchy.sh`, `bash scripts/verify-worktree-protocol.sh`
+4. The contract checks passing (`python3 scripts/run-tests -- tests/contract tests/test_scope_integrity_invariants.py`). The worktree canary script retired at CLEANUP-B; its rules are pinned in that test module. The protocol extract gate retired with the SSOT at the protocol consolidation.
 5. `pact-memory` database accessible at `~/.claude/pact-memory/memory.db`
 
 ## Steps
@@ -23,12 +23,12 @@ Verify the full PACT orchestration lifecycle: PREPARE, ARCHITECT, CODE, TEST pha
 Run the following command in Claude Code:
 
 ```
-/PACT:orchestrate Add a utility function to validate email addresses in the shared utils module
+/repacted:orchestrate Add a utility function to validate email addresses in the shared utils module
 ```
 
 ### Step 2: Observe Variety Assessment
 
-**What happens**: The orchestrator assesses task variety using the dimensions in `pact-plugin/protocols/pact-variety.md` (Novelty, Scope, Uncertainty, Risk).
+**What happens**: The orchestrator assesses task variety using the dimensions in `pact-plugin/protocols/workflows.md` §Variety (Novelty, Scope, Uncertainty, Risk).
 
 **Expected outcome**: A one-line variety summary appears, such as:
 ```
@@ -50,7 +50,7 @@ For low-variety tasks (score 4-6), the orchestrator should offer comPACT as an a
 
 ### Step 4: Observe Worktree Setup
 
-**What happens**: The orchestrator invokes `/PACT:worktree-setup` to create an isolated worktree.
+**What happens**: The orchestrator invokes `/repacted:worktree-setup` to create an isolated worktree.
 
 **Expected outcome**:
 ```
@@ -99,7 +99,7 @@ Should contain research output file(s).
 
 ### Step 8: Observe Scope Detection
 
-**What happens**: After PREPARE, the orchestrator evaluates scope detection heuristics from `pact-plugin/protocols/pact-scope-detection.md`.
+**What happens**: After PREPARE, the orchestrator evaluates scope detection heuristics from `pact-plugin/protocols/workflows.md` §Scope Detection.
 
 **Expected outcome** (single-domain utility task):
 ```
@@ -151,7 +151,7 @@ Should show both CODE and TEST phase commits.
 
 ### Step 12: Observe Completion
 
-**What happens**: The orchestrator marks all tasks completed and offers to run `/PACT:peer-review`.
+**What happens**: The orchestrator marks all tasks completed and offers to run `/repacted:peer-review`.
 
 **Expected outcome**:
 - Feature task marked completed
@@ -176,8 +176,8 @@ Should show both CODE and TEST phase commits.
 | Failure | Symptom | Diagnosis |
 |---------|---------|-----------|
 | Orchestrator writes code directly | Edit/Write tool used on `.py`/`.ts`/`.js` files | S5 delegation policy violated; orchestrator should delegate |
-| Agent stalls | No response after extended time | Check `pact-plugin/protocols/pact-agent-stall.md` for stall indicators |
-| Phase skipped incorrectly | PREPARE skipped but requirements unclear | Completeness check in `pact-plugin/protocols/pact-completeness.md` may have been bypassed |
-| Worktree not created | Agent works in main repo directory | `/PACT:worktree-setup` was not invoked or failed silently |
+| Agent stalls | No response after extended time | Check `pact-plugin/protocols/coordination.md` §Stall Detection for stall indicators |
+| Phase skipped incorrectly | PREPARE skipped but requirements unclear | Completeness check in `pact-plugin/protocols/coordination.md` §Completeness Signals may have been bypassed |
+| Worktree not created | Agent works in main repo directory | `/repacted:worktree-setup` was not invoked or failed silently |
 | HANDOFF missing items | Agent response lacks structured handoff | `validate_handoff` hook should warn; check `pact-plugin/hooks/validate_handoff.py` |
 | Scope detection false positive | Decomposition proposed for simple task | Counter-signals may not have been applied; verify scoring in output |

@@ -18,6 +18,11 @@ from helpers import parse_frontmatter
 from shared.intentional_wait import KNOWN_RESOLVERS
 
 COMMANDS_DIR = Path(__file__).parent.parent / "commands"
+# CLEANUP-B: the Task A/B skeleton, the variety stamp, the wiring and the spawn form live ONCE, in
+# the shared dispatch reference. Each consumer command keeps the trigger line and its mission
+# fields, so each pin below checks its rule in the reference AND the trigger in every command.
+DISPATCH_REFERENCE = COMMANDS_DIR.parent / "reference" / "dispatch" / "teachback-gated-dispatch.md"
+DISPATCH_TRIGGER = "Read reference/dispatch/teachback-gated-dispatch.md before your first dispatch this session."
 
 # The shutdown loop's call AS IT APPEARS INSIDE THE FENCED BLOCK.
 #
@@ -165,12 +170,12 @@ class TestAskUserQuestionOptions:
         assert '"End session (graceful)"' not in wrapup_content
 
     def test_wrapup_pause_invokes_pause_command(self, wrapup_content):
-        """Pause option should invoke /PACT:pause."""
-        assert "/PACT:pause" in wrapup_content
+        """Pause option should invoke /repacted:pause."""
+        assert "/repacted:pause" in wrapup_content
 
     def test_wrapup_taskstop_confined_to_end_session_branch(self, wrapup_content):
         """The continue branch must keep teammates alive, and the pause branch
-        delegates to /PACT:pause which already stops them — a second loop there
+        delegates to /repacted:pause which already stops them — a second loop there
         would duplicate it. Only the terminal branch stops teammates."""
         section = wrapup_content.split("Session Decision")[1]
         yes = section.find('**"Yes, continue"**')
@@ -225,11 +230,12 @@ class TestAskUserQuestionOptions:
         assert desc in peer_review_content, "peer-review.md missing shared Pause description"
 
 
+# rePACT left this list in COMMANDS (m8b): the command is a stub, and a nested
+# cycle dispatches through orchestrate's template, which is pinned here.
 CONSUMER_COMMANDS = [
     "orchestrate",
     "peer-review",
     "comPACT",
-    "rePACT",
     "plan-mode",
 ]
 
@@ -262,9 +268,14 @@ class TestPactRoleTeammateInConsumerCommandsByFile:
         path = COMMANDS_DIR / f"{name}.md"
         assert path.exists(), f"Consumer command file missing: {name}.md"
         text = path.read_text(encoding="utf-8")
-        assert "YOUR PACT ROLE: teammate (" in text, (
-            f"{name}.md must contain canonical 'YOUR PACT ROLE: teammate (' "
-            "marker — load-bearing for the routing chain that detects a "
+        assert DISPATCH_TRIGGER in text, (
+            f"{name}.md must carry the dispatch trigger line {DISPATCH_TRIGGER!r}: "
+            "the canonical spawn form (and its PACT ROLE marker) lives in the shared "
+            "dispatch reference since CLEANUP-B."
+        )
+        assert "YOUR PACT ROLE: teammate (" in DISPATCH_REFERENCE.read_text(encoding="utf-8"), (
+            "the shared dispatch reference must contain the canonical 'YOUR PACT ROLE: "
+            "teammate (' marker — load-bearing for the routing chain that detects a "
             "teammate spawn at session_init time."
         )
 
@@ -284,10 +295,9 @@ class TestPactRoleTeammateInConsumerCommandsByComponent:
     def test_canonical_form_component_present_in_at_least_one_consumer(
         self, label, substr
     ):
-        bodies = {
-            name: (COMMANDS_DIR / f"{name}.md").read_text(encoding="utf-8")
-            for name in CONSUMER_COMMANDS
-        }
+        # CLEANUP-B: the canonical form has one home, the shared dispatch reference,
+        # which every consumer command points at (ByFile checks the trigger).
+        bodies = {"dispatch-reference": DISPATCH_REFERENCE.read_text(encoding="utf-8")}
         if not any(substr in body for body in bodies.values()):
             pytest.fail(
                 f"canonical-form component {label!r} (substring {substr!r}) "
@@ -299,15 +309,15 @@ class TestPactRoleTeammateInConsumerCommandsByComponent:
 
 class TestNoFirstActionFossilInConsumerCommands:
     """Negative-invariant fossilization guard: consumer command dispatch-prompt
-    templates must not contain the v3.x FIRST-ACTION + Skill("PACT:teammate-bootstrap")
+    templates must not contain the v3.x FIRST-ACTION + Skill("teammate-bootstrap")
     pattern. The skill was deleted in C9; any surviving invocation produces
     teammates whose first tool call dead-ends. Guards the post-C5b state.
     """
 
     FORBIDDEN_FOSSIL_PATTERNS = (
         "YOUR FIRST ACTION (YOU MUST DO THIS IMMEDIATELY)",
-        'Skill(\\"PACT:teammate-bootstrap\\")',
-        'Skill("PACT:teammate-bootstrap")',
+        'Skill(\\"repacted:' 'teammate-bootstrap\\")',
+        'Skill("repacted:' 'teammate-bootstrap")',
     )
 
     @pytest.mark.parametrize("name", CONSUMER_COMMANDS)
@@ -325,11 +335,11 @@ class TestNoFirstActionFossilInConsumerCommands:
 
 # The teammate self-registration first-action directive, in its delivered
 # (unescaped) form. In the source `prompt="..."` literals it is written with
-# escaped quotes (`Invoke Skill(\"PACT:pact-team-registration\")`), consistent
+# escaped quotes (`Invoke Skill(\"repacted:teammate\")`), consistent
 # with the escaped `\n\n` in the same literal; the orchestrator unescapes both
 # when it constructs the real Agent() call. The presence check below normalizes
 # the escaping so it is robust to either representation.
-REGISTER_DIRECTIVE = 'Invoke Skill("PACT:pact-team-registration")'
+REGISTER_DIRECTIVE = 'Invoke Skill("repacted:teammate")'
 
 
 def _normalize_prompt_escaping(text: str) -> str:
@@ -346,10 +356,10 @@ def _normalize_prompt_escaping(text: str) -> str:
 # teammate-spawning surface; the persona canonical template
 # (agents/pact-orchestrator.md) is the authoritative source form.
 SPAWN_PROMPT_SURFACES = [
+    ("dispatch-reference", DISPATCH_REFERENCE),
     ("orchestrate", COMMANDS_DIR / "orchestrate.md"),
     ("peer-review", COMMANDS_DIR / "peer-review.md"),
     ("comPACT", COMMANDS_DIR / "comPACT.md"),
-    ("rePACT", COMMANDS_DIR / "rePACT.md"),
     ("plan-mode", COMMANDS_DIR / "plan-mode.md"),
     ("bootstrap", COMMANDS_DIR / "bootstrap.md"),
     ("pact-orchestrator", COMMANDS_DIR.parent / "agents" / "pact-orchestrator.md"),
@@ -360,11 +370,13 @@ SPAWN_PROMPT_SURFACES = [
 # (and thereby a conscious "does it carry the directive?" check) instead of
 # slipping in unguarded. orchestrate.md has the most (one per dispatched phase).
 EXPECTED_SPAWN_LITERAL_COUNTS = {
-    "orchestrate": 6,
-    "peer-review": 1,
-    "comPACT": 2,
-    "rePACT": 1,
-    "plan-mode": 1,
+    # CLEANUP-B: the four consumer commands carry no spawn literal; they point at the one in
+    # the shared dispatch reference. A literal added back to a command fails its 0 here.
+    "dispatch-reference": 1,
+    "orchestrate": 0,
+    "peer-review": 0,
+    "comPACT": 0,
+    "plan-mode": 0,
     "bootstrap": 1,
     "pact-orchestrator": 1,
 }
@@ -509,7 +521,7 @@ class TestRegisterDirectivePresentInEverySpawnLiteral:
         spawn = (
             'Agent(prompt="YOUR PACT ROLE: teammate (x).\\n\\nYou are joining '
             'team t. As your FIRST action, Invoke Skill(\\"'
-            'PACT:pact-team-registration\\") to record your identity.")'
+            'repacted:teammate\\") to record your identity.")'
         )
         assert len(_spawn_prompt_literals(spawn)) == 1, (
             "a genuine teammate-spawn literal was dropped by the extractor. "
@@ -610,7 +622,7 @@ class TestTeamRegistrationSkillLiveness:
     """Anti-fossil liveness guard: the register directive points at a LIVE skill.
 
     The register first-action directs every spawned teammate to invoke the
-    pact-team-registration skill. If that skill directory is ever renamed or
+    teammate skill. If that skill directory is ever renamed or
     removed, the directive dead-ends — the exact failure that killed the
     deleted teammate-bootstrap skill (guarded by
     TestNoFirstActionFossilInConsumerCommands). This makes the new directive
@@ -618,14 +630,14 @@ class TestTeamRegistrationSkillLiveness:
     """
 
     SKILL_PATH = (
-        COMMANDS_DIR.parent / "skills" / "pact-team-registration" / "SKILL.md"
+        COMMANDS_DIR.parent / "skills" / "teammate" / "SKILL.md"
     )
 
     def test_team_registration_skill_exists(self):
         assert self.SKILL_PATH.is_file(), (
-            "skills/pact-team-registration/SKILL.md does not exist, but the "
+            "skills/teammate/SKILL.md does not exist, but the "
             "canonical spawn prompt directs every teammate to invoke "
-            "PACT:pact-team-registration as its first action. The directive "
+            "repacted:teammate as its first action. The directive "
             "would dead-end — the failure that killed teammate-bootstrap. "
             "Restore the skill or update the directive."
         )
@@ -635,7 +647,9 @@ class TestImperativeSoftPhrasingConvention:
     """v4.0.0 lazy-load cross-reference convention guard.
 
     Orchestrator agent body uses two phrasing templates, both built around
-    the unified tool-call shape Read(file_path="../protocols/<file>.md"):
+    the unified tool-call shape Read(file_path="{plugin_root}/protocols/<file>.md"),
+    a path from the plugin root (a path relative to the persona file does not resolve
+    from the lead's working directory):
 
       IMPERATIVE: **You MUST Read(file_path="...") before answering** whenever <trigger>
         for decision-blocking protocols. Compels Read on trigger detection.
@@ -656,23 +670,22 @@ class TestImperativeSoftPhrasingConvention:
 
     IMPERATIVE_PROTOCOLS = [
         "algedonic.md",
-        "pact-s4-tension.md",
-        "pact-s5-policy.md",
-        "pact-state-recovery.md",
-        "pact-completion-authority.md",
+        "recovery.md",
     ]
 
+    # 1.5.0 (B3): the every-acceptance rules and the variety scoring moved into
+    # the persona's §12 and §10, so completion.md and workflows.md are read on demand.
     SOFT_PROTOCOLS = [
-        "pact-variety.md",
-        "pact-s4-checkpoints.md",
-        "pact-workflows.md",
+        "lead-reference.md",
         "pact-communication-charter.md",
+        "completion.md",
+        "workflows.md",
     ]
 
     @pytest.mark.parametrize("protocol", IMPERATIVE_PROTOCOLS)
     def test_imperative_protocol_uses_imperative_phrasing(self, protocol):
         text = self.ORCHESTRATOR_PATH.read_text(encoding="utf-8")
-        tool_call = f'Read(file_path="../protocols/{protocol}")'
+        tool_call = f'Read(file_path="{{plugin_root}}/protocols/{protocol}")'
         assert tool_call in text, (
             f"pact-orchestrator.md missing tool-call cross-reference to {protocol}."
         )
@@ -697,9 +710,8 @@ class TestImperativeSoftPhrasingConvention:
     @pytest.mark.parametrize("protocol", SOFT_PROTOCOLS)
     def test_soft_protocol_does_not_use_imperative_phrasing(self, protocol):
         text = self.ORCHESTRATOR_PATH.read_text(encoding="utf-8")
-        tool_call = f'Read(file_path="../protocols/{protocol}")'
-        if tool_call not in text:
-            return
+        tool_call = f'Read(file_path="{{plugin_root}}/protocols/{protocol}")'
+        assert tool_call in text, f"pact-orchestrator.md lost its Read pointer to {protocol}"
         idx = 0
         offending = []
         while True:
@@ -898,7 +910,6 @@ class TestPerLoopDispatchSites:
         ("comPACT.md", "**Dispatch the specialist**", "SingleSpecialist"),
         ("peer-review.md", "**Dispatch reviewers**", "Reviewers"),
         ("plan-mode.md", "**Dispatch each consultant**", "Consultants"),
-        ("rePACT.md", "For each specialist needed,", "SubScopeSpecialists"),
     ]
 
     @classmethod
@@ -1007,12 +1018,24 @@ class TestPerLoopDispatchSites:
         # is loud, which is the drift worth surfacing.
         lead_in_line = self._locate(lines, anchor)
 
-        block = self._site_block(text, lead_in_line)
+        # CLEANUP-B: the canonical shape (two TaskCreate, two TaskUpdate, one Agent spawn) lives
+        # once in the shared dispatch reference. The site keeps its mission fields: the
+        # teammate's name and subagent_type on the lead-in line, and both task subjects in the
+        # block after it; the file keeps the trigger line.
+        problems = []
+        lead_line = lines[lead_in_line - 1]
+        if 'name="' not in lead_line or 'subagent_type="pact-' not in lead_line:
+            problems.append("lead-in line lacks its name= / subagent_type= mission fields")
+        site = self._site_block(text, lead_in_line)
+        if "TEACHBACK for" not in site or not re.search(r"Task B[^\n]*subject", site):
+            problems.append("site block lacks its Task A / Task B subjects")
+        if DISPATCH_TRIGGER not in text:
+            problems.append("command file lacks the dispatch trigger line")
+        block = DISPATCH_REFERENCE.read_text(encoding="utf-8")
         task_create_count = block.count("TaskCreate")
         task_update_count = block.count("TaskUpdate")
         agent_spawn_count = block.count("Agent(")
 
-        problems = []
         if task_create_count < 2:
             problems.append(
                 f"expected ≥2 TaskCreate occurrences, found {task_create_count}"
@@ -1046,7 +1069,7 @@ class TestPerLoopDispatchSites:
 #   "lower id = earlier" reading of the task list.
 #
 #   The fixed form points the teammate at Task B by its SUBJECT pattern
-#   ("the '{role}: {mission}' work task in your TaskList"), a role-neutral
+#   ("the '{name}: {mission}' work task in your TaskList"), a role-neutral
 #   cross-reference that needs no pre-known id, so Task A can be created first.
 #   Each dispatch block also carries an explicit "A-FIRST ORDERING (required)"
 #   note marking B-first creation as wrong.
@@ -1176,7 +1199,9 @@ class TestLegitimateBlockWiringSurvives:
 
     @pytest.mark.parametrize("name", CONSUMER_COMMANDS)
     def test_block_edge_wiring_present(self, name):
-        text = (COMMANDS_DIR / f"{name}.md").read_text(encoding="utf-8")
+        assert DISPATCH_TRIGGER in (COMMANDS_DIR / f"{name}.md").read_text(encoding="utf-8"), (
+            f"{name}.md lost the dispatch trigger line; its wiring lives in the reference")
+        text = DISPATCH_REFERENCE.read_text(encoding="utf-8")
         for wiring in ("addBlocks=[B_id]", "addBlockedBy=[A_id]"):
             assert wiring in text, (
                 f"{name}.md is missing legitimate block-edge wiring {wiring!r}. "
@@ -1197,22 +1222,25 @@ class TestAFirstOrderingDisciplinePresentInCommands:
     rewording while still detecting deletion of either discipline element.
     """
 
-    A_FIRST_NOTE_ANCHOR = "A-FIRST ORDERING"
+    A_FIRST_NOTE_ANCHOR = "may be created in either order"
     ROLE_BASED_XREF_ANCHOR = "identified by its subject"
 
     @pytest.mark.parametrize("name", CONSUMER_COMMANDS)
     def test_a_first_note_present(self, name):
-        text = (COMMANDS_DIR / f"{name}.md").read_text(encoding="utf-8")
+        assert DISPATCH_TRIGGER in (COMMANDS_DIR / f"{name}.md").read_text(encoding="utf-8"), (
+            f"{name}.md lost the dispatch trigger line; its A-first skeleton lives in the reference")
+        text = DISPATCH_REFERENCE.read_text(encoding="utf-8")
         assert self.A_FIRST_NOTE_ANCHOR in text, (
             f"{name}.md is missing the {self.A_FIRST_NOTE_ANCHOR!r} dispatch note. "
-            f"Each teachback-gated dispatch block must explicitly state that "
-            f"creating Task A (the gate) before Task B is required and that "
-            f"B-first creation is wrong."
+            f"1.4.1 (T-68b281e4): no hook reads which of Task A and Task B has the "
+            f"lower id, so the dispatch note says either creation order is fine."
         )
 
     @pytest.mark.parametrize("name", CONSUMER_COMMANDS)
     def test_role_based_cross_reference_present(self, name):
-        text = (COMMANDS_DIR / f"{name}.md").read_text(encoding="utf-8")
+        assert DISPATCH_TRIGGER in (COMMANDS_DIR / f"{name}.md").read_text(encoding="utf-8"), (
+            f"{name}.md lost the dispatch trigger line; its Task A text lives in the reference")
+        text = DISPATCH_REFERENCE.read_text(encoding="utf-8")
         assert self.ROLE_BASED_XREF_ANCHOR in text, (
             f"{name}.md is missing the role-based subject-pattern cross-reference "
             f"({self.ROLE_BASED_XREF_ANCHOR!r}). Task A's description must point "
@@ -1230,15 +1258,14 @@ class TestAFirstOrderingDisciplinePresentInPersona:
         id forward-reference with a subject-pattern cross-reference.
     """
 
-    CREATE_A_FIRST_ANCHOR = "Create Task A FIRST"
+    CREATE_A_FIRST_ANCHOR = "Create Task A FIRST"  # dropped in 1.4.1 (T-68b281e4)
     NO_FORWARD_ID_ANCHOR = "NOT by a forward task id"
 
-    def test_persona_states_create_a_first(self):
+    def test_persona_no_longer_requires_a_first(self):
         text = PERSONA_PATH.read_text(encoding="utf-8")
-        assert self.CREATE_A_FIRST_ANCHOR in text, (
-            f"pact-orchestrator.md is missing the {self.CREATE_A_FIRST_ANCHOR!r} "
-            f"dispatch directive. The persona §Agent Teams Dispatch sequence must "
-            f"reinforce creating the teachback gate (Task A) before Task B."
+        assert self.CREATE_A_FIRST_ANCHOR not in text, (
+            f"pact-orchestrator.md still carries {self.CREATE_A_FIRST_ANCHOR!r}; "
+            f"1.4.1 dropped the rule because no hook reads the id order."
         )
 
     def test_persona_prohibits_forward_id_reference(self):
@@ -1271,14 +1298,16 @@ class TestRefreshCommandStructure:
         fm = parse_frontmatter(refresh_text)
         assert fm is not None
         assert fm["description"] == (
-            "Mid-workstream context checkpoint — harvest, persist, shut down "
-            "teammates, stand by for /compact + /PACT:bootstrap"
+            "Save progress and stop helper agents mid-task so you can run /compact"
         )
 
-    def test_canonical_write_template_present(self, refresh_text):
+    def test_canonical_write_template_present(self):
         """The journal write mirrors pause.md byte-conventions: shell-clamped
         case for the conditional session_consolidated pre-emit, quoted-heredoc
-        --stdin for the session_refreshed write, set -e + ERR trap."""
+        --stdin for the session_refreshed write, set -e + ERR trap. COMMANDS (m8b)
+        moved the template verbatim into the reference refresh.md loads at step 4."""
+        refresh_text = (COMMANDS_DIR.parent / "reference" / "refresh" / "checkpoint.md").read_text(encoding="utf-8")
+        assert "reference/refresh/checkpoint.md" in (COMMANDS_DIR / "refresh.md").read_text(encoding="utf-8")
         assert "case '{true_or_false}' in" in refresh_text
         assert "--type session_consolidated" in refresh_text
         assert "--type session_refreshed" in refresh_text
@@ -1331,7 +1360,7 @@ class TestBootstrapRefreshClauses:
         return (COMMANDS_DIR / "bootstrap.md").read_text(encoding="utf-8")
 
     def test_secretary_respawn_carveout(self, bootstrap_text):
-        assert "respawn it after `/PACT:refresh`" in bootstrap_text
+        assert "respawn it after `/repacted:refresh`" in bootstrap_text
         assert "resurrects its stale pre-refresh transcript" in bootstrap_text
 
     def test_refreshed_state_paragraph(self, bootstrap_text):
@@ -1588,11 +1617,12 @@ TERMINATION_COMMAND_SURFACES = [
 #   imPACT.md            — a command, but terminates ONE unrecoverable agent;
 #                          not a session-terminating flow, so deliberately NOT
 #                          in SESSION_TERMINATING_FLOWS below.
-#   pact-agent-teams     — a skill: the teammate-side receiving protocol.
+#   teammate-messaging   — the teammate skill's reference holding the receiving protocol
+#                          (TEAMMATE m6; was pact-agent-teams).
 #   pact-orchestrator.md — an agent body: lead-side guidance.
 TERMINATION_REASONING_SURFACES = [
     "commands/imPACT.md",
-    "skills/pact-agent-teams/SKILL.md",
+    "skills/teammate/references/teammate-messaging.md",
     "agents/pact-orchestrator.md",
 ]
 
@@ -1833,54 +1863,52 @@ class TestResolverVocabularyIsSingleSourced:
         )
 
 
-class TestNextRoutesTheBacklogToolsActualExitCodes:
-    """`commands/next.md`'s exit-code branches against `backlog.py`'s constants.
+class TestNextRoutesTheTaskToolsActualExitCodes:
+    """`commands/next.md`'s exit-code branches against `bin/repact-task`'s actual codes.
 
-    WHY THIS EXISTS. The tool's refusal code moved and the command file kept
-    routing the old one. Nothing reddened: the tool's own tests reference the
-    CONSTANT, so they pass at any value, and nothing related the command file's
-    branches to the tool's actual codes. An external reviewer found it after
-    four internal lanes and a verify-only pass, from a commit that had shipped.
+    WHY THIS EXISTS. The backlog tool's refusal code once moved and the command
+    file kept routing the old one. Nothing reddened: the tool's own tests
+    reference the CONSTANT, so they pass at any value, and nothing related the
+    command file's branches to the tool's actual codes. D10 P3 moved next.md to
+    repact-task, and this arm moved with it.
 
-    BOTH SIDES ARE DERIVED, NEITHER IS TYPED. The codes come from the module's
-    `_EXIT_*` constants by attribute scan, so a renamed or added constant is
-    picked up rather than missed, and the routed set comes from the command
-    file's own text. A literal on either side would be a value pin that reddens
-    on the next legitimate move — which is the failure this file has argued
-    against elsewhere.
+    BOTH SIDES ARE DERIVED, NEITHER IS TYPED. The codes come from the writer's
+    error classes (every `TaskError` subclass's `code`), the CLI's
+    `EXIT_MISSED`, and 0; the routed set comes from the command file's own
+    text. A literal on either side would be a value pin that reddens on the
+    next legitimate move.
 
-    THE EXTRACTION IS THE FRAGILE PART AND IS DELIBERATELY NARROW. A sweep for
-    integers over the section does not work: the prose contains "Step 5" many
-    times and an "exit 2" that is the INTERPRETER's code, named precisely
-    because it is not one the tool chooses. So the arm keys on the file's own
-    completeness sentence, anchored on the clause that carries its meaning
-    rather than on a phrasing. Whitespace is collapsed first, so re-wrapping
-    the paragraph cannot break it. If a future author states the set some other
-    way the anchor stops matching and the assertion fires on the empty
-    extraction — loudly, not silently.
+    THE EXTRACTION IS THE FRAGILE PART AND IS DELIBERATELY NARROW. It keys on
+    the file's own completeness sentence, anchored on the clause that carries
+    its meaning. Whitespace is collapsed first, so re-wrapping cannot break it;
+    a restated set stops matching and the assertion fires on the empty
+    extraction, loudly.
 
-    WHAT THIS DOES NOT COVER. It relates TWO files. Any other surface that
-    routes on these codes is invisible to it, and the census that found the
-    known sites could not see a router naming neither the tool nor its exit
-    behaviour. It does not check that each branch's ADVICE is correct, only
-    that the codes agree. And the catch-all branch is not a number: it is
-    excluded by construction, never matched as one.
+    WHAT THIS DOES NOT COVER. It relates TWO files, does not check that each
+    branch's ADVICE is correct, and the catch-all branch is not a number.
     """
 
     _CLAIM = "are the only ones the tool chooses"
 
     def _defined(self):
-        from shared import backlog
+        import importlib.machinery
+        import importlib.util
 
-        codes = {v for k, v in vars(backlog).items() if k.startswith("_EXIT_")}
-        assert codes, (
-            "no _EXIT_* constants found on shared.backlog — the extraction "
-            "failed, which is not the same as agreement"
-        )
-        return codes, backlog
+        bin_dir = COMMANDS_DIR.parent / "bin"
+        loader = importlib.machinery.SourceFileLoader("repact_task_cli_codes", str(bin_dir / "repact-task"))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        cli = importlib.util.module_from_spec(spec)
+        loader.exec_module(cli)
+        errors, stack = set(), [cli.W.TaskError]
+        while stack:
+            cls = stack.pop()
+            errors.add(cls.code)
+            stack.extend(cls.__subclasses__())
+        assert errors, "no TaskError codes found — the extraction failed, which is not agreement"
+        return {0, cli.EXIT_MISSED} | errors
 
     def test_next_md_routes_exactly_the_codes_the_tool_defines(self):
-        defined, backlog = self._defined()
+        defined = self._defined()
         text = (COMMANDS_DIR / "next.md").read_text(encoding="utf-8")
         flat = re.sub(r"\s+", " ", text)
 
@@ -1894,7 +1922,7 @@ class TestNextRoutesTheBacklogToolsActualExitCodes:
         assert routed, "the enumeration extracted no codes — extraction failure"
 
         assert routed == defined, (
-            f"next.md routes {sorted(routed)} but backlog.py defines "
+            f"next.md routes {sorted(routed)} but repact-task defines "
             f"{sorted(defined)}; the unrouted/unknown codes are "
             f"{sorted(defined ^ routed)}"
         )
@@ -1903,7 +1931,7 @@ class TestNextRoutesTheBacklogToolsActualExitCodes:
         # enumeration and the branches cannot drift apart from each other.
         headers = {int(m) for m in re.findall(r"^Exit code (\d+)\b", text, re.M)}
         assert headers, "no 'Exit code N' branch headers found — extraction failure"
-        assert headers == defined - {backlog._EXIT_OK}, (
+        assert headers == defined - {0}, (
             f"branch headers cover {sorted(headers)} but the tool's non-success "
-            f"codes are {sorted(defined - {backlog._EXIT_OK})}"
+            f"codes are {sorted(defined - {0})}"
         )

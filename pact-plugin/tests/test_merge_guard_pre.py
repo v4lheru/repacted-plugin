@@ -504,3 +504,597 @@ class TestExtractPrNumberFlagFormAsymmetry:
                 f"claim explains why hand-picked corpora missed the defect. "
                 f"If one token now suffices, the explanation is wrong."
             )
+
+
+import merge_guard_pre  # noqa: E402
+
+
+# ── A token belongs to the session that minted it; an empty id matches only an empty id ───
+def _session_token(token_dir, session_id, name="one"):
+    import json
+    import time
+    data = {"expires_at": time.time() + 600, "context": {"operation_type": "merge"}}
+    if session_id is not _ABSENT:
+        data["session_id"] = session_id
+    path = token_dir / f"{merge_guard_pre.TOKEN_PREFIX}{name}"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+_ABSENT = object()
+
+
+@pytest.mark.parametrize("current,minted,found", [
+    ("", "other-session", False),                 # was accepted: a reader with no id took any token
+    (None, "other-session", False),
+    ("", "", True), ("", _ABSENT, True), ("", None, True), (None, "", True),
+    ("this-session", "this-session", True),
+    ("this-session", "", False), ("this-session", _ABSENT, False), ("this-session", None, False),
+    ("this-session", "other-session", False),
+    ("this-session", "THIS-SESSION", False),      # no case folding
+    ("this-session", "this-session ", False),     # no trimming
+    ("this-session", "this‐session", False),      # a look-alike hyphen (U+2010)
+    ("", " ", False), ("", "​", False),      # blank-looking is not empty
+    ("", "x" * 100_000, False),
+    ("this-session", ["this-session"], False), ("this-session", 0, False),
+])
+def test_token_session_must_equal_the_reader_session(tmp_path, monkeypatch, current, minted, found):
+    monkeypatch.setattr(merge_guard_pre, "get_session_id", lambda: current)
+    path = _session_token(tmp_path, minted)
+    tokens = merge_guard_pre.find_valid_tokens(tmp_path)
+    assert [where for _, where in tokens] == ([str(path)] if found else [])
+    assert path.exists()                          # another session's token is left alone
+
+
+# ── GIT, Gh and GLAB run git, gh and glab on a case-blind disk ────────────────────────────
+@pytest.mark.parametrize("typed,read", [
+    ("GIT push --force origin main", "git push --force origin main"),
+    ("Git push origin main", "git push origin main"),
+    ("/usr/bin/GIT push origin main", "/usr/bin/git push origin main"),
+    ("GH pr merge 12 --squash", "gh pr merge 12 --squash"),
+    ("GLAB mr merge 5", "glab mr merge 5"),
+    ("ENV GIT push origin main", "env git push origin main"),
+    ("SUDO Git push origin main", "sudo git push origin main"),
+    ("BASH -c 'GIT push origin main'", "bash -c 'git push origin main'"),
+    ("echo $(GIT push origin main)", "echo $(git push origin main)"),
+    ("GIT push; GIT\tpush\nGIT", "git push; git\tpush\ngit"),
+])
+def test_program_words_are_read_in_lower_case(typed, read):
+    from shell.merge.views import canonical_spelling
+    assert canonical_spelling(typed) == read
+    assert (merge_guard_pre.check_merge_authorization(typed, cwd="/nonexistent-repact") is None) == \
+        (merge_guard_pre.check_merge_authorization(read, cwd="/nonexistent-repact") is None)
+
+
+@pytest.mark.parametrize("command", [
+    "git -C /src/GIT/repo status", "ls GIT/ Git.txt GIT-notes .GIT", "GIT_DIR=x git status",
+    "echo $GIT $GH_TOKEN ${GIT}", "IF x; THEN y; FI", "git log --grep GITHUB", "cat my-GIT",
+    "ＧＩＴ push origin main", "GİT push origin main",
+])
+def test_other_words_keep_their_letter_case(command):
+    from shell.merge.views import canonical_spelling
+    assert canonical_spelling(command) == command
+
+
+@pytest.mark.parametrize("typed", [
+    "GIT push --force origin main", "Git push origin main", "/usr/bin/GIT push origin main",
+    "GIT push origin --delete old-branch", "GIT branch -D feat", "GH pr merge 12 --squash",
+    "Gh pr merge 12 --squash", "GLAB mr merge 5", "ENV GIT push --force origin main",
+    "command GIT push --force origin main", "RTK Git push --force origin main",
+    "sh -c 'GIT push --force origin main'", "echo $(GIT push --force origin main)",
+    "GIT push " + "x" * 50_000 + " && GIT push --force origin main",
+])
+def test_capital_program_word_is_refused_like_the_plain_one(tmp_path, typed):
+    assert merge_guard_pre.check_merge_authorization(typed, token_dir=tmp_path, cwd=str(tmp_path))
+
+
+# A guarded operation inside an eval payload is refused as wrapped, like `sh -c`, whatever quote
+# the payload ends on. Before, the payload's closing quote stayed on the last refspec and the line
+# passed with no approval.
+_EVAL_WRAPPED_DENY = [
+    'eval "git push origin main"',                    # push to a protected branch
+    'eval "git push --force origin topic"',           # force push
+    'eval "git push --delete origin topic"',          # remote branch delete
+    'eval "git push origin :topic"',
+    'eval "git branch -D topic"',                     # local branch delete
+    'eval "gh pr merge 1 --squash"',                  # PR merge
+    'eval "glab mr merge 5"',                         # MR merge
+    'eval "gh pr close 1 --delete-branch"',           # PR close
+    "eval 'git push origin main'",
+    "eval $'git push origin main'",
+    "eval git push origin main",
+    'eval "git push" origin main',
+    'eval "git" "push" "origin" "main"',
+    'eval -- "git push origin main"',
+    'builtin eval "git push origin main"',
+    'command eval "git push origin main"',
+    'command -p eval "git push origin main"',
+    '\\eval "git push origin main"',
+    'e""val "git push origin main"',
+    'EVAL=1 eval "git push origin main"',
+    'true && eval "git push origin main"',
+    'true; eval "git push origin main"',
+    'true\neval "git push origin main"',
+    'sh -c \'eval "git push origin main"\'',
+    'eval "sh -c \'git push origin main\'"',
+    'eval "eval \\"git push origin main\\""',
+    'eval \'eval "git push origin main"\'',
+    'eval "true; git push origin main"',
+    'eval "git push origin main" ',
+    'eval\t"git push origin main"',
+    "eval eval eval eval eval git push origin main",  # nested deeper than the payload is read
+]
+
+
+@pytest.mark.parametrize("command", _EVAL_WRAPPED_DENY)
+def test_guarded_operation_inside_eval_is_refused(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path))
+
+
+@pytest.mark.parametrize("command", [
+    'eval "git push" origin main', "eval 'git push --delete origin topic'",
+    'builtin eval "git push origin :topic"',
+])
+def test_eval_wrapped_refusal_tells_the_user_to_run_it(tmp_path, command):
+    reason = merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path))
+    assert "wrapped in an eval string" in reason and "! <command>" in reason
+
+
+@pytest.mark.parametrize("command", [
+    'eval "$(ssh-agent -s)"', 'eval "$(pyenv init -)"', 'eval "$(direnv hook zsh)"',
+    'eval "echo hi"', "eval echo hi", "eval", 'eval ""', 'eval "git status"',
+    'eval "git push origin topic"', 'eval "git push --force-with-lease origin topic"',
+    'echo eval "git push origin main"', 'git commit -m "eval git push origin main"',
+    'grep -rn "eval git push origin main" docs',
+])
+def test_eval_without_a_guarded_operation_passes(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path)) is None
+
+
+# A push to a protected branch inside a quoted payload is refused whether the quote closes on the
+# branch name or on a flag. Before, the closing quote stayed on the refspec and only the flag
+# form was refused.
+@pytest.mark.parametrize("command", [
+    'ssh host "git push origin main"', 'ssh host "git push origin main --quiet"',
+    "ssh host 'git push origin main'", 'ssh host "git push origin HEAD:main"',
+    'watch "git push origin main"', 'watch "git push origin main --quiet"',
+    'xargs -I{} sh -c "git push origin main"', 'xargs -I{} sh -c "git push origin main --quiet"',
+])
+def test_push_to_main_in_a_quoted_payload_is_refused(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path))
+
+
+@pytest.mark.parametrize("command", [
+    'echo "git push origin main"', 'git commit -m "git push origin main"',
+    'grep "git push origin main" f', 'printf "git push origin main"',
+    'ssh host "git push origin topic"', "ssh host 'git push origin topic'",
+])
+def test_quoted_push_text_that_is_data_or_a_topic_push_passes(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path)) is None
+
+
+# A guarded operation inside a subshell, a substitution, a function body, a case arm or a
+# here-string is refused like the bare command. Before, the closing parenthesis was read as part
+# of the branch name (`main)`), a here-string was not read as a script, and an eval or `sh -c`
+# after `then`, `do`, `{` or `(` was not seen.
+_GROUPED_DENY = [
+    "(git push origin main)", "(cd . && git push origin main)", "x=$(git push origin main)",
+    "(git push origin HEAD:main)", "(git push -u origin main)",
+    "(git merge --no-ff feat && git push origin main)",
+    'bash <<< "git push origin main"', 'source /dev/stdin <<< "git push origin main"',
+    'if true; then eval "git push origin main"; fi', '( eval "git push origin main" )',
+    # neighbours
+    "((git push origin main))", "( ( ( (git push origin main) ) ) )", "(git push origin main)&",
+    "(git push origin main)|cat", "(git push origin main) 2>&1", "(git push origin main;)",
+    "(git push origin main\n)", "(git push origin 'main')", "time (git push origin main)",
+    "! (git push origin main)", "if (git push origin main); then :; fi", "$(git push origin main)",
+    'echo "$(git push origin main)"', 'echo "x $(git push origin main) y"',
+    'echo "$(echo "$(git push origin main)")"', 'echo "${x:-$(git push origin main)}"',
+    "echo `git push origin main`", 'echo "`git push origin main`"', "x=`git push origin main`",
+    "echo $(( $(git push origin main) ))", "cat <(git push origin main)", "tee >(git push origin main)",
+    "f() { git push origin main; }; f", "f(){ git push origin main;}; f",
+    "function f { git push origin main; }; f", "case x in x) git push origin main;; esac",
+    "cat <<EOF\n$(git push origin main)\nEOF", "(bash <<EOF\ngit push origin main\nEOF\n)",
+    "x=$(bash <<'EOF'\ngit push origin main\nEOF\n)",
+    'gh pr create --body "$(cat <<EOF\nRun `git push origin main` now\nEOF\n)"',
+    # force push, branch delete and a merge in each wrapper
+    "x=$(git push --force origin feat)", 'echo "$(git push --force origin feat)"',
+    "case x in x) git push --force origin feat;; esac", "(git push origin +feat)",
+    "echo `git branch -D topic`", "cat <(git branch -D topic)", "f() { git branch -D topic; }; f",
+    'echo "$(git branch -D topic)"', "x=$(gh pr merge 1)", "(git push --delete origin topic)",
+    # here-strings
+    '. /dev/stdin <<< "git push origin main"', "zsh <<< 'git push origin main'",
+    'dash <<<"git push origin main"', 'ksh <<< "git push origin main"', 'bash -s <<< "git push origin main"',
+    'sh <<< "git branch -D topic"', 'bash <<< "git push --force origin feat"',
+    "bash <<< $'git push origin main'", "bash <<< git\\ push\\ origin\\ main",
+    '<<< "git push origin main" bash', 'sudo bash <<< "git push origin main"',
+    '/bin/bash <<< "git push origin main"', 'bash <<< "(git push origin main)"',
+    'cat <<< "$(git push origin main)"',
+    # an eval or a shell -c wherever a command may start
+    'if true; then sh -c "git push origin main"; fi', 'while true; do eval "git push origin main"; done',
+    'if false; then :; else eval "git push origin main"; fi', '{ eval "git push origin main"; }',
+    '! eval "git push origin main"', 'time eval "git push origin main"',
+    'true | eval "git push origin main"', '(eval "git push origin main")',
+    'x=$(eval "git push origin main")', 'if eval "git push origin main"; then :; fi',
+    'eval "(git push origin main)"', 'sh -c "(git push origin main)"',
+    "sh -c 'x=$(git push origin main)'", "xargs -I{} sh -c '(git push origin main)'",
+    'ssh host "(cd /srv && git push origin main)"', 'watch "(git push origin main)"',
+    'busybox bash -c "(git push origin main)"',
+]
+
+
+@pytest.mark.parametrize("command", _GROUPED_DENY)
+def test_guarded_operation_inside_a_group_or_a_here_string_is_refused(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path))
+
+
+# Quoting, braces, heredoc scripts, function bodies and a shell -c string are read as the shell
+# reads them. Before: `\'` inside $'..' (and after a plain quote) ended the quoted span one
+# character early, so two such words paired around a guarded command and hid it; a brace list
+# was read as one literal word; a group inside a heredoc script, `function f {`, `coproc` and a
+# shell -c after a program outside the wrapper catalogue were not read at all.
+_READING_DENY = [
+    # 1. ANSI-C quotes: a backslash escapes the next character inside $'..'
+    "echo $'\\'' ; git push origin main ; echo $'\\''",
+    "echo $'a\\'b' ; git push origin main ; echo $'c\\'d'",
+    "echo $'\\'' ; git push --force origin feat ; echo $'\\''",
+    "echo $'\\'' ; git branch -D topic ; echo $'\\''",
+    "echo $'\\'' ; gh pr merge 5 ; echo $'\\''",
+    "echo $'\\'' ; eval \"git push origin main\" ; echo $'\\''",
+    "echo $'\\'' ; sh -c \"git push origin main\" ; echo $'\\''",
+    'echo $"a\\"b" ; git push origin main ; echo $"c\\"d"',
+    "echo 'it'\\''s' ; git push origin main ; echo 'a'\\''b'",
+    "echo $$'x' ; git push origin main ; echo $$'y'",
+    # 2. brace expansion
+    "git push origin {main,feat}", "git push origin {feat,main}", "git push origin feat:ma{in,}",
+    "git push origin HEAD:{main,feat}", "git push origin {main,}", "git {push,} origin main",
+    "gh pr merg{e,} 5", "gh pr {merge,} 5", "git push origin {+feat,x}",
+    "git push {--force,} origin feat", "git branch {-D,} topic", "git push origin ma{i..i}n",
+    'git push origin {"main",feat}', "git push origin {x,{y,main}}", "{git,} push origin main",
+    '(git push origin {main,feat})', 'sh -c "git push origin {main,feat}"',
+    # 2. a list too long or too tangled to spell out, in a git leg
+    "git push origin x{1..100}", "git push origin {a..z}{a..z}",
+    # 3a. an escaped bracket inside an array word list
+    "x=(a \\( ) ; (git push origin main)", "x=(a \\) ) ; (git branch -D topic)",
+    # 3b. a group or a substitution inside a heredoc body a shell runs
+    "bash <<'EOF'\n(git push origin main)\nEOF", "bash <<'EOF'\nx=$(git push origin main)\nEOF",
+    "cat <<'EOF' | bash\n(git push origin main)\nEOF", "cat <<'EOF' | sh -s\n(git push origin main)\nEOF",
+    "source /dev/stdin <<'EOF'\n(git push origin main)\nEOF",
+    "bash <<'EOF'\n(git push --force origin feat)\nEOF", "zsh <<'EOF'\n(git branch -D topic)\nEOF",
+    # 3c. the `function` keyword opens a leg
+    'function f { eval "git push origin main"; }; f', 'function f() { eval "git push origin main"; }; f',
+    'function f { sh -c "git push origin main"; }; f', 'function f { bash <<< "git push origin main"; }; f',
+    'function my-fn { eval "git branch -D topic"; }; my-fn',
+    # 3d. coproc opens a leg
+    'coproc eval "git push origin main"', 'coproc P { eval "git push origin main"; }',
+    'coproc sh -c "git push --force origin feat"', 'noglob eval "git push origin main"',
+    # 4. a shell and its -c string after any program
+    'docker exec c sh -c "git push origin main"', 'script -q /dev/null sh -c "git push origin main"',
+    'caffeinate sh -c "git push origin main"', 'arch -arm64 sh -c "git push origin main"',
+    'uv run sh -c "git push origin main"', 'uv run bash -e -c "git push --force origin feat"',
+    'docker exec c bash -lc "git branch -D topic"', 'docker run --rm img sh -c "(git push origin main)"',
+    'foo sh -x -c "ok" bash -c "git push origin main"',
+    # 4. and its here-string
+    'caffeinate bash <<< "git push origin main"', 'uv run bash <<< "git push --force origin feat"',
+    'docker exec -i c sh <<< "git branch -D topic"',
+    'echo bash -c "git push origin main"',          # the accepted cost of reading -c anywhere
+]
+
+
+@pytest.mark.parametrize("command", _READING_DENY)
+def test_guarded_operation_behind_quoting_braces_or_a_script_reader_is_refused(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path))
+
+
+@pytest.mark.parametrize("command", [
+    'echo "(git push origin main)"', 'git commit -m "fix {main,feat}"', "echo {a,b}",
+    "git log --format='%h {x,y}'", "git push origin feat{1,2}", "git stash show stash@{0}",
+    "git rev-parse HEAD@{u}", "git diff main@{1} main", "echo $'it\\'s'",
+    "echo $'a\\'b' ; git status ; echo $'c\\'d'", "echo 'it'\\''s' ; git status",
+    "cat <<'EOF'\ngit push origin main\nEOF", "python3 <<'EOF'\nprint('(git push origin main)')\nEOF",
+    "cat <<'EOF' > notes.txt\n(git push origin {main,x})\nEOF",
+    "gh api repos/{owner}/{repo}/pulls/5", "git add src/{a,b}.py", "mkdir -p src/{a,b,c}",
+    "for i in {1..100}; do echo $i; done", "function f { git status; }; f", "coproc cat",
+    "x=(a \\( ) ; git status", 'docker exec c sh -c "git status"', 'docker exec c sh -c "git push origin feat"',
+    "uv run pytest -c pytest.ini", 'grep -c "git push origin main" log.txt',
+    'cat <<< "git push origin main"', 'uv run bash <<< "git push origin feat"',
+    # the whole $'..' string is the comment's text: its `| sh` is inside the quotes
+    "gh pr comment 1 --body $'git push --force origin main\\' | sh'",
+])
+def test_quoting_braces_and_script_readers_leave_everyday_lines_alone(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("command", [
+    "( git push origin main )", "(git push --force origin feat)", "(git branch -D topic)",
+    "(gh pr merge 1)", "{ git push origin main; }", "git push origin main|cat",
+    "git push origin main>log", "git push origin main&&echo ok",
+])
+def test_grouped_forms_refused_before_stay_refused(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path))
+
+
+@pytest.mark.parametrize("command", [
+    "(cd sub && git push origin topic)", "(git status)", "x=$(git rev-parse main)",
+    'echo "(git push origin main)"', 'git commit -m "fix (main)"', "git log main)",
+    "echo '$(git push origin main)'", "git commit -m 'run `git push origin main` later'",
+    'git commit -m "feat(guard): deny (git push origin main)"', "x=(git push origin main)",
+    "cat <<'EOF' > notes.md\nrun `git push origin main` or $(git push --force origin x)\n(git push origin main)\nEOF",
+    'gh pr create --title t --body "$(cat <<\'EOF\'\nRun `git push origin main` after (git branch -D topic).\nEOF\n)"',
+    'git commit -m "$(cat <<\'EOF\'\nfix: it\'s (a) `git push origin main` thing\nEOF\n)"',
+    "(git push origin topic)", "x=$(git push origin topic)", "(git push --force-with-lease origin topic)",
+    'bash <<< "git status"', 'source /dev/stdin <<< "echo hi"', 'cat <<< "git push origin main"',
+    'grep main <<< "git push origin main"', 'if true; then eval "git status"; fi',
+    'echo "$(git log --oneline main)"', "find . \\( -name main \\) -print", "echo $((1+2))",
+    "git log --format='%(refname)' main", "arr=(a b c); echo ${arr[0]}",
+    "git push origin topic # (git push origin main)", 'rg "\\(git push origin main\\)" docs',
+    'python3 -c "print(\'git push origin main\')"', "git diff $(git merge-base origin/main HEAD)",
+    'while read l; do echo "$l"; done < <(git branch --list main)', "f() { git status; }; f",
+    "case $x in main) echo main;; esac", 'ssh host "git push origin topic"', 'watch "git status"',
+    'ssh host "echo (hi)"', 'xargs -I{} sh -c "echo {}"',
+])
+def test_grouped_text_without_a_guarded_operation_passes(tmp_path, command):
+    assert merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path)) is None
+
+
+# A guarded operation that no approval can bind (inside a group, or only inside a wrapper's quoted
+# payload) is refused with the run-it-yourself text, never with a request for an approval.
+@pytest.mark.parametrize("command", [
+    "(git push origin main)", "x=$(git push origin main)", 'bash <<< "git push origin main"',
+    'sh -c "git push origin main"', 'eval "git push origin main"', 'ssh host "git push origin main"',
+    'watch "git push origin main"',
+])
+def test_unbindable_wrapped_push_tells_the_user_to_run_it(tmp_path, command):
+    reason = merge_guard_pre.check_merge_authorization(command, token_dir=tmp_path, cwd=str(tmp_path))
+    assert "cannot be bound to an approval" in reason and "[rule: mg.unmintable.shape]" in reason
+
+
+def test_unquoted_eval_push_still_asks_for_an_approval(tmp_path):
+    reason = merge_guard_pre.check_merge_authorization(
+        "eval git push origin main", token_dir=tmp_path, cwd=str(tmp_path))
+    assert reason and "cannot be bound to an approval" not in reason
+
+
+# ── An approval covers only the one command it was given for ─────────────────────────────
+# Each row mints the way the post hook mints from a clicked option holding the approved
+# command, writes the token under tmp, and asks the pre hook about the executed line.
+import subprocess  # noqa: E402
+
+import merge_guard_post  # noqa: E402
+
+_PUSH = "git push origin main"
+
+
+@pytest.fixture
+def checkout(tmp_path, monkeypatch):
+    """A git checkout with an origin remote (so an approval can bind its repository) and an
+    empty token directory, both under tmp; no branch named x exists in it."""
+    repo, tokens = tmp_path / "repo", tmp_path / "tokens"
+    repo.mkdir()
+    tokens.mkdir()
+    for args in (["init", "-q", "-b", "work"], ["remote", "add", "origin", "https://github.com/o/r.git"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(merge_guard_pre, "get_session_id", lambda: "S")
+    monkeypatch.setattr(merge_guard_post, "get_session_id", lambda: "S")
+    return repo, tokens
+
+
+def _approve(approved, tokens):
+    context = merge_guard_post._mint_context_from_texts([f"Yes, run `{approved}`"]).context
+    assert context is not None, f"no mint for {approved!r}"
+    assert merge_guard_post.write_token(context, tokens)
+
+
+def _asked(command, checkout):
+    repo, tokens = checkout
+    return merge_guard_pre.check_merge_authorization(command, token_dir=tokens, cwd=str(repo))
+
+
+def _live_tokens(tokens):
+    return [p.name for p in tokens.iterdir() if not p.name.endswith(".consumed") and ".use" not in p.name]
+
+
+@pytest.mark.parametrize("approved, executed", [
+    ("git branch -D x", f'git branch -D x 2>"$({_PUSH})"'),
+    ("git branch -D x", f'git branch -D x <<< "$({_PUSH})"'),
+    ("git branch -D x", f"git branch -D x <<EOF\n$({_PUSH})\nEOF"),
+    ("git push --force origin feat", f'git push --force origin feat 2>"$({_PUSH})"'),
+    ("gh pr merge 5 -R o/r", f'gh pr merge 5 -R o/r 2>"$({_PUSH})"'),
+    ("git branch -D x", 'git branch -D x 2>"$(gh pr merge 5)"'),
+    ("git branch -D x", f'git branch -D "$({_PUSH})"'),            # argument position: denied before too
+    ('sh -c "git branch -D x"', f'sh -c "git branch -D x; {_PUSH}"'),
+])
+def test_a_second_guarded_operation_never_rides_on_an_approval(checkout, approved, executed):
+    _approve(approved, checkout[1])
+    reason = _asked(executed, checkout)
+    assert reason and "[rule: mg.compound.destructive]" in reason, reason
+    assert len(_live_tokens(checkout[1])) == 1                       # the approval was not spent
+    assert "[rule: mg.compound.destructive]" in merge_guard_pre.check_merge_authorization(
+        executed, token_dir=checkout[1] / "none", cwd=str(checkout[0]))
+    assert merge_guard_post._mint_context_from_texts([f"Yes, run `{executed}`"]).context is None
+
+
+@pytest.mark.parametrize("approved, executed", [
+    ('sh -c "git branch -D x"', 'ssh host "git branch -D x"'),
+    ('sh -c "git branch -D x"', 'sh -c "cd ../other && git branch -D x"'),
+    ('sh -c "git branch -D x"', 'sh -c "git -C ../other branch -D x"'),
+    ("git branch -D x", 'sh -c "git branch -D x"'),                 # a bare approval passes only the bare command
+    ('sh -c "git branch -D x"', "git branch -D x"),
+    ("git branch -D x", "git -C ../other branch -D x"),             # controls: denied before too
+    ("git branch -D x", "cd ../other && git branch -D x"),
+])
+def test_wrapper_and_directory_are_part_of_what_was_approved(checkout, approved, executed):
+    (checkout[0].parent / "other").mkdir()
+    _approve(approved, checkout[1])
+    reason = _asked(executed, checkout)
+    assert reason and "[rule: mg.token.mismatch]" in reason, reason
+    assert len(_live_tokens(checkout[1])) == 1
+
+
+@pytest.mark.parametrize("command", [
+    'sh -c "git branch -D x"', 'sh -c "gh pr merge 5 -R o/r"', "(git branch -D x)",
+    "(git push --force origin feat)", "x=$(git branch -D x)", 'eval "git branch -D x"',
+    "eval git push origin main",
+])
+def test_a_wrapped_command_that_mints_asks_for_approval_and_passes_with_it(checkout, command):
+    reason = _asked(command, checkout)
+    assert reason and "cannot be bound to an approval" not in reason, reason
+    assert "AskUserQuestion" in reason
+    _approve(command, checkout[1])
+    assert _asked(command, checkout) is None
+
+
+@pytest.mark.parametrize("command", [
+    'sh -c "git push --force origin feat"', 'sh -c "gh pr close 5 -R o/r"', 'bash <<< "git branch -D x"',
+])
+def test_a_wrapped_command_no_approval_can_name_gets_the_run_it_yourself_text(checkout, command):
+    assert merge_guard_post._mint_context_from_texts([f"Yes, run `{command}`"]).context is None
+    reason = _asked(command, checkout)
+    assert "cannot be bound to an approval" in reason and "[rule: mg.unmintable.shape]" in reason
+    assert "AskUserQuestion" not in reason
+
+
+def test_a_bare_approved_command_passes_once_and_its_token_is_retired(checkout):
+    _approve("git branch -D x", checkout[1])
+    assert _asked("git branch -D x", checkout) is None
+    assert merge_guard_post._retire_token_for_command("git branch -D x", "branch-delete", checkout[1])
+    assert _live_tokens(checkout[1]) == []
+    assert "[rule: mg.branch_delete.explicit]" in _asked("git branch -D x", checkout)
+
+
+def test_a_wrapped_approval_is_retired_only_by_its_own_wrapped_command(checkout):
+    wrapped = 'sh -c "git branch -D x"'
+    _approve(wrapped, checkout[1])
+    assert not merge_guard_post._retire_token_for_command("git branch -D x", "branch-delete", checkout[1])
+    assert merge_guard_post._retire_token_for_command(wrapped, "branch-delete", checkout[1])
+
+
+@pytest.mark.parametrize("approved, executed", [
+    ("git branch -D x", "git branch -D x 2>/dev/null"),
+    ("git branch -D x", "git branch -D x 2>&1 | tee log"),
+    (_PUSH, f'{_PUSH} 2>"$(mktemp)"'),
+])
+def test_a_harmless_redirect_or_substitution_is_not_a_second_operation(checkout, approved, executed):
+    _approve(approved, checkout[1])
+    assert _asked(executed, checkout) is None
+
+
+@pytest.mark.parametrize("approved", [None, "git push --force origin main"])
+def test_a_tag_message_naming_a_push_passes_and_spends_no_approval(checkout, approved):
+    if approved:
+        _approve(approved, checkout[1])
+    assert _asked('git tag v1.0 -m "git push --force origin main"', checkout) is None
+    assert len(_live_tokens(checkout[1])) == (1 if approved else 0)
+
+
+# ── An approval covers the whole git command it was given for ────────────────────────────
+# The guarded git leg is bound word for word (`typed`); what stands around it (a redirect, a
+# pipe, another leg, a runner word, a trailing comment, a closed list of flags) is not.
+_BASIC = ["git push origin main", "git push --force origin feat", "git branch -D x",
+          "git push origin --delete feat"]
+_AROUND = ["{}", "{} 2>&1 | tail", "{} && echo done", "cd . && {}", "timeout 60 {}",
+           "{} || echo failed", "{} ; git status", "git fetch origin && {}", "{} &", "{} # now"]
+
+
+@pytest.mark.parametrize("command", _BASIC)
+@pytest.mark.parametrize("around", _AROUND)
+def test_an_approved_command_passes_in_its_everyday_spellings(checkout, command, around):
+    """Both ways: the plain approval passes the decorated line, and the decorated approval
+    the plain one."""
+    for approved, executed in ((command, around.format(command)), (around.format(command), command)):
+        _approve(approved, checkout[1])
+        assert _asked(executed, checkout) is None, (approved, executed)
+        operation = merge_guard_post.detect_command_operation_type(command)
+        assert merge_guard_post._retire_token_for_command(executed, operation, checkout[1])
+        assert _live_tokens(checkout[1]) == []
+        assert _asked(executed, checkout) is not None                # once: a new approval is needed
+
+
+@pytest.mark.parametrize("approved, executed", [
+    ("git push origin main", "git push -u origin main"),
+    ("git push --set-upstream -v origin main", "git push origin main"),
+    ("git push origin main", "git push origin main --quiet --no-progress"),
+    ("git branch -D x", "git branch -q -D x"),
+])
+def test_the_closed_list_of_harmless_flags_is_not_part_of_the_approval(checkout, approved, executed):
+    _approve(approved, checkout[1])
+    assert _asked(executed, checkout) is None
+
+
+@pytest.mark.parametrize("approved, executed, rule", [
+    ("git push origin main", "git push origin feat:main", "mg.token.mismatch"),
+    ("git push origin main", "git -c remote.origin.pushurl=../other.git push origin main", "mg.token.mismatch"),
+    ("git push origin main", "git remote set-url origin ../other.git && git push origin main",
+     "mg.unmintable.shape"),
+    ("git push origin main", "git config remote.origin.pushurl ../other.git; git push origin main",
+     "mg.unmintable.shape"),
+    ("git push origin main", "export GIT_SSH_COMMAND=x; git push origin main", "mg.unmintable.shape"),
+    ("git push origin main", "git push --receive-pack='x; git-receive-pack' origin main", "mg.token.mismatch"),
+    ("git push origin main", "git push --tags origin main", "mg.token.mismatch"),
+    ("git push origin main", "git push origin main --tags", "mg.token.mismatch"),
+    ("git push origin main", "git push origin main -o ci.skip", "mg.token.mismatch"),
+    ("git push origin main", "git push -o ci.skip origin main", "mg.token.mismatch"),
+    ("git push origin main", "GIT_TRACE=1 git push origin main", "mg.token.mismatch"),
+    ("git push origin main", "git push origin main '#' feat:main", "mg.token.mismatch"),  # a quoted # is a word
+    ("git push origin main", "for i in 1 2 3; do git push origin main; done", "mg.unmintable.shape"),
+    ("git push --force origin feat", "git push --force origin leak:feat", "mg.token.mismatch"),
+    ("git push --force origin feat", "git push --force --no-verify origin feat", "mg.token.mismatch"),
+    ("git branch -D x", "git -c core.hooksPath=../h branch -D x", "mg.token.mismatch"),
+])
+def test_another_word_in_the_git_command_is_another_command(checkout, approved, executed, rule):
+    _approve(approved, checkout[1])
+    reason = _asked(executed, checkout)
+    assert reason and f"[rule: {rule}]" in reason, reason
+    assert len(_live_tokens(checkout[1])) == 1                       # the approval was not spent
+
+
+@pytest.mark.parametrize("command", [
+    'cd "$D" && git push --force origin feat',                      # another $D is another repository
+    '(cd "$D" && git branch -D x)',
+    'git -C "$D" branch -D x',
+    "git branch -D $b",
+    'git push --force origin "$(git rev-parse --abbrev-ref HEAD)"',
+    "for i in 1 2 3; do git push origin main; done",
+    "git remote set-url origin ../other.git && git push origin main",
+])
+def test_a_command_that_cannot_be_bound_mints_nothing_and_is_handed_to_the_user(checkout, command):
+    minted = merge_guard_post._mint_context_from_texts([f"Yes, run `{command}`"])
+    assert minted == (None, "unbindable_shape")
+    for prefix in ("", "D=../other; ", "b=main; "):
+        reason = _asked(prefix + command, checkout)
+        assert reason and "AskUserQuestion" not in reason, reason
+        assert "[rule: mg.unmintable.shape]" in reason
+
+
+@pytest.mark.parametrize("command", ['sh -c "git branch -D x"', "(git branch -D x)",
+                                     "(cd . && git branch -D x)"])
+def test_a_wrapped_approval_holds_only_in_the_directory_it_was_given_in(checkout, monkeypatch, command):
+    repo, tokens = checkout
+    (repo / "sub").mkdir()
+    _approve(command, tokens)
+    monkeypatch.chdir(repo / "sub")
+    reason = merge_guard_pre.check_merge_authorization(command, token_dir=tokens, cwd=str(repo / "sub"))
+    assert reason and "[rule: mg.token.mismatch]" in reason, reason
+    monkeypatch.chdir(repo)
+    assert _asked(command, checkout) is None
+
+
+def test_a_token_written_before_the_command_was_bound_passes_nothing(checkout):
+    context = merge_guard_post._mint_context_from_texts(["Yes, run `git branch -D x`"]).context
+    assert context.pop("typed") == "\x1f".join(["git", "branch", "-D", "x"])
+    assert merge_guard_post.write_token(context, checkout[1])
+    assert "[rule: mg.token.mismatch]" in _asked("git branch -D x", checkout)
+
+
+@pytest.mark.parametrize("approved, executed", [
+    ("gh pr merge 5 -R o/r --squash", 'gh pr merge 5 -R o/r --squash --body "merge now"'),
+    ("gh pr close 5 -R o/r", 'gh pr close 5 -R o/r --comment "superseded"'),
+    ("gh pr merge 5 -R o/r", "gh pr merge 5 -R o/r && git fetch origin"),
+])
+def test_a_gh_approval_is_bound_by_target_flags_and_repository_as_before(checkout, approved, executed):
+    """A leg of another program carries no `typed`: its message text is no part of the approval."""
+    _approve(approved, checkout[1])
+    assert _asked(executed, checkout) is None
+    _approve(approved, checkout[1])
+    assert "[rule: mg.token.mismatch]" in _asked(executed.replace(" 5 ", " 6 ").replace("o/r", "o/q"), checkout)

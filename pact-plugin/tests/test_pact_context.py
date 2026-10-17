@@ -30,8 +30,8 @@ resolve_agent_name():
 16. Returns empty string when no identity info available
 17. Falls back to agent_type when team config missing
 18. Falls back to agent_type when agent_id not in members
-19. Returns agent_type as-is when it doesn't start with pact- or PACT:pact-
-19b. Resolves "PACT:pact-<name>" like "pact-<name>"; any other "PACT:" value as-is
+19. Returns agent_type as-is when it doesn't start with pact- or repacted:pact-
+19b. Resolves "repacted:pact-<name>" like "pact-<name>"; any other "PACT:" value as-is
 20. Handles non-list members gracefully
 
 write_context():
@@ -401,7 +401,7 @@ class TestProjectSlug:
 
     One helper, project_slug(), feeds every session-path derivation, so a
     project launched through a symlinked directory names the same slug the
-    pact-memory project id and the backlog key already use: the target's
+    pact-memory project id already uses: the target's
     basename, never the link's.
     """
 
@@ -656,7 +656,7 @@ class TestResolveAgentName:
 
     def test_agent_type_without_pact_prefix(self):
         """Should return agent_type as-is when it doesn't start with pact- or
-        PACT:pact-."""
+        repacted:pact-."""
         from shared.pact_context import resolve_agent_name
 
         result = resolve_agent_name({"agent_type": "custom-agent"})
@@ -664,17 +664,18 @@ class TestResolveAgentName:
         assert result == "custom-agent"
 
     @pytest.mark.parametrize("agent_type, expected", [
-        ("PACT:pact-backend-coder", "backend-coder"),
-        ("PACT:pact-secretary", "secretary"),
-        ("PACT:pact-", ""),
+        ("repacted:pact-backend-coder", "backend-coder"),
+        ("repacted:pact-secretary", "secretary"),
+        ("repacted:pact-", ""),
         ("pact-backend-coder", "backend-coder"),
-        ("pact-PACT:pact-x", "PACT:pact-x"),
-        ("PACT:secretary", "PACT:secretary"),
+        ("pact-repacted:" "pact-x", "repacted:" "pact-x"),
+        ("repacted:" "secretary", "repacted:" "secretary"),
         ("PACT:", "PACT:"),
-        ("PACT:PACT:pact-x", "PACT:PACT:pact-x"),
+        ("repacted:" "repacted:" "pact-x", "repacted:" "repacted:" "pact-x"),
+        ("PACT:pact-backend-coder", "backend-coder"),
         ("pact:pact-x", "pact:pact-x"),
         ("OTHER:pact-x", "OTHER:pact-x"),
-        (" PACT:pact-x", " PACT:pact-x"),
+        (" repacted:" "pact-x", " repacted:" "pact-x"),
     ], ids=[
         "namespaced",
         "namespaced_secretary",
@@ -684,12 +685,14 @@ class TestResolveAgentName:
         "namespace_without_pact_prefix_kept",
         "bare_namespace_kept",
         "double_namespace_kept",
+        "legacy_namespace_stripped",
         "lowercase_namespace_kept",
         "other_namespace_kept",
         "leading_space_kept",
     ])
     def test_agent_type_plugin_namespace(self, agent_type, expected):
-        """Step 4 removes one leading "PACT:" only when "pact-" follows it.
+        """Step 4 removes one leading namespace (current or legacy) only when
+        "pact-" follows it.
 
         The first three ids are the only inputs the namespace handling
         changes; every other value resolves exactly as the plain
@@ -2213,7 +2216,7 @@ class TestGetSessionDirAdversarial:
         don't reject)."""
         from shared.pact_context import get_session_dir
 
-        pact_context(session_id="abc-123", project_dir="/Users/dev/my.app.v2")
+        pact_context(session_id="abc-123", project_dir="/Users/alice/my.app.v2")
 
         result = get_session_dir()
         assert result.endswith("pact-sessions/my_app_v2/abc-123")
@@ -2226,7 +2229,7 @@ class TestGetSessionDirAdversarial:
         is the same allowlist-driven defense applied uniformly."""
         from shared.pact_context import get_session_dir
 
-        pact_context(session_id="abc-123", project_dir="/Users/dev/My Project")
+        pact_context(session_id="abc-123", project_dir="/Users/alice/My Project")
 
         result = get_session_dir()
         assert result.endswith("pact-sessions/My_Project/abc-123")
@@ -2237,7 +2240,7 @@ class TestGetSessionDirAdversarial:
         proceed; the slug just collapses to a single '_' token."""
         from shared.pact_context import get_session_dir
 
-        pact_context(session_id="abc-123", project_dir="/Users/dev/プロジェクト")
+        pact_context(session_id="abc-123", project_dir="/Users/alice/プロジェクト")
 
         result = get_session_dir()
         assert result.endswith("pact-sessions/_/abc-123")
@@ -2253,7 +2256,7 @@ class TestGetSessionDirAdversarial:
 
         pact_context(
             session_id="abc-123",
-            project_dir='/Users/dev/proj"$(rm -rf ~)bar',
+            project_dir='/Users/alice/proj"$(rm -rf ~)bar',
         )
 
         result = get_session_dir()
@@ -2286,7 +2289,7 @@ class TestGetSessionDirAdversarial:
         monkeypatch.setattr(ctx_module, "_cache", None)
         # Point Path.home at tmp_path + set CLAUDE_PROJECT_DIR.
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/dev/proj")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/alice/proj")
 
         # Embedded NL + null byte + NEL (U+0085).
         attack_id = "valid\nFAKE\x00SEG\x85more"
@@ -2331,7 +2334,7 @@ class TestGetSessionDirAdversarial:
         monkeypatch.setattr(ctx_module, "_context_path", None)
         monkeypatch.setattr(ctx_module, "_cache", None)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/dev/proj")
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/alice/proj")
 
         ctx_module.init({"session_id": attack_id})
 
@@ -2372,7 +2375,7 @@ class TestGetSessionDirAdversarial:
         from shared.pact_context import get_session_dir
 
         # Path("foo/bar/").name returns "bar" in Python — trailing slash is stripped
-        pact_context(session_id="abc", project_dir="/Users/dev/my-app/")
+        pact_context(session_id="abc", project_dir="/Users/alice/my-app/")
 
         result = get_session_dir()
         assert result.endswith("pact-sessions/my-app/abc")
@@ -2920,7 +2923,7 @@ class TestDescribeContextFailure:
         assert str(target) in result
         assert "session_init may have failed" in result
         assert "self-heal" in result
-        assert "/PACT:bootstrap" in result
+        assert "/repacted:bootstrap" in result
 
     def test_file_present_arm_returns_empty(self, monkeypatch, tmp_path):
         """File present (even malformed) → '' — not a missing-context

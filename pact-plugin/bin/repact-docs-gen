@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""repact-docs-gen: write the reference pages and the troubleshooting page from this plugin tree.
+
+Location: pact-plugin/bin/repact-docs-gen. Logic in bin/_docsgen.py (pages) and
+bin/_docsgen_source.py (what ships). Writes, under ROOT, docs/reference/{commands,agents,
+skills,bin,config,rules,compat}.md and docs/troubleshooting.md: the generated regions are
+replaced, the prose around them is kept, and a missing page starts from a skeleton. Only what
+ships is listed: in the private repo the export manifests hide excluded files and the export
+transforms apply; anywhere else the tree is read as it is.
+
+`--check` writes nothing and exits 1 when any page differs from a fresh render (CI: the
+regeneration yields no diff). `--pages` limits the run, e.g. to the plugin's own
+docs/troubleshooting.md, which repact-explain and hooks/shared/rules.py point to.
+
+Usage: repact-docs-gen [--check] [--pages NAME[,NAME]] ROOT
+Exit codes: 0 written or unchanged; 1 --check found a page that differs; 2 usage or source error.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _docsgen as gen  # noqa: E402
+from _docsgen_source import SourceError  # noqa: E402
+
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+EXAMPLES = {
+    "write": 'python3 "pact-plugin/bin/repact-docs-gen" .',
+    "check": 'python3 "pact-plugin/bin/repact-docs-gen" --check .',
+    "pages": 'python3 "pact-plugin/bin/repact-docs-gen" --pages troubleshooting pact-plugin',
+}
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="repact-docs-gen", description=__doc__.split("\n")[0].split(": ", 1)[1],
+        epilog="examples:\n  " + "\n  ".join(EXAMPLES.values()),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("root", help="target root; pages go under ROOT/docs/")
+    parser.add_argument("--check", action="store_true",
+                        help="write nothing; exit 1 when a page differs from a fresh render")
+    parser.add_argument("--pages", default=",".join(gen.PAGES),
+                        help=f"comma-separated subset of: {', '.join(gen.PAGES)}")
+    return parser
+
+
+def _usage_error(parser: argparse.ArgumentParser, message: str, example: str) -> int:
+    parser.print_usage(sys.stderr)
+    print(f"repact-docs-gen: error: {message}\n\n{EXAMPLES[example]}", file=sys.stderr)
+    return 2
+
+
+def main(argv=None) -> int:
+    parser = _parser()
+    args = parser.parse_args(argv)
+    keys = [key.strip() for key in args.pages.split(",") if key.strip()]
+    unknown = [key for key in keys if key not in gen.PAGES]
+    if unknown or not keys:
+        return _usage_error(parser, f"unknown page {', '.join(unknown) or '(none given)'}",
+                            "pages")
+    root = Path(args.root)
+    if not root.is_dir():
+        return _usage_error(parser, f"ROOT is not a directory: {root}",
+                            "check" if args.check else "write")
+    try:
+        results, mode = gen.run(PLUGIN_ROOT, root, keys, args.check)
+    except SourceError as error:
+        print(f"repact-docs-gen: {error}", file=sys.stderr)
+        return 2
+    for status, page in results:
+        print(f"{status}: {page}")
+    stale = [page for status, page in results if status in ("differs", "missing")]
+    written = sum(1 for status, _ in results if status == "wrote")
+    print(f"repact-docs-gen: {len(results)} pages, {written} written, {len(stale)} differ "
+          f"(mode: {mode})")
+    if stale:
+        print("repact-docs-gen: run it without --check and commit the result", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

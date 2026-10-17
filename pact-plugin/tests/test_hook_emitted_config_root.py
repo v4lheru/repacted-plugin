@@ -195,3 +195,19 @@ def test_degraded_gate_warning_names_the_configured_root(alt_root):
     reason = json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecisionReason"]
     assert f"{alt_root}/plugins/cache/" in reason
     assert "~/.claude" not in reason
+
+
+def test_degraded_gate_warning_names_the_plugin_root_when_the_platform_sets_it(alt_root, monkeypatch, tmp_path):
+    """A local-marketplace install has no cache copy, so the plugin root the
+    platform exported is the path to name; the cache path is only the fallback."""
+    import bootstrap_gate
+
+    plugin_root = tmp_path / "checkout" / "pact-plugin"
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+    with patch("sys.stdout", new_callable=io.StringIO) as out:
+        with pytest.raises(SystemExit):
+            bootstrap_gate._emit_degraded_warning("import", RuntimeError("boom"), "Read")
+
+    reason = json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecisionReason"]
+    assert f"the plugin at {plugin_root}." in reason
+    assert "plugins/cache" not in reason

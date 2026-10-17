@@ -37,7 +37,9 @@ from pathlib import Path
 import pytest
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-SKILL_FILE = PLUGIN_ROOT / "skills" / "pact-handoff-harvest" / "SKILL.md"
+# the secretary rework: the Consolidation Step 3 prune text lives verbatim in the long form; the new
+# JSONL ledger is never pruned, so this pins the old file's documented rule only.
+SKILL_FILE = PLUGIN_ROOT / "skills" / "pact-handoff-harvest" / "references" / "harvest-long-form.md"
 
 # Two synthetic sections. They differ ONLY in the property the gate must not
 # depend on: whether a journal exists somewhere the reader cannot see.

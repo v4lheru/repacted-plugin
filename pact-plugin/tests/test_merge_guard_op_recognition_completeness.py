@@ -42,13 +42,20 @@ from shared.merge_guard_common import (  # noqa: E402
     detect_command_operation_type as OP,
     extract_command_context as CTX,
 )
-from merge_guard_pre import _token_matches_command as MATCH  # noqa: E402
+import merge_guard_pre  # noqa: E402
+
+
+def MATCH(tok, cmd):
+    """The pre hook's token match, looked up at call time: the repo fixture completes a
+    hand-built token() with the whole-command binding of `cmd`."""
+    return merge_guard_pre._token_matches_command(tok, cmd)
 from merge_guard_pre import check_merge_authorization  # noqa: E402
 from merge_guard_post import (  # noqa: E402
     _mint_context_from_bundle,
     _target_value,
     write_token,
 )
+from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
 
 IMPLICIT = "\x00implicit"  # the implicit-remote marker used by remote-mass-delete
 
@@ -65,10 +72,10 @@ def mint(cmd_text):
     bare-curl/wget non-mint is a fail-safe over-block characteristic, accepted)."""
     question = {
         "question": "Proceed?",
-        "options": [{"label": "Yes, do it", "description": f"Run `{cmd_text}` now"}],
+        "options": [{"label": "Yes", "description": f"Run `{cmd_text}` now"}],
         "multiSelect": False,
     }
-    return _mint_context_from_bundle([question], {"Proceed?": "Yes, do it"})
+    return _mint_context_from_bundle([question], {"Proceed?": "Yes"})
 
 
 def token_from_ctx(ctx):
@@ -76,9 +83,13 @@ def token_from_ctx(ctx):
     return {"operation_type": ctx["operation_type"], "context": ctx}
 
 
-def token(op, **ctx_fields):
-    """Construct a token directly for cross-auth / non-authorization probes."""
+def token(op, bind=None, **ctx_fields):
+    """Construct a token directly for cross-auth / non-authorization probes. A git op's
+    token is bound (1.4.1 U13) to the fixture checkout and, for a push, to `origin`."""
     ctx = {"operation_type": op, "bound_flags": [], **ctx_fields}
+    if op in mgc._GIT_BOUND_OPS:
+        ctx = mgc.command_repo_binding(
+            ctx, bind or ("git branch -D x" if op == "branch-delete" else "git push origin x")) or ctx
     return {"operation_type": op, "context": ctx}
 
 
@@ -489,8 +500,13 @@ class TestBranchProtectionGate:
         cmd = PROTECTION_CLIENTS[client].format(M=method)
         assert D(cmd) is True, f"UNDER-BLOCK: {client} {method} not gated: {cmd!r}"
         assert OP(cmd) == "branch-protection"
-        assert CTX(cmd).get("protected_branch") == "main"
-        assert _target_value(CTX(cmd)) is not None  # mintable
+        if client.startswith("gh-"):
+            # amend_6 on #141: the gh api removal binds its repo
+            assert CTX(cmd).get("protected_branch") == "api:o/r:main"
+            assert _target_value(CTX(cmd)) is not None  # mintable
+        else:
+            # amend_7 on #141: curl/wget are gated but never minted
+            assert _target_value(CTX(cmd)) is None
         # parity
         assert mgc.is_dangerous_command(cmd) == (mgc.detect_command_operation_type(cmd) is not None)
 
@@ -513,9 +529,10 @@ class TestBranchProtectionSlashedAndMintAndNonVacuity:
     @pytest.mark.parametrize(
         "cmd,branch",
         [
-            ("gh api -X DELETE repos/o/r/branches/feature/x/protection", "feature/x"),
-            ("gh api -X PUT repos/o/r/branches/release/1.2/x/protection", "release/1.2/x"),
-            ("curl -X PATCH https://git.example.com/repos/o/r/branches/dev/protection", "dev"),
+            # amend_6 on #141: the gh api removal binds its repo; amend_7: curl never mints
+            ("gh api -X DELETE repos/o/r/branches/feature/x/protection", "api:o/r:feature/x"),
+            ("gh api -X PUT repos/o/r/branches/release/1.2/x/protection", "api:o/r:release/1.2/x"),
+            ("curl -X PATCH https://git.example.com/repos/o/r/branches/dev/protection", None),
         ],
     )
     def test_slashed_and_simple_branch_extracted(self, cmd, branch):
@@ -538,13 +555,13 @@ class TestBranchProtectionSlashedAndMintAndNonVacuity:
 
     def test_mint_authorize_proof_non_vacuous_wrong_branch_refused(self):
         cmd = "gh api -X DELETE repos/o/r/branches/main/protection"
-        assert MATCH(token("branch-protection", protected_branch="main"), cmd) is True
-        assert MATCH(token("branch-protection", protected_branch="other"), cmd) is False
+        assert MATCH(token("branch-protection", protected_branch="api:o/r:main", host="github.com"), cmd) is True
+        assert MATCH(token("branch-protection", protected_branch="api:o/r:other", host="github.com"), cmd) is False
 
     def test_cross_op_closure(self):
         """A branch-protection token must NOT authorize a CLI branch-delete of the
         same name (distinct op-classes)."""
-        tok = token("branch-protection", protected_branch="main")
+        tok = token("branch-protection", protected_branch="api:o/r:main", host="github.com")
         assert MATCH(tok, "gh api -X DELETE repos/o/r/branches/main/protection") is True
         assert MATCH(tok, "git branch -D main") is False
 
@@ -570,7 +587,12 @@ class TestHostAgnosticCurlRefMutationMintAndParity:
     force-push); #1061 brings the non-api-host READ floor to parity with the
     already-host-agnostic mint classifier. (curl commands must be backtick-wrapped
     in the AUQ option text to mint — pre-existing locate_command_regions substrate
-    behavior; the mint() helper does this.)"""
+    behavior; the mint() helper does this.)
+
+    RE-RULED by amend_7 on #141: these forms stay GATED (the read floor above is
+    unchanged) but never MINT: there is no sound flag walk over curl/wget options, so a
+    URL-path parse must not stand in for an identity (the curl-merge posture, sec #71).
+    The rows now pin gate + classify + parity + never-mint."""
 
     @pytest.mark.parametrize(
         "cmd,expected_op",
@@ -581,27 +603,23 @@ class TestHostAgnosticCurlRefMutationMintAndParity:
             ("curl -X PATCH https://git.example.com/repos/o/r/git/refs/heads/y", "force-push"),
         ],
     )
-    def test_non_api_host_ref_mutation_gates_classifies_mints_and_authorizes(self, cmd, expected_op):
+    def test_non_api_host_ref_mutation_gates_classifies_and_never_mints(self, cmd, expected_op):
         # read gate (the host-agnostic widening)
         assert D(cmd) is True, f"UNDER-BLOCK: non-api-host ref-mutation not gated: {cmd!r}"
         assert OP(cmd) == expected_op
         # mint==read parity
         assert mgc.is_dangerous_command(cmd) == (mgc.detect_command_operation_type(cmd) is not None)
-        # mints + authorizes its own command (the #1064 "every gated op mints" closure)
-        result = mint(cmd)
-        assert result.context is not None, f"did not mint (refusal={result.refusal_reason}) for {cmd!r}"
-        assert result.context.get("operation_type") == expected_op
-        assert MATCH(token_from_ctx(result.context), cmd) is True
+        # amend_7: gated but never minted (always asks with the command text)
+        assert mint(cmd).context is None, f"curl/wget ref form minted: {cmd!r}"
+        assert _target_value(CTX(cmd)) is None
 
-    def test_widening_is_a_superset_api_host_still_gates_and_mints(self):
-        """Control: the api-host form (which gated pre-#1061 too) STILL gates +
-        mints + authorizes — proving #1061 is a strict superset (non-api host
-        ADDED), not a swap that could have dropped the api-host coverage."""
+    def test_widening_is_a_superset_api_host_still_gates_never_mints(self):
+        """Control: the api-host form (which gated pre-#1061 too) STILL gates —
+        proving #1061 is a strict superset (non-api host ADDED), not a swap that could
+        have dropped the api-host coverage. amend_7: it never mints either."""
         cmd = "curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/y"
         assert D(cmd) is True
-        result = mint(cmd)
-        assert result.context is not None, f"did not mint (refusal={result.refusal_reason})"
-        assert MATCH(token_from_ctx(result.context), cmd) is True
+        assert mint(cmd).context is None
 
 
 # ===========================================================================
@@ -824,16 +842,13 @@ class TestAcceptedGrainAndAwarenessPins:
     DELIBERATE, ratified boundaries — they are NOT under-blocks, and pinning them
     prevents a future reader from mistaking the boundary for a bug."""
 
-    def test_cross_remote_same_named_single_ref_delete_shares_token_accepted_grain(self):
-        """§10 target-grain asymmetry: remote-ref-delete binds ref-ONLY (no remote,
-        per the force-push target_ref precedent), so a token minted for one remote
-        authorizes the SAME-named single-ref delete on a DIFFERENT remote within the
-        single-use window. This is an ACCEPTED honest-mistake grain by explicit
-        decision (the operator approved "delete ref feature"; the remote differs) —
-        documented here as accepted, NOT an under-block."""
+    def test_cross_remote_same_named_single_ref_delete_is_remote_bound(self):
+        """§10 target-grain, reversed in 1.4.1 U13: a remote-ref-delete approval binds
+        the remote as well as the ref, so a token minted for one remote no longer
+        authorizes the SAME-named single-ref delete on a DIFFERENT remote."""
         tok = token("remote-ref-delete", target_ref="feature")
         assert MATCH(tok, "git push origin :feature") is True
-        assert MATCH(tok, "git push upstream :feature") is True  # ACCEPTED grain (ref-only bind)
+        assert MATCH(tok, "git push upstream :feature") is False
 
     def test_quoted_gh_api_field_value_collides_with_preexisting_var_strip(self):
         """AWARENESS PIN (pre-existing, OUT-of-scope): a gh-api field value written
@@ -860,13 +875,13 @@ class TestAcceptedGrainAndAwarenessPins:
         bare = {
             "question": "Proceed?",
             "options": [{
-                "label": "Yes, do it",
+                "label": "Yes",
                 # NOTE: no backticks around the command -> bare option text
                 "description": "Run curl -X DELETE https://git.example.com/repos/o/r/git/refs/heads/y now",
             }],
             "multiSelect": False,
         }
-        result = _mint_context_from_bundle([bare], {"Proceed?": "Yes, do it"})
+        result = _mint_context_from_bundle([bare], {"Proceed?": "Yes"})
         # fail-safe: no mint from bare curl text (accepted over-block, not an under-block)
         assert result.context is None
 
@@ -882,7 +897,7 @@ class TestAcceptedGrainAndAwarenessPins:
         clean = "gh api -X DELETE repos/o/r/branches/main/protection"
         assert D(clean) is True
         assert OP(clean) == "branch-protection"
-        assert CTX(clean).get("protected_branch") == "main"
+        assert CTX(clean).get("protected_branch") == "api:o/r:main"  # amend_6 on #141
 
 
 # ===========================================================================
@@ -927,9 +942,10 @@ class TestOverBlockGoneRegression:
     @pytest.mark.parametrize(
         "cmd,expected_op,target_key,target_val",
         [
-            ("gh api -X delete repos/o/r/git/refs/heads/y", "branch-delete", "branch", "y"),
-            ("gh api --method delete repos/o/r/git/refs/heads/y", "branch-delete", "branch", "y"),
-            ("gh api -X Delete repos/o/r/branches/main/protection", "branch-protection", "protected_branch", "main"),
+            # amend_4 on #141: the REST delete binds its repo
+            ("gh api -X delete repos/o/r/git/refs/heads/y", "branch-delete", "branch", "api:o/r:y"),
+            ("gh api --method delete repos/o/r/git/refs/heads/y", "branch-delete", "branch", "api:o/r:y"),
+            ("gh api -X Delete repos/o/r/branches/main/protection", "branch-protection", "protected_branch", "api:o/r:main"),
         ],
     )
     def test_lowercase_method_gh_api_gates_mints_and_authorizes(self, cmd, expected_op, target_key, target_val):
@@ -943,16 +959,15 @@ class TestOverBlockGoneRegression:
         # parity equality now holds for the mint-widened lowercase form
         assert mgc.is_dangerous_command(cmd) == (mgc.detect_command_operation_type(cmd) is not None)
 
-    def test_curl_lowercase_method_protection_mints_and_authorizes(self):
-        """curl + lowercase method + protection PATH gates+mints+authorizes (curl must
-        be backtick-wrapped in the option text to mint — the mint() helper does)."""
+    def test_curl_lowercase_method_protection_gates_and_never_mints(self):
+        """curl + lowercase method + protection PATH gates and classifies (curl must
+        be backtick-wrapped in the option text to mint — the mint() helper does).
+        RE-RULED by amend_7 on #141 (same reasoning applied to protection removal):
+        curl/wget are gated but never minted."""
         cmd = "curl -X put https://git.example.com/repos/o/r/branches/main/protection"
         assert D(cmd) is True
         assert OP(cmd) == "branch-protection"
-        result = mint(cmd)
-        assert result.context is not None, f"did not mint (refusal={result.refusal_reason})"
-        assert result.context.get("protected_branch") == "main"
-        assert MATCH(token_from_ctx(result.context), cmd) is True
+        assert mint(cmd).context is None
 
     # --- gh global flag before `api` (gh -R o/r api ...) now MINTS ---
 
@@ -962,7 +977,7 @@ class TestOverBlockGoneRegression:
         assert OP(cmd) == "branch-protection"
         result = mint(cmd)
         assert result.context is not None, f"did not mint (refusal={result.refusal_reason})"
-        assert result.context.get("protected_branch") == "main"
+        assert result.context.get("protected_branch") == "api:o/r:main"  # amend_6 on #141
         assert MATCH(token_from_ctx(result.context), cmd) is True
 
     def test_gh_global_flag_body_mention_not_over_blocked(self):
@@ -1005,6 +1020,12 @@ class TestCrossLegFlagLeakOverBlockGone:
     same shared site. Mirrors TestOverBlockGoneRegression's cross-leg-gone block;
     the counter-mutation below proves these assertions are coupled to THIS fix."""
 
+    @pytest.fixture(autouse=True)
+    def _on_feature_branch(self, cli_repo_is_o_r):
+        # A bare `git push` on main is a push to main (1.4.1 U13); these rows are about the
+        # cross-leg flag leak, so they run on a feature checkout.
+        (cli_repo_is_o_r / ".git" / "HEAD").write_text("ref: refs/heads/feature\n")
+
     # --- the 5 cured forms (+ separator variants of the primary) ---
 
     @pytest.mark.parametrize(
@@ -1015,12 +1036,23 @@ class TestCrossLegFlagLeakOverBlockGone:
             "git push origin feature | rm -rf build/",    # | variant
             "git push && rm -rf build/",                  # was PERMANENTLY blocked (no target)
             "git push origin && rm -rf build/",           # was PERMANENTLY blocked
-            "gh pr close 42 && git branch -d temp",       # close sibling: leaked -d
             "git branch --delete temp && git checkout --force main",  # branch-delete sibling: leaked --force
         ],
     )
     def test_cross_leg_flag_leak_gone(self, cmd):
         assert D(cmd) is False, f"OVER-BLOCK regressed: cross-leg flag leak re-appeared: {cmd!r}"
+
+    def test_close_sibling_leak_gone_while_bare_close_gates(self):
+        """The close sibling of #1078, re-stated for FIX-MERGE f3 (amend_1 a): the bare
+        close leg now GATES on its own, so the cure is no longer 'ungated'. What #1078
+        fixed still holds: the continuation leg's `-d` does not leak into the close, so
+        the close binds NO --delete-branch and a plain close approval authorizes it."""
+        cmd = "gh pr close 42 && git branch -d temp"
+        assert D(cmd) is True
+        leg = mgc._single_destructive_leg(cmd)
+        assert leg == "gh pr close 42"
+        ctx = mgc.extract_command_context(leg)
+        assert ctx["operation_type"] == "close" and ctx["bound_flags"] == [], ctx
 
     # --- non-vacuity contrast: single-first-leg flag forms still gate, correct op ---
 
@@ -1049,8 +1081,9 @@ class TestCrossLegFlagLeakOverBlockGone:
             ("git push && rm -rf build/", None),
             ("git push origin && rm -rf build/", None),
             ("git branch --delete temp && git checkout --force main", None),
-            # close sibling: detect stays "close" (see docstring), still ungated
-            ("gh pr close 42 && git branch -d temp", "close"),
+            # close sibling: moved to test_close_sibling_leak_gone_while_bare_close_gates
+            # (FIX-MERGE f3: the bare close now gates, and it mints, so no
+            # gated-but-unmintable state arises there either).
         ],
     )
     def test_no_gated_but_unmintable_state_for_cured_forms(self, cmd, expected_op):
@@ -1098,7 +1131,7 @@ class TestCrossLegFlagLeakOverBlockGone:
         "cmd",
         [
             "git push --force origin main",                         # single leg
-            "cd /repo && git push --force origin main",             # flag+push together in a NON-FIRST leg
+            "cd . && git push --force origin main",             # flag+push together in a NON-FIRST leg
             "git push --force origin main && echo ok",              # first-leg force + benign continuation
             "git push --force origin main 2>&1",                    # FD redirect — one leg (FD-neutralized)
             'git push --push-option "a && b" --force origin main',  # QUOTED separator — one leg
@@ -1119,7 +1152,7 @@ class TestCrossLegFlagLeakOverBlockGone:
     def test_literal_arm_same_leg_control_detects_force_push(self):
         """Non-vacuity control + mint parity for the preserved set: the
         non-first-leg same-leg form classifies force-push on the mint side too."""
-        assert OP("cd /repo && git push --force origin main") == "force-push"
+        assert OP("cd . && git push --force origin main") == "force-push"
 
     @pytest.mark.parametrize(
         "cmd",
@@ -1178,6 +1211,16 @@ class TestCrossLegFlagLeakOverBlockGone:
         )
 
 
+def _close_arm_fires(cmd: str) -> bool:
+    """True iff a branch-deleting close arm (_CLOSE_LITERAL_ARMS) matches some leg of the
+    stripped command: the per-leg surface #1087 converted. Resolves the module globals at
+    call time, so the counter-mutations above act on it."""
+    stripped = mgc._strip_non_executable_content(mgc._normalize_line_continuations(cmd))
+    return any(
+        arm.search(leg) for leg in mgc._slice_stripped_legs(stripped) for arm in mgc._CLOSE_LITERAL_ARMS
+    )
+
+
 class TestCloseLiteralArmCrossLegSweep:
     """#1087 CLOSE cross-leg completion — the permanent bidirectional sweep for
     the per-leg `_CLOSE_LITERAL_ARMS` conversion, modeled on the #1082 force-push
@@ -1203,19 +1246,25 @@ class TestCloseLiteralArmCrossLegSweep:
         ],
     )
     def test_close_arm_cross_leg_span_cured(self, cmd):
-        """#1087 CURED: a bare `gh pr close` chained with a `--delete-branch` token
-        in a SEPARATE leg no longer gates (the token and the close verb never
-        co-occur in one leg). This is the over-block removal AND the laundering
-        substrate removal — the ambiguous form is now is_dangerous=False, so the
-        mint write-gate refuses and no token can be minted to launder."""
-        assert D(cmd) is False, f"CLOSE cross-leg over-block regressed: {cmd!r}"
+        """#1087 CURED: a `--delete-branch` token in a SEPARATE leg never joins a close
+        (the token and the close verb never co-occur in one leg), so the branch-deleting
+        close arm does not fire and no --delete-branch is bound. FIX-MERGE f3 (amend_1 a)
+        re-stated this row: a bare close now gates on its own, so the assertion moved from
+        'ungated' to the arm and the bind, which is what #1087 cured. The ambiguous form
+        is a compound of two destructive closes, refused before any mint."""
+        assert _close_arm_fires(cmd) is False, f"CLOSE cross-leg arm span regressed: {cmd!r}"
+        leg = mgc._single_destructive_leg(cmd)
+        if leg is None:
+            assert mgc.is_compound_destructive_command(cmd) is True, cmd
+        else:
+            assert mgc.extract_command_context(leg)["bound_flags"] == [], cmd
 
     # --- SECONDARY (no-new-under-block): same-leg close+flag STILL gates ---
     @pytest.mark.parametrize(
         "cmd",
         [
             "gh pr close 42 --delete-branch",                              # single leg
-            "cd /repo && gh pr close 42 --delete-branch",                  # CRITICAL must-not-regress (co-occur in leg[1])
+            "cd . && gh pr close 42 --delete-branch",                  # CRITICAL must-not-regress (co-occur in leg[1])
             'git commit -m "a && b" && gh pr close 42 --delete-branch',    # quoted && is substrate, real close leg gates
             "bash -c 'gh pr close 42 --delete-branch'",                    # quoted single leg
             "gh --repo o/r pr close 42 --delete-branch",                   # global-flag prefix
@@ -1228,7 +1277,7 @@ class TestCloseLiteralArmCrossLegSweep:
     def test_close_arm_same_leg_still_gates(self, cmd):
         """The no-new-under-block set: `gh pr close` + delete flag co-occurring
         within ONE leg still gates in ANY leg position — including the CRITICAL
-        `cd /repo && gh pr close 42 --delete-branch` (True today ONLY via the
+        `cd . && gh pr close 42 --delete-branch` (True today ONLY via the
         in-leg per-leg match the #1087 conversion re-establishes; it was True
         pre-fix via the cross-leg lookahead the fix removes). The `-d`/`-cd`
         short-flag forms gate via the first-leg flag-condition union arm."""
@@ -1238,7 +1287,7 @@ class TestCloseLiteralArmCrossLegSweep:
         """Non-vacuity control for the same-leg set: the preserved forms classify
         as `close`, so the D=True rows discriminate a real gated close from a
         blanket 'compound is always safe'."""
-        assert OP("cd /repo && gh pr close 42 --delete-branch") == "close"
+        assert OP("cd . && gh pr close 42 --delete-branch") == "close"
         assert OP("gh pr close 42 --delete-branch") == "close"
 
     @pytest.mark.parametrize(
@@ -1264,14 +1313,16 @@ class TestCloseLiteralArmCrossLegSweep:
             co-match. This is why the identity-slice mutation is a FAITHFUL pre-fix
             simulation for this row (the coder flagged this for reviewer
             confirmation; it is confirmed here per-row, not assumed single-family)."""
-        assert mgc.is_dangerous_command(cmd) is False
+        # FIX-MERGE f3: a bare close gates on its own now, so the non-vacuity is asserted
+        # on the close-arm predicate (_close_arm_fires), the surface #1087 changed.
+        assert _close_arm_fires(cmd) is False
         monkeypatch.setattr(mgc, "_slice_stripped_legs", lambda s: [s])
-        assert mgc.is_dangerous_command(cmd) is True, (
+        assert _close_arm_fires(cmd) is True, (
             f"whole-command mutation did not restore the pre-fix close over-block "
             f"— the cured-row assertion would be vacuous: {cmd!r}"
         )
         monkeypatch.setattr(mgc, "_CLOSE_LITERAL_ARMS", ())
-        assert mgc.is_dangerous_command(cmd) is False, (
+        assert _close_arm_fires(cmd) is False, (
             f"whole-command flip survived close-arm neutering — a SECOND family "
             f"co-matches, so the identity-slice mutation is NOT a faithful "
             f"single-family pre-fix simulation for this row: {cmd!r}"
@@ -1318,7 +1369,7 @@ class TestApiLiteralArmCrossLegSweep:
         "cmd",
         [
             "gh api -X DELETE repos/o/r/git/refs/heads/x",                 # single leg
-            "cd /repo && gh api -X DELETE repos/o/r/git/refs/heads/x",     # non-first leg (method+path co-occur)
+            "cd . && gh api -X DELETE repos/o/r/git/refs/heads/x",     # non-first leg (method+path co-occur)
             "gh api repos/o/r/pulls/5/merge -X PUT",                       # merge, method after path
             "curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/x",  # curl same-leg
             "wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/x",  # wget same-leg
@@ -1330,7 +1381,7 @@ class TestApiLiteralArmCrossLegSweep:
         """The no-new-under-block set: the API client + mutating method (or
         implicit-POST body flag) + endpoint co-occurring within ONE leg still gates
         in ANY leg position. (The non-first-leg protection form
-        `cd /repo && gh api -X DELETE .../branches/main/protection` is separately
+        `cd . && gh api -X DELETE .../branches/main/protection` is separately
         pinned at `test_literal_arm_contrast_still_gates_non_first_leg`; the
         git/refs non-first-leg row here is its sibling, not a duplicate.)"""
         assert D(cmd) is True, f"NEW UNDER-BLOCK: same-leg dangerous API stopped gating: {cmd!r}"
@@ -1443,7 +1494,7 @@ class TestBranchDeleteLiteralArmCrossLegSweep:
         "cmd",
         [
             "git branch -D temp",                                # arm 1, single leg
-            "cd /repo && git branch -D temp",                    # arm 1 in a NON-FIRST leg (union arm abstains — literal arm load-bearing)
+            "cd . && git branch -D temp",                    # arm 1 in a NON-FIRST leg (union arm abstains — literal arm load-bearing)
             "git branch --delete --force temp",                  # arm 2
             "git branch --force --delete temp",                  # arm 3
             "git branch -D temp && echo done",                   # arm 1 + benign continuation
@@ -1455,13 +1506,13 @@ class TestBranchDeleteLiteralArmCrossLegSweep:
             "git branch -fD temp",                               # union arm, clustered
             "git branch --delete -f temp",                       # union arm, split
             "git branch -f --delete temp",                       # union arm, split
-            "cd /repo && git branch --delete --force temp",      # arm 2 in a NON-FIRST leg (union arm abstains — literal arm load-bearing)
+            "cd . && git branch --delete --force temp",      # arm 2 in a NON-FIRST leg (union arm abstains — literal arm load-bearing)
         ],
     )
     def test_branch_delete_arm_same_leg_still_gates(self, cmd):
         """The no-new-under-block set: `git branch` + force-delete flag
         co-occurring within ONE leg still gates in ANY leg position — including
-        the CRITICAL `cd /repo && git branch -D temp` (the union arm is
+        the CRITICAL `cd . && git branch -D temp` (the union arm is
         first-leg-anchored and abstains there, so ONLY the per-leg literal arm
         catches it). The quoted-separator row is why this fix is per-leg
         matching over the substrate, not a tempered-regex span (`[^&|;]*` would
@@ -1474,7 +1525,7 @@ class TestBranchDeleteLiteralArmCrossLegSweep:
         "cmd",
         [
             "git branch -D temp",
-            "cd /repo && git branch -D temp",
+            "cd . && git branch -D temp",
             "git branch --delete --force temp",
             "git branch --force --delete temp",
             "git branch -D temp && echo done",
@@ -1612,7 +1663,7 @@ class TestBranchDeleteLiteralArmCrossLegSweep:
         )
 
     def test_golden_row_split_proof_each_mechanism_isolated(self, monkeypatch):
-        """SPLIT PROOF on the GOLDEN row `cd /repo && git branch -D temp`.
+        """SPLIT PROOF on the GOLDEN row `cd . && git branch -D temp`.
 
         WHY THE PREVIOUS SHAPE HAD TO BE RE-DERIVED, not repaired. This test used to
         neuter the literal tuple ALONE and assert the row went ungated, on the premise
@@ -1637,7 +1688,7 @@ class TestBranchDeleteLiteralArmCrossLegSweep:
         else covers the form, and it doubles as the known-bad control for rows 1-2,
         so each assertion is demonstrated failing on a known-bad input BY
         CONSTRUCTION rather than merely demonstrated passing."""
-        cmd = "cd /repo && git branch -D temp"
+        cmd = "cd . && git branch -D temp"
         arms = mgc._BRANCH_DELETE_LITERAL_ARMS
         per_leg = mgc._PER_LEG_OPS
         filter_without_branch_delete = tuple(
@@ -1797,11 +1848,11 @@ class TestCloseTargetMintsAllFaithfulForms:
         "cmd,expected",
         [
             ("gh pr close 5 -d", "5"),
-            ("cd /repo && gh pr close 5 -d", "5"),
+            ("cd . && gh pr close 5 -d", "5"),
             (f"gh pr close {_PULL5} -d", "url:github.com/o/r#5"),
-            (f"cd /repo && gh pr close {_PULL5} -d", "url:github.com/o/r#5"),
+            (f"cd . && gh pr close {_PULL5} -d", "url:github.com/o/r#5"),
             ("gh pr close feature -d", "branch:feature"),
-            ("cd /repo && gh pr close feature -d", "branch:feature"),
+            ("cd . && gh pr close feature -d", "branch:feature"),
         ],
     )
     def test_every_faithful_close_form_gates_and_mints(self, cmd, expected):
@@ -1880,7 +1931,7 @@ class TestCloseTargetLaunderingRefused:
         on every form, so the refusals above are discrimination, not a blanket
         deny."""
         for cmd in ("gh pr close 5 -d", f"gh pr close {_PULL5} -d", "gh pr close feature -d",
-                    "cd /repo && gh pr close feature -d"):
+                    "cd . && gh pr close feature -d"):
             assert _authorizes(cmd, cmd) is True, f"faithful re-execution refused: {cmd!r}"
 
 
@@ -2112,7 +2163,7 @@ class TestApiMergeMintParity:
         assert OP(cmd) == "merge", f"API-merge spelling unclassified: {cmd!r}"
         ctx, refusal = mint(cmd)
         assert ctx is not None, f"OVER-BLOCK regressed (no mint): {cmd!r} ({refusal})"
-        assert ctx["pr_number"] == "42"
+        assert ctx["pr_number"] == "api:o/r#42"   # repo-qualified (amend_2 on #141)
         assert ctx["bound_flags"] == expected_flags
 
     @pytest.mark.parametrize(
@@ -2143,21 +2194,23 @@ class TestApiMergeMintParity:
 
     # --- cross-spelling authorization (correct same-op + non-laundering) ---
 
-    def test_cli_approval_authorizes_api_exec_same_flags(self, tmp_path):
-        """Cross-spelling is CORRECT same-operation authorization: a plain CLI
-        approval (bound []) authorizes the plain API exec of the SAME pr (both
-        derive {merge, 42, []} from the one extract_command_context)."""
+    def test_cli_approval_does_not_authorize_api_exec(self, tmp_path):
+        """RE-RULED by amend_2 on #141: a REST identity binds its repo (`api:o/r#42`), while
+        the CLI `gh pr merge 42` names the repo only implicitly, so the hook cannot prove
+        they are the same PR. Cross-spelling now REFUSES in both directions (before amend_2
+        a CLI #42 approval authorized a REST merge of #42 in ANY repo)."""
         ctx, _ = mint("gh pr merge 42")
         assert ctx is not None and ctx["bound_flags"] == []
         write_token(ctx, token_dir=tmp_path)
         assert check_merge_authorization(
-            "gh api -X PUT /repos/o/r/pulls/42/merge", token_dir=tmp_path) is None
+            "gh api -X PUT /repos/o/r/pulls/42/merge", token_dir=tmp_path) is not None
 
-    def test_api_approval_authorizes_cli_exec_same_flags(self, tmp_path):
+    def test_api_approval_does_not_authorize_cli_exec(self, tmp_path):
+        """RE-RULED by amend_2 on #141 (the reverse direction of the row above)."""
         ctx, _ = mint("gh api -X PUT /repos/o/r/pulls/42/merge")
         assert ctx is not None and ctx["bound_flags"] == []
         write_token(ctx, token_dir=tmp_path)
-        assert check_merge_authorization("gh pr merge 42", token_dir=tmp_path) is None
+        assert check_merge_authorization("gh pr merge 42", token_dir=tmp_path) is not None
 
     def test_privileged_cli_approval_refuses_plain_api_exec(self, tmp_path):
         """Non-laundering: a PRIVILEGED CLI approval (bound [--admin]) does NOT
@@ -2334,7 +2387,7 @@ class TestApiMergeEndpointPositionLaunderingClosed:
         """Every confirmed exploit: the approval binds the ENDPOINT (6), and the
         never-approved standalone decoy-5 merge DENIES. Pre-fix the flat
         first-match bound 5 and this standalone AUTHORIZED (the laundering)."""
-        assert _mint_pr(approve) == "6", (
+        assert _mint_pr(approve) == "api:o/r#6", (
             f"endpoint-position bind regressed (bound a decoy): {approve!r}"
         )
         assert _authorize_standalone(approve, standalone, tmp_path) == "DENY", (
@@ -2363,9 +2416,10 @@ class TestApiMergeEndpointPositionLaunderingClosed:
         closes the laundering. The module-global `_extract_api_merge_pr` binding resolves
         at call time."""
         approve = "gh api -X PUT -f note=pulls/5/merge repos/o/r/pulls/6/merge"
-        # direction 1 — fix present: the walk binds the ENDPOINT on both surfaces.
-        assert mgc.extract_command_context(approve).get("pr_number") == "6"
-        assert _mint_pr(approve) == "6"
+        # direction 1 — fix present: the walk binds the ENDPOINT on both surfaces
+        # (repo-qualified since amend_2 on #141; the flat mutation below binds bare numbers).
+        assert mgc.extract_command_context(approve).get("pr_number") == "api:o/r#6"
+        assert _mint_pr(approve) == "api:o/r#6"
         # restore the pre-fix flat first-match extractor.
         def flat(command):
             m = _real_re.search(r"pulls/(\d+)/merge\b", command)
@@ -2410,7 +2464,7 @@ class TestApiMergeEndpointNoOverBlock:
         """Every faithful spelling mints its CORRECT endpoint (6), including the
         body-coincidence merge whose `-f note` happens to mention pulls/5 — the
         endpoint positional (6) is bound, never the body decoy, and never None."""
-        assert _mint_pr(cmd) == "6", f"faithful api-merge bound wrong/None: {cmd!r}"
+        assert _mint_pr(cmd) == "api:o/r#6", f"faithful api-merge bound wrong/None: {cmd!r}"
 
     @pytest.mark.parametrize(
         "cmd",
@@ -2427,32 +2481,25 @@ class TestApiMergeEndpointNoOverBlock:
         )
 
     def test_tokenizer_failure_still_binds_endpoint(self):
-        """Over-block-safe fallback: an unbalanced-quote faithful merge (shlex
-        tokenizer returns None) still binds the endpoint from the stripped/raw
-        first-match — NEVER None for a recognized leg (a mis-parse must not gate
-        a faithful merge)."""
+        """Over-block-safe fallback: an unbalanced-quote merge (shlex tokenizer returns
+        None) still binds the endpoint from the stripped/raw first-match — NEVER None
+        for a recognized leg. RE-RULED by amend_5 on #141: the approval no longer mints,
+        because the host (and any leading cd or inline variable) cannot be read from an
+        untokenizable command; a shell would not run it either (unterminated quote)."""
         cmd = 'gh api -X PUT -f note="unbalanced repos/o/r/pulls/6/merge'
         assert OP(cmd) == "merge"
-        assert _mint_pr(cmd) == "6", "tokenizer-failure fallback returned None (over-block)"
+        assert CTX(cmd).get("pr_number") == "api:o/r#6", "tokenizer-failure fallback returned None"
+        assert _mint_pr(cmd) is None
 
-    def test_gh_api_attached_method_is_1079_underblock_not_overblock(self):
-        """DOCUMENTED BOUNDARY (not an over-block): the gh-api ATTACHED method
-        spelling `gh api --method=PUT .../merge` is is_dangerous=False (the read
-        floor's `(?:-X|--method)\\s+` requires whitespace) yet OP=merge — the
-        pre-existing #1079 method-delimiter under-block (attached/`=` spellings
-        bypass the read floor; closed won't-fix). It is READ==MINT SYMMETRIC:
-        not gated → correctly NOT mintable, so it is NOT a gated-but-unmintable
-        over-block, and it is unchanged by the endpoint-position fix. The SPACED
-        gh-api form and wget's native `--method=` form DO gate + mint (covered
-        above). This row pins the symmetry so a future 'harden' that mints the
-        attached form without also gating it (asymmetry = over-block-shaped
-        surprise) turns red."""
-        cmd = "gh api --method=PUT repos/o/r/pulls/6/merge"
-        assert D(cmd) is False, "read floor unexpectedly gates the attached form"
-        assert _mint_pr(cmd) is None, (
-            "attached-method form minted while the read floor does NOT gate it — "
-            "read/mint asymmetry (see #1079); this is the symmetry tripwire"
-        )
+    def test_gh_api_attached_method_gates_and_mints(self):
+        """The gh-api ATTACHED method spelling `gh api --method=PUT .../merge` (and
+        `-XPUT`) gates like the spaced form since review #118 M2 closed the #1079
+        method-delimiter under-block, and stays READ==MINT SYMMETRIC: it gates AND its
+        approval binds the same endpoint PR."""
+        for cmd in ("gh api --method=PUT repos/o/r/pulls/6/merge",
+                    "gh api -XPUT repos/o/r/pulls/6/merge"):
+            assert D(cmd) is True, "read floor does not gate the attached form: %r" % cmd
+            assert _mint_pr(cmd) == "api:o/r#6", "gated but not mintable: %r" % cmd
 
 
 class TestApiMergeEndpointCarrierInteraction:
@@ -2478,7 +2525,7 @@ class TestApiMergeEndpointCarrierInteraction:
         mintable token — approving the endpoint-6 merge binds 6, and a standalone
         decoy-5 merge DENIES (the decoy never became an authorizing target)."""
         approve = "gh api -X PUT -f branch=pulls/5/merge repos/o/r/pulls/6/merge"
-        assert _mint_pr(approve) == "6"
+        assert _mint_pr(approve) == "api:o/r#6"
         assert _authorize_standalone(
             approve, "gh api -X PUT repos/o/r/pulls/5/merge", tmp_path) == "DENY"
 
@@ -2532,7 +2579,7 @@ class TestApiMergeEndpointResidualBoundary:
         """gh-api no-widening: an enumerated gh-api value-flag decoy binds the ENDPOINT
         (6), and the standalone decoy-5 DENIES. RED if a common gh-api flag drops from
         the skip set (silent widening)."""
-        assert _mint_pr(approve) == "6", (
+        assert _mint_pr(approve) == "api:o/r#6", (
             f"a gh-api enumerated value-flag decoy bound the decoy — residual widened: {approve!r}"
         )
         assert _authorize_standalone(
@@ -2569,7 +2616,7 @@ class TestApiMergeEndpointResidualBoundary:
         never None. RED if a future 'harden' fail-closes on multi-token/exotic forms
         (reintroducing a cardinal-sin over-block for gh-api)."""
         cmd = "gh api -X PUT repos/o/r/pulls/6/merge --some-unknown-flag benign"
-        assert _mint_pr(cmd) == "6", (
+        assert _mint_pr(cmd) == "api:o/r#6", (
             "faithful gh-api merge with an unknown benign flag returned wrong/None — a "
             "harden fail-closed into an over-block"
         )
@@ -2591,7 +2638,7 @@ class TestAcceptedRecognitionLimitationPins:
     aware PER-LEG predicate reaches those forms with no match-anywhere behavior: each
     call sees ONE isolated leg and derives flags AND positionals from it, so a mention
     inside a benign leg stays a mention. Leaving them ungated was therefore not a
-    principled limitation but a good-faith-reachable UNDER-BLOCK (`cd /repo && git
+    principled limitation but a good-faith-reachable UNDER-BLOCK (`cd . && git
     push origin --delete feature` ran completely ungated), and it was closed.
 
     So the OUTCOME assertion those pins carried was a PROXY for the author's real
@@ -2708,10 +2755,10 @@ class TestAcceptedRecognitionLimitationPins:
     @pytest.mark.parametrize(
         "cmd,expected_op",
         [
-            ("cd /repo && git push origin main --force", "force-push"),
-            ("cd /repo && git branch -D feature", "branch-delete"),
-            ("cd /repo && gh pr merge 5", "merge"),
-            ("cd /repo && gh api -X DELETE repos/o/r/branches/main/protection", "branch-protection"),
+            ("cd . && git push origin main --force", "force-push"),
+            ("cd . && git branch -D feature", "branch-delete"),
+            ("cd . && gh pr merge 5", "merge"),
+            ("cd . && gh api -X DELETE repos/o/r/branches/main/protection", "branch-protection"),
         ],
     )
     def test_literal_arm_contrast_still_gates_non_first_leg(self, cmd, expected_op):

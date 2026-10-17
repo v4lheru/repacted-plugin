@@ -8,6 +8,7 @@ Tests cover:
 4. Skill names and descriptions are present
 5. SKILL.md body contains substantive content
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -17,17 +18,14 @@ from helpers import parse_frontmatter
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
 EXPECTED_SKILLS = {
-    "pact-agent-teams",
     "pact-architecture-patterns",
-    "pact-teachback",
     "pact-coding-standards",
     "pact-handoff-harvest",
     "pact-memory",
     "pact-prepare-research",
     "pact-security-patterns",
-    "pact-team-registration",
     "pact-testing-strategies",
-    "request-more-context",
+    "teammate",
     "worktree-cleanup",
     "worktree-setup",
 }
@@ -37,7 +35,6 @@ N8N_SKILLS = {
     "n8n-code-javascript",
     "n8n-code-python",
     "n8n-expression-syntax",
-    "n8n-mcp-tools-expert",
     "n8n-node-configuration",
     "n8n-validation-expert",
     "n8n-workflow-patterns",
@@ -104,6 +101,8 @@ class TestSkillMdFiles:
             text = skill_md.read_text(encoding="utf-8")
             _, _, body = text.partition("---")
             _, _, body = body.partition("---")
+            if body.strip().startswith("> Moved:"):
+                continue  # a C6 stub left at a moved skill (removed at SWEEP)
             assert len(body.strip()) > 100, f"{d.name}/SKILL.md body too short"
 
 
@@ -117,7 +116,10 @@ class TestPreResponseChannelCheckGate:
     gate is in pact-agent-teams/SKILL.md.
     """
 
-    AGENT_TEAMS_PATH = SKILLS_DIR / "pact-agent-teams" / "SKILL.md"
+    # TEAMMATE (m6): the full teammate-side gate lives in the teammate skill's messaging
+    # reference; its short, per-turn form opens skills/teammate/SKILL.md before On Start.
+    AGENT_TEAMS_PATH = SKILLS_DIR / "teammate" / "references" / "teammate-messaging.md"
+    TEAMMATE_SKILL_PATH = SKILLS_DIR / "teammate" / "SKILL.md"
     ORCHESTRATION_PATH = (
         SKILLS_DIR.parent / "agents" / "pact-orchestrator.md"
     )
@@ -134,8 +136,9 @@ class TestPreResponseChannelCheckGate:
     # Teammate-side (pact-agent-teams/SKILL.md) is two levels deep; lead-side
     # (agents/pact-orchestrator.md) is one level deep — pin separate link
     # paths per surface.
-    TEAMMATE_CHARTER_LINK = "../../protocols/pact-communication-charter.md#pre-send-self-check"
-    LEAD_CHARTER_LINK = "../protocols/pact-communication-charter.md"
+    # TEAMMATE (m6): the teammate-side Pre-Send Self-Check moved into the same reference.
+    TEAMMATE_CHARTER_LINK = "teammate-messaging.md#pre-send-self-check"
+    LEAD_CHARTER_LINK = "{plugin_root}/protocols/pact-communication-charter.md"
     LEAD_GRAY_AREA_PHRASE = "Lead-side gray-area trap"
     TEAMMATE_GRAY_AREA_PHRASE = "Teammate-side gray-area trap"
 
@@ -202,9 +205,9 @@ class TestPreResponseChannelCheckGate:
         )
 
     def test_teammate_gate_appears_before_on_start(self):
-        teammate = self.AGENT_TEAMS_PATH.read_text(encoding="utf-8")
+        teammate = self.TEAMMATE_SKILL_PATH.read_text(encoding="utf-8")
         assert teammate.index("## Pre-Response Channel Check") < teammate.index("## On Start"), \
-            "pact-agent-teams: gate must appear before On Start"
+            "teammate SKILL.md: gate must appear before On Start"
 
     def test_lead_gate_appears_before_communication(self):
         lead = self.ORCHESTRATION_PATH.read_text(encoding="utf-8")
@@ -221,14 +224,14 @@ _ALL_SKILL_FILES = sorted(SKILLS_DIR.glob("*/SKILL.md"))
 
 
 # =============================================================================
-# F20 — pact-*.md agent files must declare pact-agent-teams in skills frontmatter
+# F20 — every spawned pact-*.md teammate reaches the team protocol
 # =============================================================================
 
-# Per architect §6 / §7(b)+(f), every spawned PACT teammate must preload the
-# pact-agent-teams skill so the team-protocol body is in the agent's context
-# at first turn. pact-orchestrator is delivered via `claude --agent` rather
-# than spawned, so its frontmatter shape differs (no `skills:` block) and is
-# carved out.
+# TEAMMATE (m6): the `skills:` preload is gone (C10: a headless `claude -p` spawn injects every
+# listed body). Each teammate body instead invokes `Skill("repacted:teammate")` first, and the
+# prelude repeats it. Files whose owner has not removed the preload yet are exempt here exactly
+# as in tests/contract/test_identity.py SKILLS_EXEMPT. pact-orchestrator is delivered via
+# `claude --agent`, not spawned, and is carved out.
 PACT_AGENTS_DIR = SKILLS_DIR.parent / "agents"
 F20_CARVE_OUT_FILES = frozenset({"pact-orchestrator"})
 _PACT_AGENT_FILES = sorted(PACT_AGENTS_DIR.glob("pact-*.md"))
@@ -239,33 +242,28 @@ _PACT_AGENT_FILES = sorted(PACT_AGENTS_DIR.glob("pact-*.md"))
     _PACT_AGENT_FILES,
     ids=[p.stem for p in _PACT_AGENT_FILES],
 )
-def test_f20_pact_agent_declares_pact_agent_teams_skill(agent_path):
-    """F20 pre-merge audit: each pact-*.md teammate file must list
-    `pact-agent-teams` under its skills: frontmatter block. Without the
-    skill preload, spawned teammates never see TaskList / SendMessage /
-    completion-authority protocol — the original #662 trigger surface.
+def test_f20_pact_agent_reaches_the_teammate_skill(agent_path):
+    """F20 (#662): a spawned teammate must reach the team protocol (TaskList, SendMessage,
+    completion authority). Without it the original #662 trigger surface returns."""
+    from tests.contract.test_identity import SKILLS_EXEMPT
 
-    Carve-out: pact-orchestrator is delivered via `claude --agent` and has
-    no skills: block at all. Documented in F20_CARVE_OUT_FILES.
-    """
     if agent_path.stem in F20_CARVE_OUT_FILES:
-        pytest.skip(
-            f"{agent_path.stem} is carved out from F20 — orchestrator "
-            "persona delivered via --agent flag, not spawn"
-        )
+        pytest.skip(f"{agent_path.stem} is delivered via --agent flag, not spawn")
     text = agent_path.read_text(encoding="utf-8")
-    fm = parse_frontmatter(text)
-    assert fm is not None, f"{agent_path.name} has no frontmatter"
-    skills_value = fm.get("skills", "")
-    assert "pact-agent-teams" in skills_value, (
-        f"{agent_path.name} skills frontmatter missing pact-agent-teams. "
-        "Spawned teammates would lack the team-protocol body — see #662 F20."
+    if f"agents/{agent_path.name}" in SKILLS_EXEMPT:
+        fm = parse_frontmatter(text)
+        assert fm is not None and "pact-agent-teams" in fm.get("skills", ""), (
+            f"{agent_path.name} is SKILLS_EXEMPT but no longer preloads the team protocol")
+        return
+    assert 'Skill("repacted:teammate")' in text, (
+        f"{agent_path.name} never tells the agent to invoke Skill(\"repacted:teammate\"); "
+        "with no skills: preload the spawned teammate would lack the team protocol (#662 F20)."
     )
 
 
 class TestNoFirstActionFossilInSkillBodies:
     """Negative-invariant fossilization guard: skill bodies must not contain
-    the v3.x FIRST-ACTION + Skill("PACT:teammate-bootstrap") + peer_inject
+    the v3.x FIRST-ACTION + Skill("teammate-bootstrap") + peer_inject
     delivery-mechanism prose. The mechanism and the bootstrap command were
     deleted; any surviving prose tells spawned teammates to look for content
     delivered by absent machinery.
@@ -279,10 +277,10 @@ class TestNoFirstActionFossilInSkillBodies:
 
     FORBIDDEN_FOSSIL_PATTERNS = (
         "YOUR FIRST ACTION (YOU MUST DO THIS IMMEDIATELY)",
-        'Skill("PACT:teammate-bootstrap")',
-        "Skill('PACT:teammate-bootstrap')",
-        "/PACT:teammate-bootstrap",
-        "/PACT:bootstrap",
+        'Skill("repacted:' 'teammate-bootstrap")',
+        "Skill('repacted:" "teammate-bootstrap')",
+        "/repacted:" "teammate-bootstrap",
+        "/repacted:bootstrap",
         "peer_inject",
     )
 
@@ -320,9 +318,13 @@ class TestOrderingInvariantPhraseCount:
     cannot be elided without false-RED.
     """
 
+    # TEAMMATE (m6): the four sites moved with the merge into skills/teammate. On Start is inline
+    # in SKILL.md; On Completion, Intentional Waiting and the teachback body are references.
     EXPECTED_COUNTS = {
-        "pact-agent-teams/SKILL.md": 3,
-        "pact-teachback/SKILL.md": 1,
+        "teammate/SKILL.md": 1,
+        "teammate/references/teammate-handoff.md": 1,
+        "teammate/references/teammate-waiting.md": 1,
+        "teammate/references/teammate-teachback.md": 1,
     }
 
     @pytest.mark.parametrize(
@@ -365,7 +367,8 @@ class TestHarvestPerTeamSectionDirective:
     Pin style mirrors the EXPECTED_COUNTS content-presence pattern above.
     """
 
-    REL_PATH = "pact-handoff-harvest/SKILL.md"
+    # the secretary rework: the verbatim rule text moved to the skill's long form.
+    REL_PATH = "pact-handoff-harvest/references/harvest-long-form.md"
 
     # Verbatim load-bearing substrings of the save-step directive. If a
     # deliberate rewording changes these, update them here with a comment
@@ -431,7 +434,8 @@ class TestOrphanRecoveryCarrierGuard:
     Pin style mirrors TestHarvestPerTeamSectionDirective above.
     """
 
-    REL_PATH = "pact-handoff-harvest/SKILL.md"
+    # the secretary rework: the verbatim rule text moved to the skill's long form.
+    REL_PATH = "pact-handoff-harvest/references/harvest-long-form.md"
 
     # Verbatim load-bearing substrings of the step 4 carrier guard. If a
     # deliberate rewording changes these, update them here with a comment
@@ -460,3 +464,49 @@ class TestOrphanRecoveryCarrierGuard:
             f"state in that update that step 4 removes nothing and that the "
             f"carrier test is expressed."
         )
+
+
+# --- SKILLS-N8N (phase B, m9a): catalog descriptions and the progressive-disclosure routers ------
+
+# The PACT-origin skills this package owns. Their descriptions are the catalog entry AND the cue a
+# skill auto-loads on (D22), so each stays <= 180 chars (build plan §2 C1) and opens with the
+# situation ("Use when ...") rather than a topic label. The 3 V8 skills are excluded: SWEEP
+# deletes them, and n8n-ops is a user-layer skill with its own <= 400 rule.
+SKILLS_N8N_OWNED = (
+    "worktree-setup", "worktree-cleanup",
+    "telegram-guide", "pact-coding-standards", "pact-testing-strategies",
+)
+DESCRIPTION_MAX = 180
+ROUTER_MAX_BYTES = 8_000   # lead ruling on #119: coding/testing are <= 8,000 B routers
+
+
+def _description(name: str) -> str:
+    raw = parse_frontmatter((SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8"))["description"]
+    return str(raw).strip().strip("\"'")
+
+
+@pytest.mark.parametrize("name", SKILLS_N8N_OWNED)
+def test_owned_description_fits_the_catalog_ceiling(name):
+    description = " ".join(str(_description(name)).split())
+    assert len(description) <= DESCRIPTION_MAX, f"{name}: {len(description)} chars"
+
+
+@pytest.mark.parametrize("name", SKILLS_N8N_OWNED)
+def test_owned_description_leads_with_the_situation(name):
+    assert str(_description(name)).lstrip().startswith("Use when"), name
+
+
+@pytest.mark.parametrize("name", ["pact-coding-standards", "pact-testing-strategies"])
+def test_router_fits_and_every_link_resolves(name):
+    """The router stays small, and nothing moved out of it is orphaned: every relative link in
+    the router and in its references resolves, and every reference is linked from the router."""
+    skill_dir = SKILLS_DIR / name
+    router = skill_dir / "SKILL.md"
+    assert router.stat().st_size <= ROUTER_MAX_BYTES, router.stat().st_size
+    link = re.compile(r"\]\(([^)#:]+\.md)(?:#[^)]*)?\)")
+    for md in [router, *sorted((skill_dir / "references").glob("*.md"))]:
+        for target in link.findall(md.read_text(encoding="utf-8")):
+            assert (md.parent / target).resolve().is_file(), f"{md.name} -> {target}"
+    linked = {Path(t).name for t in link.findall(router.read_text(encoding="utf-8"))}
+    unlinked = [p.name for p in (skill_dir / "references").glob("*.md") if p.name not in linked]
+    assert not unlinked, f"{name}: references not linked from the router: {unlinked}"

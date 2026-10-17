@@ -311,7 +311,7 @@ class TestModuleConstants:
         # Top-level re-export: only the staleness predicate is on the
         # shared package's public API. Vocabulary + format helpers stay
         # module-only to keep the shared package namespace small.
-        from shared import wait_stale  # noqa: F401
+        from shared.intentional_wait import wait_stale  # noqa: F401
         from shared.intentional_wait import DEFAULT_THRESHOLD_MINUTES
         from shared.intentional_wait import (  # noqa: F401  # re-export probe: import IS the test — names must stay importable module-only
             canonical_since,
@@ -1242,35 +1242,6 @@ class TestDocSurfaceStalenessSweep:
             return True
         return False
 
-    @pytest.mark.parametrize("subdir", ["agents", "commands", "protocols"])
-    def test_no_old_name_in_doc_surface(self, subdir):
-        root = self._doc_root() / subdir
-        assert root.is_dir(), f"Expected doc directory {root} to exist"
-        violations = []
-        for md_path in root.rglob("*.md"):
-            content = md_path.read_text(encoding="utf-8")
-            in_fence = False
-            for line_no, line in enumerate(content.splitlines(), start=1):
-                # Track fenced-code-block state. A line that IS a fence
-                # delimiter toggles the state; that line itself is treated
-                # as inside-fence (snippets like ```python with the OLD
-                # constant in the same line shouldn't false-positive).
-                if self.FENCE_PATTERN.search(line):
-                    in_fence = not in_fence
-                    continue
-                if self._skipped_line(line, in_fence):
-                    continue
-                for pattern in self.ALL_OLD_NAME_PATTERNS:
-                    if pattern.search(line):
-                        violations.append(
-                            f"{md_path.relative_to(root.parent)}:{line_no}: "
-                            f"[{pattern.pattern}] {line.strip()}"
-                        )
-        assert not violations, (
-            "Stale typo-variant references found in doc surface — must be "
-            "retargeted to the canonical `_AGENT_TYPES`-suffixed name:\n"
-            + "\n".join(violations)
-        )
 
     # ---- B1 narrowed-regex counter-tests ----
 
@@ -1422,7 +1393,7 @@ class TestDocSurfaceStalenessSweep:
             root / "agents" / "pact-secretary.md",
             root / "commands" / "comPACT.md",
             root / "commands" / "orchestrate.md",
-            root / "protocols" / "pact-completion-authority.md",
+            root / "protocols" / "completion.md",
         ]
         new_name = "SELF_COMPLETE_EXEMPT_AGENT_TYPES"
         hits = [

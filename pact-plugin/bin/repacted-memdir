@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""repacted-memdir: rename the orchestrator's memory dir to match the product that runs.
+
+Location: pact-plugin/bin/repacted-memdir (owned by launcher; the core is
+_memdir.py beside it). bin/repact calls it around every alternate-mode session:
+`--ensure repacted` before `claude` starts, `--ensure pact` from its exit trap. Between
+sessions the one dir therefore always carries PACT's name, and `pact` needs no change.
+
+  --ensure pact|repacted  give the one dir that product's name (no-op when it has it)
+  --merge-split           fold a stray PACT-named dir into the repacted-named one after a
+                          crash: never overwrites, never deletes a file; a colliding stray
+                          file is kept as '<name>.split-<UTC timestamp>' beside its twin.
+                          It then points the agent and protocols links back at PACT's root,
+                          which the crashed launcher left on repacted.
+  --status                both names, the split flag, the *.split-* files and which root
+                          each agent / protocols link points at
+  --links                 with --ensure: also point the 13 agent links and the protocols
+                          link at that product's root (see _agentlinks.py for why)
+
+Safety:
+  - DRY RUN by default. Only --confirm-live changes anything.
+  - The root is $CLAUDE_CONFIG_DIR when set, else $HOME/.claude.
+  - Refuses (exit 2, nothing moved): a split for --ensure, a symlink or non-dir at either
+    name, and any --confirm-live run from inside a repact session (REPACTED_LAUNCH is set
+    there: the session holds the dir).
+  - Each move is one atomic os.rename; the count and digest are recomputed afterwards and a
+    difference fails loudly (exit 1) with the undo command.
+
+Exit codes: 0 done or nothing to do; 1 a post-move check failed; 2 refused; 64 usage error.
+
+Examples:
+  python3 "repacted-memdir" --status
+  python3 "repacted-memdir" --ensure repacted --confirm-live
+  python3 "repacted-memdir" --merge-split
+  python3 "repacted-memdir" --merge-split --confirm-live
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _agentlinks  # noqa: E402  the agent and protocols links (launcher)
+import _memdir  # noqa: E402  the rename core (launcher)
+
+INSIDE_SESSION_VAR = "REPACTED_LAUNCH"
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse exits 2 on a usage error, which here means 'refused'; use 64 instead."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}\n\n  python3 \"repacted-memdir\" --status",
+              file=sys.stderr)
+        sys.exit(_memdir.EXIT_USAGE)
+
+
+def parse_args(argv):
+    parser = _Parser(prog="repacted-memdir", description=__doc__.split("\n\n")[0],
+                     epilog=__doc__[__doc__.index("Examples:"):],
+                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--ensure", choices=_memdir.SIDES, help="give the dir this product's name")
+    mode.add_argument("--merge-split", action="store_true", help="fold a stray PACT-named dir in")
+    mode.add_argument("--status", action="store_true", help="report and change nothing")
+    parser.add_argument("--to", default=_memdir.DEFAULT_NAME,
+                        help=f"the repacted-side dir name (default {_memdir.DEFAULT_NAME})")
+    parser.add_argument("--confirm-live", action="store_true",
+                        help="apply (default: dry run, nothing moves)")
+    parser.add_argument("--quiet", action="store_true",
+                        help="print only refusals, failures and reminders (the launcher's mode)")
+    parser.add_argument("--links", action="store_true",
+                        help="with --ensure, also point the agent and protocols links at that "
+                             "product's root (PACT's from installed_plugins.json)")
+    parser.add_argument("--remind-splits", action="store_true",
+                        help="after --ensure, print one line while *.split-* files remain")
+    args = parser.parse_args(argv)
+    if not _memdir.SAFE_NAME.match(args.to) or args.to == _memdir.LEGACY_NAME:
+        parser.error(f"--to must be a single dir name other than {_memdir.LEGACY_NAME}, "
+                     f"got {args.to!r}")
+    return args
+
+
+def _guarded(step, *call_args, **kwargs) -> int:
+    """Run one step; turn its refusal or failure into a printed line and an exit code."""
+    try:
+        return step(*call_args, **kwargs)
+    except _memdir.Refusal as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return _memdir.EXIT_REFUSED
+    except (_memdir.VerifyFailed, OSError) as exc:
+        print(f"{exc}" if isinstance(exc, _memdir.VerifyFailed) else f"FAILED: {exc}",
+              file=sys.stderr)
+        return _memdir.EXIT_VERIFY
+
+
+def _link_step(config_root: Path, home: Path, side: str, apply: bool, say) -> int:
+    product_root = (_agentlinks.own_plugin_root() if side == "repacted"
+                    else _agentlinks.pact_install_root(config_root))
+    pairs = _agentlinks.link_pairs(config_root, home, product_root)
+    _agentlinks.point_links(pairs, apply=apply, label=side, say=say)
+    return _memdir.EXIT_OK
+
+
+def _status_lines(config_root: Path, home: Path) -> "list[str]":
+    roots = {"repacted": _agentlinks.own_plugin_root(), "PACT": None}
+    try:
+        roots["PACT"] = _agentlinks.pact_install_root(config_root)
+        lines = [f"  PACT root: {roots['PACT']}"]
+    except _memdir.Refusal as exc:
+        lines = [f"  PACT root: unresolved ({exc})"]
+    lines.append(f"  repacted root: {roots['repacted']}")
+    return lines + _agentlinks.ownership(
+        _agentlinks.link_pairs(config_root, home, roots["repacted"]), roots)
+
+
+def run(args, env=None) -> int:
+    env = os.environ if env is None else env
+    say = (lambda _line: None) if args.quiet else print
+    try:
+        root, origin = _memdir.resolve_root(env)
+    except _memdir.Refusal as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return _memdir.EXIT_REFUSED
+    home = Path(env.get("HOME") or Path.home())
+    memory_dir = root / "agent-memory"
+    if args.status:
+        print(f"root: {root} (from {origin})")
+        print("\n".join(_memdir.status(memory_dir, args.to) + _status_lines(root, home)))
+        return _memdir.EXIT_OK
+    if args.confirm_live and env.get(INSIDE_SESSION_VAR):
+        print(f"REFUSED: {INSIDE_SESSION_VAR} is set, so this runs inside a repact session, "
+              "which holds the dir; run it from a plain terminal", file=sys.stderr)
+        return _memdir.EXIT_REFUSED
+    say(f"root: {root} (from {origin})")
+    if args.merge_split:
+        code = _guarded(_memdir.merge_split, memory_dir, args.to, apply=args.confirm_live,
+                        say=print)
+        # Kill -9 recovery: the crashed launcher also left the links on repacted.
+        if code == _memdir.EXIT_OK:
+            code = _guarded(_link_step, root, home, "pact", args.confirm_live, print)
+        return code
+    code = _guarded(_memdir.ensure, memory_dir, args.ensure, args.to, apply=args.confirm_live,
+                    say=say)
+    # Toward repacted the links follow only a successful rename (a refused launch must leave
+    # PACT's links alone); toward PACT, the exit trap's direction, they are restored regardless.
+    if args.links and (code == _memdir.EXIT_OK or args.ensure == "pact"):
+        code = max(code, _guarded(_link_step, root, home, args.ensure, args.confirm_live, say))
+        if code != _memdir.EXIT_OK and args.ensure == "repacted" and args.confirm_live:
+            # The launch will not start claude, and its trap is not set yet: undo the half-done
+            # switch here so PACT is left exactly as it was.
+            print("repact: the switch to repacted failed; restoring PACT's name and links",
+                  file=sys.stderr)
+            _guarded(_memdir.ensure, memory_dir, "pact", args.to, apply=True, say=say)
+            _guarded(_link_step, root, home, "pact", True, say)
+    reminder = _memdir.split_reminder(memory_dir, args.to) if args.remind_splits else None
+    if reminder:
+        print(reminder, file=sys.stderr)
+    return code
+
+
+def main(argv=None) -> int:
+    return run(parse_args(sys.argv[1:] if argv is None else argv))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

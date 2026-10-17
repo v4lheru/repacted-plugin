@@ -766,7 +766,7 @@ class TestSymlinkedProjectDir:
     """Strategy 1 names the directory CLAUDE_PROJECT_DIR RESOLVES TO, not the
     link it was reached through.
 
-    The backlog writer stores the resolved path, so a link basename here and a
+    Session paths use the resolved path, so a link basename here and a
     target path there split one project into two names. Real detector, real
     filesystem, real git for the repo arm: the resolve is the thing under test.
     """

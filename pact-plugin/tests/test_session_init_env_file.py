@@ -47,18 +47,17 @@ def _run_main(monkeypatch, tmp_path, frame=None):
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     stdin_data = json.dumps({"source": "startup", "session_id": "33334444-0000-0000-0000-000000000000", **(frame or {})})
-    with patch("session_init.setup_plugin_symlinks", return_value=None), \
-         patch("session_init.ensure_project_memory_md", return_value=None), \
-         patch("session_init.check_pinned_staleness", return_value=None), \
+    with patch("shared.session_init_common.setup_plugin_symlinks", return_value=None), \
+         patch("shared.session_init_common.ensure_project_memory_md", return_value=None), \
          patch("session_init.get_task_list", return_value=None), \
-         patch("session_init.restore_last_session", return_value=None), \
-         patch("session_init.build_context_cache", side_effect=_capture_context_cache), \
-         patch("session_init.persist_context", return_value=None), \
-         patch("session_init.append_event"), \
-         patch("session_init.update_session_info", return_value=None), \
-         patch("session_init.check_resume_state", return_value=None), \
-         patch("session_init._registry_resolve", return_value=None), \
-         patch("session_init.get_peer_context", return_value=None), \
+         patch("shared.session_init_lead.restore_last_session", return_value=None), \
+         patch("shared.session_init_lead.build_context_cache", side_effect=_capture_context_cache), \
+         patch("shared.session_init_lead.persist_context", return_value=None), \
+         patch("shared.session_init_lead.append_event"), \
+         patch("shared.session_init_lead.update_session_info", return_value=None), \
+         patch("shared.session_init_lead.check_resume_state", return_value=None), \
+         patch("shared.session_init_teammate._registry_resolve", return_value=None), \
+         patch("shared.session_init_teammate.get_peer_context", return_value=None), \
          patch("sys.stdin", io.StringIO(stdin_data)), \
          patch("sys.stdout", new_callable=io.StringIO):
         with pytest.raises(SystemExit) as exc:

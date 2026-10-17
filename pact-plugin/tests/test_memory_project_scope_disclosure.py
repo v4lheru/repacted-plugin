@@ -149,8 +149,7 @@ def test_the_string_only_detector_still_returns_a_bare_string():
     """The long-standing signature is preserved for its external callers.
 
     `_detect_project_id` is called by the precedence pins in
-    test_project_dir_resolution.py and by test_backlog.py. Returning a tuple
-    there would break them, which is why the richer variant was added beside it
+    test_project_dir_resolution.py. Returning a tuple there would break them, which is why the richer variant was added beside it
     rather than replacing it.
     """
     with patch.dict("os.environ", {"CLAUDE_PROJECT_DIR": "/tmp/some-project"}):
@@ -205,7 +204,7 @@ def test_an_agreeing_save_discloses_too(mem):
 
 def test_divergence_is_reported_without_being_called_a_misfile(mem):
     """The measured incident's shape: saved from inside a different repo."""
-    scope = _save(mem, Path("/Users/mj/Sites/scratchpad/viable"))
+    scope = _save(mem, Path("/Users/alice/Sites/scratchpad/viable"))
     assert scope["location_divergence"] is True
     assert scope["cwd_repo"] == "viable"
     assert scope["project_id"] == "PACT-prompt"
@@ -358,7 +357,7 @@ def test_a_save_that_fails_AT_THE_STORE_WRITE_discloses_nothing(mem, caplog):
     arm that reports success.
     """
     # POSITIVE CONTROL: a completed save populates the field on this instance.
-    ok = _save(mem, Path("/Users/mj/Sites/scratchpad/viable"))
+    ok = _save(mem, Path("/Users/alice/Sites/scratchpad/viable"))
     assert ok is not None and ok["location_divergence"] is True, (
         "the control save disclosed nothing, so a later absence would prove "
         f"only that this arm never populates the field: {ok!r}"
@@ -369,7 +368,7 @@ def test_a_save_that_fails_AT_THE_STORE_WRITE_discloses_nothing(mem, caplog):
         with patch.object(memory_api, "_ensure_ready", lambda: None), \
              patch.object(
                  memory_api, "main_repo_root",
-                 return_value=Path("/Users/mj/Sites/scratchpad/viable")), \
+                 return_value=Path("/Users/alice/Sites/scratchpad/viable")), \
              patch.object(
                  memory_api, "create_memory",
                  side_effect=RuntimeError("store write exploded")):
@@ -453,7 +452,7 @@ def test_quick_save_warns_when_it_files_under_a_different_repository(caplog):
     """
     with caplog.at_level(logging.WARNING):
         memory_id = _quick_save(
-            Path("/Users/mj/Sites/scratchpad/viable"),
+            Path("/Users/alice/Sites/scratchpad/viable"),
             context="quick_save divergence probe",
             project_id="PACT-prompt",
         )

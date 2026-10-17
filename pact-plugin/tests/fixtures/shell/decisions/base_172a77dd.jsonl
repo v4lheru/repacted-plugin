@@ -1,0 +1,352 @@
+{"base": "172a77dd", "blob_id": "52cb9bd84b8d5d986a4e61eab48252895e0183fe", "captured_from": "3f27b2c6", "rows": 351, "sha256": "75a4fe6df30e4ec594f1949fac81a62958e3aeb2c23f4828e68fc6477998eb04"}
+{"attr": "_GH_PR_VALUE_TAKING_FLAGS", "value": {"__set__": ["--author-email", "--body", "--body-file", "--comment", "--match-head-commit", "--max-retries", "--retry-count", "--subject", "--timeout"], "frozen": true}}
+{"attr": "_extract_pr_number", "callable": true}
+{"attr": "detect_command_operation_type", "callable": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["_extract_pr_number", ["gh pr merge --max-retries 5"], {}], "result": null}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --author-email 99 --admin"], {}], "result": "42"}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --body 99 --admin"], {}], "result": "42"}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --body-file 99 --admin"], {}], "result": "42"}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --comment 99 --admin"], {}], "result": "42"}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --match-head-commit 99 --admin"], {}], "result": "42"}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --max-retries 99 --admin"], {}], "result": "42"}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --retry-count 99 --admin"], {}], "result": "42"}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --subject 99 --admin"], {}], "result": "42"}
+{"call": ["_extract_pr_number", ["gh pr merge 42 --timeout 99 --admin"], {}], "result": "42"}
+{"call": ["detect_command_operation_type", ["cd /repo && gh pr close 5 -d"], {}], "result": "close"}
+{"call": ["is_dangerous_command", ["cd . && gh pr close 5 -R owner/repo -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && gh pr close 5 -d -R owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && gh pr close 5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && gh pr close 5 -dR owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && gh pr close feature -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && gh pr close https://github.com/o/r/pull/5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git branch --delete -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git branch -Df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git branch -d -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git branch -df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git branch -fD temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git branch -fd temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push --delete origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push --mirror origin"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push --prune origin --all"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push -d origin a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push -d origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push -du origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push -ud origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push origin --delete a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push origin --delete main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push origin -d main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push origin :a :b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push origin :main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /repo && gh pr close 5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /repo && git push origin --delete feature"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr close 5 --delete-branch --repo owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr close 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr close 5 -R owner/repo -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr close 5 -d -R owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr close 5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr close 5 -dR owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr merge 42 --admin --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr merge 42 --admin -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr merge 42 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr merge 42 --squash --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr merge 42 -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr merge 42 -dR owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && gh pr merge 42"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch --delete --force a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch --delete --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch --delete -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch --force --delete temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -D --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -D -f temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -D a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -Df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -d -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -f -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -fD temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git branch -fd temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push --delete origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push --force -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push --force origin main feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push --force-with-lease origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push --mirror origin"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push --prune origin --all"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -d origin a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -d origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -du origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -f -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -f origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -fu origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -ud origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push -uf origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push origin --delete a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push origin --delete main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push origin -d main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push origin :a :b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push origin :main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push origin HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r && git push origin main:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr close 5 --delete-branch --repo owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr close 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr close 5 -R owner/repo -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr close 5 -d -R owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr close 5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr close 5 -dR owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr merge 42 --admin --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr merge 42 --admin -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr merge 42 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr merge 42 --squash --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr merge 42 -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr merge 42 -dR owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; gh pr merge 42"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch --delete --force a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch --delete --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch --delete -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch --force --delete temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -D --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -D -f temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -D a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -Df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -d -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -f -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -fD temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git branch -fd temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push --delete origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push --force -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push --force origin main feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push --force-with-lease origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push --mirror origin"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push --prune origin --all"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -d origin a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -d origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -du origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -f -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -f origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -fu origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -ud origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push -uf origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push origin --delete a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push origin --delete main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push origin -d main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push origin :a :b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push origin :main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push origin HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd /tmp/r ; git push origin main:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr close 5 --delete-branch --repo owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr close 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr close 5 -R owner/repo -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && gh pr close 5 -d -R owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && gh pr close 5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && gh pr close 5 -dR owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && gh pr merge 42 --admin --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr merge 42 --admin -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr merge 42 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr merge 42 --squash --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr merge 42 -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr merge 42 -dR owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && gh pr merge 42"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch --delete --force a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch --delete --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch --delete -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git branch --force --delete temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch -D --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch -D -f temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch -D a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch -Df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git branch -d -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git branch -df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git branch -f -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git branch -fD temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git branch -fd temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push --delete origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push --force -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push --force origin main feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push --force-with-lease origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push --mirror origin"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push --prune origin --all"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push -d origin a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push -d origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push -du origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push -f -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push -f origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push -fu origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push -ud origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push -uf origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push origin --delete a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push origin --delete main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push origin -d main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push origin :a :b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push origin :main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo hi && git push origin HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi && git push origin main:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr close 5 --delete-branch --repo owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr close 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr close 5 -R owner/repo -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || gh pr close 5 -d -R owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || gh pr close 5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || gh pr close 5 -dR owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || gh pr merge 42 --admin --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr merge 42 --admin -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr merge 42 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr merge 42 --squash --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr merge 42 -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr merge 42 -dR owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || gh pr merge 42"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch --delete --force a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch --delete --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch --delete -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git branch --force --delete temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch -D --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch -D -f temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch -D a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch -Df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git branch -d -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git branch -df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git branch -f -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git branch -fD temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git branch -fd temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push --delete origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push --force -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push --force origin main feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push --force-with-lease origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push --mirror origin"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push --prune origin --all"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push -d origin a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push -d origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push -du origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push -f -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push -f origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push -fu origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push -ud origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push -uf origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push origin --delete a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push origin --delete main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push origin -d main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push origin :a :b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push origin :main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["false || git push origin HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["false || git push origin main:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 --delete-branch --repo owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 -R owner/repo -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 -Rd owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr close 5 -d -R owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 -dR owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr close feature -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close https://github.com/o/r/pull/5 -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 42 --admin --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 42 --admin -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 42 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 42 --squash --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 42 -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 42 -dR owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 42"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch --delete --force a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch --delete --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch --delete -f temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch --force --delete temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -D --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -D -f temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -D a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -Df temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -d -f temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -df temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -f -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -fD temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -fd temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --delete origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin main feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force-with-lease origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --mirror origin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --prune origin --all"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -d origin a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -d origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -du origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -f -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -f origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -fu origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -ud origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -uf origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin --delete a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin --delete main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin -d main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin :a :b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin :main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin main:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr close 5 --delete-branch --repo owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr close 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr close 5 -R owner/repo -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && gh pr close 5 -d -R owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && gh pr close 5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && gh pr close 5 -dR owner/repo"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && gh pr merge 42 --admin --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr merge 42 --admin -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr merge 42 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr merge 42 --squash --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr merge 42 -d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr merge 42 -dR owner/repo"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && gh pr merge 42"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch --delete --force a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch --delete --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch --delete -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git branch --force --delete temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch -D --force temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch -D -f temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch -D a b"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch -Df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git branch -d -f temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git branch -df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git branch -f -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git branch -fD temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git branch -fd temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push --delete origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push --force -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push --force origin main feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push --force-with-lease origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push --mirror origin"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push --prune origin --all"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push -d origin a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push -d origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push -du origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push -f -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push -f origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push -fu origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push -u origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push -ud origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push -uf origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push origin --delete a b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push origin --delete main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push origin -d main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push origin :a :b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push origin :main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git push origin HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status && git push origin main:main"], {}], "result": true}

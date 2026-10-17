@@ -1,0 +1,30 @@
+{
+  "identity": {
+    "name": "Your Name",
+    "email": "you@example.com",
+    "slack_id": ""
+  },
+  "paths": {
+    "kb": "~/.local/share/repacted/kb",
+    "vault": null
+  },
+  "kb": {
+    "require_suffix": null
+  },
+  "distill": {
+    "enabled": false,
+    "backend": "claude-cli",
+    "model": "sonnet",
+    "effort": "medium",
+    "caps": {
+      "usd": null,
+      "tokens": null,
+      "sessions": null
+    },
+    "projects": {
+      "include": [],
+      "exclude": []
+    },
+    "pricing_source": null
+  }
+}

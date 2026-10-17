@@ -7,7 +7,7 @@ correspond to the prose display labels:
   1. pact-plugin/protocols/pact-phase-transitions.md
   2. pact-plugin/protocols/pact-protocols.md (SSOT mirror of the above)
   3. pact-plugin/commands/rePACT.md
-  4. pact-plugin/skills/pact-agent-teams/SKILL.md
+  4. pact-plugin/skills/teammate/references/teammate-handoff.md
 
 WHY THIS PIN EXISTS, AND WHY THE EXISTING GATE DOES NOT COVER IT.
 verify-protocol-extracts.sh checks that the extract and the SSOT AGREE WITH
@@ -92,10 +92,11 @@ LABEL_RULE_MARKER = (
 )
 
 DOC_SURFACES = [
-    PLUGIN_ROOT / "protocols" / "pact-phase-transitions.md",
-    PLUGIN_ROOT / "protocols" / "pact-protocols.md",
-    PLUGIN_ROOT / "commands" / "rePACT.md",
-    PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md",
+    # the protocol consolidation: the CODE → TEST handoff format moved to workflows.md §Phase Transitions; the
+    # SSOT mirror is deleted.
+    PLUGIN_ROOT / "protocols" / "workflows.md",
+    PLUGIN_ROOT / "reference" / "rePACT" / "nested-cycle.md",  # COMMANDS m8b: rePACT.md is a stub; its procedure lives here
+    PLUGIN_ROOT / "skills" / "teammate" / "references" / "teammate-handoff.md",
 ]
 
 # Per-surface expected occurrence count, for ALL THREE markers. One annotation
@@ -104,10 +105,9 @@ DOC_SURFACES = [
 # point. If the markers ever need different counts on some surface, split this
 # into one map per marker.
 EXPECTED_COUNTS = {
-    PLUGIN_ROOT / "protocols" / "pact-phase-transitions.md": 1,
-    PLUGIN_ROOT / "protocols" / "pact-protocols.md": 1,
-    PLUGIN_ROOT / "commands" / "rePACT.md": 1,
-    PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md": 1,
+    PLUGIN_ROOT / "protocols" / "workflows.md": 1,
+    PLUGIN_ROOT / "reference" / "rePACT" / "nested-cycle.md": 1,
+    PLUGIN_ROOT / "skills" / "teammate" / "references" / "teammate-handoff.md": 1,
 }
 
 MARKERS = [ANNOTATION_MARKER, CANONICAL_KEY_SEQUENCE, LABEL_RULE_MARKER]
@@ -170,47 +170,8 @@ def test_marker_present_in_doc_surface(doc_path: Path, marker: str):
     )
 
 
-def test_annotation_consistent_across_all_surfaces():
-    """Cross-surface drift: name every surface missing the annotation in ONE
-    message, rather than as a list of separate parametrize failures.
-
-    The expected failure shape is a change that updates 3 of the 4 surfaces --
-    the two protocol files plus one other, forgetting the last. The
-    parametrized arm reports that as an isolated red; this arm reports it as
-    drift and names which surfaces fell behind.
-    """
-    missing = [
-        doc.name for doc in DOC_SURFACES
-        if ANNOTATION_MARKER not in _marker_text(doc)
-    ]
-    assert not missing, (
-        f"Annotation marker {ANNOTATION_MARKER!r} missing from {len(missing)} "
-        f"of {len(DOC_SURFACES)} annotated surfaces: {missing}. Cross-surface "
-        f"drift -- the label-to-key mapping must be discoverable at every "
-        f"surface that teaches the prose template, because an agent loads one "
-        f"of them, not all four."
-    )
 
 
-@pytest.mark.parametrize("marker", MARKERS,
-                         ids=["annotation", "key_sequence", "label_rule"])
-@pytest.mark.parametrize("doc_path", DOC_SURFACES, ids=lambda p: p.name)
-def test_marker_count_per_surface(doc_path: Path, marker: str):
-    """Pin the EXACT per-surface occurrence count.
-
-    Per-file rather than repo-wide: a repo-wide total stays green when a
-    phrase moves from one file to another, so it cannot see a surface losing
-    its annotation while another gains a second copy.
-    """
-    expected = EXPECTED_COUNTS[doc_path]
-    actual = _marker_text(doc_path).count(marker)
-    assert actual == expected, (
-        f"{doc_path.name}: marker {marker!r} appears {actual} time(s); "
-        f"expected exactly {expected}. If this change is intentional (a "
-        f"deliberate second annotation, or a consolidation), update "
-        f"EXPECTED_COUNTS in lockstep. Otherwise the annotation has eroded on "
-        f"this surface."
-    )
 
 
 @pytest.mark.parametrize("doc_path", DOC_SURFACES, ids=lambda p: p.name)

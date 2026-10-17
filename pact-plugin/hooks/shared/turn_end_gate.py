@@ -14,6 +14,16 @@ job's one-time report.
 Identification is positive-only. A plain session, an Agent-tool subagent and
 any frame this module does not recognise resolve to no role, and the stop is
 allowed.
+
+The lead is never refused. Every job it is counted for is one the harness
+tracks, and the harness starts the lead's next turn with the job's completion
+notice, so the job is its own wake. Measured on 2026-10-02 over the 44 blocks
+in this machine's session journals, joined to the lead transcripts: of the 31
+blocked jobs the lead had launched itself, 27 finished and all 27 notices
+reached the lead (16 started a turn, 11 arrived mid-turn); the lead stopped
+the other 4. The lead's stop is journaled as `allow_flagged` with the job ids,
+so the same join can be repeated. A teammate is still refused: an in-process
+teammate's notice does not start its turn.
 """
 
 from __future__ import annotations
@@ -26,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from . import background_work, pact_context, state_file, turn_end_jobs
+from .frame import is_lead_frame
 from .paths import get_claude_config_dir
 from .session_journal import append_event_checked, make_event
 from .task_utils import iter_team_task_jsons
@@ -47,6 +58,16 @@ VERDICT_ALLOW_ROLE_UNRESOLVED = "allow_role_unresolved"
 VERDICT_ALLOW_ERROR = "allow_error"
 VERDICT_ALLOW_NO_JOB = "allow_no_job"
 
+# Why a lead's stop over its own running jobs was allowed.
+CAUSE_SESSION_CRON = "session_cron"
+CAUSE_HARNESS_TRACKED = "harness_tracked"
+RUNNING_STATUS = "running"
+MAX_ENDED_JOBS = 20
+ENDED_STATUS_MAX_CHARS = 32
+# The journal row's `ids` and the job ids keying `ended`.
+MAX_TRACE_IDS = 20
+TRACE_ID_MAX_CHARS = 128
+
 MAX_LISTED_JOBS = 5
 JOB_LABEL_MAX_CHARS = 80
 META_MAX_BYTES = 64 * 1024
@@ -54,20 +75,14 @@ META_MAX_BYTES = 64 * 1024
 _UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f]+")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
-LEAD_BLOCK_TEXT = (
-    "Background work is still running in this session and nothing is "
-    "scheduled to wake you: {jobs}. Its completion notice usually starts your "
-    "next turn, but a notice can go undelivered. Before ending this turn, do "
-    "one of these: wait for it to finish, schedule a wake with CronCreate, or "
-    "stop it if it is no longer needed. If a job listed here belongs to a "
-    "teammate, end the turn again. Each job is reported once."
-)
 TEAMMATE_BLOCK_TEXT = (
     "You are ending your turn while background work you started is still "
     "running and no wait covers it: {jobs}. Its completion notice will not "
-    "wake you. Before ending this turn, either wait for the result, or SET "
-    "metadata.intentional_wait on every task the wait covers, naming this "
-    "job, so the lead knows to wake you. Each job is reported once."
+    "wake you, and may not reach the lead. Before ending this turn, wait for the "
+    "result in the foreground (and run such commands in the foreground with a "
+    "long timeout from now on), or SET metadata.intentional_wait on every task "
+    "the wait covers, naming this job, so the lead knows to wake you. Each job "
+    "is reported once."
 )
 SEPARATE_PROCESS_TEAMMATE_BLOCK_TEXT = (
     "Background work you started is still running and no wait covers it: "
@@ -90,6 +105,8 @@ class Verdict:
     cause: str = ""
     reason: str = ""
     session_dir: str = ""
+    # job id -> the status the frame gives for a lead job that is no longer running
+    ended: dict = field(default_factory=dict)
 
     @property
     def blocks(self) -> bool:
@@ -128,10 +145,8 @@ def _job_types_for(role: str, event: Any) -> frozenset:
     return turn_end_jobs.OWN_PROCESS_JOB_TYPES
 
 
-def _block_text_for(role: str, event: Any) -> str:
-    """The block text for this role on this turn-end event."""
-    if role == ROLE_LEAD:
-        return LEAD_BLOCK_TEXT
+def _block_text_for(event: Any) -> str:
+    """The block text for a teammate on this turn-end event. The lead is never blocked."""
     if event == "SubagentStop":
         return TEAMMATE_BLOCK_TEXT
     return SEPARATE_PROCESS_TEAMMATE_BLOCK_TEXT
@@ -147,8 +162,23 @@ def _decide(input_data: dict, running: list) -> Verdict:
             role, VERDICT_ALLOW_ROLE_UNRESOLVED, len(running),
             session_dir=pact_context.get_session_dir(),
         )
-    event = input_data.get("hook_event_name")
     session_dir = session_dir_for(input_data)
+    try:
+        return _resolved_verdict(input_data, role, name, team, session_dir)
+    except Exception as exc:
+        # The role is known here, so the error is journaled in this session's
+        # own directory: a separate-process teammate has no session context for
+        # `evaluate` to find one from.
+        return Verdict(
+            role, VERDICT_ALLOW_ERROR, len(running),
+            cause=type(exc).__name__, session_dir=session_dir,
+        )
+
+
+def _resolved_verdict(
+    input_data: dict, role: str, name: str, team: str, session_dir: str
+) -> Verdict:
+    event = input_data.get("hook_event_name")
     jobs = turn_end_jobs.running_jobs(input_data, _job_types_for(role, event))
     count = len(jobs)
     if not jobs:
@@ -156,11 +186,14 @@ def _decide(input_data: dict, running: list) -> Verdict:
     crons = input_data.get("session_crons")
     # Stop only: a SubagentStop frame carries the lead process's crons, which
     # wake the lead, not the in-process teammate ending its turn.
-    if event == "Stop" and isinstance(crons, list) and crons:
+    cron_armed = event == "Stop" and isinstance(crons, list) and bool(crons)
+    if role == ROLE_LEAD:
+        return _lead_verdict(input_data, team, jobs, cron_armed, session_dir)
+    if cron_armed:
         return Verdict(
-            role, VERDICT_ALLOW_FLAGGED, count, cause="session_cron", session_dir=session_dir
+            role, VERDICT_ALLOW_FLAGGED, count, cause=CAUSE_SESSION_CRON, session_dir=session_dir
         )
-    candidates = _candidates(input_data, role, name, team, jobs)
+    candidates = _candidates(input_data, name, team, jobs)
     if not candidates:
         return Verdict(role, VERDICT_ALLOW_FLAGGED, count, session_dir=session_dir)
     if not session_dir:
@@ -173,13 +206,67 @@ def _decide(input_data: dict, running: list) -> Verdict:
             role, VERDICT_ALLOW_ALREADY_TOLD, count,
             ids=[e["id"] for e in candidates], session_dir=session_dir,
         )
-    text = _block_text_for(role, event)
+    text = _block_text_for(event)
     return Verdict(
         role, VERDICT_BLOCK, count,
         ids=[e["id"] for e in new],
         reason=text.format(jobs=describe_jobs(new)),
         session_dir=session_dir,
     )
+
+
+def _lead_verdict(
+    input_data: dict, team: str, jobs: list, cron_armed: bool, session_dir: str
+) -> Verdict:
+    """The lead's stop: always allowed, and journaled with its own running jobs.
+
+    `ids` are the running jobs a registry row records as the lead's launch;
+    the cause says whether a cron was also armed. `ended` holds the status of
+    a lead job the frame lists as no longer running, when the frame lists one.
+    """
+    own_ids = _lead_job_ids(team)
+    ids = [e["id"] for e in jobs if e["id"] in own_ids]
+    cause = CAUSE_SESSION_CRON if cron_armed else CAUSE_HARNESS_TRACKED if ids else ""
+    return Verdict(
+        ROLE_LEAD, VERDICT_ALLOW_FLAGGED, len(jobs),
+        ids=ids, cause=cause, session_dir=session_dir,
+        ended=_ended_jobs(input_data, own_ids),
+    )
+
+
+def _lead_job_ids(team: str) -> set:
+    """Job ids a registry row records as the lead's own launch.
+
+    background_tasks lists every job in the process with no owner. A running
+    shell with no lead row is a teammate's or a subagent's, recorded or not.
+
+    JOB-ID REUSE. The match is on the job id alone, and ids are not
+    established unique: they look random rather than like counters, but
+    uniqueness has not been measured. A lead row still inside the TTL whose id
+    another agent's job reuses puts that job in the lead's journaled ids. It
+    never refuses a stop.
+    """
+    return {
+        r["harness_task_id"] for r in background_work.load_records_for_discharge(team)
+        if r.get("owner_role") == background_work.OWNER_ROLE_LEAD and r.get("harness_task_id")
+    }
+
+
+def _ended_jobs(input_data: dict, own_ids: set) -> dict:
+    """{job id: status} for the lead's jobs the frame lists as not running.
+
+    A turn end with nothing running writes no event at all, so this is seen
+    only when another counted job is still running in the same frame."""
+    entries = input_data.get("background_tasks")
+    ended: dict = {}
+    for entry in entries if isinstance(entries, list) else []:
+        job_id = entry.get("id") if isinstance(entry, dict) else None
+        if not isinstance(job_id, str) or job_id not in own_ids:
+            continue
+        status = _clean(entry.get("status"))[:ENDED_STATUS_MAX_CHARS]
+        if status and status != RUNNING_STATUS and len(ended) < MAX_ENDED_JOBS:
+            ended[job_id] = status
+    return ended
 
 
 # --------------------------------------------------------------------------
@@ -241,14 +328,18 @@ def _stop_role(input_data: dict) -> "tuple[str, str, str]":
             return ROLE_TEAMMATE, member, team
         return ROLE_UNRESOLVED, "", team
     session_id = input_data.get("session_id")
-    if pact_context.is_lead(input_data):
-        return ROLE_LEAD, "", team
     # Nothing else in the lead's own process ends on Stop, so the lead session
     # is the lead whatever its agent_type spelling.
     if _is_text(session_id) and session_id == pact_context._read_lead_session_id(team):
         return ROLE_LEAD, "", team
+    # A session registered as a member is that teammate whatever agent_type its
+    # frame carries: a teammate spawned as the orchestrator type is not the
+    # lead. This is tested before the agent_type because the lead's own frame
+    # resolves no member name: its team comes from its session context.
     if _is_member(frame_name, team):
         return ROLE_TEAMMATE, frame_name, team
+    if is_lead_frame(input_data):
+        return ROLE_LEAD, "", team
     return ROLE_UNRESOLVED, "", team
 
 
@@ -329,28 +420,9 @@ def _is_text(value: Any) -> bool:
 # --------------------------------------------------------------------------
 
 
-def _candidates(input_data: dict, role: str, name: str, team: str, running: list) -> list:
-    """The running jobs this role must account for before ending the turn."""
+def _candidates(input_data: dict, name: str, team: str, running: list) -> list:
+    """The running jobs a teammate must account for before ending the turn."""
     records = background_work.load_records_for_discharge(team)
-    if role == ROLE_LEAD:
-        # background_tasks lists every job in the process with no owner; a
-        # registry record is what marks a job as someone else's launch — a
-        # teammate's, or a subagent's.
-        #
-        # THIS BRANCH SUBTRACTS EVERY ROW CARRYING A JOB ID AND NEVER READS
-        # `owner_role`. That is safe only because no writer produces a row the
-        # lead owns. A writer that adds one must filter those rows out here, or
-        # the lead is acquitted of its own running job.
-        #
-        # JOB-ID REUSE, AND WHICH WAY IT FAILS HERE. The match is on the job id
-        # alone, and ids are not established unique: they look random rather
-        # than like counters, but uniqueness has not been measured. If a row
-        # still inside the TTL carries an id that a job in this process's list
-        # reuses, that job is subtracted. This branch only ever removes
-        # candidates, so a reused id can only UNDER-block: it acquits the lead of
-        # that job.
-        teammate_jobs = {r["harness_task_id"] for r in records if r.get("harness_task_id")}
-        return [e for e in running if e["id"] not in teammate_jobs]
     if input_data.get("hook_event_name") == "SubagentStop":
         # The lead process's whole list: only this teammate's recorded jobs count.
         #
@@ -481,14 +553,21 @@ def mark_told(verdict: Verdict) -> bool:
         return False
 
 
+def _trace_id(job_id: Any) -> str:
+    return job_id[:TRACE_ID_MAX_CHARS] if isinstance(job_id, str) else ""
+
+
 def write_trace(verdict: Verdict) -> bool:
     """Append this verdict's background_stop_gate journal event. Never raises."""
     try:
         fields = {"role": verdict.role, "verdict": verdict.verdict, "running": verdict.running}
         if verdict.ids:
-            fields["ids"] = list(verdict.ids)
+            # The told-once record keeps every id whole; only the journal row is cut.
+            fields["ids"] = [_trace_id(i) for i in verdict.ids[:MAX_TRACE_IDS]]
         if verdict.cause:
             fields["cause"] = verdict.cause
+        if verdict.ended:
+            fields["ended"] = {_trace_id(k): v for k, v in verdict.ended.items()}
         return append_event_checked(
             make_event(TRACE_EVENT, **fields), TRACE_EVENT,
             session_dir=verdict.session_dir or None,

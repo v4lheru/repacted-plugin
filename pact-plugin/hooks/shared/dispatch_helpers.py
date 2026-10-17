@@ -24,13 +24,13 @@ Exposes:
     dispatch_site emit records can never drift apart.
   - has_task_assigned(team_name, name) — task-assigned check (one of
     the dispatch_gate rules; rejects spawn before TaskCreate)
-  - trustworthy_actor_name(input_data) — actor resolution for the
+  - trustworthy_actor_name(input_data, team_name) — actor resolution for the
     task_lifecycle_gate self-completion rule
   - SOLO_EXEMPT — research/exploration agents that bypass dispatch_gate
 
 Module-load discipline (architect §5.6):
-  Stdlib imports (json/sys) AND _emit_load_failure_deny defined BEFORE
-  the wrapped try/except BaseException block. The wrapped block catches
+  The fail-closed emitter (hooks/_fail_closed.py, stdlib only) is bound to
+  _emit_load_failure_deny BEFORE the wrapped try/except BaseException block. The wrapped block catches
   cross-package import failures (functools/re/pathlib/shared.pact_context)
   and emits a structured DENY with hookEventName=PreToolUse so any
   importer (dispatch_gate, task_lifecycle_gate) inherits the fail-closed
@@ -41,36 +41,14 @@ Module-load discipline (architect §5.6):
 
 from __future__ import annotations
 
-import json
-import sys
-from typing import NoReturn
+import re
+from functools import partial
 
 
-def _emit_load_failure_deny(stage: str, error: BaseException) -> NoReturn:
-    """Stdlib-only fail-closed deny for module-load failure.
+# The one fail-closed emitter (hooks/_fail_closed.py, stdlib only); bound to this check's name.
+from _fail_closed import emit_load_failure_deny
 
-    Mirrors PR #660 ``merge_guard_pre._emit_load_failure_deny`` and the
-    bootstrap_gate analogue at hooks/bootstrap_gate.py. Uses ONLY stdlib
-    (json, sys) so it remains functional even when every wrapped import
-    below fails. Audit anchor: hookEventName must be present in any deny
-    output (#658 invariant).
-    """
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                f"PACT dispatch_helpers {stage} failure — blocking for safety. "
-                f"{type(error).__name__}: {error}. Check hook installation "
-                "and shared module availability."
-            ),
-        }
-    }))
-    print(
-        f"Hook load error (dispatch_helpers / {stage}): {error}",
-        file=sys.stderr,
-    )
-    sys.exit(2)
+_emit_load_failure_deny = partial(emit_load_failure_deny, "dispatch_helpers")
 
 
 # ─── fail-closed wrapper around cross-package imports ─────────────────────
@@ -86,7 +64,7 @@ except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catc
 # ─── constants ─────────────────────────────────────────────────────────────
 
 # Research/exploration agents that legitimately spawn WITHOUT name/team_name
-# (per pinned-memory feedback_direct_agent_calls.md). These bypass the
+# (by design). These bypass the
 # dispatch_gate entirely. The specialist registry stays simple — these are caught at
 # step ① of evaluate_dispatch in dispatch_gate.py.
 SOLO_EXEMPT = frozenset({"general-purpose", "Explore", "Plan"})
@@ -190,11 +168,8 @@ def is_pact_specialist_owner(
     try:
         for member in pact_context._iter_members(team_name, teams_dir):
             if member.get("name") == owner:
-                agent_type = member.get("agentType")
-                return (
-                    isinstance(agent_type, str)
-                    and is_registered_pact_specialist(agent_type)
-                )
+                agent_type = pact_context.member_agent_type(member)
+                return agent_type is not None and is_registered_pact_specialist(agent_type)
         return False
     except Exception:
         return False  # fail-closed → gate fail-OPEN (never strands a dispatch)
@@ -420,7 +395,7 @@ def has_task_assigned(team_name: str, name: str) -> bool:
 
 # ─── actor resolution (for the self-completion rule) ──────────────────────
 
-def trustworthy_actor_name(input_data: dict) -> str | None:
+def trustworthy_actor_name(input_data: dict, team_name: str | None = None) -> str | None:
     """Extract actor name from harness-trustworthy ``agent_id`` ONLY.
 
     Bypasses ``resolve_agent_name``'s Step 1 (agent_name) and Step 4
@@ -430,22 +405,42 @@ def trustworthy_actor_name(input_data: dict) -> str | None:
 
     Trust contract: ``agent_id`` is harness-set and lives at the top
     level of the hook stdin JSON, not inside ``tool_input`` — a teammate
-    cannot collide with it via crafted tool arguments. Format is
-    ``"name@team_name"``.
+    cannot collide with it via crafted tool arguments. Two shapes name an
+    actor:
+      - ``"name@team_name"`` returns ``name``.
+      - An in-process teammate's ``"a" + agent_type + "-" + 16 hex`` returns
+        ``agent_type`` when ``team_name`` is given and ``agent_type`` names a
+        member of it (``background_work.agent_type_names_a_member``, which
+        refuses the bare ``"a" + 16 hex`` Agent-tool subagent id). The id is
+        built from ``agent_type`` and compared whole, so a frame whose type and
+        id disagree names no one.
 
-    Returns the ``name`` portion, or None if ``agent_id`` is missing or
-    malformed (no ``@``). Caller (task_lifecycle_gate self-completion
-    rule) treats None as "actor unresolvable — DO NOT exempt from the
-    self-completion advisory".
+    Returns None for anything else. Caller (task_lifecycle_gate
+    self-completion rule) treats None as "actor unresolvable — DO NOT
+    exempt from the self-completion advisory".
 
-    Pure function: no FS, no I/O, no exceptions.
+    No exceptions. Reads the team config only for the in-process shape.
     """
     if not isinstance(input_data, dict):
         return None
     agent_id = input_data.get("agent_id")
-    if not isinstance(agent_id, str) or "@" not in agent_id:
+    if not isinstance(agent_id, str):
         return None
-    name, _, team = agent_id.partition("@")
-    if not name or not team:
+    if "@" in agent_id:
+        name, _, team = agent_id.partition("@")
+        if not name or not team:
+            return None
+        return name
+    agent_type = input_data.get("agent_type")
+    if not isinstance(agent_type, str) or not agent_type or not team_name:
         return None
-    return name
+    if not re.fullmatch(re.escape(f"a{agent_type}-") + "[0-9a-f]{16}", agent_id):
+        return None
+    try:
+        from .background_work import agent_type_names_a_member
+
+        if agent_type_names_a_member(agent_type, team_name, agent_id=input_data.get("agent_id")):
+            return agent_type
+    except Exception:
+        pass
+    return None

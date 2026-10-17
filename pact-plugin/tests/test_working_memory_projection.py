@@ -452,10 +452,7 @@ _DISPLAY_GUARD = "_refuse_ambient_sync_on_declared_scope_escape"
 
 # (scope, resolver, guard, exempt). A function in scope that calls `resolver`
 # must call `guard` on a later line. The display resolver is searched in every
-# production file, so a new caller anywhere joins the population. archive_pin's
-# resolver is the hooks' shared read resolver, which read-only callers use
-# freely, so only archive_pin itself, which acts on what it resolves, is held
-# to it.
+# production file, so a new caller anywhere joins the population.
 _GUARDED_RESOLVERS = (
     (
         "production",
@@ -465,18 +462,11 @@ _GUARDED_RESOLVERS = (
         # containment-checked through it.
         frozenset({"_resolve_display_claude_md_path"}),
     ),
-    (
-        "scripts/archive_pin.py",
-        "get_project_claude_md_path",
-        "_stays_in_declared_project",
-        frozenset(),
-    ),
 )
 
 _KNOWN_GUARDED_CALLERS = {
     "sync_to_claude_md",
     "sync_retrieved_to_claude_md",
-    "resolve_claude_md",
 }
 
 
@@ -523,9 +513,7 @@ class TestEveryResolverCallerCallsTheEscapeGuard:
 
     def test_every_production_caller_of_a_resolver_calls_the_escape_guard(self):
         """MUTANT that reddens this arm: delete the guard call from
-        `sync_to_claude_md` or `sync_retrieved_to_claude_md`, or the
-        `_stays_in_declared_project` call from `archive_pin.resolve_claude_md`.
-        The failure names the unguarded caller."""
+        `sync_to_claude_md` or `sync_retrieved_to_claude_md`. The failure names the unguarded caller."""
         members, unguarded = [], []
         for scope, resolver, guard, exempt in _GUARDED_RESOLVERS:
             files = (
@@ -578,7 +566,6 @@ class TestEveryResolverCallerCallsTheEscapeGuard:
 _SCOPE_PREDICATE = "stays_in_declared_project"
 _KNOWN_PREDICATE_CALLERS = {
     "_refuse_ambient_sync_on_declared_scope_escape",
-    "resolve_claude_md",
 }
 
 
@@ -622,8 +609,7 @@ class TestEveryScopePredicateCallPassesTheRecord:
 
     def test_every_production_call_of_the_scope_predicate_passes_the_worktree_record(self):
         """MUTANT that reddens this arm: drop `worktree_identity=` from the call
-        in `_refuse_ambient_sync_on_declared_scope_escape` or in
-        `archive_pin.resolve_claude_md`. The failure names that caller."""
+        in `_refuse_ambient_sync_on_declared_scope_escape`. The failure names that caller."""
         members, missing = [], []
         for path in _production_files():
             callers, lacking = _predicate_calls_without_record(path.read_text(encoding="utf-8"))

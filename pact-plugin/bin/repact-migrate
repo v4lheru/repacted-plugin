@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""repact-migrate: move an earlier team's open tasks into this session's team. The lead's act.
+
+Location: pact-plugin/bin/repact-migrate (task-system slice 1, unit U5). A resume
+moves the open tasks of the earlier team at SessionStart only when that team ended cleanly
+(its `teams/<team>/config.json` is gone). After a crash the config still stands and no file
+tells a crashed life from one still running in another window, so SessionStart moves nothing
+and names this command. Run it when you know that life is over.
+
+It calls the function SessionStart calls (hooks/shared/task_migration.py) and skips that one
+check only: a dark task store, another session of this project naming the team, and more than
+200 open tasks still refuse. Each moved task keeps its id unless this team already issued it,
+gets a `migrated_from` key and one journal row; its source file is renamed to
+`<id>.json.migrated`. Running it twice is safe: the second run finds nothing to move, and a
+source left standing by a run that copied it is only renamed (that run's journal row is the
+proof of the copy; a task with no row is copied again). It also
+reaches a team from two or more lives back, which SessionStart never does.
+
+It moves only from a team that was this session's own: one a `session_start` row of this
+session's journal names. Any other name is refused, because nothing here could tell it from
+the store of a session that is still running somewhere else.
+
+Exit codes: 0 moved or nothing to move; 1 refused or no session context; 2 usage error.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+BIN_DIR = Path(__file__).resolve().parent
+HOOKS_DIR = BIN_DIR.parent / "hooks"
+for _path in (BIN_DIR, HOOKS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from shared import pact_context, task_migration  # noqa: E402
+from shared.journal_reader import journal_path_from, read_events_from  # noqa: E402
+from shared.paths import get_claude_config_dir, is_safe_path_component  # noqa: E402
+from shared.session_init_lead import emit_migration_row, read_migration_rows  # noqa: E402
+
+SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")
+EXAMPLE = 'python3 "<plugin-root>/bin/repact-migrate" session-0a1b2c3d'
+EXAMPLES = (
+    "example:\n"
+    f"  {EXAMPLE}\n"
+    "exit: 0 moved or nothing to move, 1 refused or no session context, 2 usage."
+)
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}\n\n  {EXAMPLE}", file=sys.stderr)
+        sys.exit(2)
+
+
+def build_parser() -> Parser:
+    parser = Parser(prog="repact-migrate", epilog=EXAMPLES,
+                    formatter_class=argparse.RawDescriptionHelpFormatter,
+                    description="Move an earlier team's open tasks into this session's team.")
+    parser.add_argument("team", help="the earlier team, as the resume note names it")
+    return parser
+
+
+def session_team() -> str:
+    """This session's team from its context file, or "" when there is none. A Bash call may
+    carry no CLAUDE_PROJECT_DIR, so the project dir is read from the context file the session
+    id names before the context module is initialised."""
+    session = next((os.environ[name] for name in SESSION_ENV if os.environ.get(name)), "")
+    if not is_safe_path_component(session):
+        return ""
+    if not os.environ.get("CLAUDE_PROJECT_DIR"):
+        pattern = f"*/{session}/pact-session-context.json"
+        for context in sorted((get_claude_config_dir() / "pact-sessions").glob(pattern)):
+            try:
+                project_dir = json.loads(context.read_text(encoding="utf-8")).get("project_dir")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if isinstance(project_dir, str) and project_dir:
+                os.environ["CLAUDE_PROJECT_DIR"] = project_dir
+                break
+    pact_context.init({"session_id": session})
+    return pact_context.get_team_name()
+
+
+def was_own_team(team: str) -> bool:
+    """True when a `session_start` row of this session's journal names `team`: the only
+    proof here that it was this session's earlier team. No journal, no proof."""
+    session_dir = pact_context.get_session_dir()
+    if not session_dir or not journal_path_from(session_dir).is_file():
+        return False
+    return any(event.get("team") == team
+               for event in read_events_from(session_dir, "session_start"))
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    if not is_safe_path_component(args.team):
+        build_parser().error("the team must be one name of letters, digits, _ and -")
+    dest_team = session_team()
+    if not dest_team:
+        print("repact-migrate: no session context here; run it from the lead's session.",
+              file=sys.stderr)
+        return 1
+    if dest_team == args.team:
+        print(f"repact-migrate: `{args.team}` is this session's own team; nothing to move.")
+        return 0
+    if not was_own_team(args.team):
+        print(f"repact-migrate: nothing was moved: `{args.team}` was never this session's team "
+              "(no session_start row of this session's journal names it).")
+        return 1
+    result = task_migration.migrate_for_session(
+        args.team, dest_team, emit_migration_row, allow_standing_config=True,
+        copied=read_migration_rows)
+    print(task_migration.resume_tasks_note(result)
+          or f"Nothing to move: team `{args.team}` holds no open task.")
+    return 1 if result.status == task_migration.STATUS_REFUSED else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

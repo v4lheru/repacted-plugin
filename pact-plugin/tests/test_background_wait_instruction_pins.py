@@ -21,37 +21,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 import session_init
 
 PLUGIN = Path(__file__).resolve().parents[1]
-TEACHBACK = "skills/pact-teachback/SKILL.md"
-AGENT_TEAMS = "skills/pact-agent-teams/SKILL.md"
 
 
 def _phrase(text: str) -> str:
     return " ".join(text.replace("`", "").split())
 
 
-PINS = [
-    (TEACHBACK, "If you background work, flag the wait before you end the turn."),
-    (TEACHBACK, "or a command a shell `&` sends to the background"),
-    (AGENT_TEAMS, "If you background work as a consultant, SET the wait on your most recently completed task."),
-    (AGENT_TEAMS, "not on a turn opened by a teammate message"),
-]
-
-
-@pytest.mark.parametrize(
-    "rel, phrase", PINS,
-    ids=[f"{Path(r).parent.name}:{_phrase(p)[:40]}" for r, p in PINS],
-)
-def test_the_background_wait_instruction_is_where_the_agent_reads_it(rel, phrase):
-    assert _phrase(phrase) in _phrase((PLUGIN / rel).read_text(encoding="utf-8")), (
-        f"{rel}: {phrase!r} is missing. An agent acts on this instruction at the "
-        "moment it backgrounds work or idles; if the wording changed on purpose, "
-        "update this pin with it."
-    )
 
 
 def test_the_in_process_notice_says_tmux_does_not_cover_an_unwatched_background_job():
@@ -62,3 +41,16 @@ def test_the_in_process_notice_says_tmux_does_not_cover_an_unwatched_background_
         "the in-process startup notice no longer says what tmux mode does not "
         f"cover, so a lead may relaunch in tmux and expect background jobs to wake it: {notice!r}"
     )
+
+
+def test_a_teammate_is_told_to_run_long_commands_in_the_foreground():
+    """2026-09-29: two in-process coders backgrounded the full suite and idled about 40 minutes,
+    because the job's completion notice never reaches the teammate (and, of 17 measured, 16
+    never reached the lead either; T-63eac115)."""
+    from shared import turn_end_gate
+
+    skill = _phrase((PLUGIN / "skills/teammate/SKILL.md").read_text(encoding="utf-8"))
+    assert _phrase("Run long commands in the foreground, never `run_in_background`") in skill
+    assert "wait for the result in the foreground" in _phrase(turn_end_gate.TEAMMATE_BLOCK_TEXT)
+    assert "the lead gets its notice" not in skill
+    assert "it goes to the lead" not in _phrase(turn_end_gate.TEAMMATE_BLOCK_TEXT)

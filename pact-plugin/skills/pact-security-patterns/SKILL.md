@@ -1,12 +1,6 @@
 ---
 name: pact-security-patterns
-description: |
-  Security best practices and threat mitigation patterns for PACT framework development.
-  Use when: implementing authentication or authorization, handling API credentials,
-  integrating external APIs, processing sensitive data (PII, financial, health),
-  reviewing code for vulnerabilities, or enforcing SACROSANCT security rules.
-  Triggers on: security audit, credential handling, OWASP, auth flows, encryption,
-  data protection, backend proxy pattern, frontend credential exposure.
+description: "Use when doing a security audit, auth flows, API credential handling, sensitive data (PII, financial, health) or vulnerability review: OWASP, encryption, backend proxy, frontend credential exposure."
 ---
 
 # PACT Security Patterns
@@ -16,57 +10,10 @@ patterns and links to detailed references for comprehensive implementation.
 
 ## SACROSANCT Rules (Non-Negotiable)
 
-These rules are ABSOLUTE and must NEVER be violated.
-
-### Rule 1: Credential Protection
-
-**NEVER ALLOW in version control:**
-- Actual API keys, tokens, passwords, or secrets
-- Credentials in frontend code (VITE_, REACT_APP_, NEXT_PUBLIC_ prefixes)
-- Real credential values in documentation or code examples
-- Hardcoded secrets in any file committed to git
-
-**ONLY acceptable locations for actual credentials:**
-
-| Location | Example | Security Level |
-|----------|---------|----------------|
-| `.env` files in `.gitignore` | `API_KEY=sk-xxx` | Development |
-| Server-side `process.env` | `process.env.API_KEY` | Runtime |
-| Deployment platform secrets | Railway, Vercel, AWS | Production |
-| Secrets managers | Vault, AWS Secrets Manager | Enterprise |
-
-**In Documentation - Always Use Placeholders:**
-```markdown
-# Configuration
-Set your API key in `.env`:
-API_KEY=your_api_key_here
-```
-
-### Rule 2: Backend Proxy Pattern
-
-```
-WRONG:  Frontend --> External API (credentials in frontend)
-CORRECT: Frontend --> Backend Proxy --> External API
-```
-
-**Architecture Requirements:**
-- Frontend MUST NEVER have direct access to API credentials
-- ALL API credentials MUST exist exclusively on server-side
-- Frontend calls backend endpoints (`/api/resource`) without credentials
-- Backend handles ALL authentication with external APIs
-- Backend validates and sanitizes ALL requests from frontend
-
-**Verification Checklist:**
-```bash
-# Build the application
-npm run build
-
-# Search for exposed credentials in bundle
-grep -r "sk-" dist/assets/*.js
-grep -r "api_key" dist/assets/*.js
-grep -r "VITE_" dist/assets/*.js
-# All above should return NO results
-```
+The credential rules have one home: Step 1 of `repacted:security-review-patterns` (no secret in
+version control, frontend code or docs; credentials only server-side, behind a backend proxy;
+the bundle grep that proves it). Invoke that skill before you write or review anything that
+touches a credential; the checklist below assumes it.
 
 ## Quick Security Reference
 

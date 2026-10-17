@@ -480,7 +480,10 @@ def test_config_less_full_uuid_resolves_through_gate_both_modes(
         assert code == 0, (
             f"branch-2 must resolve the config-less full-UUID store ({mode})"
         )
-        assert out == _SUPPRESS_EXPECTED
+        # Allowed, never denied, and since T-3b0b2543 with the one advisory that this
+        # substrate gives the teammate no Task tools (seen live: Desktop Code tab).
+        assert "permissionDecision" not in out["hookSpecificOutput"]
+        assert f"no teams/{LEAD_FULL_UUID_DIR}/config.json" in out["hookSpecificOutput"]["additionalContext"]
         # Load-bearing: only the config-less full-UUID store exists; the wrong
         # `session-<id8>` store does not.
         assert not (tmp_path / ".claude" / "tasks" / LEAD_TEAM).exists()

@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""repact-init: one setup command for this machine and, optionally, a repository (/repacted:init).
+
+Location: pact-plugin/bin/repact-init. Called by commands/init.md. Stdlib only.
+
+Machine part: merges templates/user-settings.example.json (the Agent Teams flag and allow rules
+for the plugin's own bin tools) into the user settings, $CLAUDE_CONFIG_DIR/settings.json, else
+~/.claude/settings.json. Repo part (--repo): merges templates/settings.example.json (the agent
+line) into <repo>/.claude/settings.json, creates <repo>/.repacted/, and adds the task-log line to
+<repo>/.gitattributes.
+
+The merge never overwrites: every key you have is kept, a value you set wins over the seed (the
+diff header says so), and lists gain only the entries they lack. Each run prints a unified diff
+first. A change is applied with --yes or a "y" at the prompt; without a terminal and without
+--yes nothing is written. Every file it changes is copied to <file>.bak-<UTC stamp> first and
+written atomically. A second run prints "nothing to do". It ends by running repact-doctor.
+
+It refuses, writing nothing, when a file it would change is not valid JSON, is not a JSON object
+at the top level, repeats a key, or is a symbolic link (it never writes through a link).
+
+Exit codes: 0 applied, nothing to do, or a dry run; 1 refused; 3 changes shown but not
+confirmed; 64 usage.
+
+Examples
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-init" --dry-run
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-init" --dry-run --repo
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-init" --yes --repo
+"""
+from __future__ import annotations
+
+import argparse
+import copy
+import datetime
+import difflib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional
+
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
+from shared.paths import get_claude_config_dir  # noqa: E402
+
+USER_SEED = PLUGIN_ROOT / "templates" / "user-settings.example.json"
+REPO_SEED = PLUGIN_ROOT / "templates" / "settings.example.json"
+DOCTOR = PLUGIN_ROOT / "bin" / "repact-doctor"
+GITATTRIBUTES_LINE = ".repacted/tasks.jsonl merge=union"
+USER_MODE = 0o600
+DOCTOR_TIMEOUT = 300
+EXIT_OK, EXIT_REFUSED, EXIT_UNCONFIRMED, EXIT_USAGE = 0, 1, 3, 64
+
+
+class Refusal(Exception):
+    """A file repact-init will not touch; the message names the rule and the way through."""
+
+
+@dataclass
+class Change:
+    """One planned write: a file's new text, or a directory to create (text None)."""
+    path: Path
+    old_text: Optional[str]
+    new_text: Optional[str]
+    new_mode: int = 0o644
+
+    def render(self) -> str:
+        if self.new_text is None:
+            return f"+ create directory {self.path}/"
+        old = (self.old_text or "").splitlines(keepends=True)
+        new = self.new_text.splitlines(keepends=True)
+        before = str(self.path) if self.old_text is not None else "/dev/null"
+        return "".join(difflib.unified_diff(old, new, before, f"{self.path} (after repact-init)"))
+
+
+# ---- reading -------------------------------------------------------------------------------
+
+def _no_duplicate_keys(pairs):
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError(f"the key {key!r} appears twice in one object")
+        seen[key] = value
+    return seen
+
+
+def read_text(path: Path) -> Optional[str]:
+    """The file's text, None when absent. Refuses a symbolic link and anything unreadable."""
+    if path.is_symlink():
+        raise Refusal(f"{path} is a symbolic link to {os.readlink(path)}; repact-init never writes "
+                      "through a link. Way through: replace the link with a regular copy of its "
+                      "target and run again, or add the entries of the matching file under "
+                      f"{PLUGIN_ROOT / 'templates'} to the target yourself.")
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise Refusal(f"{path} cannot be read ({error}). Way through: fix or move the file, "
+                      "then run repact-init again.") from error
+
+
+def read_settings(path: Path):
+    """(text, object) of a settings file; ({} when absent). Refuses what a merge could damage."""
+    text = read_text(path)
+    if text is None:
+        return None, {}
+    try:
+        data = json.loads(text, object_pairs_hook=_no_duplicate_keys) if text.strip() else {}
+    except ValueError as error:
+        raise Refusal(f"{path} is not valid JSON ({error}); nothing was written. Way through: "
+                      "fix the file (or move it aside), then run repact-init again.") from error
+    if not isinstance(data, dict):
+        raise Refusal(f"{path} holds a JSON {type(data).__name__}, not an object; nothing was "
+                      "written. Way through: make the top level an object, then run again.")
+    return text, data
+
+
+# ---- merging -------------------------------------------------------------------------------
+
+def merge(mine: dict, seed: dict, notes: List[str], where: str = "") -> dict:
+    """`mine` plus what `seed` adds. Objects recurse, lists gain missing items in seed order, and
+    any other clash keeps `mine` (recorded in `notes`). `mine` is never mutated."""
+    out = copy.deepcopy(mine)
+    for key, wanted in seed.items():
+        path = f"{where}.{key}" if where else key
+        if key not in out:
+            out[key] = copy.deepcopy(wanted)
+        elif isinstance(out[key], dict) and isinstance(wanted, dict):
+            out[key] = merge(out[key], wanted, notes, path)
+        elif isinstance(out[key], list) and isinstance(wanted, list):
+            out[key] = out[key] + [item for item in wanted if item not in out[key]]
+        elif out[key] != wanted:
+            notes.append(f"{path} = {json.dumps(out[key])} (the seed has {json.dumps(wanted)})")
+    return out
+
+
+def _indent_of(text: Optional[str]):
+    """The file's own indent (spaces count or a tab), so the diff shows content, not reflow."""
+    for line in (text or "").splitlines()[1:]:
+        stripped = line.lstrip(" \t")
+        if stripped and len(stripped) < len(line):
+            prefix = line[:len(line) - len(stripped)]
+            return "\t" if prefix.startswith("\t") else len(prefix)
+    return 2
+
+
+def plan_settings(path: Path, seed_path: Path, kept: List[str],
+                  new_mode: int = 0o644) -> Optional[Change]:
+    """The merge of a seed into one settings file, None when it adds nothing. Each seed value the
+    file already sets differently is appended to `kept` as '<path>: <key> = <value> ...'."""
+    text, mine = read_settings(path)
+    seed = json.loads(seed_path.read_text(encoding="utf-8"))
+    notes: List[str] = []
+    merged = merge(mine, seed, notes)
+    kept += [f"{path}: {note}" for note in notes]
+    if merged == mine:
+        return None
+    new_text = json.dumps(merged, indent=_indent_of(text), ensure_ascii=False) + "\n"
+    return Change(path, text, new_text, new_mode)
+
+
+def plan_gitattributes(path: Path) -> Optional[Change]:
+    text = read_text(path)
+    lines = (text or "").splitlines()
+    if GITATTRIBUTES_LINE in (line.strip() for line in lines):
+        return None
+    base = text or ""
+    if base and not base.endswith("\n"):
+        base += "\n"
+    return Change(path, text, base + GITATTRIBUTES_LINE + "\n")
+
+
+def plan_repo(repo: Path, kept: List[str]) -> List[Change]:
+    changes = [plan_settings(repo / ".claude" / "settings.json", REPO_SEED, kept)]
+    state_dir = repo / ".repacted"
+    if state_dir.is_symlink() or (state_dir.exists() and not state_dir.is_dir()):
+        raise Refusal(f"{state_dir} exists and is not a plain directory. Way through: move it "
+                      "aside, then run repact-init --repo again.")
+    if not state_dir.exists():
+        changes.append(Change(state_dir, None, None))
+    changes.append(plan_gitattributes(repo / ".gitattributes"))
+    return [change for change in changes if change is not None]
+
+
+# ---- applying ------------------------------------------------------------------------------
+
+def _stamp() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def backup(path: Path) -> Path:
+    """Copy `path` to <name>.bak-<UTC stamp>, never replacing an earlier backup."""
+    target = path.with_name(f"{path.name}.bak-{_stamp()}")
+    n = 1
+    while target.exists():
+        target = path.with_name(f"{path.name}.bak-{_stamp()}-{n}")
+        n += 1
+    shutil.copy2(path, target)
+    return target
+
+
+def write_atomic(path: Path, text: str, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(text)
+        os.chmod(temp, mode)
+        os.replace(temp, path)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
+def apply(change: Change) -> str:
+    """Write one change; refuses when the file moved since the diff was shown."""
+    if change.new_text is None:
+        change.path.mkdir(parents=True, exist_ok=True)
+        return f"created {change.path}/"
+    if read_text(change.path) != change.old_text:
+        raise Refusal(f"{change.path} changed after the diff was shown; nothing more was written. "
+                      "Way through: run repact-init again to see the new diff.")
+    saved = ""
+    mode = change.new_mode
+    if change.old_text is not None:
+        mode = change.path.stat().st_mode & 0o777
+        saved = f" (backup {backup(change.path)})"
+    write_atomic(change.path, change.new_text, mode)
+    return f"wrote {change.path}{saved}"
+
+
+# ---- flow ----------------------------------------------------------------------------------
+
+def repo_root(arg: str) -> Path:
+    if arg:
+        root = Path(arg).expanduser().resolve()
+        if not root.is_dir():
+            raise Refusal(f"--repo {arg} is not a directory. Way through: pass a repository path.")
+        return root
+    proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise Refusal("--repo needs a git repository and the current directory is not in one. "
+                      "Way through: cd into the repository, or pass --repo <path>.")
+    return Path(proc.stdout.strip())
+
+
+def confirmed(assume_yes: bool) -> bool:
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        return False
+    return input("Apply these changes? [y/N] ").strip().lower() in ("y", "yes")
+
+
+def run_doctor(cwd: Path) -> None:
+    print("\nrepact-doctor --quick:")
+    try:
+        proc = subprocess.run([sys.executable, str(DOCTOR), "--quick"], capture_output=True,
+                              text=True, cwd=str(cwd), timeout=DOCTOR_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"doctor did not run: {error}")
+        return
+    print((proc.stdout + proc.stderr).rstrip())
+    print(f"doctor exit {proc.returncode} (0 green, 1 amber, 2 red)")
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        print(f"repact-init: {message}\n\n"
+              'example: python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-init" --dry-run', file=sys.stderr)
+        sys.exit(EXIT_USAGE)
+
+
+def main(argv: List[str]) -> int:
+    parser = _Parser(prog="repact-init", formatter_class=argparse.RawDescriptionHelpFormatter,
+                     epilog="Examples" + __doc__.split("Examples", 1)[1])
+    parser.add_argument("--dry-run", action="store_true", help="print the diff, write nothing")
+    parser.add_argument("--yes", action="store_true", help="apply without asking")
+    parser.add_argument("--repo", nargs="?", const="", default=None, metavar="PATH",
+                        help="also set up a repository (default: the current one)")
+    parser.add_argument("--no-doctor", action="store_true", help="skip the closing doctor run")
+    args = parser.parse_args(argv)
+    try:
+        repo = repo_root(args.repo) if args.repo is not None else None
+        kept: List[str] = []
+        user = plan_settings(get_claude_config_dir() / "settings.json", USER_SEED, kept, USER_MODE)
+        changes = [user] if user is not None else []
+        changes += plan_repo(repo, kept) if repo is not None else []
+        print("".join(f"# kept yours: {note}\n" for note in kept), end="")
+        if not changes:
+            print("repact-init: nothing to do; your settings already hold everything it adds")
+        else:
+            print("\n".join(change.render() for change in changes))
+            if args.dry_run:
+                print("repact-init: dry run, nothing written")
+                return EXIT_OK
+            if not confirmed(args.yes):
+                print("repact-init: not applied. Way through: run again with --yes to apply.")
+                return EXIT_UNCONFIRMED
+            for change in changes:
+                print(apply(change))
+    except Refusal as refusal:
+        print(f"repact-init: refused: {refusal}", file=sys.stderr)
+        return EXIT_REFUSED
+    if not args.no_doctor and not args.dry_run:
+        run_doctor(repo or Path.cwd())
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

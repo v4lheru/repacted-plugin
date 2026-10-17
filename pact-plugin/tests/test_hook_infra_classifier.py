@@ -28,8 +28,7 @@ closure is TRANSITIVE over EVERY hooks/ module — both top-level helpers AND
 hooks/shared/ helpers — and follows BOTH absolute (`from X import` /
 `from shared.X import` / `import X`) AND relative (`from .X import`) edges. A
 shared-only OR absolute-only OR direct-only derivation would FALSELY pass on a
-sub-graph it never traverses (e.g. it would miss session_init->staleness->pin_caps
-top-level, task_lifecycle_gate->teachback_schema->variety_scorer shared, or
+sub-graph it never traverses (e.g. it would miss a hook->top-level-helper edge, task_lifecycle_gate->teachback_schema->variety_scorer shared, or
 the relative pact_context->.session_registry edge that makes a session_registry
 edit implicate the L3 hooks). The two-hop edges are pinned BY NAME below, and a
 top-level-edge perturbation is the explicit non-vacuity anchor.
@@ -88,8 +87,8 @@ def _direct_hook_imports(
     (`import X` / `from X import`), shared (`from shared.X import` /
     `import shared.X`), relative (`from .X import`, level>0), AND
     module-in-the-alias (`from . import X` / `from shared import X`) edges, and
-    descends into function/try-nested imports via ast.walk (e.g. session_init's
-    function-level `from pin_staleness_gate import ...`).
+    descends into function/try-nested imports via ast.walk (a function-level
+    `from X import ...` counts).
 
     The module-in-the-alias forms name the MODULE after `import`, not after
     `from`, so reading only `node.module` misses them: `from . import X` has
@@ -204,49 +203,10 @@ class TestClosureMatchesLiveImportGraph:
         assert "get_team_name" not in _direct_hook_imports(probe, idx)
 
 
-# The TOP-LEVEL helpers (hooks/*.py, NOT hooks/shared/*.py) that session_init
-# reaches transitively. TWO ARMS BELOW READ THIS ONE TUPLE, because when the
-# same list was written out at two sites, a change reached one site and left
-# the other asserting a module that had gone.
-#
-# `pin_staleness_gate` WAS a member and is NOT one now. session_init used to
-# reach it for the marker-name constant; that constant moved to
-# `shared/constants.py`, so the edge is gone and the closure is correct
-# without it. This is a recorded REMOVAL rather than a silent shrink.
-_SESSION_INIT_TOPLEVEL_HELPERS = ("pin_caps", "staleness")
-
-
 class TestTwoHopEdgesPinnedByName:
     """Pin BOTH transitive 2-hop classes by name so a future direct-only OR
     shared-only OR absolute-only regression is caught with a named failure, not
     a silent under-derivation."""
-
-    def test_the_toplevel_helper_tuple_is_not_empty(self):
-        """NON-VACUITY FOR THE TWO ARMS THAT LOOP OVER THAT TUPLE.
-
-        `for top in ():` passes PERFECTLY and asserts nothing. So an editor who
-        removes members one at a time, as the marker-constant move removed one,
-        can reach an empty tuple and leave two green arms that hold nothing.
-        This arm makes the population explicit, so the shrink stops here rather
-        than at zero.
-        """
-        assert len(_SESSION_INIT_TOPLEVEL_HELPERS) >= 2, (
-            f"_SESSION_INIT_TOPLEVEL_HELPERS holds "
-            f"{len(_SESSION_INIT_TOPLEVEL_HELPERS)} member(s): "
-            f"{_SESSION_INIT_TOPLEVEL_HELPERS}. The two arms below LOOP over "
-            f"it, so a tuple with fewer than two members stops discriminating. "
-            f"If an edge genuinely went, record why here rather than shrink "
-            f"the tuple in silence"
-        )
-
-    def test_toplevel_helpers_present_and_are_top_level(self):
-        # The TOP-LEVEL helpers (hooks/pin_caps.py etc., NOT hooks/shared/)
-        # reached from session_init must be in its closure. A shared-only
-        # derivation (the architect-caught bug) would miss them entirely.
-        idx = _module_index()
-        for top in _SESSION_INIT_TOPLEVEL_HELPERS:
-            assert top in _SEAM_HOOK_HELPER_CLOSURE["session_init"]
-            assert not _is_shared(top, idx), f"{top} must be a top-level hooks/ module"
 
     def test_shared_2hop_task_lifecycle_teachback_variety(self):
         # task_lifecycle_gate -> teachback_schema -> variety_scorer (shared chain).
@@ -272,20 +232,25 @@ class TestClosureOracleIsNonVacuous:
     test_each_hook_closure_matches_live_derivation. A vacuous (literal==literal)
     oracle would NOT respond to these perturbations."""
 
-    def test_shared_only_derivation_misses_toplevel_helpers(self):
-        # The architect-caught bug: a shared-only walk never traverses the
-        # top-level `from staleness import` / `from pin_caps import` edges, so
-        # session_init's closure LOSES the top-level helpers. Proves the
-        # oracle's FULL hooks/ traversal (not shared-only) is load-bearing. A
-        # shared-only oracle would FALSELY pass on this sub-graph.
-        idx = _module_index()
-        full = derive_closure("session_init", idx)
-        shared_only = derive_closure("session_init", idx, shared_only=True)
-        for top in _SESSION_INIT_TOPLEVEL_HELPERS:
-            assert top in full
-            assert top not in shared_only
-        # And the equality test would FAIL if the oracle were shared-only:
-        assert _SEAM_HOOK_HELPER_CLOSURE["session_init"] != shared_only
+    def test_shared_only_derivation_misses_toplevel_helpers(self, tmp_path):
+        # The architect-caught bug: a shared-only walk never traverses a
+        # top-level helper edge, so the closure LOSES the helper and all it
+        # reaches. No live seam hook reaches a top-level helper since the 1.5.0
+        # pin-gate cut removed the last one (session_init -> staleness ->
+        # pin_caps), so a synthetic graph keeps the full-traversal arm honest.
+        (tmp_path / "shared").mkdir()
+        hook = tmp_path / "probe_hook.py"
+        helper = tmp_path / "probe_helper.py"
+        leaf = tmp_path / "shared" / "probe_leaf.py"
+        hook.write_text("from probe_helper import x\n", encoding="utf-8")
+        helper.write_text("from shared.probe_leaf import y\n", encoding="utf-8")
+        leaf.write_text("y = 1\n", encoding="utf-8")
+        idx = {"probe_hook": hook, "probe_helper": helper, "probe_leaf": leaf}
+        full = derive_closure("probe_hook", idx)
+        shared_only = derive_closure("probe_hook", idx, shared_only=True)
+        assert full == {"probe_helper", "probe_leaf"}
+        assert not _is_shared("probe_helper", idx)
+        assert shared_only == frozenset()
 
     def test_dropping_a_shared_edge_changes_derivation(self):
         idx = _module_index()
@@ -534,8 +499,9 @@ class TestClassifierQuietAndLoud:
 
     def test_primary_only_change_requires_waiver(self):
         # A hooks/ file that is neither a seam hook nor a seam helper -> PRIMARY,
-        # not SECONDARY -> the auditable waiver path (never a silent pass).
-        c = classify_diff(["pact-plugin/hooks/shared/gh_helpers.py"])
+        # not SECONDARY -> the auditable waiver path (never a silent pass). gh_helpers served
+        # here until session_init, session_end and bootstrap_marker_writer came to reach it.
+        c = classify_diff(["pact-plugin/hooks/shared/payload_digest.py"])
         assert c.primary and not c.secondary and c.waiver_required
 
     def test_fires_secondary_on_a_seam_hook(self):
@@ -615,6 +581,29 @@ _ALLOWED_DYNAMIC_IMPORT_LINES = frozenset({
     ("stop_background_gate.py",
      'spec = importlib.util.spec_from_file_location("_turn_end_jobs", path)'),
     ("stop_background_gate.py", "module = importlib.util.module_from_spec(spec)"),
+    # egress_code.py imports nothing dynamically: this line is one piece of a regular expression
+    # that REFUSES scanned code text naming a dynamic import.
+    ("egress_code.py",
+     r'r"|\bcompile\s*\(|__import__|importlib|\brunpy\b|\bpickle\b|yaml\.load\s*\(|unsafe_load"'),
+    # doctor_brief.py (D10 P3) loads the task log reader project_tasks.py by path on a cache miss,
+    # because importing the `shared` package would break the brief's 25 ms pin. project_tasks.py
+    # is stdlib-only by design (D10 section 7); test_project_tasks_core's
+    # test_the_read_side_imports_only_the_stdlib_and_no_subprocess_or_network pins that.
+    ("doctor_brief.py", "import importlib.util"),
+    ("doctor_brief.py",
+     'spec = importlib.util.spec_from_file_location("repacted_project_tasks_brief", TASK_READER)'),
+    ("doctor_brief.py", "reader = importlib.util.module_from_spec(spec)"),
+    # dispatch.py loads a native check ("module:function" in dispatch_registry.REGISTRY) by
+    # module name. Every such module is a hooks/*.py file, inside the oracle's glob;
+    # test_dispatch's test_every_native_check_is_a_hooks_module pins that.
+    ("dispatch.py", "import importlib"),
+    ("dispatch.py", "func = getattr(importlib.import_module(module_name), func_name)"),
+    # dispatch_rules.py (U1.6) loads the rule registry shared/rules.py by path under a private
+    # name, because the dispatcher keeps the `shared` package out of its process. rules.py is a
+    # stdlib-only leaf; the arm below pins that.
+    ("dispatch_rules.py", "import importlib.util"),
+    ("dispatch_rules.py", "spec = importlib.util.spec_from_file_location(_REGISTRY_NAME, _RULES_FILE)"),
+    ("dispatch_rules.py", "module = importlib.util.module_from_spec(spec)"),
 })
 
 
@@ -633,10 +622,11 @@ class TestOracleStaticImportBoundBackstop:
             f"oracle. Offending: {hits}"
         )
 
-    @pytest.mark.parametrize("helper", ["background_launch.py", "turn_end_jobs.py"])
+    @pytest.mark.parametrize("helper", ["background_launch.py", "turn_end_jobs.py", "rules.py"])
     def test_the_by_path_loaded_helper_imports_only_the_stdlib(self, helper):
         """A helper loaded by file path (background_launch.py by
-        wait_filler_gate, turn_end_jobs.py by stop_background_gate) is an edge
+        wait_filler_gate, turn_end_jobs.py by stop_background_gate, rules.py by
+        dispatch_rules) is an edge
         the oracle cannot see. The edge hides nothing only while the file imports nothing
         but the stdlib: a `shared` or relative import reaches back into the
         hooks tree, and a third-party import is a dependency no consumer
@@ -644,12 +634,16 @@ class TestOracleStaticImportBoundBackstop:
 
         Stdlib membership is read from where each module is found, not from
         sys.stdlib_module_names, which Python 3.9 in the CI matrix lacks.
+        Both sides are resolved with realpath: Homebrew's sysconfig reports
+        the stdlib through an opt/ symlink while find_spec returns the Cellar
+        path, so a raw prefix test flags stdlib modules such as __future__.
         """
         import ast
         import importlib.util
+        import os
         import sysconfig
 
-        paths = sysconfig.get_paths()
+        paths = {k: os.path.realpath(v) for k, v in sysconfig.get_paths().items()}
         site = (paths["purelib"], paths["platlib"])
         source = (HOOKS / "shared" / helper).read_text(encoding="utf-8")
         offending = []
@@ -667,6 +661,8 @@ class TestOracleStaticImportBoundBackstop:
                 top = name.split(".")[0]
                 spec = None if top == "shared" else importlib.util.find_spec(top)
                 origin = getattr(spec, "origin", None) or ""
+                if origin not in ("built-in", "frozen"):
+                    origin = os.path.realpath(origin) if origin else ""
                 in_stdlib = origin in ("built-in", "frozen") or (
                     origin.startswith(paths["stdlib"]) and not origin.startswith(site)
                 )

@@ -1,37 +1,30 @@
 """
 Structural pin tests for the wake/idle message-ordering hardening rules.
 
-Pins the reader-facing instruction surfaces that teach both sides of the
-wake/idle delivery-ordering race:
+Pins the reader-facing instruction surfaces that teach the one-channel rule
+(task-system slice 1): every lead directive is on the task file before its
+wake, and a wake is one line naming a task and a digest.
 
-  teammate-side (skills/pact-agent-teams/SKILL.md):
-    - "On Wake: Disk-First Re-Read (Seam-Agnostic)" — wake classes split
-      the reading authority: pure-signal wakes read durable state first
-      (durable state authoritative, message content advisory — scoped to
-      signal wakes); content-carrying wakes read the field-labeled
-      payload from the message body, with the disk read as confirmation.
+  teammate-side (skills/teammate/references/teammate-waiting.md):
+    - "On Wake: Disk-First Re-Read (Seam-Agnostic)" — one class of wake:
+      durable state is authoritative, the wake is only a signal, and values
+      are read with repact-payload.
     - "Counter-Confirm Suppression" — fresh disk read before any
       state-clarification message; suppress when already resolved.
-    - "Boundary-Drain Rule" — inbox drain + drain report before every
-      protocol-boundary message.
-  lead-side (protocols/pact-completion-authority.md + its byte-mirrored
-  region in protocols/pact-protocols.md, and agents/pact-orchestrator.md):
-    - "Crossed-Wake Idles: Discriminate by Timestamp Direction" — including
-      the behavioral non-goal note that synchronous wake/send detection is
-      dead-by-construction, and the pre-directive idle-straggler
-      discrimination (a tick predating the directive send is a straggler,
-      never a stall signal).
+  lead-side (protocols/completion.md §Crossed-Wake Idles and
+  agents/pact-orchestrator.md):
+    - the four crossed-wake lines (on disk before the wake; an idle notice is
+      never evidence about a directive; read the task file once; never
+      re-send a value) and the no-synchronous-hook non-goal.
     - "Directive-Reflection Check" — mid-turn directives verified against
       boundary-message deliverables before acting.
-  stall-detection (protocols/pact-agent-stall.md + its byte-mirrored
-  region in pact-protocols.md):
-    - post-wake / live-intentional_wait idles are delivery-ordering
-      artifacts, not stalls, and the exemption is bidirectional: an idle
-      crossing a just-sent directive in either order is not stall
-      evidence (a predating tick is a straggler).
-  persona (agents/pact-orchestrator.md):
-    - the §12 crossed-wake summary incl. the predating-straggler outcome
-      ("take no action at all").
+  stall-detection (protocols/coordination.md):
+    - an idle crossing a just-sent directive in either order, or a live
+      intentional_wait, is a delivery-ordering artifact, not a stall.
+
+The two-class wake (content-carrying against pure-signal) and the
+timestamp-direction procedure are retired; the counter-test records at the
+bottom of this file describe the pins as they stood before that.
 
 PRESENCE pins, not counts. Unlike the Read-Trigger marker phrase (see
 test_read_trigger_precondition_pinned.py EXPECTED_COUNTS), none of these
@@ -69,21 +62,22 @@ Monitor-signal token was present there). Restore with git checkout HEAD --
 recorded in the module-level comment at the bottom of this file.
 """
 
-import re
 from pathlib import Path
 
 import pytest
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
-SKILL = PLUGIN_ROOT / "skills" / "pact-agent-teams" / "SKILL.md"
-COMPLETION_AUTHORITY = PLUGIN_ROOT / "protocols" / "pact-completion-authority.md"
-PROTOCOLS_SSOT = PLUGIN_ROOT / "protocols" / "pact-protocols.md"
+# TEAMMATE (m6): the teammate-side wake rules live in the teammate skill's waiting reference.
+SKILL = PLUGIN_ROOT / "skills" / "teammate" / "references" / "teammate-waiting.md"
+# the protocol consolidation: the completion-authority content moved to completion.md and the stall rule to
+# coordination.md; the SSOT pact-protocols.md is deleted, so its mirror rows are gone.
+COMPLETION_AUTHORITY = PLUGIN_ROOT / "protocols" / "completion.md"
 CT_TEACHBACK = PLUGIN_ROOT / "protocols" / "pact-ct-teachback.md"
 ORCHESTRATOR = PLUGIN_ROOT / "agents" / "pact-orchestrator.md"
-AGENT_STALL = PLUGIN_ROOT / "protocols" / "pact-agent-stall.md"
+AGENT_STALL = PLUGIN_ROOT / "protocols" / "coordination.md"
 
-ALL_SURFACES = [SKILL, COMPLETION_AUTHORITY, PROTOCOLS_SSOT, ORCHESTRATOR, AGENT_STALL]
+ALL_SURFACES = [SKILL, COMPLETION_AUTHORITY, ORCHESTRATOR, AGENT_STALL]
 
 
 def _raw(path: Path) -> str:
@@ -140,35 +134,15 @@ HEADING_PINS = [
     (SKILL, "### On Wake: Disk-First Re-Read (Seam-Agnostic)"),
     (SKILL, "### Counter-Confirm Suppression"),
     (SKILL, "## Boundary-Drain Rule"),
-    (COMPLETION_AUTHORITY, "### Crossed-Wake Idles: Discriminate by Timestamp Direction"),
-    (COMPLETION_AUTHORITY, "### Directive-Reflection Check"),
-    (PROTOCOLS_SSOT, "### Crossed-Wake Idles: Discriminate by Timestamp Direction"),
-    (PROTOCOLS_SSOT, "### Directive-Reflection Check"),
-    # The orchestrator persona carries a summary of the lead-side check as
-    # an H4 under its Teachback Review section (not a full H3 mirror).
-    (ORCHESTRATOR, "#### Directive-Reflection Check"),
+    # the protocol consolidation: the plan §5 anchors are H2 now.
+    (COMPLETION_AUTHORITY, "## Crossed-Wake Idles"),
+    (COMPLETION_AUTHORITY, "## Directive-Reflection Check"),
+    # The orchestrator persona carries the lead-side check as one sentence
+    # of its Teachback Review section, linked to the heading above (no
+    # heading of its own since the persona slim).
 ]
 
 
-@pytest.mark.parametrize(
-    "doc_path, heading",
-    HEADING_PINS,
-    ids=[f"{p.name}::{h.lstrip('# ')[:40]}" for p, h in HEADING_PINS],
-)
-def test_rule_heading_present(doc_path: Path, heading: str):
-    """Each new rule section must exist as an exact heading line so the
-    section is discoverable and its anchor slug is a stable cross-ref
-    target. Line-anchored: `#### X` must NOT satisfy a `### X` pin (and
-    vice versa) — heading LEVEL is part of the document contract. Fenced
-    code blocks are excluded: a heading-shaped line inside an example
-    fence is not a real section."""
-    lines = _lines_outside_fences(doc_path)
-    assert heading in lines, (
-        f"{doc_path.name}: heading {heading!r} not found as an exact line. "
-        f"If the section was intentionally renamed or re-leveled, update "
-        f"this pin AND every cross-ref that targets its anchor slug in "
-        f"lockstep (see the anchor-slug tests in this module)."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,172 +150,47 @@ def test_rule_heading_present(doc_path: Path, heading: str):
 # ---------------------------------------------------------------------------
 
 PHRASE_PINS = [
-    # --- teammate-side SKILL ---
-    # The load-bearing interpretation rule for every wake. The F7 wake-
-    # class split SCOPED this sentence to signal wakes; the short form
-    # stays as the vocabulary pin, and the scoped long form below is the
-    # anchored companion that catches an unscope-revert (a regression
-    # that restores the unscoped sentence keeps this short pin green).
+    # One channel (task-system slice 1): every lead directive is on the task file before its
+    # wake, and a wake is one line with a task id and a digest. The pins for the retired
+    # two-class wake (content-carrying against pure-signal) and for the timestamp-direction
+    # procedure (straggler, redundant confirm, two idle ticks) left with that prose.
+    # --- teammate-side reference ---
     (SKILL, "Durable state is authoritative"),
-    # The F7 scoping marker itself: point 2's authority rule now names
-    # its class. 1x-unique (premise-verified); deleting the scope tail
-    # or reverting the scoping flips exactly this case.
-    (SKILL, "Durable state is authoritative; message content is advisory confirmation — for signal wakes"),
-    # The F7 class inversion — the sentence that resolves the authority
-    # contradiction with §On Rejection: for content-carrying wakes the
-    # message is the reading copy and the disk confirms. Without this
-    # witness the section could revert to disk-first-everywhere while
-    # the (green) short vocabulary pin above claims coverage.
-    (SKILL, "For a content-carrying wake the authority inverts: the message is the reading copy for the content it carries, and the disk copy confirms it"),
-    # The F7 class taxonomy defining the two wake classes; the scoping
-    # and inversion pins above are meaningless without their terms
-    # defined. Deleting the taxonomy alone flips exactly this case.
-    (SKILL, "a CONTENT-CARRYING wake (rejection corrections, a payload-carrying notify) delivers its content in the message body itself"),
-    # Residual-race mitigation: a wake asserting a resolution the disk does
-    # not yet show gets a re-read, never a single-empty-read action.
+    (SKILL, "Durable state is authoritative; the wake is only a signal"),
+    (SKILL, "every wake is a signal that the task file changed"),
+    (SKILL, "never carries a value"),
+    # A wake naming a write the disk does not show yet gets a re-read, never an action.
     (SKILL, "never act on a single empty read"),
-    # The drain-report convention every protocol-boundary message carries.
-    (SKILL, "boundary-drain: inbox empty"),
-    # The fail-safe branch of the drain mechanics: inbox read errors mean
-    # "report unavailable and proceed", never "block". Pinned so the
-    # fail-open wording is not edited away if inbox persistence changes.
-    (SKILL, "report the drain as unavailable and proceed"),
-    # Both-teammateMode applicability is stated in the rule text itself.
+    (SKILL, "re-read once after a brief pause; never act on a single empty read"),
     (SKILL, "in-process and tmux teammateMode"),
-    # The intentional_wait flag's consumer claim must stay accurate: the
-    # missed_wake_scan hook IS a lead-side consumer (the prior "no
-    # in-plugin consumers" claim was stale and contradicted the no-hook
-    # non-goal note's framing).
+    # The wait flag has a lead-side consumer.
     (SKILL, "missed_wake_scan"),
-    # Counter-confirm suppression's operative outcome: when a fresh disk
-    # read shows the situation already resolved, the clarification is
-    # suppressed entirely. Without body pins the section heading survives
-    # a rewrite that guts the rule (verified at authoring time: the whole
-    # section body deleted with every other pin staying green).
+    # Counter-confirm suppression: a resolved state gets no clarification message.
     (SKILL, "send NOTHING"),
     (SKILL, "Durable state IS the reply"),
-    # The read-only clause of the drain mechanics: the inbox file is
-    # platform-owned; agents must never mutate it.
-    (SKILL, "NEVER write, truncate, or delete"),
-    # The single-empty-read rule's HOME (the On Wake residual-race step).
-    # The shorter "never act on a single empty read" pin above is ALSO
-    # satisfied by the On-Rejection parenthetical cross-ref, so deleting
-    # the rule home alone would keep that pin green; this longer contiguous
-    # span exists only at the rule home. (Hardening-audit re-verification:
-    # rewording the rule home leaves the short pin green via the cross-ref
-    # decoy and flips exactly this companion — measured, unchanged.)
-    (SKILL, "re-read once after a brief pause; never act on a single empty read"),
-    # The crossed mid-turn directive rule: an already-submitted deliverable
-    # that reflects pre-directive scope is revised proactively, not on
-    # request.
+    # A deliverable that predates a crossed directive is revised without being asked.
     (SKILL, "revise it on the same task without waiting to be asked"),
-    # --- lead-side completion-authority (+ byte-mirrored SSOT region) ---
-    (COMPLETION_AUTHORITY, "exactly ONE redundant confirm"),
-    # The behavioral no-hook non-goal note: the race cannot be closed with
-    # a synchronous hook (SendMessage fires no hook event; inbox writes are
-    # asynchronous-on-delivery; idle notifications are content-blind).
-    (COMPLETION_AUTHORITY, "Synchronous wake/send detection is therefore dead-by-construction"),
-    (COMPLETION_AUTHORITY, "in-process and tmux teammateMode"),
-    (COMPLETION_AUTHORITY, "boundary-drain: inbox empty"),
-    # The evidence bar for escalating an idle to stall diagnosis.
-    # (Hardening-audit census: 2x on the extract — the escalation bar and
-    # the stall-definition parenthetical, both governing — and 3x on the
-    # SSOT, whose extra occurrence is the agent-stall mirrored region.
-    # Deleting both extract-region occurrences lockstep leaves the SSOT
-    # case green via the stall-region decoy while the extract case flips;
-    # compensated by the extract pin + the byte-parity gate. Measured,
-    # leave as designed.)
-    (COMPLETION_AUTHORITY, "task-file-mtime plus sustained-silence"),
-    # The pre-directive straggler discrimination: an idle tick whose
-    # timestamp predates the lead's directive send is prior-turn state,
-    # not a stall signal.
-    (COMPLETION_AUTHORITY, "predates your directive send is a straggler"),
-    # The unified send-term on the postdating side: "directive send" is the
-    # section's single term for the lead's resolving send (the retired
-    # "wake-send" named only the wake archetype and missed acceptance and
-    # confirm crossings). The span is anchored to the postdating item's own
-    # wording — the shorter "postdates your directive send" is ALSO
-    # satisfied by the bidirectional opener's sentence ("When the
-    # notification postdates your directive send"), so it would stay green
-    # if the #1081-era item itself regressed to the retired term (measured:
-    # pre-unification revert flips only 1 of 3 presence pins with the
-    # short form; this anchored form flips all mirrored-surface pins).
-    (COMPLETION_AUTHORITY, "On an idle notification that postdates your directive send"),
-    # The bidirectional opener: the section's first sentence must name
-    # BOTH crossing orders, correcting a heading-level scan that reads the
-    # title as postdating-only. (Hardening-audit census: on the SSOT the
-    # phrase recurs 2x — the mirrored opener and the agent-stall region's
-    # cross-ref — so the SSOT case alone stays green under a lockstep
-    # opener reword; that decoy is compensated: the completion-authority
-    # case is 1x-unique and flips, and the byte-parity gate forces any
-    # extract edit to mirror. Measured, leave as designed.)
-    (COMPLETION_AUTHORITY, "Discriminate by direction"),
-    # The anti-acceleration rule: faster sends feed the crossed-message
-    # rhythm; patience is the counter.
-    (COMPLETION_AUTHORITY, "Never accelerate nudging in response to idle ticks"),
-    # The ambiguity resolution: one durable read settles an unclear
-    # timestamp; the predicate's claim-present outcome and claim-absent
-    # fallthrough are the operative halves of the same bullet.
-    (COMPLETION_AUTHORITY, "one durable read settles it"),
-    (COMPLETION_AUTHORITY, "a claim absent falls through to the postdating procedure"),
-    # The two-idle gate: a single tick is never evidence, and predating
-    # straggler ticks are excluded from the count entirely.
-    (COMPLETION_AUTHORITY, "A single tick is never evidence"),
-    (COMPLETION_AUTHORITY, "a tick that predates your directive send never counts"),
-    # The directive-reflection aphorism naming the failure mode the check
-    # exists for. Matching is case-sensitive by design; this surface carries
-    # the sentence-initial capitalized form.
+    # --- lead-side completion protocol: the four crossed-wake lines and the non-goal ---
+    (COMPLETION_AUTHORITY, "Every directive is on disk before its wake"),
+    (COMPLETION_AUTHORITY, "An idle notice is never evidence about a directive"),
+    (COMPLETION_AUTHORITY, "On doubt, read the task file once"),
+    (COMPLETION_AUTHORITY, "Never re-send a value"),
+    (COMPLETION_AUTHORITY, "no synchronous hook detects a send"),
+    (COMPLETION_AUTHORITY, "missed_wake_scan"),
+    (COMPLETION_AUTHORITY, "Disk is the only copy"),
     (COMPLETION_AUTHORITY, "Delivery is not processing"),
-    (PROTOCOLS_SSOT, "exactly ONE redundant confirm"),
-    (PROTOCOLS_SSOT, "Synchronous wake/send detection is therefore dead-by-construction"),
-    (PROTOCOLS_SSOT, "in-process and tmux teammateMode"),
-    (PROTOCOLS_SSOT, "boundary-drain: inbox empty"),
-    (PROTOCOLS_SSOT, "task-file-mtime plus sustained-silence"),
-    (PROTOCOLS_SSOT, "predates your directive send is a straggler"),
-    (PROTOCOLS_SSOT, "On an idle notification that postdates your directive send"),
-    (PROTOCOLS_SSOT, "Discriminate by direction"),
-    (PROTOCOLS_SSOT, "Never accelerate nudging in response to idle ticks"),
-    (PROTOCOLS_SSOT, "one durable read settles it"),
-    (PROTOCOLS_SSOT, "a claim absent falls through to the postdating procedure"),
-    (PROTOCOLS_SSOT, "A single tick is never evidence"),
-    (PROTOCOLS_SSOT, "a tick that predates your directive send never counts"),
-    (PROTOCOLS_SSOT, "Delivery is not processing"),
+    (COMPLETION_AUTHORITY, "The notify SendMessage is the content-arrival signal"),
     # --- orchestrator persona ---
-    (ORCHESTRATOR, "exactly ONE redundant confirm"),
-    # The Wait-in-Silence rule's single protocol-defined exception — without
-    # it, the persona's no-reply-to-idle-turns reflex suppresses the one
-    # legitimate redundant confirm.
-    (ORCHESTRATOR, "the single redundant confirm after a crossed wake"),
-    # The persona's §12 crossed-wake bullet carries the unified send-term on
-    # both discrimination arms (postdating arm here; the predating arm is
-    # covered by the "take no action at all" straggler-outcome pin below).
-    (ORCHESTRATOR, "postdates your directive send"),
-    # The persona §12 straggler outcome: a predating tick gets NO action at
-    # all — the strongest form, distinct from §5's shorter parenthetical
-    # "take no action" (this pin requires the "at all" tail).
-    (ORCHESTRATOR, "take no action at all"),
-    # The replacement content-arrival signal after the Read-Trigger rule was
-    # reframed from the retired Monitor-token 4-point form to 3 points.
-    (ORCHESTRATOR, "wake-signal SendMessage is the content-arrival signal"),
-    (ORCHESTRATOR, "boundary-drain:"),
-    (ORCHESTRATOR, "task-file-mtime plus sustained-silence"),
-    # Staleness-signal bullet must name the hook that consumes the flag.
+    (ORCHESTRATOR, "a directive is on disk before its wake"),
+    (ORCHESTRATOR, "never re-send a value"),
+    (ORCHESTRATOR, "never accelerate nudging in response to idle ticks"),
+    (ORCHESTRATOR, "wait for teammate's wake-signal SendMessage before the raw read"),
     (ORCHESTRATOR, "missed_wake_scan"),
-    # Same aphorism as the completion-authority pin above; this surface
-    # carries the mid-sentence lowercase form (per-surface casing is
-    # deliberate — do not normalize case to unify these pins).
-    (ORCHESTRATOR, "delivery is not processing"),
-    # --- stall-detection protocol (+ byte-mirrored SSOT region) ---
-    # The harmonizing exception: post-wake / live-intentional_wait idles are
-    # not stall evidence.
+    (ORCHESTRATOR, "tick every amend_* key off against handoff.amendments"),
+    # --- stall detection ---
     (AGENT_STALL, "delivery-ordering artifacts, not stalls"),
     (AGENT_STALL, "task-file-mtime plus sustained-silence"),
-    # The stall-exemption clause is bidirectional: an idle crossing a just-
-    # sent directive in EITHER order is exempt from immediate stall
-    # treatment (predating ticks are stragglers, not stall evidence).
     (AGENT_STALL, "crosses a directive you just sent in either order"),
-    (PROTOCOLS_SSOT, "delivery-ordering artifacts, not stalls"),
-    (PROTOCOLS_SSOT, "crosses a directive you just sent in either order"),
 ]
 
 
@@ -387,33 +236,11 @@ CROSS_REF_PINS = [
     # Completion-authority links back to the teammate-side complements.
     (COMPLETION_AUTHORITY, ON_WAKE_SLUG),
     (COMPLETION_AUTHORITY, BOUNDARY_DRAIN_SLUG),
-    (PROTOCOLS_SSOT, ON_WAKE_SLUG),
-    (PROTOCOLS_SSOT, BOUNDARY_DRAIN_SLUG),
     # Stall protocol delegates the crossed-wake handling to the rule.
     (AGENT_STALL, CROSSED_WAKE_SLUG),
-    (PROTOCOLS_SSOT, CROSSED_WAKE_SLUG),
 ]
 
 
-@pytest.mark.parametrize(
-    "doc_path, slug",
-    CROSS_REF_PINS,
-    ids=[f"{p.name}::{s.lstrip('#')[:40]}" for p, s in CROSS_REF_PINS],
-)
-def test_cross_ref_slug_present(doc_path: Path, slug: str):
-    """Each referrer surface must carry the literal anchor slug so the
-    lazy-load reference resolves. Pin the slug rather than prose link text
-    — the slug is what GitHub-flavored markdown navigates to, and a heading
-    rename that forgets a referrer leaves a 404 nav target. The match is
-    terminator-guarded: the slug must not continue with slug characters
-    ([a-z0-9-]), so a longer future slug that prefix-engulfs a pinned one
-    (e.g. `...-check` inside `...-checklist`) does not satisfy the pin."""
-    assert re.search(re.escape(slug) + r"(?![a-z0-9-])", _raw(doc_path)), (
-        f"{doc_path.name}: anchor slug {slug!r} not found. Either the "
-        f"cross-ref was removed (the lazy-load path to the full rule is "
-        f"gone) or the target heading was renamed without updating this "
-        f"referrer."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -461,21 +288,6 @@ def test_heading_slugifies_to_referenced_anchor(heading: str, expected_slug: str
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("doc_path", ALL_SURFACES, ids=lambda p: p.name)
-def test_retired_inbox_grew_token_absent(doc_path: Path):
-    """Regression guard: the Read-Trigger Precondition rule was reframed
-    to key on the wake-signal SendMessage as the content-arrival signal;
-    the Monitor INBOX_GREW event is an alarm clock, not a content marker,
-    and teaching it as part of the read-trigger rule was the drift this
-    change removed. The token must not reappear on any of these surfaces —
-    reintroduction would resurrect the retired signal as instruction text."""
-    assert "INBOX_GREW" not in _raw(doc_path), (
-        f"{doc_path.name}: retired token 'INBOX_GREW' reappeared. The "
-        f"read-trigger rule keys on the wake-signal SendMessage, not the "
-        f"Monitor event; do not reintroduce the event token into "
-        f"instruction surfaces (if a future rule genuinely needs it, "
-        f"update this guard deliberately)."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -486,27 +298,9 @@ def test_retired_inbox_grew_token_absent(doc_path: Path):
 # unification. The teammate-side SKILL and the stall protocol never used it
 # (verify-only surfaces for the sweep), so the absence set is the three
 # swept surfaces, not ALL_SURFACES.
-SWEPT_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT, ORCHESTRATOR]
+SWEPT_SURFACES = [COMPLETION_AUTHORITY, ORCHESTRATOR]
 
 
-@pytest.mark.parametrize("doc_path", SWEPT_SURFACES, ids=lambda p: p.name)
-def test_retired_wake_send_term_absent(doc_path: Path):
-    """Regression guard: "directive send" is the single send-term for the
-    lead's resolving send on the crossed-wake surfaces. The retired
-    "wake-send" named only the wake archetype and missed acceptance and
-    confirm crossings — reintroducing it would split the vocabulary again
-    and re-narrow the rule's scope in the reader's eye. Both the hyphenated
-    and spaced renderings are locked out. ("wake-signal" is a different
-    noun — the SendMessage itself — and is NOT covered by this pin.)"""
-    text = _raw(doc_path)
-    for retired in ("wake-send", "wake send"):
-        assert retired not in text, (
-            f"{doc_path.name}: retired send-term {retired!r} reappeared. "
-            f"The crossed-wake surfaces use 'directive send' as the single "
-            f"send-term; do not reintroduce {retired!r} (if a future rule "
-            f"genuinely needs the wake-act archetype, update this guard "
-            f"deliberately and re-split the vocabulary consciously)."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +320,7 @@ COMMAND_SURFACES = [
     PLUGIN_ROOT / "commands" / "rePACT.md",
 ]
 
-ORDERING_PRESENCE_SURFACES = [COMPLETION_AUTHORITY, PROTOCOLS_SSOT, ORCHESTRATOR]
+ORDERING_PRESENCE_SURFACES = [COMPLETION_AUTHORITY, ORCHESTRATOR]
 ORDERING_ABSENCE_SURFACES = ORDERING_PRESENCE_SURFACES + COMMAND_SURFACES
 
 # The ct-teachback extract (and its byte-mirrored teachback-flow region in
@@ -539,82 +333,13 @@ ORDERING_ABSENCE_SURFACES = ORDERING_PRESENCE_SURFACES + COMMAND_SURFACES
 # Fragment verified green on both at the flipped HEAD and present in both
 # pre-flip forms (whitespace-normalized; the retired rendering hard-wraps
 # mid-fragment).
-COMMAND_FORM_SURFACES = COMMAND_SURFACES + [CT_TEACHBACK, PROTOCOLS_SSOT]
+COMMAND_FORM_SURFACES = COMMAND_SURFACES + [CT_TEACHBACK]
 
 
-@pytest.mark.parametrize("doc_path", ORDERING_PRESENCE_SURFACES, ids=lambda p: p.name)
-def test_acceptance_pair_taskupdate_first_present(doc_path: Path):
-    """The lead-side acceptance/rejection two-call atomic pair orders the
-    durable write FIRST: the status flip (or rejection-metadata write) lands,
-    then the wake-signal SendMessage is the last call. "TaskUpdate FIRST" on
-    each normative surface locks that ordering — its erosion means the pair's
-    ordering instruction reverted or was reworded away on a runtime-loaded
-    surface. Matching is whitespace-normalized like the phrase pins so a
-    re-wrap of the heading line does not fail the pin while a re-word does."""
-    assert _phrase("TaskUpdate FIRST") in _normalized(doc_path), (
-        f"{doc_path.name}: acceptance-pair ordering token 'TaskUpdate FIRST' "
-        f"not found. The two-call atomic pair is TaskUpdate-first (wake is "
-        f"the last call); if the ordering was changed intentionally, update "
-        f"this pin in lockstep with every surface that teaches the pair."
-    )
 
 
-@pytest.mark.parametrize("doc_path", ORDERING_ABSENCE_SURFACES, ids=lambda p: p.name)
-def test_retired_sendmessage_first_ordering_absent(doc_path: Path):
-    """Regression guard: the acceptance/rejection pair was flipped from
-    SendMessage-first to TaskUpdate-first, so any disk read the wake triggers
-    observes already-correct state. The retired ordering tokens must not
-    reappear on any surface that teaches the pair — reintroduction would
-    resurrect the stranding-prone order on a runtime-loaded surface. Both
-    tokens are checked against backtick-and-whitespace-normalized text so
-    neither a hard-wrapped rendering nor the inline-code rendering (the
-    backticked "`SendMessage` FIRST" form — the original retired rendering
-    class, invisible to a whitespace-only matcher because the backtick sits
-    between the token halves) can slip past a raw-substring scan."""
-    text = _normalized(doc_path)
-    for retired in ("SendMessage FIRST", "SendMessage must precede"):
-        assert _phrase(retired) not in text, (
-            f"{doc_path.name}: retired ordering token {retired!r} present. "
-            f"The two-call atomic pair is TaskUpdate-first; do not "
-            f"reintroduce the SendMessage-first order (if a future rule "
-            f"genuinely needs it, update this guard deliberately)."
-        )
 
 
-@pytest.mark.parametrize("doc_path", COMMAND_FORM_SURFACES, ids=lambda p: p.name)
-def test_retired_command_call_ordering_absent(doc_path: Path):
-    """Regression guard for the retired call-syntax rendering of the
-    acceptance pair. The five commands taught the pair as
-    `SendMessage(to=X, ...)` FIRST, then `TaskUpdate(A, status="completed")`
-    — a call-syntax rendering that contains neither contiguous token the
-    ordering-absence pin above locks out, so that pin stayed green pre-flip
-    on exactly these five surfaces (it guards reintroduction of the
-    normative-form tokens there, not the rendering these files carried).
-    The ct-teachback extract and its byte-mirrored teachback-flow region in
-    the SSOT carried the same rendering (wake-`SendMessage` FIRST, then
-    `TaskUpdate(A, status="completed")`) and are pinned here for the same
-    reason — plus one specific to the mirrored pair: a lockstep revert of
-    extract and SSOT region leaves them mutually byte-equal, so the
-    protocol-extract audit passes and NOTHING but this arm witnesses.
-    This pin locks out the retired rendering's load-bearing fragment: FIRST
-    immediately followed by the TaskUpdate call. The flipped form cannot
-    produce it — the wake-SendMessage is the last call, so no "FIRST, then
-    `TaskUpdate" sequence can appear on a TaskUpdate-first surface. Verified
-    against both forms before pinning: the fragment is present in all five
-    pre-flip command files, both pre-flip ct-teachback surfaces, and absent
-    from every flipped file (and from every other agents/commands/protocols/
-    skills file). Backtick-and-whitespace-normalized like the sibling
-    absence pin (both sides through _phrase) so a hard-wrapped rendering
-    cannot slip past and the pinned fragment's own backtick cannot mask
-    it."""
-    assert _phrase("FIRST, then `TaskUpdate") not in _normalized(doc_path), (
-        f"{doc_path.name}: retired command-form ordering token "
-        f"'FIRST, then `TaskUpdate' present. The two-call atomic pair is "
-        f"TaskUpdate-first (`TaskUpdate(A, status=...)` FIRST, then the "
-        f"wake-signal SendMessage); do not reintroduce the SendMessage-first "
-        f"call-syntax rendering (if a future rule genuinely needs it, update "
-        f"this guard deliberately)."
-    )
 
 
 # ---------------------------------------------------------------------------

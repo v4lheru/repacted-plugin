@@ -1,10 +1,20 @@
 {
   "map": {
-    "skills/pact-agent-teams/test_skill_loading_agent_teams.py": {
-      "pathlib.Path": null
-    },
     "skills/pact-handoff-harvest/test_skill_loading_harvest.py": {
       "pathlib.Path": null
+    },
+    "tests/slow/test_merge_guard_perf.py": {
+      "merge_guard_pre": "hooks/merge_guard_pre.py",
+      "merge_guard_pre._GH_PR_NUMBER_RE": null,
+      "merge_guard_pre.is_dangerous_command": null,
+      "pathlib.Path": null,
+      "shared": "hooks/shared/__init__.py",
+      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
+      "shared.merge_guard_common._MAX_GLOBAL_FLAG_TOKENS": null,
+      "shared.merge_guard_common._shell_tokenize": null,
+      "shared.merge_guard_common._strip_flag_values": null,
+      "shared.merge_guard_common.detect_command_operation_type": null,
+      "shared.merge_guard_common.extract_privileged_flags": null
     },
     "tests/test_628_coverage.py": {
       "pathlib.Path": null,
@@ -43,50 +53,11 @@
     "tests/test_agent_memory_leaf_construction.py": {
       "pathlib.Path": null
     },
-    "tests/test_agent_state_model.py": {
-      "pathlib.Path": null
-    },
     "tests/test_agents_structure.py": {
       "helpers": "tests/helpers.py",
       "helpers.frontmatter_block": null,
       "helpers.parse_frontmatter": null,
       "pathlib.Path": null
-    },
-    "tests/test_archive_pin.py": {
-      "archive_pin": "scripts/archive_pin.py",
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pathlib.Path": null,
-      "pin_caps": "hooks/pin_caps.py",
-      "scripts.config": "skills/pact-memory/scripts/config.py",
-      "scripts.config.MEMORY_DIR_ENV": null,
-      "scripts.config.STORE_ORIGIN_HOME": null,
-      "scripts.config.resolve_db_path": null,
-      "scripts.config.store_path_origin": null,
-      "shared.project_scope": "hooks/shared/project_scope.py",
-      "shared.project_scope.same_repository": null,
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_archive_pin_emit.py": {
-      "archive_pin": "scripts/archive_pin.py",
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pathlib.Path": null,
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_archive_pin_raise_census.py": {
-      "pathlib.Path": null
-    },
-    "tests/test_archive_pin_resolver.py": {
-      "archive_pin": "scripts/archive_pin.py",
-      "pathlib.Path": null,
-      "scripts": "skills/pact-memory/scripts/__init__.py",
-      "scripts.pact_session": "skills/pact-memory/scripts/pact_session.py",
-      "shared": "hooks/shared/__init__.py",
-      "shared.project_scope": "hooks/shared/project_scope.py",
-      "shared.project_scope.same_repository": null
     },
     "tests/test_artifact_paths_durability.py": {
       "__future__.annotations": null,
@@ -175,17 +146,6 @@
       "shared.session_journal": "hooks/shared/session_journal.py",
       "shared.session_journal._validate_event_schema": null,
       "teammate_idle": "hooks/teammate_idle.py"
-    },
-    "tests/test_backlog.py": {
-      "datetime.datetime": null,
-      "datetime.timedelta": null,
-      "datetime.timezone": null,
-      "pathlib.Path": null,
-      "session_init": "hooks/session_init.py",
-      "shared": "hooks/shared/__init__.py",
-      "shared.backlog": "hooks/shared/backlog.py",
-      "shared.backlog_store": "hooks/shared/backlog_store.py",
-      "unittest.mock.patch": null
     },
     "tests/test_bin_pact_launcher.py": {
       "pathlib.Path": null
@@ -276,9 +236,6 @@
       "scripts.database": "skills/pact-memory/scripts/database.py",
       "scripts.database.get_connection": null
     },
-    "tests/test_canary_checklist_count.py": {
-      "pathlib.Path": null
-    },
     "tests/test_canonical_journal_frame_gate.py": {
       "pathlib.Path": null,
       "shared.pact_context": "hooks/shared/pact_context.py",
@@ -296,19 +253,6 @@
       "__future__.annotations": null,
       "scripts": "skills/pact-memory/scripts/__init__.py",
       "scripts.embedding_catchup": "skills/pact-memory/scripts/embedding_catchup.py",
-      "unittest.mock.patch": null
-    },
-    "tests/test_check_pin_caps.py": {
-      "check_pin_caps": "scripts/check_pin_caps.py",
-      "datetime.datetime": null,
-      "datetime.timedelta": null,
-      "datetime.timezone": null,
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pathlib.Path": null,
-      "pin_caps": "hooks/pin_caps.py",
-      "staleness": "hooks/staleness.py",
       "unittest.mock.patch": null
     },
     "tests/test_check_unused_imports.py": {
@@ -367,8 +311,6 @@
       "scripts.working_memory._resolve_display_claude_md_path": null,
       "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
       "shared.claude_md_manager.resolve_project_claude_md_path": null,
-      "staleness": "hooks/staleness.py",
-      "staleness.get_project_claude_md_path": null,
       "typing.Optional": null
     },
     "tests/test_claudemd_write_prohibition_guard.py": {
@@ -393,7 +335,6 @@
       "helpers.parse_frontmatter": null,
       "pathlib.Path": null,
       "shared": "hooks/shared/__init__.py",
-      "shared.backlog": "hooks/shared/backlog.py",
       "shared.intentional_wait": "hooks/shared/intentional_wait.py",
       "shared.intentional_wait.KNOWN_RESOLVERS": null
     },
@@ -554,11 +495,6 @@
       "shared.session_resume": "hooks/shared/session_resume.py",
       "shared.session_resume.update_session_info": null,
       "unittest.mock.patch": null
-    },
-    "tests/test_count_word_guard.py": {
-      "hooks.shared.variety_divergence": "hooks/shared/variety_divergence.py",
-      "hooks.shared.variety_divergence.extract_final_dispatch_coverage": null,
-      "pathlib.Path": null
     },
     "tests/test_covers_since_instruction_pins.py": {
       "__future__.annotations": null,
@@ -750,9 +686,7 @@
       "shared.session_journal": "hooks/shared/session_journal.py",
       "shared.session_journal.SKIP_CAUSE_RAISED": null,
       "shared.session_journal.SKIP_CAUSE_RETURNED_FALSE": null,
-      "shared.session_journal.append_event_checked": null,
-      "shared.variety_divergence": "hooks/shared/variety_divergence.py",
-      "shared.variety_divergence.count_emit_skips": null
+      "shared.session_journal.append_event_checked": null
     },
     "tests/test_emitter_happy_and_gates.py": {
       "fixtures.emitter": "tests/fixtures/emitter.py",
@@ -867,9 +801,7 @@
       "shared.intentional_wait.SELF_COMPLETE_EXEMPT_AGENT_TYPES": null,
       "shared.intentional_wait.TEACHBACK_EXEMPT_AGENT_TYPES": null,
       "shared.intentional_wait.is_self_complete_exempt": null,
-      "shared.intentional_wait.is_teachback_exempt": null,
-      "test_harvest_trigger_coherence": "tests/test_harvest_trigger_coherence.py",
-      "test_harvest_trigger_coherence._claimed_boundaries": null
+      "shared.intentional_wait.is_teachback_exempt": null
     },
     "tests/test_failure_cause_convention.py": {
       "pathlib.Path": null,
@@ -1071,10 +1003,6 @@
     "tests/test_harvest_prune_foreign_root.py": {
       "pathlib.Path": null
     },
-    "tests/test_harvest_trigger_coherence.py": {
-      "collections.Counter": null,
-      "pathlib.Path": null
-    },
     "tests/test_hook_emitted_config_root.py": {
       "bootstrap_gate": "hooks/bootstrap_gate.py",
       "pathlib.Path": null,
@@ -1204,9 +1132,6 @@
       "shared": "hooks/shared/__init__.py",
       "shared.pact_context": "hooks/shared/pact_context.py"
     },
-    "tests/test_learning_ii.py": {
-      "pathlib.Path": null
-    },
     "tests/test_lint_check_argument_accounting.py": {
       "pathlib.Path": null
     },
@@ -1237,14 +1162,6 @@
     "tests/test_managed_comment_mirror.py": {
       "__future__.annotations": null,
       "pathlib.Path": null
-    },
-    "tests/test_marker_helper_twin_drift.py": {
-      "__future__.annotations": null,
-      "scripts": "skills/pact-memory/scripts/__init__.py",
-      "scripts.working_memory": "skills/pact-memory/scripts/working_memory.py",
-      "shared.pin_markers": "hooks/shared/pin_markers.py",
-      "tests": "tests/__init__.py",
-      "tests.test_staleness": "tests/test_staleness.py"
     },
     "tests/test_marker_namespace.py": {
       "pathlib.Path": null,
@@ -1368,14 +1285,6 @@
       "scripts.models.MemoryObject": null,
       "unittest.mock.patch": null
     },
-    "tests/test_memory_end_marker_bounds_the_pin_scan.py": {
-      "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
-      "shared.claude_md_manager.MANAGED_END_MARKER": null,
-      "shared.claude_md_manager.MANAGED_START_MARKER": null,
-      "shared.claude_md_manager.MEMORY_END_MARKER": null,
-      "shared.claude_md_manager.MEMORY_START_MARKER": null,
-      "staleness": "hooks/staleness.py"
-    },
     "tests/test_memory_graph.py": {
       "helpers": "tests/helpers.py",
       "helpers.create_test_schema": null,
@@ -1485,6 +1394,8 @@
     },
     "tests/test_merge_guard.py": {
       "__future__.annotations": null,
+      "helpers": "tests/helpers.py",
+      "helpers.effective_hooks_config": null,
       "merge_guard_post": "hooks/merge_guard_post.py",
       "merge_guard_post.TOKEN_TTL": null,
       "merge_guard_post._cleanup_consumed_tokens": null,
@@ -1500,12 +1411,7 @@
       "merge_guard_pre.TOKEN_TTL": null,
       "merge_guard_pre._cleanup_consumed_tokens": null,
       "merge_guard_pre._consume_token": null,
-      "merge_guard_pre._extract_pr_number": null,
       "merge_guard_pre._has_command_substitution": null,
-      "merge_guard_pre._has_eval_or_source": null,
-      "merge_guard_pre._has_eval_with_heredoc": null,
-      "merge_guard_pre._has_pipe_to_shell": null,
-      "merge_guard_pre._has_process_substitution_to_shell": null,
       "merge_guard_pre._safe_remove": null,
       "merge_guard_pre._strip_non_executable_content": null,
       "merge_guard_pre._token_matches_command": null,
@@ -1515,6 +1421,10 @@
       "merge_guard_pre.is_compound_destructive_command": null,
       "merge_guard_pre.is_dangerous_command": null,
       "merge_guard_pre.main": null,
+      "merge_guard_repo_fixture": "tests/merge_guard_repo_fixture.py",
+      "merge_guard_repo_fixture.cli_repo_is_o_r": null,
+      "merge_guard_repo_fixture.git_bound": null,
+      "merge_guard_repo_fixture.minted_context": null,
       "pathlib.Path": null,
       "shared": "hooks/shared/__init__.py",
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
@@ -1525,7 +1435,6 @@
       "shared.merge_guard_common.USE_MARKER_SUFFIX": null,
       "shared.merge_guard_common._COMPOUND_OPS_RE": null,
       "shared.merge_guard_common._FD_REDIRECT_RE": null,
-      "shared.merge_guard_common._has_pipe_to_shell": null,
       "shared.merge_guard_common._mask_shell_quotes": null,
       "shared.merge_guard_common._normalize_line_continuations": null,
       "shared.merge_guard_common._split_into_legs": null,
@@ -1533,9 +1442,8 @@
       "shared.merge_guard_common.cleanup_consumed_tokens": null,
       "shared.merge_guard_common.cleanup_orphan_tokens": null,
       "shared.merge_guard_common.cleanup_unused_tokens": null,
-      "shared.merge_guard_common.detect_command_operation_type": null,
       "shared.merge_guard_common.extract_command_context": null,
-      "shared.merge_guard_common.is_dangerous_command": null,
+      "shell.merge": "hooks/shell/merge/__init__.py",
       "unittest.mock.patch": null
     },
     "tests/test_merge_guard_1037_narrow.py": {
@@ -1544,23 +1452,19 @@
       "merge_guard_pre.is_compound_destructive_command": null,
       "merge_guard_pre.is_dangerous_command": null
     },
-    "tests/test_merge_guard_1118_output_selector.py": {
-      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
-      "shared.merge_guard_common._strip_non_executable_content": null,
-      "shared.merge_guard_common.detect_command_operation_type": null,
-      "shared.merge_guard_common.is_dangerous_command": null
-    },
-    "tests/test_merge_guard_1118_output_selector_cert.py": {
-      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
-      "shared.merge_guard_common._strip_non_executable_content": null,
-      "shared.merge_guard_common.detect_command_operation_type": null,
-      "shared.merge_guard_common.is_dangerous_command": null
-    },
-    "tests/test_merge_guard_1118_recert.py": {
+    "tests/test_merge_guard_1118_mechanism.py": {
       "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
       "merge_guard_baseline_loader.load_vendored": null,
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
       "typing.Any": null
+    },
+    "tests/test_merge_guard_1118_output_selector.py": {
+      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
+      "shared.merge_guard_common._strip_non_executable_content": null
+    },
+    "tests/test_merge_guard_1118_output_selector_mechanism.py": {
+      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
+      "shared.merge_guard_common._strip_non_executable_content": null
     },
     "tests/test_merge_guard_1129_r1_branch_set.py": {
       "merge_guard_pre": "hooks/merge_guard_pre.py",
@@ -1568,11 +1472,10 @@
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
       "shared.merge_guard_common._canonical_join": null,
       "shared.merge_guard_common._extract_branch_delete_set": null,
-      "shared.merge_guard_common.detect_command_operation_type": null,
-      "shared.merge_guard_common.extract_command_context": null,
-      "shared.merge_guard_common.is_dangerous_command": null
+      "shared.merge_guard_common.command_repo_binding": null,
+      "shared.merge_guard_common.extract_command_context": null
     },
-    "tests/test_merge_guard_1129_r1_cert.py": {
+    "tests/test_merge_guard_1129_r1_mechanism.py": {
       "merge_guard_post": "hooks/merge_guard_post.py",
       "merge_guard_post.main": null,
       "merge_guard_pre": "hooks/merge_guard_pre.py",
@@ -1581,7 +1484,7 @@
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
       "unittest.mock.patch": null
     },
-    "tests/test_merge_guard_1129_r2_cert.py": {
+    "tests/test_merge_guard_1129_r2_mechanism.py": {
       "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
       "merge_guard_baseline_loader.load_vendored": null,
       "merge_guard_post": "hooks/merge_guard_post.py",
@@ -1591,18 +1494,18 @@
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
       "unittest.mock.patch": null
     },
-    "tests/test_merge_guard_1129_r3_cert.py": {
-      "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
-      "merge_guard_baseline_loader.load_vendored": null,
+    "tests/test_merge_guard_1129_r3_mechanism.py": {
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py"
     },
-    "tests/test_merge_guard_1134_cert.py": {
+    "tests/test_merge_guard_1134_mechanism.py": {
       "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
       "merge_guard_baseline_loader.load_baseline_172a77dd": null,
       "merge_guard_post": "hooks/merge_guard_post.py",
       "merge_guard_post.main": null,
       "merge_guard_pre": "hooks/merge_guard_pre.py",
       "merge_guard_pre.main": null,
+      "merge_guard_repo_fixture": "tests/merge_guard_repo_fixture.py",
+      "merge_guard_repo_fixture.cli_repo_is_o_r": null,
       "pathlib.Path": null,
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
       "unittest.mock.patch": null
@@ -1616,49 +1519,73 @@
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
       "unittest.mock.patch": null
     },
-    "tests/test_merge_guard_1140_carrier5_cert.py": {
-      "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
-      "merge_guard_baseline_loader.load_vendored": null,
+    "tests/test_merge_guard_1140_carrier5_mechanism.py": {
       "pathlib.Path": null,
-      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py"
+      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
+      "shell.merge.strip": "hooks/shell/merge/strip.py"
     },
-    "tests/test_merge_guard_1148_cert.py": {
+    "tests/test_merge_guard_1148_mechanism.py": {
       "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
       "merge_guard_baseline_loader.load_baseline": null,
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py"
     },
-    "tests/test_merge_guard_1155_cert.py": {
+    "tests/test_merge_guard_1155_mechanism.py": {
       "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
       "merge_guard_baseline_loader.load_baseline": null,
       "merge_guard_post": "hooks/merge_guard_post.py",
       "merge_guard_pre": "hooks/merge_guard_pre.py",
+      "merge_guard_repo_fixture": "tests/merge_guard_repo_fixture.py",
+      "merge_guard_repo_fixture.cli_repo_is_o_r": null
+    },
+    "tests/test_merge_guard_1178_f2_mechanism.py": {
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py"
     },
-    "tests/test_merge_guard_1178_cert.py": {
-      "pathlib.Path": null,
+    "tests/test_merge_guard_1178_mechanism.py": {
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py"
     },
-    "tests/test_merge_guard_1178_f2_cert.py": {
-      "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
-      "merge_guard_baseline_loader.load_vendored": null,
-      "pathlib.Path": null,
+    "tests/test_merge_guard_1181_mechanism.py": {
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py"
     },
-    "tests/test_merge_guard_1181_cert.py": {
-      "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
-      "merge_guard_baseline_loader.load_baseline": null,
-      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py"
-    },
-    "tests/test_merge_guard_1203_cert.py": {
+    "tests/test_merge_guard_1203_mechanism.py": {
       "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
       "merge_guard_baseline_loader.load_baseline_5017d1f2": null,
       "merge_guard_post": "hooks/merge_guard_post.py",
       "merge_guard_post.main": null,
       "merge_guard_pre": "hooks/merge_guard_pre.py",
       "merge_guard_pre.main": null,
+      "merge_guard_repo_fixture": "tests/merge_guard_repo_fixture.py",
+      "merge_guard_repo_fixture.cli_repo_is_o_r": null,
       "pathlib.Path": null,
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
       "unittest.mock.patch": null
+    },
+    "tests/test_merge_guard_141_u13.py": {
+      "merge_guard_post": "hooks/merge_guard_post.py",
+      "merge_guard_post._mint_context_from_bundle": null,
+      "merge_guard_pre": "hooks/merge_guard_pre.py",
+      "project_tasks_support": "tests/project_tasks_support.py",
+      "project_tasks_support.GIT_ENV": null,
+      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py"
+    },
+    "tests/test_merge_guard_150_canonical.py": {
+      "merge_guard_post": "hooks/merge_guard_post.py",
+      "merge_guard_post._mint_context_from_bundle": null,
+      "merge_guard_post.write_token": null,
+      "merge_guard_pre": "hooks/merge_guard_pre.py",
+      "project_tasks_support": "tests/project_tasks_support.py",
+      "project_tasks_support.GIT_ENV": null,
+      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
+      "shared.merge_guard_common.canonical_spelling": null,
+      "shared.merge_guard_common.detect_command_operation_type": null
+    },
+    "tests/test_merge_guard_150_pushfix.py": {
+      "merge_guard_pre": "hooks/merge_guard_pre.py",
+      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
+      "test_merge_guard_141_u13": "tests/test_merge_guard_141_u13.py",
+      "test_merge_guard_141_u13._decide": null,
+      "test_merge_guard_141_u13._git": null,
+      "test_merge_guard_141_u13._mint": null,
+      "test_merge_guard_141_u13.repos": null
     },
     "tests/test_merge_guard_auth_symmetry.py": {
       "__future__.annotations": null,
@@ -1685,7 +1612,7 @@
       "merge_guard_post._target_value": null,
       "merge_guard_pre": "hooks/merge_guard_pre.py"
     },
-    "tests/test_merge_guard_obs_cert.py": {
+    "tests/test_merge_guard_obs_mechanism.py": {
       "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
       "merge_guard_baseline_loader.load_baseline": null,
       "merge_guard_post": "hooks/merge_guard_post.py",
@@ -1694,6 +1621,8 @@
       "merge_guard_post.main": null,
       "merge_guard_pre": "hooks/merge_guard_pre.py",
       "merge_guard_pre.main": null,
+      "merge_guard_repo_fixture": "tests/merge_guard_repo_fixture.py",
+      "merge_guard_repo_fixture.cli_repo_is_o_r": null,
       "pathlib.Path": null,
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
       "unittest.mock.patch": null
@@ -1722,34 +1651,11 @@
       "merge_guard_pre": "hooks/merge_guard_pre.py",
       "merge_guard_pre.check_merge_authorization": null,
       "merge_guard_pre.main": null,
+      "merge_guard_repo_fixture": "tests/merge_guard_repo_fixture.py",
+      "merge_guard_repo_fixture.cli_repo_is_o_r": null,
       "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
-      "shared.merge_guard_common.detect_command_operation_type": null,
-      "shared.merge_guard_common.extract_privileged_flags": null,
       "shared.merge_guard_common.is_dangerous_command": null,
       "unittest.mock.patch": null
-    },
-    "tests/test_merge_guard_overblock_cluster_monotonicity.py": {
-      "merge_guard_baseline_loader": "tests/merge_guard_baseline_loader.py",
-      "merge_guard_baseline_loader.load_baseline": null,
-      "merge_guard_post": "hooks/merge_guard_post.py",
-      "merge_guard_pre": "hooks/merge_guard_pre.py",
-      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
-      "test_merge_guard_1148_cert": "tests/test_merge_guard_1148_cert.py",
-      "test_merge_guard_1148_cert.CLOSURES": null,
-      "test_merge_guard_1148_cert._ESC": null,
-      "test_merge_guard_1148_cert._F3_CLOSE": null,
-      "test_merge_guard_1148_cert._F3_GENUINE": null,
-      "test_merge_guard_1148_cert._GENUINE": null,
-      "test_merge_guard_1148_cert._LC": null,
-      "test_merge_guard_1155_cert": "tests/test_merge_guard_1155_cert.py",
-      "test_merge_guard_1155_cert.FIND_CLOSURES": null,
-      "test_merge_guard_1155_cert._R1_DELETE_CLASS": null,
-      "test_merge_guard_1155_cert._R1_FAITHFUL": null,
-      "test_merge_guard_1181_cert": "tests/test_merge_guard_1181_cert.py",
-      "test_merge_guard_1181_cert.INTENDED_CLOSURES": null,
-      "test_merge_guard_obs_cert": "tests/test_merge_guard_obs_cert.py",
-      "test_merge_guard_obs_cert.A2_CENSUS": null,
-      "test_merge_guard_obs_cert.COMMITTER_CENSUS": null
     },
     "tests/test_merge_guard_overblock_tokenizers.py": {
       "__future__.annotations": null,
@@ -1769,19 +1675,6 @@
       "shared.merge_guard_common.is_compound_destructive_command": null,
       "shared.merge_guard_common.is_dangerous_command": null,
       "unittest.mock.patch": null
-    },
-    "tests/test_merge_guard_perf.py": {
-      "merge_guard_pre": "hooks/merge_guard_pre.py",
-      "merge_guard_pre._GH_PR_NUMBER_RE": null,
-      "merge_guard_pre.is_dangerous_command": null,
-      "pathlib.Path": null,
-      "shared": "hooks/shared/__init__.py",
-      "shared.merge_guard_common": "hooks/shared/merge_guard_common.py",
-      "shared.merge_guard_common._MAX_GLOBAL_FLAG_TOKENS": null,
-      "shared.merge_guard_common._shell_tokenize": null,
-      "shared.merge_guard_common._strip_flag_values": null,
-      "shared.merge_guard_common.detect_command_operation_type": null,
-      "shared.merge_guard_common.extract_privileged_flags": null
     },
     "tests/test_merge_guard_pre.py": {
       "merge_guard_pre": "hooks/merge_guard_pre.py",
@@ -1882,10 +1775,7 @@
     "tests/test_orchestration_retrospective.py": {
       "pathlib.Path": null,
       "shared.teachback_schema": "hooks/shared/teachback_schema.py",
-      "shared.teachback_schema.resolve_variety_total": null,
-      "shared.variety_divergence": "hooks/shared/variety_divergence.py",
-      "shared.variety_divergence.extract_dispatch_coverage": null,
-      "shared.variety_divergence.extract_final_dispatch_coverage": null
+      "shared.teachback_schema.resolve_variety_total": null
     },
     "tests/test_packaging_boundary.py": {
       "pathlib.Path": null,
@@ -1999,20 +1889,11 @@
       "shared.pact_context.project_slug": null,
       "unittest.mock.patch": null
     },
-    "tests/test_peer_review_greedy_pin.py": {
-      "pathlib.Path": null
-    },
-    "tests/test_peer_review_independence_pin.py": {
-      "pathlib.Path": null
-    },
     "tests/test_per_dispatch_variety.py": {
       "pathlib.Path": null,
       "shared": "hooks/shared/__init__.py",
       "shared.teachback_schema": "hooks/shared/teachback_schema.py",
       "shared.teachback_schema.TEACHBACK_REASONING_RECONSTRUCTION_REQUIRED_MIN": null,
-      "shared.variety_divergence": "hooks/shared/variety_divergence.py",
-      "shared.variety_divergence.DEFAULT_THRESHOLD": null,
-      "shared.variety_divergence.compute_variety_divergence": null,
       "shared.variety_scorer": "hooks/shared/variety_scorer.py",
       "task_lifecycle_gate": "hooks/task_lifecycle_gate.py"
     },
@@ -2039,234 +1920,6 @@
       "pathlib.Path": null,
       "shared.task_metadata_snapshot": "hooks/shared/task_metadata_snapshot.py",
       "task_lifecycle_gate": "hooks/task_lifecycle_gate.py"
-    },
-    "tests/test_pin_caps.py": {
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps.DENY_REASON_COUNT": null,
-      "pin_caps.DENY_REASON_EMBEDDED_PIN": null,
-      "pin_caps.DENY_REASON_OVERRIDE_MISSING": null,
-      "pin_caps.DENY_REASON_SIZE": null,
-      "pin_caps.OVERRIDE_RATIONALE_MAX": null,
-      "pin_caps.PIN_COUNT_CAP": null,
-      "pin_caps.PIN_SIZE_CAP": null,
-      "pin_caps.PIN_STALE_BLOCK_THRESHOLD": null,
-      "pin_caps.Pin": null,
-      "pin_caps.apply_edit_and_parse": null,
-      "pin_caps.check_add_allowed": null,
-      "pin_caps.check_stale_block": null,
-      "pin_caps.compute_deny_reason": null,
-      "pin_caps.evaluate_full_state": null,
-      "pin_caps.format_slot_status": null,
-      "pin_caps.has_size_override": null,
-      "pin_caps.parse_pins": null
-    },
-    "tests/test_pin_caps_adversarial.py": {
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps.Pin": null,
-      "pin_caps.check_add_allowed": null,
-      "pin_caps.parse_pins": null,
-      "pin_staleness_gate": "hooks/pin_staleness_gate.py",
-      "pin_staleness_gate.PIN_STALENESS_MARKER_NAME": null,
-      "pin_staleness_gate._check_tool_allowed": null,
-      "session_init": "hooks/session_init.py",
-      "session_init.check_pin_slot_status": null,
-      "shared.pact_context": "hooks/shared/pact_context.py",
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_pin_caps_gate.py": {
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_caps_gate._check_tool_allowed": null,
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_pin_caps_gate_counter_test.py": {
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps.evaluate_full_state": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_caps_gate._check_tool_allowed": null,
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_pin_caps_gate_low_priority.py": {
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_caps_gate._check_tool_allowed": null,
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_pin_caps_gate_matrix.py": {
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps.parse_pins": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_caps_gate._check_tool_allowed": null,
-      "pin_caps_gate._extract_override_rationale": null,
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_pin_caps_integration.py": {
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "helpers.make_pinned_section": null,
-      "pathlib.Path": null,
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps.parse_pins": null,
-      "pin_staleness_gate": "hooks/pin_staleness_gate.py",
-      "pin_staleness_gate.PIN_STALENESS_MARKER_NAME": null,
-      "session_init": "hooks/session_init.py",
-      "session_init.check_pin_slot_status": null,
-      "session_init.check_pin_stale_block_directive": null,
-      "shared.pact_context": "hooks/shared/pact_context.py",
-      "staleness": "hooks/staleness.py",
-      "staleness.check_pinned_block_signal": null,
-      "staleness.detect_stale_entries": null
-    },
-    "tests/test_pin_caps_phantom_green.py": {
-      "check_pin_caps": "scripts/check_pin_caps.py",
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_caps_gate._check_tool_allowed": null,
-      "staleness": "hooks/staleness.py",
-      "unittest.mock.patch": null
-    },
-    "tests/test_pin_comment_dominance.py": {
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps.OVERRIDE_COMMENT_RE": null,
-      "pin_caps.PIN_SIZE_CAP": null,
-      "pin_caps._DATE_COMMENT_RE": null,
-      "pin_caps.evaluate_full_state": null,
-      "pin_caps.parse_pins": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_caps_gate._check_tool_allowed": null,
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_pin_comment_pipeline.py": {
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps.OVERRIDE_COMMENT_RE": null,
-      "pin_caps.PIN_STALE_BLOCK_THRESHOLD": null,
-      "pin_caps._DATE_COMMENT_RE": null,
-      "pin_caps._extract_body_chars": null,
-      "pin_caps.check_stale_block": null,
-      "pin_caps.compute_deny_reason": null,
-      "pin_caps.parse_pins": null
-    },
-    "tests/test_pin_marker_writer.py": {
-      "__future__.annotations": null,
-      "clock_shift.clock_shift_env": "tests/clock_shift/clock_shift_env.py",
-      "clock_shift.clock_shift_env.carry_clock_shift": null,
-      "pathlib.Path": null,
-      "pin_marker_writer": "hooks/pin_marker_writer.py",
-      "scripts": "skills/pact-memory/scripts/__init__.py",
-      "scripts.working_memory": "skills/pact-memory/scripts/working_memory.py",
-      "scripts.working_memory._PACT_BOUNDARY_ALT": null,
-      "scripts.working_memory._SESSION_BOUNDARY_ALT": null,
-      "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
-      "shared.claude_md_manager.MANAGED_END_MARKER": null,
-      "shared.claude_md_manager.MANAGED_START_MARKER": null,
-      "shared.claude_md_manager.MEMORY_END_MARKER": null,
-      "shared.claude_md_manager.MEMORY_START_MARKER": null,
-      "shared.claude_md_manager.PACT_BOUNDARY_PREFIXES": null,
-      "shared.claude_md_manager.PINNED_END_MARKER": null,
-      "shared.claude_md_manager.PINNED_START_MARKER": null,
-      "shared.claude_md_manager.ensure_project_memory_md": null,
-      "shared.claude_md_manager.extract_managed_region": null,
-      "shared.pact_context": "hooks/shared/pact_context.py",
-      "shared.pin_markers": "hooks/shared/pin_markers.py",
-      "shared.pin_markers.END_LINE": null,
-      "shared.pin_markers.Insertion": null,
-      "shared.pin_markers.START_LINE": null,
-      "shared.pin_markers.SkipReason": null,
-      "shared.pin_markers._PINNED_HEADING": null,
-      "shared.pin_markers._PINNED_TERMINATOR": null,
-      "shared.pin_markers._is_already_marked": null,
-      "shared.pin_markers._narrow_to_memory_region": null,
-      "shared.pin_markers.apply_insertion": null,
-      "shared.pin_markers.certify_expel_nothing": null,
-      "shared.pin_markers.marker_line_present": null,
-      "shared.pin_markers.plan_insertion": null,
-      "shared.session_journal": "hooks/shared/session_journal.py",
-      "staleness": "hooks/staleness.py",
-      "staleness._find_terminator_offset": null,
-      "staleness._parse_pinned_section": null,
-      "staleness._resolve_project_claude_md_with_base": null
-    },
-    "tests/test_pin_marker_writer_adversarial.py": {
-      "__future__.annotations": null,
-      "clock_shift.clock_shift_env": "tests/clock_shift/clock_shift_env.py",
-      "clock_shift.clock_shift_env.carry_clock_shift": null,
-      "pathlib.Path": null,
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps.PIN_COUNT_CAP": null,
-      "pin_caps.PIN_SIZE_CAP": null,
-      "pin_caps.apply_edit_and_parse": null,
-      "pin_caps.compute_deny_reason": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_caps_gate._extract_new_body": null,
-      "pin_caps_gate._parse_baseline": null,
-      "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
-      "shared.claude_md_manager.MEMORY_END_MARKER": null,
-      "shared.claude_md_manager.MEMORY_START_MARKER": null,
-      "shared.claude_md_manager.PINNED_END_MARKER": null,
-      "shared.claude_md_manager.PINNED_START_MARKER": null,
-      "shared.claude_md_manager.extract_managed_region": null,
-      "shared.pin_markers": "hooks/shared/pin_markers.py",
-      "shared.pin_markers.Insertion": null,
-      "shared.pin_markers.START_LINE": null,
-      "shared.pin_markers.SkipReason": null,
-      "shared.pin_markers.apply_insertion": null,
-      "shared.pin_markers.certify_expel_nothing": null,
-      "shared.pin_markers.plan_insertion": null,
-      "staleness": "hooks/staleness.py",
-      "staleness._parse_pinned_section": null,
-      "tests.test_pin_marker_writer": "tests/test_pin_marker_writer.py",
-      "tests.test_pin_marker_writer.production_head_and_tail": null
-    },
-    "tests/test_pin_staleness_gate.py": {
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "io.StringIO": null,
-      "pathlib.Path": null,
-      "pin_staleness_gate": "hooks/pin_staleness_gate.py",
-      "pin_staleness_gate.PIN_STALENESS_MARKER_NAME": null,
-      "pin_staleness_gate._check_tool_allowed": null,
-      "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
-      "shared.claude_md_manager.MANAGED_END_MARKER": null,
-      "shared.claude_md_manager.MANAGED_START_MARKER": null,
-      "shared.claude_md_manager.extract_managed_region": null,
-      "shared.pact_context": "hooks/shared/pact_context.py",
-      "staleness": "hooks/staleness.py"
-    },
-    "tests/test_pin_staleness_gate_two_rules.py": {
-      "pathlib.Path": null,
-      "pin_staleness_gate": "hooks/pin_staleness_gate.py",
-      "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
-      "shared.claude_md_manager.MANAGED_END_MARKER": null,
-      "shared.claude_md_manager.MANAGED_START_MARKER": null,
-      "shared.claude_md_manager.extract_managed_region": null,
-      "staleness": "hooks/staleness.py",
-      "staleness._parse_pinned_section": null
-    },
-    "tests/test_pin_staleness_marker_clear.py": {
-      "pin_staleness_gate": "hooks/pin_staleness_gate.py",
-      "pin_staleness_gate.PIN_STALENESS_MARKER_NAME": null,
-      "shared": "hooks/shared/__init__.py",
-      "shared.constants": "hooks/shared/constants.py",
-      "shared.constants.PIN_STALENESS_MARKER_NAME": null,
-      "shared.pact_context": "hooks/shared/pact_context.py",
-      "staleness": "hooks/staleness.py",
-      "track_files": "hooks/track_files.py"
     },
     "tests/test_planning_artifact_scrub.py": {
       "__future__.annotations": null,
@@ -2337,9 +1990,6 @@
       "shared.session_journal.make_event": null,
       "unittest.mock.patch": null
     },
-    "tests/test_progress_signals.py": {
-      "pathlib.Path": null
-    },
     "tests/test_project_dir_resolution.py": {
       "__future__.annotations": null,
       "clock_shift.clock_shift_env": "tests/clock_shift/clock_shift_env.py",
@@ -2359,7 +2009,6 @@
       "scripts.pact_session.ProjectScopeDisagreementError": null,
       "scripts.working_memory": "skills/pact-memory/scripts/working_memory.py",
       "shared": "hooks/shared/__init__.py",
-      "shared.backlog": "hooks/shared/backlog.py",
       "types.SimpleNamespace": null
     },
     "tests/test_project_id.py": {
@@ -2370,20 +2019,6 @@
       "unittest.mock.patch": null
     },
     "tests/test_prose_root_gate.py": {
-      "pathlib.Path": null
-    },
-    "tests/test_prune_memory_integration.py": {
-      "check_pin_caps": "scripts/check_pin_caps.py",
-      "helpers": "tests/helpers.py",
-      "helpers.make_claude_md_with_pins": null,
-      "helpers.make_pin_entry": null,
-      "pathlib.Path": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_caps_gate._check_tool_allowed": null,
-      "staleness": "hooks/staleness.py",
-      "unittest.mock.patch": null
-    },
-    "tests/test_prune_telemetry_contract.py": {
       "pathlib.Path": null
     },
     "tests/test_py39_annotation_compat.py": {
@@ -2402,9 +2037,6 @@
       "shared.session_registry._read_lead_session_id": null,
       "task_claim_gate": "hooks/task_claim_gate.py"
     },
-    "tests/test_read_trigger_precondition_pinned.py": {
-      "pathlib.Path": null
-    },
     "tests/test_recovery_pointer_fallback.py": {
       "pathlib.Path": null,
       "scripts": "skills/pact-memory/scripts/__init__.py",
@@ -2412,7 +2044,6 @@
     },
     "tests/test_removed_worktree_record.py": {
       "__future__.annotations": null,
-      "archive_pin": "scripts/archive_pin.py",
       "fixtures.role_frames": "tests/fixtures/role_frames.py",
       "fixtures.role_frames.teammate_frame": null,
       "pathlib.Path": null,
@@ -2435,8 +2066,7 @@
     "tests/test_resolver_git_env.py": {
       "pathlib.Path": null,
       "scripts.memory_api": "skills/pact-memory/scripts/memory_api.py",
-      "scripts.working_memory": "skills/pact-memory/scripts/working_memory.py",
-      "staleness": "hooks/staleness.py"
+      "scripts.working_memory": "skills/pact-memory/scripts/working_memory.py"
     },
     "tests/test_resume_team_realign_1507.py": {
       "dispatch_gate": "hooks/dispatch_gate.py",
@@ -2481,8 +2111,6 @@
       "fixtures.role_frames.postcompact_frame": null,
       "fixtures.role_frames.teammate_frame": null,
       "pathlib.Path": null,
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "pin_staleness_gate": "hooks/pin_staleness_gate.py",
       "postcompact_archive": "hooks/postcompact_archive.py",
       "postcompact_archive.main": null,
       "shared.pact_context": "hooks/shared/pact_context.py",
@@ -2497,11 +2125,7 @@
       "scripts.working_memory.sync_retrieved_to_claude_md": null,
       "scripts.working_memory.sync_to_claude_md": null,
       "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
-      "shared.claude_md_manager.migrate_to_managed_structure": null,
-      "staleness": "hooks/staleness.py",
-      "staleness.check_pinned_staleness": null,
-      "test_staleness": "tests/test_staleness.py",
-      "test_staleness.over_budget_body": null
+      "shared.claude_md_manager.migrate_to_managed_structure": null
     },
     "tests/test_session_block_substitution.py": {
       "shared.session_resume": "hooks/shared/session_resume.py",
@@ -2564,8 +2188,6 @@
       "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
       "shared.claude_md_manager.MEMORY_END_MARKER": null,
       "shared.claude_md_manager.MEMORY_START_MARKER": null,
-      "tests.test_pin_marker_writer": "tests/test_pin_marker_writer.py",
-      "tests.test_pin_marker_writer.build_claude_md": null,
       "unittest.mock.patch": null
     },
     "tests/test_session_init.py": {
@@ -2655,8 +2277,6 @@
       "shared.session_resume.check_resumption_context": null,
       "shared.symlinks": "hooks/shared/symlinks.py",
       "shared.symlinks.setup_plugin_symlinks": null,
-      "staleness": "hooks/staleness.py",
-      "staleness.check_pinned_staleness": null,
       "unittest.mock.patch": null
     },
     "tests/test_session_init_teammate_peer_inject.py": {
@@ -2715,8 +2335,6 @@
       "shared.session_resume._check_journal_paused_state": null,
       "shared.session_resume.check_paused_state": null,
       "shared.session_resume.restore_last_session": null,
-      "shared.variety_divergence": "hooks/shared/variety_divergence.py",
-      "shared.variety_divergence.extract_dispatch_coverage": null,
       "unittest.mock.MagicMock": null,
       "unittest.mock.patch": null
     },
@@ -2950,8 +2568,6 @@
       "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
       "shared.claude_md_manager.MEMORY_END_MARKER": null,
       "shared.claude_md_manager.MEMORY_START_MARKER": null,
-      "tests.test_pin_marker_writer": "tests/test_pin_marker_writer.py",
-      "tests.test_pin_marker_writer.build_claude_md": null,
       "unittest.mock.patch": null
     },
     "tests/test_stale_session.py": {
@@ -2959,51 +2575,6 @@
       "shared.stale_session": "hooks/shared/stale_session.py",
       "shared.stale_session._RESUME_LINE_RE": null,
       "shared.stale_session.detect_stale_session_block": null
-    },
-    "tests/test_staleness.py": {
-      "datetime.datetime": null,
-      "datetime.timedelta": null,
-      "pathlib.Path": null,
-      "pin_caps": "hooks/pin_caps.py",
-      "pin_caps_gate": "hooks/pin_caps_gate.py",
-      "scripts": "skills/pact-memory/scripts/__init__.py",
-      "scripts.working_memory": "skills/pact-memory/scripts/working_memory.py",
-      "scripts.working_memory.ContainmentError": null,
-      "scripts.working_memory._atomic_write_text": null,
-      "scripts.working_memory._estimate_tokens": null,
-      "scripts.working_memory._project_root_of": null,
-      "scripts.working_memory._sanitize_prompt_field": null,
-      "scripts.working_memory.file_lock": null,
-      "session_init": "hooks/session_init.py",
-      "session_init.PINNED_STALENESS_DAYS": null,
-      "session_init._estimate_tokens": null,
-      "session_init._get_project_claude_md_path": null,
-      "session_init.check_pinned_staleness": null,
-      "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
-      "shared.claude_md_manager.ContainmentError": null,
-      "shared.claude_md_manager.MANAGED_END_MARKER": null,
-      "shared.claude_md_manager.MANAGED_START_MARKER": null,
-      "shared.claude_md_manager.PACT_BOUNDARY_PREFIXES": null,
-      "shared.claude_md_manager.PINNED_START_MARKER": null,
-      "shared.claude_md_manager._DOT_CLAUDE_RELATIVE": null,
-      "shared.claude_md_manager._LEGACY_RELATIVE": null,
-      "shared.claude_md_manager._atomic_write_text": null,
-      "shared.claude_md_manager.file_lock": null,
-      "shared.claude_md_manager.resolve_project_claude_md_path": null,
-      "shared.session_resume": "hooks/shared/session_resume.py",
-      "shared.session_resume._sanitize_prompt_field": null,
-      "staleness": "hooks/staleness.py",
-      "staleness.PINNED_CONTEXT_TOKEN_BUDGET": null,
-      "staleness.PINNED_STALENESS_DAYS": null,
-      "staleness._ANY_BUDGET_WARNING_RE": null,
-      "staleness._BUDGET_WARNING_PREFIX": null,
-      "staleness._BUDGET_WARNING_SHAPE": null,
-      "staleness._LEADING_BUDGET_WARNING_RE": null,
-      "staleness._parse_pinned_section": null,
-      "staleness.check_pinned_staleness": null,
-      "staleness.estimate_tokens": null,
-      "unittest.mock.MagicMock": null,
-      "unittest.mock.patch": null
     },
     "tests/test_stall_layer_wording.py": {
       "__future__.annotations": null,
@@ -3312,17 +2883,6 @@
       "unittest.mock.MagicMock": null,
       "unittest.mock.patch": null
     },
-    "tests/test_telegram_notify.py": {
-      "telegram.notify": "telegram/notify.py",
-      "telegram.notify._build_session_summary": null,
-      "telegram.notify._filter_message": null,
-      "telegram.notify._get_project_name": null,
-      "telegram.notify._parse_env": null,
-      "telegram.notify.main": null,
-      "telegram.notify.send_notification": null,
-      "unittest.mock.MagicMock": null,
-      "unittest.mock.patch": null
-    },
     "tests/test_telegram_routing.py": {
       "pathlib.Path": null,
       "telegram.config": "telegram/config.py",
@@ -3396,10 +2956,6 @@
       "unittest.mock.AsyncMock": null,
       "unittest.mock.MagicMock": null,
       "unittest.mock.patch": null
-    },
-    "tests/test_testing_craft_pins.py": {
-      "__future__.annotations": null,
-      "pathlib.Path": null
     },
     "tests/test_three_surface_split_enforcement.py": {
       "pathlib.Path": null
@@ -3507,17 +3063,6 @@
       "test_stop_background_gate.probe_env": null,
       "test_stop_background_gate.valid_wait": null
     },
-    "tests/test_variety_divergence.py": {
-      "shared.session_journal": "hooks/shared/session_journal.py",
-      "shared.session_journal.make_event": null,
-      "shared.variety_divergence": "hooks/shared/variety_divergence.py",
-      "shared.variety_divergence._latest_snapshot_by_task": null,
-      "shared.variety_divergence._parse_ts": null,
-      "shared.variety_divergence.compute_variety_divergence": null,
-      "shared.variety_divergence.extract_dispatch_coverage": null,
-      "shared.variety_divergence.extract_final_dispatch_coverage": null,
-      "shared.variety_divergence.resolve_arc_start": null
-    },
     "tests/test_variety_rationale_contamination.py": {
       "pathlib.Path": null
     },
@@ -3611,15 +3156,6 @@
       "shared.background_work.wait_covers_record": null,
       "shared.background_work.wait_scope_anchor": null
     },
-    "tests/test_wait_discipline_layers_pinned.py": {
-      "pathlib.Path": null,
-      "test_wake_ordering_pinned": "tests/test_wake_ordering_pinned.py",
-      "test_wake_ordering_pinned._lines_outside_fences": null,
-      "test_wake_ordering_pinned._phrase": null
-    },
-    "tests/test_wait_discipline_pins.py": {
-      "pathlib.Path": null
-    },
     "tests/test_wait_filler_gate.py": {
       "pathlib.Path": null,
       "shared.hook_infra_classifier": "hooks/shared/hook_infra_classifier.py",
@@ -3653,12 +3189,6 @@
       "scripts.working_memory.sync_to_claude_md": null,
       "unittest.mock.patch": null
     },
-    "tests/test_working_memory.py": {
-      "pin_staleness_gate": "hooks/pin_staleness_gate.py",
-      "pin_staleness_gate._DATE_LED_HEADING_RE": null,
-      "scripts": "skills/pact-memory/scripts/__init__.py",
-      "scripts.working_memory": "skills/pact-memory/scripts/working_memory.py"
-    },
     "tests/test_working_memory_concurrency.py": {
       "contextlib.contextmanager": null,
       "pathlib.Path": null,
@@ -3675,9 +3205,7 @@
       "scripts.working_memory": "skills/pact-memory/scripts/working_memory.py",
       "scripts.working_memory.file_lock": null,
       "shared.claude_md_manager": "hooks/shared/claude_md_manager.py",
-      "shared.claude_md_manager.file_lock": null,
-      "test_staleness": "tests/test_staleness.py",
-      "test_staleness.TestFileLockTwinCopyDrift": null
+      "shared.claude_md_manager.file_lock": null
     },
     "tests/test_working_memory_fidelity.py": {
       "helpers": "tests/helpers.py",
@@ -3727,7 +3255,6 @@
       "scripts.working_memory.project_memories_to_claude_md": null
     },
     "tests/test_working_memory_redirected_store_refusal.py": {
-      "archive_pin": "scripts/archive_pin.py",
       "clock_shift.clock_shift_env": "tests/clock_shift/clock_shift_env.py",
       "clock_shift.clock_shift_env.carry_clock_shift": null,
       "fixtures.project_dir": "tests/fixtures/project_dir.py",
@@ -3782,15 +3309,12 @@
       "worktree_guard.is_allowed_path": null,
       "worktree_guard.is_application_code": null,
       "worktree_guard.main": null
-    },
-    "tests/test_wrapup_datasafety_contracts.py": {
-      "pathlib.Path": null
     }
   },
   "path_drift_since_sessionstart": [
-    "/Users/mj/Sites/collab/PACT-prompt/.worktrees/feat/background-wait-enforcement/pact-plugin/hooks/shared",
-    "/Users/mj/Sites/collab/PACT-prompt/.worktrees/feat/background-wait-enforcement/pact-plugin/tests/fixtures",
-    "/Users/mj/Sites/collab/PACT-prompt/.worktrees/feat/background-wait-enforcement/pact-plugin/skills/pact-handoff-harvest",
-    "/Users/mj/Sites/collab/PACT-prompt/.worktrees/feat/background-wait-enforcement/pact-plugin/skills/pact-agent-teams"
+    "/Users/alice/Sites/collab/PACT-prompt/.worktrees/feat/background-wait-enforcement/pact-plugin/hooks/shared",
+    "/Users/alice/Sites/collab/PACT-prompt/.worktrees/feat/background-wait-enforcement/pact-plugin/tests/fixtures",
+    "/Users/alice/Sites/collab/PACT-prompt/.worktrees/feat/background-wait-enforcement/pact-plugin/skills/pact-handoff-harvest",
+    "/Users/alice/Sites/collab/PACT-prompt/.worktrees/feat/background-wait-enforcement/pact-plugin/skills/pact-agent-teams"
   ]
 }

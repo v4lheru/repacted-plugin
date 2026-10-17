@@ -18,8 +18,8 @@ Mechanism under guard (architect's "lead-only-completion TIMING" framing):
     TestStatusFallbackGate + TestProductionShapeMetadataOnly.)
   - In production the PLATFORM sends a TaskCompleted frame ONLY at an actual
     completion. Rejection is PRE-completion: the teammate stores HANDOFF +
-    remains in_progress and never self-completes (pact-agent-teams SKILL.md;
-    pact-completion-authority) — so NO TaskCompleted frame fires during the
+    remains in_progress and never self-completes (teammate SKILL.md;
+    completion.md §Completion Authority) — so NO TaskCompleted frame fires during the
     in_progress / rejection phases.
   - So a revised task is completed exactly ONCE — at the lead's acceptance — by
     which point metadata.handoff == v2. The single emit reads v2.

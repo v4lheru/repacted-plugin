@@ -65,7 +65,8 @@ _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 # claim, and this one went stale the moment the hook started archiving; a name
 # that identifies the surface cannot.
 SECRETARY_SURFACE = _PLUGIN_ROOT / "agents" / "pact-secretary.md"
-HOOK_SURFACE = _PLUGIN_ROOT / "hooks" / "session_init.py"
+# The compact directive limb moved here from hooks/session_init.py (A4b).
+HOOK_SURFACE = _PLUGIN_ROOT / "hooks" / "shared" / "session_init_resume.py"
 
 # A literal filename prefix followed by an angle-bracket placeholder and the
 # extension: `compact-summary-<timestamp>.txt` -> `compact-summary-`. The

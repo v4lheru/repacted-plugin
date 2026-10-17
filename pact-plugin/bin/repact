@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# repact: start a rePACTed session. Run `pact` or `repact`, never both at once.
+#
+# Location: pact-plugin/bin/repact (owned by launcher; see
+# the design notes section 1). Policy-free: personal flags such as
+# --dangerously-skip-permissions belong in your own shell function or alias.
+#
+# Two modes, read from enabledPlugins in <config root>/settings.json:
+#   installed  a repacted@ plugin is enabled (repacted@repacted-local from a local marketplace,
+#              or repacted@repacted from the GitHub marketplace):
+#              exec claude --agent repacted:pact-orchestrator "$@"
+#   installed  has NO single-session check: nothing is renamed or relinked, so 6-7 concurrent
+#              sessions are fine.
+#   alternate  otherwise (PACT is still the installed product). It runs ALONE (#253):
+#              1. refuse (exit 2) on a managed PACT@ entry, a root with no plugin.json, a
+#                 PACT install root that installed_plugins.json does not name, a split
+#                 orchestrator memory dir (repacted-memdir --merge-split fixes that), another
+#                 alternate-mode repact (its pid in <config>/repacted-alternate.lock is alive;
+#                 the first to exit would rename the dir back under the other; --force does
+#                 not override), or another live Claude session (a `claude` process outside
+#                 this launcher's ancestry AND a teams/ or sessions/ file touched in the last
+#                 10 minutes). `--force` (ours, stripped before claude sees it) proceeds past
+#                 the last one with a warning; a `claude` process with no recent session files
+#                 (an idle Desktop or IDE helper) only warns;
+#              2. rename the orchestrator memory dir to the repacted name, and point the 13
+#                 agent links and the protocols link at this root. Claude Code reads
+#                 <config>/agents/ at session start, BEFORE SessionStart re-points the links
+#                 (measured, live gate #97), so without this the first teammates of the session
+#                 would get PACT's agent bodies;
+#              3. run claude with this plugin loaded in place and PACT disabled for this
+#                 session only (the --settings flag source beats user/project/local). The same
+#                 --settings excludes the global <config>/CLAUDE.md (claudeMdExcludes), and the
+#                 3 KB slim core (user-layer/CLAUDE.core.md) is served as memory from its own
+#                 cache dir via --add-dir + CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1.
+#                 Nothing is swapped: the user's CLAUDE.md is never written, so pact sees it
+#                 byte-identical and a kill -9 leaves nothing to recover. With no core found,
+#                 one warning is printed and the session loads the global file as before;
+#              4. rename the dir back to PACT's name and point the links back at PACT's
+#                 install root when claude exits.
+#
+# claude runs as a foreground CHILD, not exec, so the trap below fires. Bash runs a trapped
+# signal only after the foreground child exits, so the dir is renamed back exactly when
+# claude ends, never under a live session:
+#   - a terminal close or a TERM to the process group ends claude, then the trap renames;
+#   - a TERM to this script alone does not end claude; the rename waits for claude's exit.
+# A kill -9 of this script skips the trap. The next `pact` then starts with an empty memory
+# head and early teammates with repacted bodies, and the next `repact` refuses on the split
+# until `repacted-memdir --merge-split --confirm-live` folds the two dirs together (never
+# overwriting; see that tool's help) and points the links back at PACT.
+#
+# `repact --repact-status` prints the mode, the root and the memory-dir state and starts
+# nothing; it is recognised anywhere before a `--`, so the user's shell function can put its
+# own flags first. Every other argument passes to claude untouched: repact --resume <id>,
+# repact -c, repact "a prompt". `-c` / `--resume` may pick up a PACT conversation, which is benign:
+# the state formats are shared.
+
+set -u
+
+self=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}") || exit 2
+BIN=$(dirname "$self")
+ROOT=$(dirname "$BIN")
+MEMDIR="$BIN/repacted-memdir"
+[ "${1:-}" = "report" ] && shift && exec python3 "$BIN/repact-report" "$@"   # D3: `repact report` = repact-report
+
+status=no
+for arg in "$@"; do
+  [ "$arg" = "--" ] && break
+  [ "$arg" = "--repact-status" ] && status=yes && break
+done
+if [ "$status" = yes ]; then
+  mode=$(python3 "$BIN/_repact_launch.py" mode) || exit $?
+  echo "mode: $mode"
+  echo "plugin root: $ROOT"
+  python3 "$BIN/_repact_launch.py" core-status --root "$ROOT"
+  exec python3 "$MEMDIR" --status
+fi
+
+force=
+args=()
+seen_dashdash=no
+for arg in "$@"; do                       # --force is ours (before any --); claude never sees it
+  if [ "$seen_dashdash" = no ] && [ "$arg" = "--force" ]; then force=--force; continue; fi
+  [ "$arg" = "--" ] && seen_dashdash=yes
+  args+=("$arg")
+done
+set -- ${args[@]+"${args[@]}"}
+
+preflight=$(python3 "$BIN/_repact_launch.py" preflight --root "$ROOT" $force) || exit $?
+mode=$(printf '%s\n' "$preflight" | sed -n 1p)
+if [ "$mode" = "installed" ]; then
+  exec claude --agent repacted:pact-orchestrator "$@"
+fi
+settings=$(printf '%s\n' "$preflight" | sed -n 2p)
+coredir=$(printf '%s\n' "$preflight" | sed -n 3p)
+lock=$(printf '%s\n' "$preflight" | sed -n 4p)
+
+python3 "$MEMDIR" --ensure repacted --links --confirm-live --quiet --remind-splits || exit $?
+printf '%s\n' "$$" > "$lock"
+trap 'rm -f "$lock"; python3 "$MEMDIR" --ensure pact --links --confirm-live --quiet' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [ -n "$coredir" ]; then
+  REPACTED_LAUNCH=alternate CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 claude \
+    --plugin-dir "$ROOT" --settings "$settings" --add-dir "$coredir" \
+    --agent repacted:pact-orchestrator "$@"
+else
+  REPACTED_LAUNCH=alternate claude --plugin-dir "$ROOT" --settings "$settings" \
+    --agent repacted:pact-orchestrator "$@"
+fi

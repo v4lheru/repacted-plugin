@@ -31,11 +31,11 @@ import pytest
 
 # A path fragment no rendering may carry. Distinctive so a partial leak is
 # still caught by the `/` assertion below.
-_SECRET = "/Users/probe-user/secret-dir/CLAUDE.md"
+_LEAK_PATH = "/srv/probe-user/secret-dir/CLAUDE.md"
 
 
 def _oserror(code=errno.EACCES, message="Permission denied"):
-    return OSError(code, message, _SECRET)
+    return OSError(code, message, _LEAK_PATH)
 
 
 def _assert_convention(result, expected_cause, *, routed_token="failed"):
@@ -50,7 +50,7 @@ def _assert_convention(result, expected_cause, *, routed_token="failed"):
         f"cause token absent, so a different handler answered: {result!r}"
     )
     assert "/" not in result, f"path fragment leaked: {result!r}"
-    assert _SECRET not in result
+    assert _LEAK_PATH not in result
     assert os.path.expanduser("~") not in result
     assert routed_token in result.lower(), (
         "session_init routes on this substring; without it the message "
@@ -84,13 +84,13 @@ class TestFailureCauseHelper:
             unicode_exc = decode_error
 
         rows = [
-            (PermissionError(13, "Permission denied", _SECRET),
+            (PermissionError(13, "Permission denied", _LEAK_PATH),
              "PermissionError (EACCES)"),
-            (IsADirectoryError(21, "Is a directory", _SECRET),
+            (IsADirectoryError(21, "Is a directory", _LEAK_PATH),
              "IsADirectoryError (EISDIR)"),
             (OSError(errno.ENOSPC, "No space left on device"),
              "OSError (ENOSPC)"),
-            (OSError(f"bare message with {_SECRET} in it"), "OSError"),
+            (OSError(f"bare message with {_LEAK_PATH} in it"), "OSError"),
             (unicode_exc, "UnicodeDecodeError"),
             (OSError(max(errno.errorcode) + 1, "unmapped"), "OSError"),
         ]
@@ -112,7 +112,7 @@ class TestFailureCauseHelper:
             "premise moved: a 50-character cut no longer carries the path, "
             "so the stated cause for the closed vocabulary needs re-measuring"
         )
-        short = str(OSError(2, "x", _SECRET))
+        short = str(OSError(2, "x", _LEAK_PATH))
         assert "/" in short[:20], (
             "premise moved: a 20-character cut no longer carries the path"
         )
@@ -259,7 +259,6 @@ class TestNoRoutedProducerInterpolatesAnException:
             "migrate_to_managed_structure",
             "strip_orphan_kernel_block",
         ],
-        "hooks/staleness.py": ["check_pinned_staleness"],
         "hooks/shared/session_resume.py": ["update_session_info"],
     }
 
@@ -316,7 +315,7 @@ class TestNoRoutedProducerInterpolatesAnException:
                             f"{rel}:{inner.lineno} {ast.unparse(inner)[:80]}"
                         )
         # NON-VACUITY: the guard is worthless if it scanned nothing.
-        assert checked == 6, f"expected 6 producers, scanned {checked}"
+        assert checked == 5, f"expected 5 producers, scanned {checked}"
         assert not offenders, (
             "a routed producer interpolates a caught exception into a "
             "message. Render the cause with shared.failure_cause instead:\n"
@@ -328,7 +327,7 @@ class TestRoutedPrefixesAreByteIdentical:
     """The routing tokens, pinned as literals.
 
     A reword reads correctly and moves the message to the wrong channel with
-    nothing else objecting. These are the six prefixes as they ship.
+    nothing else objecting. These are the prefixes as they ship.
     """
 
     PREFIXES = [
@@ -338,8 +337,6 @@ class TestRoutedPrefixesAreByteIdentical:
          'f"Project CLAUDE.md failed: {failure_cause(e)}"'),
         ("hooks/shared/claude_md_manager.py",
          'f"Migration failed: {failure_cause(e)}"'),
-        ("hooks/staleness.py",
-         'f"Failed to update pinned staleness: {failure_cause(e)}"'),
         ("hooks/shared/symlinks.py",
          'f"protocols failed: {failure_cause(e)}"'),
         ("hooks/shared/session_resume.py",

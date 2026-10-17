@@ -78,12 +78,60 @@ from shared.agent_handoff_marker import (
     occupant_hash,
     sanitize_path_component,
 )
-from shared.session_journal import append_event, get_journal_path, make_event
+from shared.session_journal import (
+    UNRESOLVED_ATTRIBUTION,
+    append_event,
+    get_journal_path,
+    make_event,
+)
 from shared.task_metadata_snapshot import emit_task_metadata_snapshot
-from shared.task_utils import read_task_json
+from shared.task_store import TaskRef, TaskStore, read_task_json
 
 # Suppress false "hook error" display in Claude Code UI on bare exit paths.
 _SUPPRESS_OUTPUT = json.dumps({"suppressOutput": True})
+
+
+def _read_current_occupant(task_id: str, team_name: str, task_subject: str) -> tuple[dict, bool]:
+    """(task record, resolved) for the occupant the platform names: (task_id, task_subject).
+
+    M12 "journal agent field frozen": the lead's TaskCompleted frame has no stdin
+    team_name, so the read goes through the session context's team, and
+    read_task_json falls back to the bare tasks dir. A stale team or a reused id
+    then yields an OLDER occupant's file, whose owner and handoff would be stamped
+    under the current subject. A disk subject that disagrees with the platform's
+    marks that record as another occupant, and the record is re-resolved by
+    subject among tasks/*/<id>.json:
+      - exactly one team's file matches: that record, resolved;
+      - none, or more than one team's file matches: unresolved. The event is still
+        written, with agent null and attribution "unresolved" (see main), because
+        agent_handoff is what the harvest recovers HANDOFFs from. The freshest
+        match's content is kept when there is one, nothing otherwise.
+    A record with no subject is taken as is.
+    """
+    task_data = read_task_json(task_id, team_name)
+    disk_subject = task_data.get("subject") if isinstance(task_data, dict) else None
+    if not isinstance(disk_subject, str) or not disk_subject.strip() or disk_subject == task_subject:
+        return task_data, True
+    matches = []
+    store = TaskStore()
+    for team in store.teams_holding(task_id):
+        ref = TaskRef(team, task_id)
+        candidate, key = store.get(ref), store.watch_key(ref)
+        if candidate is None or key is None:
+            continue
+        if candidate.get("subject") == task_subject:
+            matches.append((key.mtime_ns / 1e9, candidate))
+    if len(matches) == 1:
+        return matches[0][1], True
+    print(
+        f"agent_handoff_emitter: task {task_id} occupant unresolved "
+        f"({len(matches)} task files carry the platform subject); "
+        "writing agent_handoff with agent null",
+        file=sys.stderr,
+    )
+    freshest = max(matches, key=lambda item: item[0])[1] if matches else {}
+    return {"subject": task_subject, "status": freshest.get("status"),
+            "metadata": freshest.get("metadata") or {}}, False
 
 
 def main() -> None:
@@ -168,7 +216,10 @@ def main() -> None:
         task_id = sanitize_path_component(str(task_id))
         team_name = pact_context.get_pact_context().get("team_name", "")
 
-        task_data = read_task_json(task_id, team_name)
+        if task_subject_was_missing:
+            task_data, resolved = read_task_json(task_id, team_name), True
+        else:
+            task_data, resolved = _read_current_occupant(task_id, team_name, task_subject)
 
         # Owner field (set at dispatch) is the authoritative "agent completed
         # this task" signal. Platform-provided teammate_name is fallback for
@@ -190,8 +241,8 @@ def main() -> None:
         owner_value = task_data.get("owner")
         if isinstance(owner_value, str) and not owner_value.strip():
             owner_value = None
-        teammate_name = owner_value or input_data.get("teammate_name")
-        if not teammate_name or not str(teammate_name).strip():
+        teammate_name = (owner_value or input_data.get("teammate_name")) if resolved else None
+        if resolved and (not teammate_name or not str(teammate_name).strip()):
             # Non-agent completion (feature/infra task) OR no valid (non-
             # whitespace) agent name from either source — no HANDOFF to persist.
             print(_SUPPRESS_OUTPUT)
@@ -241,6 +292,8 @@ def main() -> None:
         # frame defers inside the substrate (writability precondition — no
         # claim, no write); the lead-frame seams cover it.
         try:
+            if not resolved:
+                raise LookupError("occupant unresolved: no snapshot of another occupant's metadata")
             emit_task_metadata_snapshot(
                 team_name,
                 task_id,
@@ -277,7 +330,9 @@ def main() -> None:
         # writability gate below closes for the unwritable case). isinstance
         # makes a malformed handoff DEFER (claim nothing) too.
         handoff = task_metadata.get("handoff")
-        if not isinstance(handoff, dict) or not handoff:
+        if not resolved and not isinstance(handoff, dict):
+            handoff = {}  # unresolved with no subject match: record the completion, content unknown
+        elif not isinstance(handoff, dict) or not handoff:
             print(_SUPPRESS_OUTPUT)
             sys.exit(0)
 
@@ -323,7 +378,7 @@ def main() -> None:
         # makes the key a function of the event this fire is about to write.
         # A revised handoff derives a different key and emits again, where
         # the occupant-only key suppressed it for the team lifespan.
-        occupant = occupant_hash(teammate_name, task_subject)
+        occupant = occupant_hash(teammate_name or "", task_subject)
         content_key = handoff_content_key(handoff)
         if handoff_already_emitted(team_name, task_id, occupant, content_key):
             print(_SUPPRESS_OUTPUT)
@@ -365,6 +420,7 @@ def main() -> None:
                     task_id=task_id,
                     task_subject=task_subject,
                     handoff=handoff,
+                    **({} if resolved else {"attribution": UNRESOLVED_ATTRIBUTION}),
                 ),
             )
         except Exception:

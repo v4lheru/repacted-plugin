@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""check-index: enforce the agent-memory head policy (repacted:memory-hygiene).
+
+Location: pact-plugin/bin/check-index. Run by the lead
+at /repacted:wrap-up, by distill-inbox apply, and by the memory migration (M3, M5).
+
+A head is the index file at the top of one agent-memory dir. It must stay a small router:
+the head budget stated once in the index-upkeep rule of teammate-memory.md (size, count and
+width of lines), no emphasis glyphs, no dated notes, PACT's preamble literal, exactly one
+inbox pointer, and every link resolving to a file in the same dir. The limits below are
+bare constants on purpose: the figures live in one place in the plugin's prose, and this
+file never restates them next to a unit word.
+
+Units, for the reader of the constants (kept on a line of their own):
+size is measured in encoded bytes and in UTF-16 units, width in characters.
+
+Exit codes: 0 every checked head passes; 1 at least one violation; 2 usage error;
+3 nothing was checked (no head found), which proves nothing and is not a pass.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+HEAD_MAX = 3000
+HEAD_LINES = 40
+LINE_MAX = 160
+
+HEAD_FILE = "MEMORY.md"
+INBOX_FILE = "MEMORY-inbox.md"
+PREAMBLE = "`MEMORY-*.md` and `INDEX_*.md` roll up a topic; `ARCHIVE_*.md` holds retired entries."
+FORBIDDEN_GLYPHS = ("⭐", "⚠", "\U0001f6a8")      # star, warning sign, rotating light
+LINK_RE = re.compile(r"\]\(([^)\s]+)\)")
+DATE_RE = re.compile(r"\b20\d\d-\d\d-\d\d\b")
+QUOTED_PREAMBLE_RE = re.compile(r"\"(`MEMORY-\*\.md`[^\"]*?holds retired entries\.)\"")
+EXIT_OK, EXIT_VIOLATION, EXIT_USAGE, EXIT_NOTHING = 0, 1, 2, 3
+
+EXAMPLES = """examples:
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/check-index" --all
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/check-index" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/agent-memory/pact-backend-coder"
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/check-index" --all --preamble-from "${CLAUDE_PLUGIN_ROOT}/skills/teammate/references/teammate-memory.md"
+"""
+USAGE_EXAMPLE = 'example: python3 "${CLAUDE_PLUGIN_ROOT}/bin/check-index" --all'
+
+
+def utf16_units(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def check_head_text(text: str, base_dir: Path, preamble: str = PREAMBLE,
+                    virtual_files: tuple[str, ...] = ()) -> list[str]:
+    """Every policy violation in one head's text; an empty list means it passes.
+
+    base_dir: the dir the head's links must resolve in.
+    virtual_files: names treated as present (a dry run checks a head before its dir exists).
+    """
+    violations: list[str] = []
+    size = len(text.encode("utf-8"))
+    if size > HEAD_MAX:
+        violations.append(f"size: encoded length {size} over the limit {HEAD_MAX}")
+    units = utf16_units(text)
+    if units > HEAD_MAX:
+        violations.append(f"size: utf-16 length {units} over the limit {HEAD_MAX}")
+    lines = text.splitlines()
+    if len(lines) > HEAD_LINES:
+        violations.append(f"length: {len(lines)} lines over the limit {HEAD_LINES}")
+    for number, line in enumerate(lines, start=1):
+        if len(line) > LINE_MAX:
+            violations.append(f"line {number}: width {len(line)} over the limit {LINE_MAX}")
+        for glyph in FORBIDDEN_GLYPHS:
+            if glyph in line:
+                violations.append(f"line {number}: emphasis glyph U+{ord(glyph):04X}")
+        if DATE_RE.search(line):
+            violations.append(f"line {number}: dated note (heads carry no dates)")
+    if preamble not in lines:
+        violations.append("preamble: PACT's fixed preamble line is missing or altered")
+    pointers = sum(1 for line in lines if f"]({INBOX_FILE})" in line)
+    if pointers != 1:
+        violations.append(f"inbox pointer: found {pointers}, expected exactly one")
+    for target in LINK_RE.findall(text):
+        if target.startswith(("http://", "https://", "#", "mailto:")):
+            continue
+        name = target.split("#", 1)[0]
+        if name not in virtual_files and not (base_dir / name).is_file():
+            violations.append(f"link: {target} does not resolve in {base_dir.name}/")
+    return violations
+
+
+def preamble_from(path: Path) -> str:
+    """The quoted preamble literal from the index-upkeep rule in a SKILL.md."""
+    match = QUOTED_PREAMBLE_RE.search(path.read_text(encoding="utf-8"))
+    if not match:
+        raise ValueError(f"{path}: no quoted preamble literal found")
+    return match.group(1)
+
+
+def default_root() -> Path:
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+    return Path(config).expanduser() / "agent-memory"
+
+
+def heads_under(root: Path) -> list[Path]:
+    return sorted(p for p in root.glob(f"*/{HEAD_FILE}") if p.is_file())
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="check-index", epilog=EXAMPLES, formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Check agent-memory heads against the head budget in the index-upkeep "
+                    "rule (teammate-memory.md) and the rePACTed head policy.")
+    parser.add_argument("dirs", nargs="*", type=Path, help="agent-memory dir(s) holding a head")
+    parser.add_argument("--all", action="store_true", help="check every head under --root")
+    parser.add_argument("--root", type=Path, default=None,
+                        help="agent-memory root for --all (default: the config dir's agent-memory)")
+    parser.add_argument("--preamble-from", type=Path,
+                        help="take the preamble literal from this SKILL.md instead of the built-in one")
+    parser.add_argument("--quiet", action="store_true", help="print violations and the summary only")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_USAGE if exc.code else EXIT_OK
+    if not args.all and not args.dirs:
+        print(f"check-index: give a dir or --all\n\n{USAGE_EXAMPLE}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        preamble = preamble_from(args.preamble_from) if args.preamble_from else PREAMBLE
+    except (OSError, ValueError) as exc:
+        print(f"check-index: {exc}\n\n{USAGE_EXAMPLE}", file=sys.stderr)
+        return EXIT_USAGE
+    heads = heads_under(args.root or default_root()) if args.all else \
+        [d / HEAD_FILE for d in args.dirs if (d / HEAD_FILE).is_file()]
+    missing = [d for d in args.dirs if not (d / HEAD_FILE).is_file()]
+    for directory in missing:
+        print(f"{directory}: no {HEAD_FILE}", file=sys.stderr)
+    if not heads:
+        print("check-index: NOTHING CHECKED (no head found); this is not a pass", file=sys.stderr)
+        return EXIT_NOTHING
+    failed = 0
+    for head in heads:
+        violations = check_head_text(head.read_text(encoding="utf-8"), head.parent, preamble)
+        failed += bool(violations)
+        for violation in violations:
+            print(f"{head.parent.name}/{HEAD_FILE}: {violation}")
+        if not violations and not args.quiet:
+            print(f"{head.parent.name}/{HEAD_FILE}: ok")
+    print(f"check-index: {len(heads) - failed} of {len(heads)} heads pass")
+    return EXIT_VIOLATION if failed or missing else EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

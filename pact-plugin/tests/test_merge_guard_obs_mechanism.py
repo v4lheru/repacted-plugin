@@ -1,0 +1,1392 @@
+"""
+Location: pact-plugin/tests/test_merge_guard_obs_mechanism.py
+Folded 2026-10-04 (refactor shell lane): its row tests are decision-table rows now
+         (tests/fixtures/shell/decisions/fold_manifest.json); the mechanism tests stay.
+Summary: GOOD-FAITH over-block sweep certification (PR #1195 OBS). Certifies against the
+         REAL classifier, base (committed vendored fixture via merge_guard_baseline_loader
+         — loud-fail, CI-executable) vs live HEAD. NEVER a byte-diff / git-show-by-SHA.
+
+         GOVERNING MODEL — GOOD-FAITH: OVER-BLOCK = cardinal, always fix (census rows must
+         CLOSE, base-True -> HEAD-False). UNDER-BLOCK = acceptable IFF it requires
+         deliberate/adversarial construction (a good-faith user could never accidentally
+         type it); a good-faith DESTRUCTIVE command slipping through unguarded is STILL
+         unacceptable. Every section names (a) the census over-blocks it closes and (b)
+         the DESTRUCTIVE-STILL-GATES floor that MUST stay is_dangerous=True.
+
+         THE LOAD-BEARING GUARD — the destructive-still-gates floor. The read-verb strip
+         and the -m carriers only ever remove STRUCTURALLY-INERT filter/message values
+         (git/gh match or print them, never shell-execute), and the strip fires ONLY when
+         the resolved head is a read verb from the CLOSED set — so a good-faith destructive
+         command is never touched and STILL GATES. The floor rows below are the sole
+         regression tripwire; ANY of them flipping to not-dangerous is a good-faith
+         under-block (STOP-and-report, NOT good-faith-acceptable).
+
+         Destructive verbs assembled at runtime so this file stays inert to the live guard.
+"""
+import ast
+import io
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+import merge_guard_post as mgpost  # noqa: E402
+import merge_guard_pre as mgpre  # noqa: E402
+import shared.merge_guard_common as mgc  # noqa: E402
+from merge_guard_baseline_loader import load_baseline  # noqa: E402
+from merge_guard_post import main as post_main  # noqa: E402
+from merge_guard_pre import main as pre_main  # noqa: E402
+from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
+
+D = mgc.is_dangerous_command
+
+
+class TestObsA3CommitterAnchor:
+
+
+    def test_anchor_present_in_both_sites(self):
+        # L337 _MSG_FLAG_ANCHOR (census-load-bearing) + carrier-5 inline copy (defensive).
+        assert "(?<!\\S)-[a-ln-zA-Z]*m" in mgc._MSG_FLAG_ANCHOR
+
+
+class TestObsA1PrefixWrapperResolution:
+
+    def test_resolver_stops_at_first_positional(self):
+        # the load-bearing invariant: a destructive subcommand resolves to ITSELF, never
+        # gobbling a positional word into a read-verb key.
+        assert mgc._resolve_git_subcommand(["git", "push", "origin", "grep", ":main"]) == 1
+        assert mgc._resolve_git_subcommand(["git", "-C", "/p", "branch", "-D", "x"]) == 3
+        assert mgc._resolve_git_subcommand(["git", "-c", "k=v", "log"]) == 3
+        assert mgc._resolve_git_subcommand(["git", "--foo", "log"]) is None  # unknown -> None
+
+
+# =========================================================================================
+# OBS-C — force-push target recovery past -o/--push-option (commit 4). The prior naive
+# split-filter in _extract_force_push_target_ref counted -o's NON-dash value (`ci.skip`)
+# as a 3rd positional -> None -> a faithful force-push carrying a push-option was
+# gated-but-unmintable (over-block). The fix reuses the SHARED _push_positionals helper
+# (the same one the remote-ref-delete/mass-delete builders use), which skips a value
+# flag's value token — recovering the REAL refspec positional. MINT-ENABLING ONLY:
+# is_dangerous and the op-class are unchanged; the bound target is the real refspec,
+# never the -o value (mint==read via the shared extract_command_context).
+# =========================================================================================
+_FPUSH = "git " + "push " + "--force "
+OBS_C_MINT_RECOVERY = [
+    ("o-space", _FPUSH + "-o ci.skip origin main"),
+    ("o-space-kv", _FPUSH + "-o ci.skip=true origin main"),
+    ("push-option-space", _FPUSH + "--push-option x origin main"),
+    ("push-option-inline", _FPUSH + "--push-option=x origin main"),
+    ("o-multi", _FPUSH + "-o a -o b origin main"),
+    ("o-with-colon-refspec", _FPUSH + "-o x origin feature:main"),
+]
+
+
+class TestObsCForcePushOptionTargetRecovery:
+    @pytest.mark.parametrize(
+        "label,cmd", OBS_C_MINT_RECOVERY, ids=[r[0] for r in OBS_C_MINT_RECOVERY]
+    )
+    def test_target_recovered_and_mints(self, label, cmd):
+        import merge_guard_pre
+        from merge_guard_post import _mint_context_from_bundle, _target_value
+
+        # target recovered = the real refspec positional (never the -o value)
+        ctx = mgc.extract_command_context(cmd)
+        assert ctx.get("target_ref") == "main", (
+            "target_ref not recovered past the push-option value: %r" % cmd
+        )
+        # full production round-trip: the faithful click MINTS and its token authorizes
+        question = {
+            "question": "Proceed?",
+            "options": [{"label": "Yes", "description": "Run `%s` now" % cmd}],
+            "multiSelect": False,
+        }
+        mint_ctx, refusal = _mint_context_from_bundle([question], {"Proceed?": "Yes"})
+        assert mint_ctx is not None, (
+            "faithful force-push with a push-option STOPPED MINTING (%s): %r" % (refusal, cmd)
+        )
+        assert _target_value(mint_ctx) == "main"
+        assert merge_guard_pre._token_matches_command({"context": mint_ctx}, cmd) is True
+
+
+# =========================================================================================
+# OBS-G — multi-ref push-to-main MINTABILITY (the `push_set` distinct key; MINT layer).
+# Closes the gated-but-unmintable over-block: post-OBS-E a multi-ref push including main
+# (`git push origin main feature`) GATES but the scalar extractor's deliberate `!=2 -> None`
+# conservatism yields target=None -> no mint -> the faithful click cannot authorize it. The
+# fix transfers the ratified branch_set/mass_target/_canonical_join precedent: one shared
+# `_extract_push_to_main_set` (>=2 refspecs -> canonical sort+dedup FULL-refspec netstring
+# identity, remote-AGNOSTIC; <2 -> None = the scalar boundary) feeds BOTH the post-hook mint
+# (`_target_value` gains push_set) and the pre-hook read (`_token_matches_command`'s
+# push-to-main arm binds target_ref OR push_set, set-EQUALITY) -> mint==read by construction.
+# SECURITY CERT = the 4+1 property matrix (executable, base-vs-HEAD via the vendored
+# fixture, never a byte-diff): (a) injective set-identity over rich refspec tokens;
+# (b) SCOPE BOUNDARY — multi-ref force-push/delete stay unmintable
+# (`_extract_force_push_target_ref` byte-untouched); (c) scalar<->set exactly-one-populated;
+# (d) mint==read round-trip through the REAL hook functions; (e) the REQUIRED 5th
+# bound_flags property — a PLAIN push_set token REFUSES a --force-with-lease multi-ref push
+# of the same set (the op-agnostic a2 bound_flags equality, checked before the target arms)
+# and REFUSES --force multi-ref (op-gate reclassifies force-push). (e) pins behavior the
+# code inherits from a2 so a future PRIVILEGED_FLAGS edit cannot silently regress the
+# plain<->lease separation.
+# =========================================================================================
+_PG = "git " + "push "
+
+
+def PUSH_SET(cmd):
+    """Call-time module-attr resolution of the OBS-G-only extractor (revert
+    non-vacuity: a source-only revert of OBS-G fails these rows PER-ROW, never as a
+    collection-wide ImportError — module-level imports stay limited to stable symbols)."""
+    return mgc._extract_push_to_main_set(cmd)
+
+
+def _gctx(cmd):
+    """HEAD command context via the ONE extract_command_context SSOT (both hooks' derivation),
+    bound to this checkout and remote the way both hooks bind it (1.4.1 U13)."""
+    ctx = mgc.extract_command_context(cmd)
+    return mgc.command_repo_binding(ctx, cmd) or ctx
+
+
+def _gtok(cmd):
+    """Mint-shaped token: context derived exactly as the post-hook mint derives it."""
+    return {"context": _gctx(cmd)}
+
+
+def _greads(tok, cmd):
+    """The REAL pre-hook read predicate (op-gate -> a2 bound_flags -> per-op target arm)."""
+    return mgpre._token_matches_command(tok, cmd)
+
+
+class TestObsGPushSetMintability:
+    # ---- the closed over-block (bidirectional vs the vendored base) ----
+    def test_base_was_gated_but_unmintable_head_mints(self):
+        base = load_baseline()
+        cmd = _PG + "origin main feature"
+        base_ctx = base.extract_command_context(cmd)
+        assert base_ctx.get("operation_type") == "push-to-main", "row not gated at base (vacuous)"
+        assert "push_set" not in base_ctx and "target_ref" not in base_ctx, (
+            "base minted a multi-ref target — the over-block premise is wrong"
+        )
+        head_ctx = _gctx(cmd)
+        assert head_ctx.get("operation_type") == "push-to-main"
+        assert head_ctx.get("push_set") == mgc._canonical_join(["feature", "main"])
+        assert mgpost._target_value(head_ctx) == head_ctx["push_set"], "the #1064 mint site misses push_set"
+
+    def test_collect_pairs_mints_exactly_one_pair(self):
+        cmd = _PG + "origin main feature"
+        pairs = mgpost._collect_pairs([cmd])
+        assert list(pairs) == [("push-to-main", mgc._canonical_join(["feature", "main"]))]
+
+    # ---- (a) injective set-identity over rich refspec tokens ----
+    def test_identity_canonicalizes_reorder_and_dup(self):
+        want = PUSH_SET(_PG + "origin main feature")
+        assert want is not None
+        assert PUSH_SET(_PG + "origin feature main") == want
+        assert PUSH_SET(_PG + "origin main feature feature") == want
+
+    def test_identity_separates_rich_refspec_tokens(self):
+        colon = PUSH_SET(_PG + "origin feature:main develop:main")
+        assert colon == mgc._canonical_join(["develop:main", "feature:main"])
+        # concat-collision refuses: the netstring length-prefix is self-delimiting.
+        assert PUSH_SET(_PG + "origin feature:maindevelop:main extra:main") != colon
+        assert PUSH_SET(_PG + "origin refs/heads/main feature") == mgc._canonical_join(
+            ["feature", "refs/heads/main"]
+        )
+        # injectivity canaries: a literal comma-name / netstring-shaped name never
+        # collides with the set it imitates (the class a bare-comma join failed).
+        assert mgc._canonical_join(["a,b"]) != mgc._canonical_join(["a", "b"])
+        assert mgc._canonical_join(["4:main"]) != mgc._canonical_join(["main"])
+
+    @pytest.mark.parametrize(
+        "label,other",
+        [
+            ("subset", "origin main"),
+            ("superset", "origin main feature staging"),
+            ("different-set", "origin main develop"),
+        ],
+    )
+    def test_set_equality_refuses_sub_super_different(self, label, other):
+        tok = _gtok(_PG + "origin main feature")
+        assert _greads(tok, _PG + other) is False, "%s wrongly authorized" % label
+
+    def test_set_equality_authorizes_same_reorder_dup_and_remote_agnostic(self):
+        tok = _gtok(_PG + "origin main feature")
+        assert _greads(tok, _PG + "origin main feature") is True
+        assert _greads(tok, _PG + "origin feature main") is True
+        assert _greads(tok, _PG + "origin main feature feature") is True
+        # 1.4.1 U13: the approval binds the remote it reaches (it was remote-agnostic,
+        # Q5), so another remote re-asks.
+        assert _greads(tok, _PG + "upstream main feature") is False
+
+    # ---- (b) SCOPE BOUNDARY — force-push / delete multi-ref stay unmintable ----
+    @pytest.mark.parametrize(
+        "label,cmd,want_op",
+        [
+            ("force-multi-ref", _PG + "--for" + "ce origin main feature", "force-push"),
+            ("plus-multi-ref", _PG + "origin +main +feature", "force-push"),
+            ("delete-multi-ref", _PG + "origin :main :feature", "remote-mass-delete"),
+        ],
+    )
+    def test_non_push_to_main_multi_ref_never_gets_push_set(self, label, cmd, want_op):
+        ctx = _gctx(cmd)
+        assert ctx.get("operation_type") == want_op
+        assert "push_set" not in ctx, "the elif scope boundary leaked push_set to %s" % want_op
+
+    def test_multi_ref_force_push_now_mints_via_force_push_set(self):
+        # CONTROL-SWAP (OBS-I): the OBS-G scope boundary is REVERSED under its own
+        # ratified proof — the multi-ref force-push now mints the DISTINCT
+        # forced-normalized `force_push_set` (never push_set; the op split keeps
+        # the keys disjoint, pinned in the OBS-I class below).
+        ctx = _gctx(_PG + "--for" + "ce origin main feature")
+        assert ctx.get("force_push_set") == mgc._canonical_join(["+feature", "+main"])
+        assert mgpost._target_value(ctx) == ctx["force_push_set"]
+
+
+    # ---- (c) scalar <-> set exactly-one-populated ----
+    @pytest.mark.parametrize(
+        "label,cmd,want_key",
+        [
+            ("single-ref-scalar", _PG + "origin main", "target_ref"),
+            ("single-colon-scalar", _PG + "origin HEAD:main", "target_ref"),
+            ("multi-ref-set", _PG + "origin main feature", "push_set"),
+            ("multi-colon-set", _PG + "origin feature:main develop", "push_set"),
+        ],
+    )
+    def test_exactly_one_of_target_ref_push_set(self, label, cmd, want_key):
+        ctx = _gctx(cmd)
+        present = tuple(k for k in ("target_ref", "push_set") if k in ctx)
+        assert present == (want_key,), "co-population/wrong key: %r -> %r" % (cmd, present)
+
+    def test_scalar_and_set_tokens_never_cross_authorize(self):
+        scalar_tok = _gtok(_PG + "origin main")
+        set_tok = _gtok(_PG + "origin main feature")
+        assert _greads(scalar_tok, _PG + "origin main feature") is False
+        assert _greads(set_tok, _PG + "origin main") is False
+        assert _greads(scalar_tok, _PG + "origin main") is True  # scalar path unchanged
+
+    # ---- (d) mint==read round-trip through the REAL hook functions ----
+    def test_mint_read_round_trip(self):
+        cmd = _PG + "origin main feature"
+        ctx = _gctx(cmd)
+        minted = mgpost._target_value(ctx)
+        assert minted is not None
+        # the read side re-derives the byte-identical identity from the SAME extractor
+        assert _greads({"context": ctx}, cmd) is True
+        assert ctx["push_set"] == PUSH_SET(cmd) == minted
+
+    def test_mint_subset_of_read_over_matrix(self):
+        # mint⊆read: any command that mints a push_set is is_dangerous (gated) too.
+        for cmd in [
+            _PG + "origin main feature",
+            _PG + "origin feature main",
+            _PG + "upstream main feature",
+            _PG + "origin -o ci.skip=true main feature",
+            _PG + "origin feature:main develop",
+        ]:
+            if PUSH_SET(cmd) is not None and _gctx(cmd).get("push_set"):
+                assert D(cmd) is True, "minted but not gated (mint⊄read): %r" % cmd
+
+    # ---- (e) the REQUIRED 5th property: bound_flags negatives (a2 inheritance) ----
+    def test_plain_set_token_refuses_lease_multi_ref(self):
+        plain = _gtok(_PG + "origin main feature")
+        assert plain["context"].get("bound_flags") == []
+        lease_cmd = _PG + "--for" + "ce-with-lease origin main feature"
+        # premise: the lease multi-ref classifies push-to-main with lease BOUND,
+        # so the a2 set-equality (plain [] vs [--force-with-lease]) refuses.
+        lease_ctx = _gctx(lease_cmd)
+        assert lease_ctx.get("operation_type") == "push-to-main"
+        assert lease_ctx.get("bound_flags") == ["--for" + "ce-with-lease"]
+        assert _greads(plain, lease_cmd) is False, (
+            "a PLAIN push_set token authorized a history-rewriting lease push"
+        )
+
+    def test_plain_set_token_refuses_force_multi_ref(self):
+        plain = _gtok(_PG + "origin main feature")
+        force_cmd = _PG + "--for" + "ce origin main feature"
+        # premise: --force multi-ref reclassifies force-push -> the op-gate refuses.
+        assert _gctx(force_cmd).get("operation_type") == "force-push"
+        assert _greads(plain, force_cmd) is False
+
+    def test_lease_set_token_binds_symmetrically(self):
+        lease_cmd = _PG + "--for" + "ce-with-lease origin main feature"
+        lease_tok = _gtok(lease_cmd)
+        assert _greads(lease_tok, lease_cmd) is True  # faithful lease click round-trips
+        # never-escalate is symmetric-REFUSE: the lease token does not authorize the
+        # plain command either (any bound_flags difference refuses).
+        assert _greads(lease_tok, _PG + "origin main feature") is False
+
+    # ---- seam: cd-prefix / compound — the set INHERITS the scalar posture ----
+    def test_cd_prefix_whole_command_extract_stays_unmintable(self):
+        # the whole-command extract is first-leg-anchored -> target None (OBS-H scope);
+        # SYMMETRIC for scalar and set: neither key populates, detect still gates.
+        for cmd in ["cd . && " + _PG + "origin main", "cd . && " + _PG + "origin main feature"]:
+            ctx = _gctx(cmd)
+            assert ctx.get("operation_type") == "push-to-main"
+            assert "target_ref" not in ctx and "push_set" not in ctx
+            assert mgpost._target_value(ctx) is None
+
+    def test_cd_prefix_quoted_presentation_symmetrically_mintable(self):
+        # CONTROL-SWAP (OBS-H): the quoted compound region now extracts through the
+        # read-symmetric _extraction_surface -> the destructive LEG -> a pair IS
+        # collected, identically for scalar and set (previously symmetric-unmintable;
+        # the intended posture CHANGED with the extraction-surface fix, so this row
+        # flipped as a control-swap, not a reframe).
+        scalar = mgpost._collect_pairs(["Approve: `cd . && " + _PG + "origin main`"])
+        multi = mgpost._collect_pairs(["Approve: `cd . && " + _PG + "origin main feature`"])
+        assert list(scalar) == [("push-to-main", "main")]
+        assert list(multi) == [("push-to-main", mgc._canonical_join(["feature", "main"]))]
+
+    def test_cd_prefix_bare_presentation_set_mirrors_scalar(self):
+        # bare-text presentation: locate_command_regions recovers the `git ...` span for
+        # BOTH (pre-existing scalar behavior); the set inherits the identical shape —
+        # no scalar/set divergence, no NEW seam opened by the push_set key.
+        scalar = mgpost._collect_pairs(["cd . && " + _PG + "origin main"])
+        multi = mgpost._collect_pairs(["cd . && " + _PG + "origin main feature"])
+        assert (len(scalar) > 0) == (len(multi) > 0)
+
+    # ---- fail-safe residuals: no canonical identity -> None (never over-broad) ----
+    @pytest.mark.parametrize(
+        "label,cmd",
+        [
+            ("unbalanced-quote", _PG + "origin main 'feature"),
+            ("procsub", _PG + "origin main <(echo feature)"),
+            ("flag-flood", _PG + " ".join("-x%d" % i for i in range(40)) + " origin main feature"),
+            ("zero-ref", _PG + "origin"),
+            ("single-ref-boundary", _PG + "origin main"),
+            ("glued-non-command", "git " + "push--for" + "ce origin main feature"),
+        ],
+    )
+    def test_fail_safe_shapes_yield_none(self, label, cmd):
+        assert PUSH_SET(cmd) is None, "%s minted an over-broad set identity" % label
+
+
+# =========================================================================================
+# OBS-G — REAL mint -> execute round-trip (the cert BACKBONE, the sibling of the #1129
+# harness). Drives the ACTUAL post_main (AskUserQuestion approval whose clicked option
+# embeds the command in backticks -> token mint) then the ACTUAL pre_main (Bash exec ->
+# allow/deny) against the same token dir. This layer is MANDATORY for a mint-layer fix:
+# the recorded #1129 miss (branch_set registered at extract+read but MISSING from
+# _target_value) was invisible to every test that hand-constructs token context — a
+# faithful click minted ZERO tokens while all read-side units stayed green. minted==1 is
+# asserted FIRST on every refusal row so a DENY is proven a READ decision, never a
+# mint-side miss masquerading as one. The three sites are independently load-bearing
+# through these rows: EXTRACT (exactly-one-populated above), MINT (minted==1 — a
+# _target_value miss goes red here), READ (exec-same ALLOW — a read-arm miss goes red).
+# =========================================================================================
+_G_ALLOW, _G_DENY = 0, 2
+
+
+def _g_live_token_ids(tok):
+    """Inode identity of the LIVE (non-retired) token files in `tok`.
+
+    Keyed on INODE and not on filename, because here the two are not
+    interchangeable. `cleanup_unused_tokens` retires the previous token with
+    `os.rename`, which PRESERVES its inode, while a mint is an `O_EXCL` create
+    that allocates a NEW one. So a name-keyed diff counts a retirement as a
+    mint, AND is blind to a mint that reuses the name the retirement just
+    vacated — which second-granularity token names make the ordinary case
+    rather than a rare one. Those two errors cancel often enough to look
+    correct: a same-second pair reads 1 by counting the retirement while the
+    real token is invisible. Neither error is reachable by narrowing the glob,
+    because the defect is the identity, not the filter.
+
+    Non-tokens are dropped by EXCLUSION, never by matching an expected token
+    shape. An inclusion pattern such as `merge-authorized-<digits>` silently
+    drops the millisecond-disambiguated fallback name that `write_token` falls
+    back to on collision — a real token — and would go on dropping every later
+    shape nobody thought to add. Exclusion can only ever over-count, which
+    fails loudly; inclusion under-counts, which does not.
+    """
+    ids = set()
+    for path in tok.glob(mgc.TOKEN_PREFIX + "*"):
+        if path.name.endswith(".consumed") or mgc.USE_MARKER_SUFFIX in path.name:
+            continue
+        ids.add(path.stat().st_ino)
+    return ids
+
+
+def _g_mint(cmd, tok):
+    """Drive the REAL post hook with an approval embedding `cmd`; return the count of
+    tokens minted by this call. See `_g_live_token_ids` for why the count is
+    keyed on inode rather than on filename."""
+    before = _g_live_token_ids(tok)
+    env = json.dumps({
+        "tool_name": "AskUserQuestion",
+        "tool_input": {"questions": [{
+            "question": "Proceed?",
+            "options": [
+                {"label": "Yes", "description": "Run `%s`" % cmd},
+                {"label": "Cancel", "description": "Abort"},
+            ],
+        }]},
+        "tool_response": {"answers": {"Proceed?": "Yes"}},
+        "session_id": "obs-g-cert",
+    })
+    with patch.object(mgpost, "TOKEN_DIR", tok), \
+            patch("sys.stdin", io.StringIO(env)), \
+            patch("sys.stdout", io.StringIO()):
+        try:
+            post_main()
+        except SystemExit as e:
+            assert e.code == 0, "post hook exited nonzero: %r" % (e.code,)
+    return len(_g_live_token_ids(tok) - before)
+
+
+def _g_execute(cmd, tok):
+    """Run `cmd` through the REAL pre hook; return exit code (0=ALLOW, 2=DENY).
+
+    AMBIGUOUS ON PURPOSE, AND THE CALLER RESOLVES IT. A return of 0 means only
+    that the hook did not DENY. It cannot distinguish "a token authorized this
+    command" from "this command was never gated at all", because an ungated
+    command reaches no decision and so exits 0 too.
+
+    The discriminator is the calling convention, not this function: every row
+    asserts `minted == 1` BEFORE `rc == _G_ALLOW`, and since only a gated
+    command mints, that mint assertion IS the proof that the command was gated.
+    Read `rc` alone and a never-gated command reads exactly like an authorized
+    one. Keep the mint assertion first.
+    """
+    env = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": "obs-g-cert",
+    })
+    with patch.object(mgpre, "TOKEN_DIR", tok), \
+            patch("sys.stdin", io.StringIO(env)), \
+            patch("sys.stdout", io.StringIO()), \
+            patch("sys.stderr", io.StringIO()):
+        try:
+            pre_main()
+            return 0
+        except SystemExit as e:
+            return e.code if isinstance(e.code, int) else 0
+
+
+def _g_roundtrip(mint_cmd, exec_cmd, tok):
+    return _g_mint(mint_cmd, tok), _g_execute(exec_cmd, tok)
+
+
+def _g_write_token_that_retires_then_fails_to_create(fired):
+    """Build a `write_token` stand-in that retires, then creates nothing.
+
+    `write_token` runs its retirement BEFORE the `O_EXCL` create, so a create
+    that fails leaves a retirement on disk and no new token. This reproduces
+    that SHAPE. It does not reproduce any particular CAUSE of the failure, and
+    it stops being faithful if that order changes —
+    `TestObsGStubTracksTheRealFailurePath` is what notices if it does.
+
+    The name states the POST-STATE rather than the outcome. "Creates nothing"
+    is true of all four ways `write_token` returns None; leaving a retirement
+    behind belongs to exactly one of them, and naming the shared outcome
+    claimed three modes this stand-in does not model.
+
+    Defined once and shared by the pin and by its guard on purpose: a guard
+    comparing against its own private copy of the stub would certify the copy,
+    not the stub, which is the defect this arrangement exists to close.
+    """
+    def _stub(context, token_dir=None):
+        mgc.cleanup_unused_tokens(token_dir or mgpost.TOKEN_DIR, context,
+                                  mgpost.get_session_id())
+        fired.append(True)
+        return None
+    return _stub
+
+
+def _g_token_shape(name):
+    """`merge-authorized-1785902062.consumed` -> `.consumed`.
+
+    Strips the prefix and the epoch stamp so two directories seeded moments
+    apart compare on WHICH ARTIFACTS EXIST rather than on when they were made.
+    A live token yields `''`, a retirement `'.consumed'`, a use marker `'.use-1'`.
+    """
+    return name[len(mgc.TOKEN_PREFIX):].lstrip("0123456789")
+
+
+class TestObsGStubTracksTheRealFailurePath:
+    """The zero-mint stub must still leave what the real failure path leaves.
+
+    `_g_write_token_that_retires_then_fails_to_create` names the post-state it produces:
+    retire the previous token, create nothing, return None. That claim used to
+    live only in a comment, which states a property rather than enforcing it. This drives the REAL function into failure at its
+    `os.open` and compares what each leaves on disk.
+
+    It compares the POST-STATE rather than the signature, because a signature
+    match holds while the retire-versus-create ORDER changes and the order is
+    the entire claim. It does not read the source, because a text check is a
+    proxy for the behaviour and reddens on comment-only edits.
+
+    WHAT THIS STAND-IN IS FOR, AND WHAT IT IS NOT FOR. It models one of the
+    four ways `write_token` returns None: the create failing after the
+    retirement has already run. The other three are refusal guards that return
+    BEFORE any disk operation — a non-dict context (578), a context carrying
+    no anchor key (590), and a context with no `operation_type` (605). Those
+    leave the directory exactly as they found it, so this stand-in is not a
+    model of them, and a test that needs one must build its own.
+
+    That is a statement of scope rather than a gap, and the reason is worth
+    keeping. With the directory untouched there is no retirement, and a
+    retirement is the only artifact a name-keyed count and an inode-keyed
+    count disagree about — both read zero in those three modes. Only the
+    create failure leaves something that tells the two forms apart, which is
+    why it is the mode worth modelling and why widening to the other three
+    would add no discrimination.
+
+    The three non-vacuity witnesses below are NOT redundant with the final
+    comparison. Witness (c) is what actually reddens when the retirement
+    disappears — it reaches that drift first, by ordering, and names it —
+    so removing any of them as "already covered by the comparison" would
+    trade a diagnostic failure for a bare inequality, and would reopen the
+    empty-directory pass that (c) exists to close.
+    """
+
+    def test_stub_leaves_what_the_real_failure_path_leaves(self, tmp_path):
+        # The retirement is per binding: the failing write must carry the prior
+        # token's own context (read back below), or nothing is retired.
+
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        stub_dir = tmp_path / "stub"
+        stub_dir.mkdir()
+
+        def shapes(d):
+            return sorted(_g_token_shape(p.name)
+                          for p in d.glob(mgc.TOKEN_PREFIX + "*"))
+
+        # Both arms start from a real prior token. Without one there is no
+        # retirement to observe and both sides would land on empty.
+        assert _g_mint(_PG + "origin main", real_dir) == 1
+        assert _g_mint(_PG + "origin main", stub_dir) == 1
+        (prior,) = real_dir.glob(mgc.TOKEN_PREFIX + "*")
+        ctx = json.loads(prior.read_text())["context"]
+
+        opened = []
+        real_open = mgpost.os.open
+
+        def _failing_open(*args, **kwargs):
+            opened.append(args[0] if args else None)
+            raise OSError(28, "forced failure for this test")
+
+        mgpost.os.open = _failing_open
+        try:
+            returned = mgpost.write_token(ctx, real_dir)
+        finally:
+            mgpost.os.open = real_open
+
+        fired = []
+        _g_write_token_that_retires_then_fails_to_create(fired)(ctx, stub_dir)
+
+        # NON-VACUITY. Two empty directories compare equal, so the match below
+        # means nothing until the scenario is shown to have actually run.
+        assert opened, (
+            "os.open was never reached, so the real create never failed and "
+            "the comparison is not about the path this stub stands in for"
+        )
+        assert returned is None, (
+            "the real write_token did not fail — this would compare a success "
+            "against a stubbed failure"
+        )
+        assert fired, "the stub never ran"
+        assert shapes(real_dir), "the compared state is empty; nothing was compared"
+        assert ".consumed" in shapes(real_dir), (
+            "no retirement on the real side, so the shape being compared is "
+            "not the retire-then-fail shape the stub claims to reproduce"
+        )
+
+        assert shapes(stub_dir) == shapes(real_dir), (
+            "the stub no longer leaves what the real failure path leaves: "
+            f"real={shapes(real_dir)} stub={shapes(stub_dir)}. The stub's "
+            "claim to reproduce the retire-then-fail shape has drifted, and "
+            "the zero-mint pin built on it is testing a path that changed."
+        )
+
+
+class TestObsGWriteTokenPreCleanupRefusalCount:
+    """Pin the refusal count the class above states as a fact about production.
+
+    `TestObsGStubTracksTheRealFailurePath` says `write_token` has three refusal
+    guards returning before the retirement, and rests a ruling on it: those
+    three leave the directory untouched, so they cannot tell a name-keyed count
+    from an inode-keyed one, which is why widening the stand-in to cover them
+    would add no discrimination. A fourth pre-cleanup refusal that DOES touch
+    disk makes that reasoning false. Nothing else would notice. This does.
+
+    It reads the parse tree of `write_token` and counts the `Return` nodes
+    above the retirement whose value is None — counting a bare `return` as well
+    as `return None`, since a predicate matching only the second would miss a
+    bare one added later.
+
+    WHAT THIS CANNOT SEE. It is a PARTIAL guard, and the boundary belongs here
+    rather than in a report, because a partial guard read as a total one leaves
+    a reader more confident than no guard would:
+
+      - A fourth refusal placed inside a HELPER called before the retirement.
+        The walk sees a `Call`, not a `Return`, and following calls into
+        arbitrary callees is unbounded. This is the ceiling.
+      - A guard whose CONDITION changes while its position holds. The count
+        pins how many, never which.
+      - A pre-cleanup `raise`, or a return of something that is not None —
+        both are exits this does not count.
+      - Reachability. A refusal made dead by an earlier unconditional return is
+        still counted; this reads structure, never execution.
+
+    What it does catch is the common edit: a fourth guard written inline. A
+    refactor of the existing three into a helper drops the count and also
+    reddens — a false positive, but a loud one.
+    """
+
+    def test_write_token_has_three_pre_cleanup_return_none_paths(self):
+        # Resolved through the imported module rather than a path literal, so
+        # the check follows the same import the suite itself uses.
+        tree = ast.parse(Path(mgpost.__file__).read_text(encoding="utf-8"))
+
+        found = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "write_token"]
+        assert len(found) == 1, (
+            f"expected exactly one `write_token` definition, found {len(found)}"
+        )
+        fn = found[0]
+
+        nested = [n for n in ast.walk(fn)
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and n is not fn]
+        assert not nested, (
+            "a nested function definition appeared inside `write_token`, and "
+            "ast.walk would absorb its returns into the count below"
+        )
+
+        cleanups = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                    and getattr(n.func, "id", None) == "_cleanup_unused_tokens"]
+        assert len(cleanups) == 1, (
+            f"expected exactly one `_cleanup_unused_tokens` call, found "
+            f"{len(cleanups)}. With any other number, `before the retirement` "
+            "is not a well-defined partition and the count below is a number "
+            "computed over nothing."
+        )
+        retirement = cleanups[0].lineno
+
+        returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
+
+        def _returns_none(node):
+            return node.value is None or (
+                isinstance(node.value, ast.Constant) and node.value.value is None
+            )
+
+        # NON-VACUITY. Three `Return` nodes sit above the retirement whatever
+        # their shape, so a predicate that accepted everything would score 3
+        # and pass having read nothing. Require it to reject something.
+        assert any(not _returns_none(r) for r in returns), (
+            "the None-return predicate accepted every return in the function, "
+            "so the count below would hold for a predicate that discriminates "
+            "nothing"
+        )
+
+        pre_cleanup = [r for r in returns
+                       if r.lineno < retirement and _returns_none(r)]
+        assert len(pre_cleanup) == 3, (
+            f"`write_token` has {len(pre_cleanup)} paths returning None before "
+            f"the retirement, not 3 (lines {[r.lineno for r in pre_cleanup]}). "
+            "The class docstring above states three and rests a ruling on it: "
+            "a fourth that touches disk would falsify the reasoning that those "
+            "modes cannot discriminate the two count forms. Update the prose "
+            "AND re-check that reasoning — the count is not the only thing "
+            "that moved."
+        )
+
+
+class TestObsGMintCountIsIdentityKeyed:
+    """The mint count must tell a real mint apart from a retirement.
+
+    `_g_mint` is asserted BEFORE the refusal on every DENY row in this file, so
+    it is what separates a legitimate refusal from an over-block wearing a
+    refusal's clothes. A name-keyed count cannot make that separation:
+    `write_token` retires the previous token by renaming it into the same glob,
+    so a mint that created NOTHING still counted 1 whenever a prior token
+    existed to retire — and the mint-side miss those rows exist to catch went
+    straight through them.
+
+    Reverting `_g_live_token_ids` to a name diff turns this test RED. That is
+    the point of it: the docstring there explains why the count is keyed on
+    inode, and this is what stops the explanation from being the only guard.
+    """
+
+    def test_a_mint_that_creates_nothing_counts_zero(self, tmp_path):
+        # A prior token has to exist, or there is no retirement to miscount and
+        # the two forms of the count agree — the case would not discriminate.
+        assert _g_mint(_PG + "origin main", tmp_path) == 1, (
+            "setup did not mint, so no retirement is available and the "
+            "assertion below would hold for the wrong reason"
+        )
+
+        fired = []
+        real_write_token = mgpost.write_token
+        mgpost.write_token = _g_write_token_that_retires_then_fails_to_create(fired)
+        try:
+            minted = _g_mint(_PG + "origin main", tmp_path)
+        finally:
+            mgpost.write_token = real_write_token
+
+        # NON-VACUITY, AND IT NEEDS THREE WITNESSES RATHER THAN ONE. Zero is
+        # also what this test yields when it measures nothing, so the number is
+        # worthless until the scenario is shown to have actually happened. The
+        # `fired` flag alone is NOT enough: the stub can fire with no prior
+        # token to retire, and the count then reads 0 for a reason that has
+        # nothing to do with what is being pinned.
+        assert fired, "the stub never ran, so this test measured nothing"
+        tokens = list(tmp_path.glob(mgc.TOKEN_PREFIX + "*"))
+        assert any(p.name.endswith(".consumed") for p in tokens), (
+            "no retirement on disk, so nothing was present for a name-keyed "
+            "count to mistake for a mint"
+        )
+        assert not [
+            p for p in tokens
+            if not p.name.endswith(".consumed")
+            and mgc.USE_MARKER_SUFFIX not in p.name
+        ], "a live token survived, so the mint did not fail and 0 would be wrong"
+
+        assert minted == 0, (
+            "a mint that created no token counted as one. The retirement of "
+            "the prior token was counted as a fresh mint, so a mint-side miss "
+            "passes the `minted == 1` assertion written to catch it, and a "
+            "DENY caused by an over-block is certified as a read decision."
+        )
+
+
+class TestObsGRealMintExecuteRoundTrip:
+    def test_faithful_multi_ref_click_mints_and_self_authorizes(self, tmp_path):
+        # THE over-block cure, end-to-end: the faithful multi-ref click MINTS (base
+        # minted zero — gated-but-unmintable) and its own execution is ALLOWED.
+        cmd = _PG + "origin main feature"
+        minted, rc = _g_roundtrip(cmd, cmd, tmp_path)
+        assert minted == 1, "faithful multi-ref click did not mint (the over-block persists)"
+        assert rc == _G_ALLOW
+
+    def test_reorder_and_dup_authorize(self, tmp_path):
+        # The same refs reordered or named twice are the same target set and another text:
+        # the approval covers the git command word for word.
+        minted, rc = _g_roundtrip(_PG + "origin main feature", _PG + "origin feature main", tmp_path)
+        assert minted == 1 and rc == _G_DENY
+        minted, rc = _g_roundtrip(_PG + "origin main feature",
+                                  _PG + "origin main feature feature", tmp_path)
+        assert minted == 1 and rc == _G_DENY
+
+    @pytest.mark.parametrize(
+        "label,exec_tail",
+        [
+            ("superset", "origin main feature staging"),
+            ("subset-scalar", "origin main"),
+            ("different-set", "origin main develop"),
+        ],
+    )
+    def test_set_equality_denies_other_sets(self, label, exec_tail, tmp_path):
+        minted, rc = _g_roundtrip(_PG + "origin main feature", _PG + exec_tail, tmp_path)
+        assert minted == 1, "the {main,feature} approval must MINT (refuse must be a read decision)"
+        assert rc == _G_DENY, "a {main,feature} token wrongly authorized the %s" % label
+
+    def test_scalar_token_denies_set_execution(self, tmp_path):
+        minted, rc = _g_roundtrip(_PG + "origin main", _PG + "origin main feature", tmp_path)
+        assert minted == 1, "the scalar approval must still MINT (pre-existing path)"
+        assert rc == _G_DENY, "a scalar main token wrongly authorized a multi-ref push"
+
+    def test_plain_set_token_denies_lease_and_force_execution(self, tmp_path):
+        # the 5th property END-TO-END: a PLAIN multi-ref token refuses the
+        # history-rewriting spellings of the same set (a2 bound_flags / op-gate).
+        minted, rc = _g_roundtrip(_PG + "origin main feature",
+                                  _PG + "--for" + "ce-with-lease origin main feature", tmp_path)
+        assert minted == 1
+        assert rc == _G_DENY, "plain push_set token authorized a lease multi-ref push"
+        minted, rc = _g_roundtrip(_PG + "origin main feature",
+                                  _PG + "--for" + "ce origin main feature", tmp_path)
+        assert minted == 1
+        assert rc == _G_DENY, "plain push_set token authorized a --force multi-ref push"
+
+    def test_multi_ref_force_push_approval_now_mints_end_to_end(self, tmp_path):
+        # CONTROL-SWAP (OBS-I): the multi-ref FORCE approval now MINTS (the OBS-G
+        # boundary reversed under its own proof) and the faithful click
+        # self-authorizes end-to-end.
+        cmd = _PG + "--for" + "ce origin main feature"
+        minted, rc = _g_roundtrip(cmd, cmd, tmp_path)
+        assert minted == 1, "the faithful multi-ref force-push click did not mint"
+        assert rc == _G_ALLOW
+
+    def test_cd_prefix_compound_approval_symmetrically_mintable_end_to_end(self, tmp_path):
+        # CONTROL-SWAP (OBS-H): the cd-prefix seam through the REAL pipeline — the
+        # quoted compound approval now extracts through _extraction_surface -> the
+        # destructive leg -> MINTS, and the (unchanged) read side tier-1-binds the
+        # compound execution -> ALLOW. Previously pinned symmetric-unmintable; the
+        # intended posture changed with the extraction-surface fix (control-swap).
+        cmd = "cd . && " + _PG + "origin main feature"
+        minted, rc = _g_roundtrip(cmd, cmd, tmp_path)
+        assert minted == 1, "the faithful cd-prefix multi-ref click did not mint"
+        assert rc == _G_ALLOW
+
+    @pytest.mark.parametrize(
+        "label,approve_tail,exec_tail",
+        [
+            ("compound-approve-compound-exec", "cd . && {push}origin {refs}", "cd . && {push}origin {refs}"),
+            ("cleanleg-approve-compound-exec", "{push}origin {refs}", "cd . && {push}origin {refs}"),
+            ("compound-approve-cleanleg-exec", "cd . && {push}origin {refs}", "{push}origin {refs}"),
+        ],
+    )
+    def test_cd_prefix_posture_set_inherits_scalar(self, label, approve_tail, exec_tail, tmp_path):
+        # NO-NEW-SEAM guarantee: on every cd-prefix shape the SET's real end-to-end
+        # outcome (did it mint, allow/deny) equals the SCALAR's pre-existing outcome.
+        # Deliberately pinned as INHERITANCE (set == scalar), not as a normative
+        # absolute, so a future uniform compound-posture change moves both together
+        # without falsifying this cert.
+        scalar_dir = tmp_path / "scalar"
+        set_dir = tmp_path / "set"
+        scalar_dir.mkdir()
+        set_dir.mkdir()
+        s_m, s_rc = _g_roundtrip(
+            approve_tail.format(push=_PG, refs="main"),
+            exec_tail.format(push=_PG, refs="main"), scalar_dir)
+        t_m, t_rc = _g_roundtrip(
+            approve_tail.format(push=_PG, refs="main feature"),
+            exec_tail.format(push=_PG, refs="main feature"), set_dir)
+        assert (s_m > 0) == (t_m > 0) and s_rc == t_rc, (
+            "set diverged from the scalar posture on %s: scalar=%s/%s set=%s/%s"
+            % (label, s_m, s_rc, t_m, t_rc)
+        )
+
+
+# =========================================================================================
+# OBS-H — cd-prefix per-leg EXTRACTION mintability (the `_extraction_surface` fix; MINT
+# surface, the arc's last cure). Closes the last over-block: a QUOTED single-destructive
+# cd-prefix compound approval (`Approve: \`cd . && git push origin main\``) detected
+# push-to-main (whole-candidate, per-leg detection) but extracted first-leg-anchored (the
+# cd leg -> no target) -> no pair -> gated-but-unmintable. The fix: extraction at the TWO
+# mint call sites consumes `_extraction_surface(region)` — the read side's VERBATIM
+# three-tier expression (tier-1 unique dangerous leg; tier-2 unique detectable leg; else
+# the whole region = the fail-safe unmintable collapse). SECURITY = the REDUCTION THEOREM
+# (ratified #89/#91): mint(quoted cd-prefix X) == mint(bare leg-of-X on already-certified
+# bytes) by dict-equality on the FULL (op, target, bound_flags); the read side is
+# byte-untouched, so every post-fix outcome maps to an already-certified pre-fix outcome.
+# REQUIRED addition (the #91 RATIFY-WITH-CHANGES condition): NON-PUSH-class cd-prefix
+# quoted mint PARITY pins — the surface rewires extraction for ALL op-classes, so the
+# merge/close/branch-delete/ref-delete parity is pinned against a future helper/tier-fn
+# edit silently regressing a non-push class (mirrors the OBS-G 5th-property pin).
+# =========================================================================================
+def _h_mint(desc):
+    """Context-level mint through the REAL `_mint_context_from_bundle` (the mint entry
+    the post hook runs after option selection): returns (context, refusal_reason)."""
+    q = {"question": "Proceed?",
+         "options": [{"label": "Yes", "description": desc}],
+         "multiSelect": False}
+    return mgpost._mint_context_from_bundle([q], {"Proceed?": "Yes"})
+
+
+def _h_reads(ctx, cmd):
+    return mgpre._token_matches_command({"context": ctx}, cmd)
+
+
+_H_CMD = "cd . && " + _PG + "origin main"
+_H_LEG = _PG + "origin main"
+_H_CMDS = "cd . && " + _PG + "origin main feature"
+_H_LEGS = _PG + "origin main feature"
+_H_CMDF = "cd . && " + _PG + "--for" + "ce origin main"
+_H_LEGF = _PG + "--for" + "ce origin main"
+_H_CMDL = "cd . && " + _PG + "--for" + "ce-with-lease origin main"
+_H_LEGL = _PG + "--for" + "ce-with-lease origin main"
+_H_MERGE = "gh " + "pr " + "merge"
+_H_CLOSE = "gh " + "pr " + "close"
+
+
+class TestObsHExtractionSurfaceMintability:
+    def test_surface_strip_free_identity_and_value_carrying_context_equality(self):
+        # The reduction theorem's premise, STRIP-AWARE: for a STRIP-FREE bare
+        # single-command region the surface is the region itself (tier-1 == region,
+        # text identity). For a VALUE-CARRYING command, tier-1 returns the
+        # inert-value-STRIPPED leg — text identity does NOT hold; the load-bearing
+        # invariant is context-EQUALITY: the real extractor derives the SAME
+        # (op, target, bound_flags) from the stripped surface as from the raw region.
+        # (The read side has derived from this stripped view all along — the
+        # extraction-surface fix ALIGNS the mint with it; a raw-vs-stripped context
+        # divergence on a real shape would have been a mint/read disagreement
+        # already, so this row is the tripwire for that class.)
+        for leg in (_H_LEG, _H_LEGS, "gh " + "pr " + "merge 5", "git branch -Df stale"):
+            assert mgpost._extraction_surface(leg) == leg
+        for cmd in (
+            "gh api -X PUT -f note=pulls/5/merge repos/o/r/pulls/6/merge",
+            _H_MERGE + ' 6 --body "see pulls/5/merge"',
+            _PG + 'origin main -o ci.message="push origin master"',
+            _H_CLOSE + ' 9 -c "do not close 7"',
+        ):
+            surf = mgpost._extraction_surface(cmd)
+            assert mgc.extract_command_context(surf) == mgc.extract_command_context(cmd), (
+                "raw-vs-stripped context divergence on %r (surface=%r)" % (cmd, surf)
+            )
+
+    @pytest.mark.parametrize(
+        "label,compound,leg,want_key,want_val",
+        [
+            ("scalar", _H_CMD, _H_LEG, "target_ref", "main"),
+            ("set", _H_CMDS, _H_LEGS, "push_set", None),  # None -> computed canonical below
+            ("force", _H_CMDF, _H_LEGF, "target_ref", "main"),
+            ("lease", _H_CMDL, _H_LEGL, "target_ref", "main"),
+        ],
+    )
+    def test_fix_token_space_and_read_round_trip(self, label, compound, leg, want_key, want_val):
+        if want_val is None:
+            want_val = mgc._canonical_join(["feature", "main"])
+        ctx, refusal = _h_mint("Run `%s` now" % compound)
+        assert ctx is not None, "quoted cd-prefix %s did not mint: %r" % (label, refusal)
+        assert ctx.get(want_key) == want_val
+        # THE THEOREM: dict-equality with the bare-leg mint on the same bytes.
+        bare, _ = _h_mint("Run: " + leg)
+        assert ctx == bare, "token-space changed: compound=%r bare=%r" % (ctx, bare)
+        # round-trip through the REAL (byte-untouched) read side.
+        assert _h_reads(ctx, compound) is True
+        assert _h_reads(ctx, leg) is True
+
+    @pytest.mark.parametrize(
+        "label,exec_cmd",
+        [
+            ("scalar-to-set", _H_CMDS),
+            ("target-swap", "cd . && " + _PG + "origin feature"),
+            ("op-escalation-force", _H_CMDF),
+            ("flag-escalation-lease", _H_CMDL),
+        ],
+    )
+    def test_deny_negatives_on_the_scalar_compound_token(self, label, exec_cmd):
+        ctx, _ = _h_mint("Run `%s` now" % _H_CMD)
+        assert ctx is not None
+        assert _h_reads(ctx, exec_cmd) is False, "%s wrongly authorized" % label
+
+    def test_deny_negatives_on_the_set_compound_token(self):
+        ctx, _ = _h_mint("Run `%s` now" % _H_CMDS)
+        assert ctx is not None
+        assert _h_reads(ctx, "cd . && " + _PG + "origin main feature staging") is False
+        assert _h_reads(ctx, _H_CMD) is False
+
+    @pytest.mark.parametrize(
+        "label,desc,want_key,want_val",
+        [
+            ("simple-quoted", "Run `" + _PG + "origin main` now", "target_ref", "main"),
+            ("simple-bare", "Run: " + _PG + "origin main", "target_ref", "main"),
+            ("merge-compound-quoted", "Run `cd . && " + _H_MERGE + " 5` now", "pr_number", "5"),
+            ("merge-neighbor-quoted", "Run `" + _H_MERGE + " 5 && echo done` now", "pr_number", "5"),
+            ("first-leg-delete-quoted",
+             "Run `" + _PG + "origin --delete stale && make deploy` now", "target_ref", "stale"),
+            # the two case-(ii) rows (quoted UNDETECTED compounds already leg-recover via
+            # the bare-subspan path — pre-existing; must keep minting identically):
+            ("case-ii-colon-refspec", "Run `cd . && " + _PG + "origin :main` now",
+             "target_ref", "main"),
+            ("case-ii-cluster-delete", "Run `cd . && git branch -Df temp` now",
+             "branch", "temp"),
+        ],
+    )
+    def test_noreg_today_minting_shapes_keep_minting(self, label, desc, want_key, want_val):
+        ctx, refusal = _h_mint(desc)
+        assert ctx is not None and ctx.get(want_key) == want_val, (
+            "NOREG %s: ctx=%r refusal=%r" % (label, ctx, refusal)
+        )
+
+    # ---- the #91 REQUIRED addition: NON-PUSH-class cd-prefix quoted mint parity ----
+    @pytest.mark.parametrize(
+        "label,compound,leg,want_key,want_val",
+        [
+            ("merge", "cd . && " + _H_MERGE + " 7 --admin",
+             _H_MERGE + " 7 --admin", "pr_number", "7"),
+            ("close", "cd . && " + _H_CLOSE + " 9 --delete-branch",
+             _H_CLOSE + " 9 --delete-branch", "pr_number", "9"),
+            ("branch-delete", "cd . && git branch -D hotfix",
+             "git branch -D hotfix", "branch", "hotfix"),
+            ("ref-delete", "cd . && " + _PG + "origin --delete stale",
+             _PG + "origin --delete stale", "target_ref", "stale"),
+        ],
+    )
+    def test_non_push_class_cd_prefix_quoted_mint_parity(self, label, compound, leg,
+                                                         want_key, want_val):
+        # `_extraction_surface` rewires extraction for ALL op-classes at the two mint
+        # sites; this pins the non-push classes' parity so a future edit to the helper
+        # or the tier functions cannot silently regress one of them.
+        ctx, refusal = _h_mint("Run `%s` now" % compound)
+        bare, _ = _h_mint("Run: " + leg)
+        assert ctx is not None, "PARITY %s: quoted cd-prefix did not mint: %r" % (label, refusal)
+        assert ctx.get(want_key) == want_val and ctx == bare, (
+            "PARITY %s broke: ctx=%r bare=%r" % (label, ctx, bare)
+        )
+
+    # ---- the H.10 wrapped-merge mint-parity discriminators ----
+    @pytest.mark.parametrize(
+        "label,desc",
+        [
+            ("bash-c-wrapped", "Run `bash -c '" + _H_MERGE + " 5'` now"),
+            ("sh-c-wrapped", 'Run `sh -c "' + _H_MERGE + ' 5"` now'),
+        ],
+    )
+    def test_wrapped_merge_keeps_minting(self, label, desc):
+        # tier-1 of a single-command region is the region itself, so the quoted-region
+        # wrapped spellings are NOREG by construction — pinned as standing discriminators.
+        ctx, refusal = _h_mint(desc)
+        assert ctx is not None and ctx.get("pr_number") == "5", (
+            "wrapped %s stopped minting: %r" % (label, refusal)
+        )
+
+    # ---- structural couplings, pinned executably ----
+    def test_gap5_refuses_chimeric_before_pair_collection(self):
+        # refusal_reason MUST be compound_command (GAP5), not multiple_commands or
+        # no_command — proving the compound refuse still fires BEFORE pair collection
+        # with the extraction-surface rewire in place.
+        _, refusal = _h_mint("Run `" + _H_MERGE + " 5 && " + _PG + "--for" + "ce origin main` now")
+        assert refusal == "compound_command"
+
+    def test_multiplicity_still_refuses_two_commands(self):
+        _, refusal = _h_mint("Run `" + _PG + "origin main` or `" + _H_MERGE + " 7` now")
+        assert refusal == "multiple_commands"
+
+    def test_three_leg_single_destructive_mints(self):
+        ctx, _ = _h_mint("Run `cd . && cd . && " + _PG + "origin main` now")   # directories that exist
+        assert ctx is not None and ctx.get("target_ref") == "main"
+
+
+    def test_per_leg_detect_to_tier1_coupling(self):
+        # THE COUPLING (lead ruling): the cd-prefix mint depends on (a) per-leg
+        # detection covering the whole compound as a region (push classes via the
+        # per-leg filter) AND (b) tier-1 selecting the destructive leg as the
+        # extraction surface. If the per-leg filter shrinks, the mint regresses to
+        # unmintable (fail-safe) — but THIS row goes RED with a named diagnosis
+        # instead of a silent posture change.
+        assert mgc.detect_command_operation_type(_H_CMD) == "push-to-main"
+        assert mgpost._extraction_surface(_H_CMD) == _H_LEG
+
+    def test_ambiguity_collapses_to_whole_region_fail_safe(self):
+        # 2 destructive legs -> tier-1 None; 2 detectable legs -> tier-2 None; the
+        # surface collapses to the WHOLE region = first-leg-anchored = unmintable
+        # (the over-block direction, never an over-broad token). GAP5 independently
+        # refuses this shape at the bundle level (pinned above).
+        two = _PG + "origin main && " + _PG + "--for" + "ce origin f"
+        assert mgpost._extraction_surface(two) == two
+
+
+class TestObsHRealMintExecuteRetireRoundTrip:
+    # The full-pipeline layer (real post_main -> pre_main -> _retire_token_for_command),
+    # reusing the OBS-G harness. minted==1 asserted first on every DENY row.
+    def test_quoted_cd_prefix_scalar_mints_and_self_authorizes(self, tmp_path):
+        minted, rc = _g_roundtrip(_H_CMD, _H_CMD, tmp_path)
+        assert minted == 1, "the faithful quoted cd-prefix click did not mint"
+        assert rc == _G_ALLOW
+
+    def test_compound_token_authorizes_bare_leg_and_vice_versa(self, tmp_path):
+        minted, rc = _g_roundtrip(_H_CMD, _H_LEG, tmp_path)
+        assert minted == 1 and rc == _G_ALLOW
+        minted, rc = _g_roundtrip(_H_LEG, _H_CMD, tmp_path)
+        assert minted == 1 and rc == _G_ALLOW
+
+    def test_deny_rows_minted_first(self, tmp_path):
+        minted, rc = _g_roundtrip(_H_CMD, _H_CMDS, tmp_path)
+        assert minted == 1, "refusal must be a read decision, not a mint miss"
+        assert rc == _G_DENY
+        minted, rc = _g_roundtrip(_H_CMD, _H_CMDF, tmp_path)
+        assert minted == 1
+        assert rc == _G_DENY
+
+    def test_retirement_round_trip_wrong_target_first(self, tmp_path):
+        # mint from the quoted compound approval; the token REFUSES retirement against
+        # a wrong-target compound (survives), then RETIRES on its own compound
+        # execution — the 4th consumer (byte-unchanged) selects the same leg the
+        # mint bound.
+        def live():
+            return [p for p in tmp_path.glob("merge-authorized-*")
+                    if not p.name.endswith(".consumed") and ".use-" not in p.name]
+        minted = _g_mint(_H_CMDS, tmp_path)
+        assert minted == 1
+        wrong = mgpost._retire_token_for_command(
+            "cd . && " + _PG + "origin main develop", "push-to-main", tmp_path)
+        assert wrong is False and len(live()) == 1, "wrong-target retirement consumed the token"
+        right = mgpost._retire_token_for_command(_H_CMDS, "push-to-main", tmp_path)
+        assert right is True and len(live()) == 0, "the token did not retire on its own compound"
+
+
+# =========================================================================================
+# OBS-I — multi-ref force-push MINTABILITY (`force_push_set`, reversing the OBS-G scope
+# boundary under its own ratified proof). Cures the peer-review-found cardinal over-block
+# (`git push origin +feature main` gated-but-unmintable). THREE security layers, each
+# load-bearing: (1) FORCED-FORM NORMALIZATION — class-wide --force upgrades every element
+# to its `+` form so the identity tracks WHICH REFS GET FORCED (the plain->forced
+# mixed-set collision cure; --force is NOT a bound flag, so the identity must carry the
+# semantics); (2) the ALLOWLIST-INVERSION guard — force_push_set populates ONLY when EVERY
+# flag token is ref-scope-NEUTRAL (a closed, SECURITY-OWNED membership set pinned below);
+# delete/mass op-triggers, scope expanders, dry-run, lease-on-force, unknown/future flags
+# all fail SAFE to None. The census walks the RAW tail (never `_normalized_flags`, which
+# is condition-scoped and BLIND to --tags/--all — a census built on it would false-green
+# the smuggle) with getopt-style value-`-o` resolution in ANY cluster position, feeding
+# the SHARED byte-untouched `_push_positionals` a value-free tail so the census and the
+# positional gather agree by construction; (3) the ':'-element delete guard
+# (defense-in-depth). mint==read via the ONE shared extractor => the READ direction closes
+# by construction: a non-neutral EXECUTION derives force_push_set=None and no pure-force
+# token matches (None-identity denial).
+# =========================================================================================
+def FORCE_SET(cmd):
+    """Call-time module-attr resolution (revert non-vacuity: a source-only revert of
+    OBS-I fails these rows PER-ROW, never as a collection-wide ImportError)."""
+    return mgc._extract_force_push_set(cmd)
+
+
+_I_PURE = _PG + "--for" + "ce origin main feature"
+
+
+def _i_pure_id():
+    return mgc._canonical_join(["+feature", "+main"])
+
+
+class TestObsIForcePushSetMintability:
+    # ---- the cardinal over-block cures ----
+    @pytest.mark.parametrize(
+        "label,tail,want",
+        [
+            ("plus-pair-peer-review-row", "origin +feature main", ["+feature", "main"]),
+            ("plus-both", "origin +main +feature", ["+feature", "+main"]),
+            ("pure-force", "--for" + "ce origin main feature", ["+feature", "+main"]),
+            ("short-f", "-f origin main feature", ["+feature", "+main"]),
+            ("mixed-force-plus", "--for" + "ce origin +feature main", ["+feature", "+main"]),
+        ],
+    )
+    def test_fix_rows_mint_the_normalized_identity(self, label, tail, want):
+        cmd = _PG + tail
+        want_id = mgc._canonical_join(want)
+        assert FORCE_SET(cmd) == want_id
+        ctx = _gctx(cmd)
+        assert ctx.get("operation_type") == "force-push"
+        assert ctx.get("force_push_set") == want_id
+        assert "target_ref" not in ctx and "push_set" not in ctx
+        assert mgpost._target_value(ctx) == want_id
+        # round-trip through the real read side
+        assert _greads({"context": ctx}, cmd) is True
+
+    # ---- (A) every non-neutral flag -> None (the escalation stays closed) ----
+    @pytest.mark.parametrize(
+        "label,flags",
+        [
+            ("delete", "--for" + "ce --delete"), ("short-d", "--for" + "ce -d"),
+            ("mirror", "--for" + "ce --mirror"), ("prune", "--for" + "ce --prune"),
+            ("fd-cluster", "-fd"), ("tags", "--for" + "ce --tags"),
+            ("follow-tags", "--for" + "ce --follow-tags"), ("all", "--for" + "ce --all"),
+            ("branches", "--for" + "ce --branches"),
+            ("recurse-submodules", "--for" + "ce --recurse-submodules=on-demand"),
+            ("short-n", "--for" + "ce -n"), ("dry-run", "--for" + "ce --dry-run"),
+            ("lease-on-force", "--for" + "ce --for" + "ce-with-lease"),
+            ("no-force", "--no-for" + "ce"), ("receive-pack", "--for" + "ce --receive-pack=x"),
+            ("repo", "--for" + "ce --repo=r"), ("end-of-options", "--for" + "ce --"),
+            ("unknown-future", "--for" + "ce --zzz"),
+        ],
+    )
+    def test_non_neutral_flags_yield_none(self, label, flags):
+        cmd = _PG + flags + " origin main feature"
+        assert FORCE_SET(cmd) is None, "%s wrongly minted a force set" % label
+
+    # ---- (B) every neutral spelling MINTS (the cardinal-over-block gate) ----
+    @pytest.mark.parametrize(
+        "label,flags",
+        [
+            ("pure", "--for" + "ce"), ("short-f", "-f"), ("fu-cluster", "-fu"),
+            ("verbose-short", "--for" + "ce -v"), ("quiet-upstream", "--for" + "ce -q -u"),
+            ("atomic-porcelain", "--for" + "ce --atomic --porcelain"),
+            ("verbose-long", "--for" + "ce --verbose"),
+            ("progress", "--for" + "ce --progress"),
+            ("no-progress", "--for" + "ce --no-progress"),
+            ("o-value", "--for" + "ce -o ci.skip=true"),
+            ("push-option-inline", "--for" + "ce --push-option=x"),
+            ("push-option-separate", "--for" + "ce --push-option x"),
+            ("signed", "--for" + "ce --signed"),
+            ("ipv4-thin", "--for" + "ce -4 --thin"),
+            ("no-verify", "--for" + "ce --no-verify"),
+        ],
+    )
+    def test_neutral_spellings_mint(self, label, flags):
+        cmd = _PG + flags + " origin main feature"
+        assert FORCE_SET(cmd) == _i_pure_id(), "%s over-blocked (allowlist too strict)" % label
+
+    # ---- the -o family IDENTITY-VALUE rows (getopt-complete cluster handling) ----
+    @pytest.mark.parametrize(
+        "label,flags",
+        [
+            ("fvo-next-token", "-fvo msg"),
+            ("fo-next-token", "-fo msg"),
+            ("vfo-next-token", "-vfo msg"),
+            ("fov-rest-of-token", "-fov"),
+            ("fvo-glued-value", "-fvoMSG"),
+            ("o-token-start", "--for" + "ce -o msg"),
+        ],
+    )
+    def test_o_family_identity_value(self, label, flags):
+        # the IDENTITY VALUE is asserted (not just mint-success): a value-token leak
+        # into the positional gather would bind the -o value as the remote and the
+        # remote as a +refspec — this row pins the correct {+feature,+main}.
+        cmd = _PG + flags + " origin main feature"
+        assert FORCE_SET(cmd) == _i_pure_id(), "%s mis-bound the identity" % label
+
+    def test_o_first_glued_value_fails_safe(self):
+        # THE RULED AMBIGUITY CLASS (lead+security): `-ofv` = getopt -o=fv (NO
+        # force) but the pre-existing cluster-blind DETECTION sees the 'f' and
+        # classifies force-push — git's parse and the classifier diverge on WHAT
+        # THE OPERATION IS, so minting ANY identity would be wrong under one
+        # reading. Fail SAFE: an o-first / no-f-before-o GLUED value returns None
+        # (gated-but-unmintable — an exotic, documented residual over-block).
+        # Glued values stay MINTABLE when `f` is unambiguously BEFORE the `o` in
+        # the same cluster (-fov / -fvoMSG — pinned green in the -o family rows).
+        for label, cmd in [
+            ("ofv", _PG + "-ofv origin main feature"),
+            ("vox", _PG + "--for" + "ce -vox origin main feature"),
+        ]:
+            assert FORCE_SET(cmd) is None, "%s minted despite the ambiguity ruling" % label
+        ctx = _gctx(_PG + "-ofv origin main feature")
+        assert ctx.get("operation_type") == "for" + "ce-push"   # pre-existing detection, out of scope
+        assert "force_push_set" not in ctx, "the ambiguous shape must stay unmintable"
+        assert mgpost._target_value(ctx) is None
+
+    def test_o_missing_value_is_malformed_fail_safe(self):
+        assert FORCE_SET(_PG + "-fvo") is None
+        assert FORCE_SET(_PG + "--for" + "ce --push-option") is None
+
+    # ---- collision negatives + semantic equivalence ----
+    def test_plain_forced_collision_closed_both_directions(self):
+        plain_mixed = _gctx(_PG + "origin +feature main")
+        all_forced = _gctx(_PG + "--for" + "ce origin +feature main")
+        assert plain_mixed["force_push_set"] != all_forced["force_push_set"]
+        assert _greads({"context": plain_mixed}, _PG + "--for" + "ce origin +feature main") is False
+        assert _greads({"context": all_forced}, _PG + "origin +feature main") is False
+
+    def test_semantic_equivalence_force_equals_all_plus(self):
+        force_tok = _gctx(_I_PURE)
+        plus_tok = _gctx(_PG + "origin +main +feature")
+        assert _greads({"context": force_tok}, _PG + "origin +main +feature") is True
+        assert _greads({"context": plus_tok}, _I_PURE) is True
+
+    # ---- ':' delete guard + fail-safes ----
+    @pytest.mark.parametrize(
+        "label,cmd",
+        [
+            ("colon-element", _PG + "--for" + "ce origin :main feature"),
+            ("plus-colon-element", _PG + "origin +:main feature"),
+            ("unbalanced-quote", _PG + "--for" + "ce origin main 'feature"),
+            ("procsub", _PG + "--for" + "ce origin main <(echo x)"),
+            ("flag-flood", _PG + " ".join("-v" for _ in range(40)) + " --for" + "ce origin main feature"),
+            ("single-ref-boundary", _PG + "--for" + "ce origin main"),
+        ],
+    )
+    def test_guard_and_fail_safe_shapes_yield_none(self, label, cmd):
+        assert FORCE_SET(cmd) is None, "%s minted an over-broad force set" % label
+
+    # ---- 4-key exactly-one-populated + cross negatives ----
+    @pytest.mark.parametrize(
+        "label,cmd,want_key",
+        [
+            ("single-force", _PG + "--for" + "ce origin main", "target_ref"),
+            ("multi-force", _I_PURE, "force_push_set"),
+            ("single-ptm", _PG + "origin main", "target_ref"),
+            ("multi-ptm", _PG + "origin main feature", "push_set"),
+        ],
+    )
+    def test_four_key_exactly_one_populated(self, label, cmd, want_key):
+        ctx = _gctx(cmd)
+        present = tuple(k for k in ("target_ref", "push_set", "force_push_set") if k in ctx)
+        assert present == (want_key,), "co-population/wrong key on %s: %r" % (label, present)
+
+    def test_cross_op_and_set_negatives(self):
+        force_tok = {"context": _gctx(_I_PURE)}
+        assert _greads(force_tok, _PG + "origin main feature") is False       # op-gate vs push_set
+        assert _greads({"context": _gctx(_PG + "origin main feature")}, _I_PURE) is False
+        assert _greads(force_tok, _PG + "--for" + "ce origin main feature staging") is False
+        assert _greads(force_tok, _PG + "--for" + "ce origin main") is False
+        assert _greads(force_tok, _PG + "--for" + "ce origin main develop") is False
+        assert _greads(force_tok, _PG + "--for" + "ce origin feature main") is True   # reorder
+        assert _greads(force_tok, _PG + "--for" + "ce upstream main feature") is False  # remote-bound (1.4.1 U13)
+
+    # ---- (C) READ-direction closure: pure token vs non-neutral executions ----
+    @pytest.mark.parametrize(
+        "label,exec_flags",
+        [
+            ("delete-exec", "--for" + "ce --delete"),
+            ("tags-exec", "--for" + "ce --tags"),
+            ("mirror-exec", "--for" + "ce --mirror"),
+            ("dry-run-exec", "--for" + "ce -n"),
+        ],
+    )
+    def test_pure_token_denies_non_neutral_executions(self, label, exec_flags):
+        # the mint guard and the read refusal are the SAME code: the non-neutral
+        # execution derives force_push_set=None -> None-identity denial.
+        pure_tok = {"context": _gctx(_I_PURE)}
+        exec_cmd = _PG + exec_flags + " origin main feature"
+        assert _greads(pure_tok, exec_cmd) is False, "%s wrongly authorized" % label
+
+    def test_no_verify_a2_discrimination(self):
+        nv_cmd = _PG + "--for" + "ce --no-verify origin main feature"
+        nv = _gctx(nv_cmd)
+        assert nv.get("force_push_set") == _i_pure_id()
+        assert nv.get("bound_flags") == ["--no-verify"]
+        assert _greads({"context": _gctx(_I_PURE)}, nv_cmd) is False  # plain refuses nv (a2)
+        assert _greads({"context": nv}, nv_cmd) is True
+
+    # ---- the ALLOWLIST MEMBERSHIP PIN (security-owned surface) ----
+    def test_allowlist_membership_pin(self):
+        # Like PRIVILEGED_FLAGS: any future addition to this set is a REVIEWED,
+        # deliberate act — this pin makes a silent widening fail loudly.
+        assert mgc._FORCE_PUSH_NEUTRAL_LONG == frozenset({
+            "--for" + "ce", "--no-verify",
+            "--verbose", "--quiet", "--progress", "--no-progress", "--porcelain",
+            "--set-upstream", "--atomic",
+            "--ipv4", "--ipv6", "--thin", "--no-thin",
+            "--signed", "--no-signed",
+            "--push-option",
+        })
+        assert mgc._FORCE_PUSH_NEUTRAL_SHORT == frozenset("fvqu46")
+        assert "o" not in mgc._FORCE_PUSH_NEUTRAL_SHORT  # value-resolved pre-census
+
+    # ---- OBS-H composition + NOREG scalars ----
+    def test_obsh_cd_prefix_composition(self):
+        cdc = "cd . && " + _I_PURE
+        assert _gctx(mgpost._extraction_surface(cdc)) == _gctx(_I_PURE)
+
+    def test_noreg_scalar_behaviors_unchanged(self):
+        assert _gctx(_PG + "--for" + "ce origin main").get("target_ref") == "main"
+        assert _gctx(_PG + "origin +main").get("target_ref") == "+main"
+
+
+class TestObsIRealMintExecuteRetireRoundTrip:
+    def test_pure_force_approval_mints_and_self_authorizes(self, tmp_path):
+        minted, rc = _g_roundtrip(_I_PURE, _I_PURE, tmp_path)
+        assert minted == 1, "the faithful multi-ref force click did not mint"
+        assert rc == _G_ALLOW
+
+    def test_reorder_and_plus_spelling_authorize(self, tmp_path):
+        # Same force-push set, another text: refused since the approval covers the command
+        # word for word (the reordered form and the `+ref` spelling alike).
+        minted, rc = _g_roundtrip(_I_PURE, _PG + "--for" + "ce origin feature main", tmp_path)
+        assert minted == 1 and rc == _G_DENY
+        minted, rc = _g_roundtrip(_I_PURE, _PG + "origin +main +feature", tmp_path)
+        assert minted == 1 and rc == _G_DENY
+
+    @pytest.mark.parametrize(
+        "label,exec_tail",
+        [
+            ("different-set", "--for" + "ce origin main develop"),
+            ("superset", "--for" + "ce origin main feature staging"),
+            ("subset-scalar", "--for" + "ce origin main"),
+            ("plain-mixed", "origin +feature main"),
+            ("delete-spelling", "--for" + "ce --delete origin main feature"),
+            ("tags-spelling", "--for" + "ce --tags origin main feature"),
+        ],
+    )
+    def test_deny_rows_minted_first(self, label, exec_tail, tmp_path):
+        minted, rc = _g_roundtrip(_I_PURE, _PG + exec_tail, tmp_path)
+        assert minted == 1, "the pure approval must MINT (refusal must be a read decision)"
+        assert rc == _G_DENY, "the pure force token wrongly authorized the %s" % label
+
+    def test_o_cluster_real_round_trip(self, tmp_path):
+        cmd = _PG + "-fvo msg origin main feature"
+        minted, rc = _g_roundtrip(cmd, cmd, tmp_path)
+        assert minted == 1, "the -fvo cluster spelling did not mint (the #100 over-block)"
+        assert rc == _G_ALLOW
+
+    def test_retirement_round_trip_wrong_target_first(self, tmp_path):
+        def live():
+            return [p for p in tmp_path.glob("merge-authorized-*")
+                    if not p.name.endswith(".consumed") and ".use-" not in p.name]
+        minted = _g_mint(_I_PURE, tmp_path)
+        assert minted == 1
+        wrong = mgpost._retire_token_for_command(
+            _PG + "--for" + "ce origin main develop", "for" + "ce-push", tmp_path)
+        assert wrong is False and len(live()) == 1, "wrong-target retirement consumed the token"
+        right = mgpost._retire_token_for_command(_I_PURE, "for" + "ce-push", tmp_path)
+        assert right is True and len(live()) == 0, "the token did not retire on its own execution"

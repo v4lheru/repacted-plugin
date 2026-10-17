@@ -23,14 +23,13 @@ Fail-open invariant (SACROSANCT): every error path returns the 10-key
 defaults dict. summarize_session_state never raises. Compaction hooks
 call this on the hot path; a crash here would block compaction.
 
-Architecture reference: docs/architecture/journal-based-task-scanner.md
+Architecture reference: the design notes
 in the fix/journal-based-task-scanner worktree.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -40,8 +39,10 @@ from shared.constants import (
     SYSTEM_TASK_PREFIXES,
     VARIETY_ASSESSED_DISPATCH_SCOPE,
 )
-from shared.paths import get_claude_config_dir
-from shared.session_journal import _parse_ts, read_events_from
+from shared.paths import SAFE_PATH_COMPONENT_RE as _SAFE_PATH_COMPONENT_RE_FROM_PATHS
+from shared.paths import SESSION_ID_CONTROL_CHARS_RE as _SESSION_ID_CONTROL_CHARS_RE_FROM_PATHS
+from shared.paths import get_claude_config_dir, is_safe_path_component
+from shared.session_journal import _parse_ts, latest_variety_by_task, read_events_from
 
 
 # Maximum length for sanitized render-bound strings. Matches the
@@ -60,11 +61,11 @@ _NAME_MAX_CHARS = 200
 #   - feature_id: numeric task IDs or UUIDs (hex + hyphens).
 # Rejects ".", "..", "../etc", path separators, control chars, null,
 # whitespace, and all shell/URL metacharacters by construction.
-# See security-engineer memory patterns_path_name_fallback_escape.md:
+# See the Path.name escape rule:
 # positive regex allowlist is the recommended defense (option 1 over
 # Path.name identity checks, which admit ".." as .name returns ".."
 # verbatim rather than the expected empty string).
-SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9_-]+")
+SAFE_PATH_COMPONENT_RE = _SAFE_PATH_COMPONENT_RE_FROM_PATHS  # defined in shared.paths
 # Back-compat alias for callers that imported the pre-cycle-8 private name.
 # The underscore-prefixed binding remains a module-local alias so existing
 # test imports (`from shared.session_state import _SAFE_PATH_COMPONENT_RE`)
@@ -73,42 +74,9 @@ SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9_-]+")
 _SAFE_PATH_COMPONENT_RE = SAFE_PATH_COMPONENT_RE
 
 
-# Characters stripped from every string that flows into model-visible
-# output (custom_instructions, systemMessage). Covers:
-#   - C0 control chars 0x00-0x1F (includes NUL, BEL, tab 0x09,
-#     LF 0x0A, CR 0x0D, ESC 0x1B, etc.)
-#   - DEL (0x7F)
-#   - NEL (U+0085), LINE SEPARATOR (U+2028), PARAGRAPH SEPARATOR
-#     (U+2029) — Unicode line terminators recognized by
-#     `str.splitlines()` and by LLM tokenizers; crafted names
-#     containing these survive a naive C0-only filter and can inject
-#     new lines into the rendered output.
-# Single SSOT for the strip set: this regex IS the canonical
-# SESSION_ID_CONTROL_CHARS_RE. Producer-side sanitizers in
-# pact_context.init() (S9 defense) and session_init.py's
-# classification ladder share one regex; previously each module
-# defined its own copy and asymmetric strip sets across interpolation
-# sinks could become the attacker's entry point. See security-engineer
-# memory patterns_symmetric_sanitization.md.
-#
-# \ud83d\udd34 IT IS NARROWER THAN `_PROMPT_CONTROL_CHARS_RE`, ON PURPOSE, AND A WIDENING
-# OF THAT ONE MUST NOT BE COPIED HERE. The two are different objects with
-# different jobs, and the differences are the design:
-#   - THIS one is a DETECTOR. Every call site uses `.search()`, so it answers
-#     `does this identifier carry a line breaker`. It carries NO `+`, and that
-#     is correct: for a search predicate a one-or-more quantifier matches the
-#     same set of strings and buys nothing.
-#   - THE OTHER one is a REPLACER. Its call sites use `.sub(" ", value)`, and
-#     there the `+` IS load-bearing: without it a run of N control characters
-#     becomes N spaces rather than one.
-# ON LINE BREAKERS THE TWO ARE EQUAL. The other one covers U+0085 inside its
-# `\x7f-\x9f` range, and this one names U+0085 by codepoint. This one omits
-# ONLY the non-line-breaking C1 characters, which is what the list above says
-# it intends. Making them one definition changes behaviour in either
-# direction: the replacer would stop removing `\x80-\x84` and `\x86-\x9f` from
-# model-visible prose, or this detector would start refusing session ids for
-# C1 characters that break no line.
-SESSION_ID_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
+# The render strip set and session-id detector: defined in shared.paths with its full rationale
+# (a leaf, so pact_context can import it without importing this module).
+SESSION_ID_CONTROL_CHARS_RE = _SESSION_ID_CONTROL_CHARS_RE_FROM_PATHS
 # Module-private alias (back-compat for existing call sites that import
 # `_RENDER_STRIP_RE`). New code should import the public name via
 # `shared.session_state` (or the shared package re-export).
@@ -157,37 +125,7 @@ def _sanitize_member_name(name: str) -> str:
     return cleaned
 
 
-def is_safe_path_component(value: str) -> bool:
-    """
-    Return True if `value` is safe to use as a single-segment path
-    component.
-
-    Defense-in-depth against path-traversal via tampered session
-    context (see security review Finding 2). The upstream allowlist
-    lives in session_init's team-name generation — `re.sub(r"[^a-f0-9-]", "",
-    session_id[:8])` — which already filters path separators, `..`,
-    nulls, and controls at team-name generation time. This guard is a
-    second line of defense at the I/O boundary.
-
-    Uses a positive regex allowlist (`SAFE_PATH_COMPONENT_RE`) instead
-    of the tempting `Path(value).name == value` identity check. The
-    identity check is BROKEN: `Path("..").name == ".."` is True, so
-    the check admits `..` as "safe" and permits one-level directory
-    escape when composed against a trusted root (e.g.
-    `~/.claude/teams/../something`). The positive allowlist sidesteps
-    this by requiring every character to belong to a known-safe
-    alphabet; `..`, `.`, `../etc`, path separators, controls, and
-    whitespace all reject.
-
-    See security-engineer agent memory
-    `patterns_path_name_fallback_escape.md` for the authoritative
-    write-up of this anti-pattern.
-    """
-    if not isinstance(value, str) or not value:
-        return False
-    return SAFE_PATH_COMPONENT_RE.fullmatch(value) is not None
-
-
+# is_safe_path_component is defined in shared.paths and re-exported here.
 # Back-compat alias for callers that imported the pre-cycle-8 private
 # name. See the matching `_SAFE_PATH_COMPONENT_RE` alias above.
 _is_safe_path_component = is_safe_path_component
@@ -277,7 +215,7 @@ def _latest_feature_level_variety_event(
     Feature-level means: type `variety_assessed` AND NOT dispatch-marked
     (top-level `scope` equal to VARIETY_ASSESSED_DISPATCH_SCOPE). LATEST is
     the greatest PARSED instant, first-wins on an equal instant — the same
-    selection direction as `variety_divergence.resolve_arc_start`, because
+    selection direction as the wrap-up retrospective's arc start, because
     both pick a CURRENT-ARC boundary/marker: in a resumed multi-arc session
     the latest feature-level event is the current arc's, while the FIRST
     binds renders to a prior arc. An event with a missing or unparseable
@@ -289,7 +227,20 @@ def _latest_feature_level_variety_event(
     imports from) rather than a local copy: the Z-vs-+00:00 normalization
     is one implementation with three call sites across modules, and a
     fourth copy here would be the drift the extraction exists to prevent.
+
+    A task whose LATEST row is dispatch-marked is never the feature, even
+    through an earlier feature-level row (FIX-STATE, f5). journal_emitter
+    writes a feature-level row for a Task B stamped before its teachback
+    gate exists, then a dispatch row at the wiring; the later row is the
+    truth for that task. "Latest" per task is session_journal.
+    latest_variety_by_task's JOURNAL order, which equals ts order for an
+    append-only journal. A later feature re-stamp keeps a task eligible.
     """
+    dispatch_tasks = {
+        task_id for task_id, row in latest_variety_by_task(
+            [e for e in events if isinstance(e, dict)]).items()
+        if row.get("scope") == VARIETY_ASSESSED_DISPATCH_SCOPE
+    }
     latest: dict[str, Any] | None = None
     latest_dt: datetime | None = None
     for event in events:
@@ -298,6 +249,8 @@ def _latest_feature_level_variety_event(
         if event.get("type") != "variety_assessed":
             continue
         if event.get("scope") == VARIETY_ASSESSED_DISPATCH_SCOPE:
+            continue
+        if event.get("task_id") in dispatch_tasks:
             continue
         try:
             dt = _parse_ts(event.get("ts"))
@@ -548,57 +501,13 @@ def _read_task_counts(
         skipped silently. All-zero dict on any outer error.
     """
     counts = {"completed": 0, "in_progress": 0, "pending": 0, "total": 0}
-
-    if not team_name or not is_safe_path_component(team_name):
-        return counts
-
-    try:
-        tasks_base = (
-            Path(tasks_base_dir) if tasks_base_dir
-            else get_claude_config_dir() / "tasks"
-        )
-        team_dir = tasks_base / team_name
-        # Bounded containment parity: reject a team_dir SYMLINK escaping the base
-        # (fail-open). This is the GLOB reader, so it ALSO gets the per-file
-        # is_symlink skip below (a *.json symlink could resolve outside the base
-        # even when team_dir is contained) — mirroring iter_team_task_jsons.
-        try:
-            team_dir.resolve().relative_to(tasks_base.resolve())
-        except (ValueError, OSError):
-            return counts
-
-        if not team_dir.exists():
-            return counts
-
-        for task_file in team_dir.glob("*.json"):
-            # Dotfile skip (glob-result hygiene): glob('*.json') DOES match
-            # dotfile-prefixed names; this is a COUNT reader, so a planted
-            # `.evil.json` would inflate the tally. Mirror iter_team_task_jsons's
-            # dotfile exclusion. (Security #37 5-mirror guard #4.)
-            if task_file.name.startswith("."):
-                continue
-            # Per-file symlink skip (glob-result hygiene): glob returns symlink
-            # entries; one could resolve outside the base. Skip silently.
-            try:
-                if task_file.is_symlink():
-                    continue
-            except OSError:
-                continue
-            try:
-                data = json.loads(
-                    task_file.read_text(encoding="utf-8", errors="replace")
-                )
-            except (json.JSONDecodeError, OSError, ValueError):
-                continue
-            if not isinstance(data, dict):
-                continue
-
-            status = data.get("status", "pending")
-            if status in ("completed", "in_progress", "pending"):
-                counts[status] += 1
-            counts["total"] += 1
-    except OSError:
-        pass  # Fail-open: return whatever we tallied
+    from shared.task_store import TaskStore  # lazy: task_store imports this module
+    store = TaskStore(tasks_base_dir) if tasks_base_dir else TaskStore()
+    for data in store.iter_tasks(team_name):
+        status = data.get("status", "pending")
+        if status in ("completed", "in_progress", "pending"):
+            counts[status] += 1
+        counts["total"] += 1
     return counts
 
 
@@ -622,42 +531,11 @@ def _read_feature_subject_from_disk(
     """
     if not team_name or not feature_id:
         return None
-    if not is_safe_path_component(team_name):
-        return None
-    if not is_safe_path_component(feature_id):
-        return None
-
-    try:
-        tasks_base = (
-            Path(tasks_base_dir) if tasks_base_dir
-            else get_claude_config_dir() / "tasks"
-        )
-        team_dir = tasks_base / team_name
-        # Bounded containment parity (single-named-file reader -> 2-of-5 guards:
-        # is_safe_path_component on team_name+feature_id above + this
-        # resolve()/relative_to; glob-result hygiene guards correctly ABSENT —
-        # reads ONE {feature_id}.json, never globs). Fail-open (return None) on a
-        # team_dir symlink escaping the base or an unreadable path.
-        try:
-            team_dir.resolve().relative_to(tasks_base.resolve())
-        except (ValueError, OSError):
-            return None
-        task_path = team_dir / f"{feature_id}.json"
-
-        if not task_path.exists():
-            return None
-
-        data = json.loads(
-            task_path.read_text(encoding="utf-8", errors="replace")
-        )
-        if not isinstance(data, dict):
-            return None
-        subject = data.get("subject")
-        if isinstance(subject, str) and subject:
-            return subject
-        return None
-    except (OSError, json.JSONDecodeError, ValueError, TypeError):
-        return None
+    from shared.task_store import TaskRef, TaskStore  # lazy: task_store imports this module
+    store = TaskStore(tasks_base_dir) if tasks_base_dir else TaskStore()
+    data = store.get(TaskRef(team_name, feature_id))
+    subject = data.get("subject") if data is not None else None
+    return subject if isinstance(subject, str) and subject else None
 
 
 # --- Public API ----------------------------------------------------------
@@ -774,7 +652,7 @@ def summarize_session_state(
         # each entry in team_names — are sanitized here at the module
         # boundary so a single-point-of-defense applies no matter
         # which helper produced the string. See security-engineer
-        # memory patterns_symmetric_sanitization.md for the pattern
+        # the symmetric-sanitisation rule for the pattern
         # rationale (asymmetric strip sets across interpolation sinks
         # = no defense). Non-string values pass through untouched
         # (None stays None); _sanitize_member_name returns "" for

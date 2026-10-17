@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""repact-session-numbers: six numbers of one session, from its ledger row or computed now.
+
+Location: pact-plugin/bin/repact-session-numbers. Read-only; wrap-up and pause run it.
+One header line (the session, and "ledger row of <date>" or "computed now"), then one line per
+number: lead calls, per-call lead input, teammate calls, idle-only cache-read tokens,
+rejections, check returns. The numbers are computed now, by the ledger writer's own function,
+when the session has no ledger row or its row is older than the session's transcripts;
+--ledger-only reads the row alone. A number with no source prints "n/a" and the reason. The
+reader is bin/_session_numbers.py: named integer fields only, no text of a row or transcript.
+
+Usage: repact-session-numbers [--session ID] [--session-dir DIR] [--ledger PATH] [--ledger-only]
+Exit codes: 0 printed; 2 usage error.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _session_numbers  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(_session_numbers.main())

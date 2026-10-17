@@ -14,10 +14,14 @@ for a separate-process teammate's session, because session_init writes that
 file for lead frames only; a fixture that wrote one would test a topology no
 teammate is in.
 
-REVERT CARDINALITY — MEASURED, NOT CARRIED. Each row names the behaviour one
-edit removes. That edit was applied to its own copy of the tree, proved
-applied, and run against this whole file with a fresh bytecode cache; the
-unmutated copy passes every arm:
+REVERT CARDINALITY — MEASURED BEFORE THE LEAD STOPPED BEING REFUSED, AND NOT
+MEASURED AGAIN SINCE. The lead arms now assert an allowed stop and its journal
+row, and the block and told-once arms run on a separate-process teammate, so
+the counts below no longer describe this file; the rows still name the
+behaviours the arms cover. Each row names the behaviour one edit removes. That
+edit was applied to its own copy of the tree, proved applied, and run against
+this whole file with a fresh bytecode cache; the unmutated copy passed every
+arm:
   hook file removed ................................. 33 failed (all but the six
                                                       arms that never run the
                                                       Stop hook: five call gate
@@ -42,6 +46,9 @@ unmutated copy passes every arm:
   teammate check ignores the joined record .......... 1 failed
 Re-measure every row whenever an arm here is added or parametrized, and restate
 the table in the same commit. A parametrized arm counts once per case.
+NOT RE-MEASURED since the lead's candidates became the jobs recorded as its own
+launch: the two "lead" rows above describe the earlier subtract-the-recorded
+rule, and every count predates the arms added with that change.
 """
 
 import json
@@ -52,6 +59,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from helpers import effective_hooks_config  # noqa: E402
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
 HOOK = HOOKS_DIR / "stop_background_gate.py"
@@ -62,7 +70,7 @@ LEAD_SID = "aaaaaaaa-0000-4000-8000-000000000001"
 MATE_SID = "bbbbbbbb-0000-4000-8000-000000000002"
 PLAIN_SID = "cccccccc-0000-4000-8000-000000000003"
 MATE = "mate"
-LEAD_TYPE = "PACT:pact-orchestrator"
+LEAD_TYPE = "repacted:pact-orchestrator"
 TOLD_FILENAME = "background-stop-told.json"
 SUPPRESS = {"suppressOutput": True}
 
@@ -207,46 +215,175 @@ def output(proc: subprocess.CompletedProcess):
     return json.loads(proc.stdout) if proc.stdout.strip() else None
 
 
+def lead_launch_frame(job_id: str, **fields) -> dict:
+    """The lead's own background Bash launch, as PostToolUse sees it: no agent_id."""
+    frame = {
+        "hook_event_name": "PostToolUse",
+        "session_id": LEAD_SID,
+        "agent_type": LEAD_TYPE,
+        "transcript_path": "<transcript_path>",
+        "cwd": "<cwd>",
+        "tool_name": "Bash",
+        "tool_input": {"command": "sleep 300", "description": "sleep", "run_in_background": True},
+        "tool_response": {
+            "backgroundTaskId": job_id, "interrupted": False, "isImage": False,
+            "noOutputExpected": False, "stderr": "", "stdout": "",
+        },
+    }
+    frame.update(fields)
+    return frame
+
+
+def lead_launches(world: World, *job_ids: str) -> None:
+    """Record the lead's own launches through the production writer."""
+    for job_id in job_ids:
+        proc = world.run(lead_launch_frame(job_id), script=TRACK_FILES)
+        assert proc.returncode == 0, proc.stderr
+    lead_rows = [r.get("harness_task_id") for r in world.records() if r.get("owner_role") == "lead"]
+    assert lead_rows == list(job_ids), world.records()
+
+
 # --------------------------------------------------------------------------
 # Lead
 # --------------------------------------------------------------------------
 
 
-def test_the_production_hook_blocks_a_lead_ending_its_turn_over_an_unrecorded_job(tmp_path):
+def test_a_shell_the_lead_did_not_launch_never_blocks_the_lead(tmp_path):
+    """The lead counts only the jobs recorded as its own launch.
+
+    A teammate's shell whose launch went unrecorded sits in the lead's job
+    list with no owner. It must not refuse the lead a turn end, alone or
+    beside a job the lead did start.
+    """
     world = World(tmp_path)
+    unowned = stop_frame(jobs=[job("bmate1")], agent_type=LEAD_TYPE)
+
+    assert output(world.run(unowned)) == SUPPRESS
+    assert [(t["role"], t["verdict"]) for t in world.traces(LEAD_SID)] == [("lead", "allow_flagged")]
+    assert world.told(LEAD_SID) is None
+
+    lead_launches(world, "blead1")
+    out = output(world.run(stop_frame(jobs=[job("bmate1"), job("blead1")], agent_type=LEAD_TYPE)))
+    assert out == SUPPRESS
+    assert world.traces(LEAD_SID)[-1]["ids"] == ["blead1"]
+
+
+@pytest.mark.parametrize("fields", [
+    {"agent_id": "ad2b1261fdd77c958"},
+    {"agent_id": f"{MATE}@{TEAM}"},
+    {"agent_type": "pact-backend-coder"},
+    {"agent_type": None},
+    {"tool_response": {"stdout": ""}},
+    {"tool_response": {"backgroundTaskId": ["bodd1"]}},
+], ids=["subagent-id", "member-id", "teammate-type", "no-type", "no-job-id", "job-id-not-text"])
+def test_only_the_leads_own_frame_writes_a_lead_row(tmp_path, fields):
+    """A frame that is not positively the lead's, or names no job, writes no lead row."""
+    world = World(tmp_path)
+    proc = world.run(lead_launch_frame("bodd1", **fields), script=TRACK_FILES)
+
+    assert proc.returncode == 0, proc.stderr
+    assert [r for r in world.records() if r.get("owner_role") == "lead"] == []
+    assert output(world.run(stop_frame(jobs=[job("bodd1")], agent_type=LEAD_TYPE))) == SUPPRESS
+
+
+def test_a_lead_ending_its_turn_over_its_own_job_is_allowed_and_journaled(tmp_path):
+    """REGRESSION (1.3.6 field report, section F): the lead was refused its turn end until it
+    armed a CronCreate fallback, three extra tool calls per wait. Measured 2026-10-02 over the
+    44 blocks in the session journals: all 27 finished jobs the lead had launched itself
+    delivered their own notice. The job is its own wake; the stop is journaled with its id."""
+    world = World(tmp_path)
+    lead_launches(world, "bjob1")
     proc = world.run(stop_frame(jobs=[job("bjob1")], agent_type=LEAD_TYPE))
 
-    out = output(proc)
-    assert out["decision"] == "block"
-    assert "`bjob1`" in out["reason"]
-    assert "nothing is scheduled to wake you" in out["reason"]
-    assert [(t["role"], t["verdict"], t["ids"]) for t in world.traces(LEAD_SID)] == [
-        ("lead", "block", ["bjob1"])
+    assert output(proc) == SUPPRESS
+    assert [(t["role"], t["verdict"], t["cause"], t["ids"]) for t in world.traces(LEAD_SID)] == [
+        ("lead", "allow_flagged", "harness_tracked", ["bjob1"])
     ]
-    assert world.told(LEAD_SID) == ["bjob1"]
+    assert "ended" not in world.traces(LEAD_SID)[0]
+    assert world.told(LEAD_SID) is None
     assert "journal emit dropped" not in proc.stderr
+
+
+def test_a_lead_job_the_frame_lists_as_ended_is_journaled_with_its_status(tmp_path):
+    world = World(tmp_path)
+    lead_launches(world, "bdone1", "bjob2")
+    frame = stop_frame(
+        jobs=[job("bdone1", status="completed"), job("bmate9", status="failed"), job("bjob2")],
+        agent_type=LEAD_TYPE,
+    )
+
+    assert output(world.run(frame)) == SUPPRESS
+    trace = world.traces(LEAD_SID)[0]
+    assert (trace["ids"], trace["ended"], trace["running"]) == (["bjob2"], {"bdone1": "completed"}, 1)
+
+
+@pytest.mark.parametrize("entries", [
+    "not-a-list", None, [None, 7, "x", [], {}],
+    [{"id": None, "status": "running", "type": "shell"}, {"id": ["bjob1"], "status": "x", "type": "shell"}],
+    [{"id": "bjob1", "status": {"a": 1}, "type": "shell"}, {"id": "bjob1", "status": 7, "type": "shell"}],
+    [{"id": "bjob1", "status": "x\n" * 50_000, "type": "shell"}],
+    [{"id": "bjob1", "status": float("nan"), "type": ["shell"]}],
+    # An unhashable type on a running entry used to end the hook with a traceback and exit 1.
+    [{"id": "bodd1", "status": "running", "type": ["shell"]}, {"id": "bodd2", "status": "running", "type": {}}],
+], ids=["text", "none", "junk-entries", "odd-ids", "odd-status", "huge-status", "nan-status", "odd-type"])
+def test_a_malformed_job_list_never_blocks_the_lead_or_breaks_the_journal(tmp_path, entries):
+    """The frame is the harness's, but the gate must end the turn whatever it holds."""
+    world = World(tmp_path)
+    lead_launches(world, "bjob1")
+    running = [job("bjob1")] if isinstance(entries, list) else []
+    frame = stop_frame(agent_type=LEAD_TYPE)
+    frame["background_tasks"] = entries + running if isinstance(entries, list) else entries
+    proc = world.run(frame)
+
+    assert proc.returncode == 0 and output(proc) in (SUPPRESS, None), proc.stderr
+    traces = world.traces(LEAD_SID)
+    assert [t["verdict"] for t in traces] == (["allow_flagged"] if running else [])
+    for trace in traces:
+        assert all(len(v) <= 32 and "\n" not in v for v in trace.get("ended", {}).values())
+    assert not [e for e in world.events(LEAD_SID) if e.get("type") == "journal_emit_skipped"]
+
+
+def test_a_lead_call_the_harness_moved_to_the_background_is_counted(tmp_path):
+    """A foreground lead call that times out is moved to the background by the harness: no
+    run_in_background flag and no `&`, only a job id in tool_response. Main counted every
+    running job at the lead's turn end, so it blocked; with lead rows only, this call wrote
+    none and the job was never counted. The same frame from a teammate writes no row."""
+    world = World(tmp_path)
+    no_flag = {"command": "sleep 900", "description": "sleep"}
+    proc = world.run(lead_launch_frame("bmate2", tool_input=no_flag, agent_type="pact-backend-coder"),
+                     script=TRACK_FILES)
+    assert proc.returncode == 0 and world.records() == [], proc.stderr
+
+    assert world.run(lead_launch_frame("bmoved1", tool_input=no_flag), script=TRACK_FILES).returncode == 0
+    assert [(r.get("owner_role"), r.get("harness_task_id")) for r in world.records()] == [("lead", "bmoved1")]
+    assert output(world.run(stop_frame(jobs=[job("bmoved1")], agent_type=LEAD_TYPE))) == SUPPRESS
+    assert [t["ids"] for t in world.traces(LEAD_SID)] == [["bmoved1"]]
 
 
 def test_a_second_stop_is_not_blocked_for_the_same_job(tmp_path):
     """The livelock bound, behaviourally: one block per job id, then the stop lands."""
     world = World(tmp_path)
-    frame = stop_frame(jobs=[job("bjob1")], agent_type=LEAD_TYPE)
+    world.register_teammate(MATE_SID, MATE)
+    world.add_task(7, MATE)
+    frame = stop_frame(session_id=MATE_SID, jobs=[job("bjob1")], agent_type="pact-backend-coder")
 
     assert output(world.run(frame))["decision"] == "block"
     assert output(world.run(frame)) == SUPPRESS
 
     # A job that was never reported still is: the bound is per job, not per session.
-    third = output(world.run(stop_frame(jobs=[job("bjob1"), job("bjob2")], agent_type=LEAD_TYPE)))
+    third = output(world.run(stop_frame(
+        session_id=MATE_SID, jobs=[job("bjob1"), job("bjob2")], agent_type="pact-backend-coder")))
     assert third["decision"] == "block"
     assert "`bjob2`" in third["reason"] and "`bjob1`" not in third["reason"]
-    assert [t["verdict"] for t in world.traces(LEAD_SID)] == [
+    assert [t["verdict"] for t in world.traces(MATE_SID)] == [
         "block", "allow_already_told", "block"
     ]
-    assert world.told(LEAD_SID) == ["bjob1", "bjob2"]
+    assert world.told(MATE_SID) == ["bjob1", "bjob2"]
 
 
 def test_stop_hook_active_allows(tmp_path):
     world = World(tmp_path)
+    lead_launches(world, "bjob1")
     proc = world.run(stop_frame(jobs=[job("bjob1")], agent_type=LEAD_TYPE, stop_hook_active=True))
 
     assert output(proc) == SUPPRESS
@@ -277,11 +414,11 @@ def test_a_job_recorded_by_a_teammate_does_not_block_the_lead(tmp_path):
 
 def test_a_stop_from_the_lead_session_is_the_lead_whatever_its_spelling(tmp_path):
     world = World(tmp_path)
+    lead_launches(world, "bjob1")
     proc = world.run(stop_frame(jobs=[job("bjob1")], agent_type="some-other-orchestrator"))
 
-    out = output(proc)
-    assert out["decision"] == "block"
-    assert "nothing is scheduled to wake you" in out["reason"]
+    assert output(proc) == SUPPRESS
+    assert [(t["role"], t["ids"]) for t in world.traces(LEAD_SID)] == [("lead", ["bjob1"])]
 
 
 # --------------------------------------------------------------------------
@@ -332,6 +469,34 @@ def test_a_separate_process_teammate_without_a_wait_is_blocked(tmp_path):
     assert [(t["role"], t["verdict"]) for t in world.traces(MATE_SID)] == [("teammate", "block")]
 
 
+def _lead_session_in_the_registry(world: World) -> None:
+    """The lead's session with no context file and a registry entry naming a member."""
+    (world.session_dir(LEAD_SID) / "pact-session-context.json").unlink()
+    world.register_teammate(LEAD_SID, MATE)
+
+
+@pytest.mark.parametrize("prepare, session_id, agent_type, expected", [
+    (lambda w: None, MATE_SID, LEAD_TYPE, ("teammate", "block")),
+    (lambda w: None, MATE_SID, "pact-orchestrator", ("teammate", "block")),
+    (lambda w: None, LEAD_SID, LEAD_TYPE, ("lead", "allow_flagged")),
+    (_lead_session_in_the_registry, LEAD_SID, LEAD_TYPE, ("lead", "allow_flagged")),
+], ids=["mate-qualified-lead-type", "mate-plain-lead-type", "lead", "lead-session-in-registry"])
+def test_a_registered_teammate_is_a_teammate_whatever_its_agent_type(
+    tmp_path, prepare, session_id, agent_type, expected
+):
+    """REGRESSION (1.3.7 review): a separate-process teammate whose agent_type is the
+    orchestrator's was read as the lead, and the lead is never refused. 1.3.6 blocked it."""
+    world = World(tmp_path)
+    world.register_teammate(MATE_SID, MATE)
+    world.add_task(7, MATE)
+    prepare(world)
+    proc = world.run(stop_frame(session_id=session_id, jobs=[job("bjob1")], agent_type=agent_type))
+
+    out = output(proc)
+    assert (out == SUPPRESS) if expected[0] == "lead" else (out["decision"] == "block")
+    assert [(t["role"], t["verdict"]) for t in world.traces(session_id)] == [expected]
+
+
 def test_a_teammate_with_a_covering_wait_is_allowed(tmp_path):
     world = World(tmp_path)
     world.register_teammate(MATE_SID, MATE)
@@ -380,10 +545,11 @@ def test_a_job_layer_1_recorded_for_a_teammate_does_not_block_the_lead(tmp_path)
     world.register_teammate(MATE_SID, MATE)
     world.add_task(7, MATE)
     launch_through_layer_1(world, "bjoin1")
+    lead_launches(world, "blead1")
 
     out = output(world.run(stop_frame(jobs=[job("bjoin1"), job("blead1")], agent_type=LEAD_TYPE)))
-    assert out["decision"] == "block"
-    assert "`blead1`" in out["reason"] and "`bjoin1`" not in out["reason"]
+    assert out == SUPPRESS
+    assert [t["ids"] for t in world.traces(LEAD_SID)] == [["blead1"]]
 
 
 def test_a_wait_older_than_a_layer_1_launch_does_not_cover_it(tmp_path):
@@ -433,11 +599,9 @@ def test_a_shell_launched_inside_a_subagent_is_not_charged_to_the_lead(tmp_path)
     """The lead must not be refused its turn end over a subagent's shell.
 
     A shell launched inside a subagent appears in the LEAD's background_tasks
-    with no owner, and outlives the subagent that started it. The lead's
-    candidate set is every running shell MINUS the recorded launches, so unless
-    that launch is recorded, nothing marks it as someone else's: the lead is
-    refused a turn end over a job it did not start and cannot flag. Refusing an
-    honest turn end is the failure this gate must never produce.
+    with no owner, and outlives the subagent that started it. The lead counts
+    only its own recorded launches, and the subagent's row is not one of them.
+    Refusing an honest turn end is the failure this gate must never produce.
 
     The record is written through the PRODUCTION writer, not by hand. A
     hand-written row would satisfy this arm whatever the writer does, which is
@@ -508,7 +672,6 @@ def test_a_subagent_row_is_not_matched_by_a_member_of_the_same_name(tmp_path, mo
 
     candidates = turn_end_gate._candidates(
         {"hook_event_name": "SubagentStop"},
-        turn_end_gate.ROLE_TEAMMATE,
         colliding,
         TEAM,
         [job("bsub-collide")],
@@ -617,27 +780,16 @@ def test_a_leads_live_subagent_passes_the_fast_path_and_does_not_block(tmp_path)
     assert world.told(LEAD_SID) is None
 
 
-def test_a_lead_is_told_only_about_its_shell(tmp_path):
+def test_a_leads_stop_journals_only_its_shell(tmp_path):
     world = World(tmp_path)
+    lead_launches(world, "bshell1")
     frame = stop_frame(
         jobs=live_teammates() + [job("bsub1", type="subagent"), job("bshell1")],
         agent_type=LEAD_TYPE,
     )
 
-    out = output(world.run(frame))
-    assert out["decision"] == "block"
-    assert "`bshell1`" in out["reason"]
-    assert "`bmate" not in out["reason"] and "`bsub1`" not in out["reason"]
+    assert output(world.run(frame)) == SUPPRESS
     assert [t["ids"] for t in world.traces(LEAD_SID)] == [["bshell1"]]
-
-
-def test_the_lead_text_does_not_say_a_notice_cannot_start_a_turn(tmp_path):
-    world = World(tmp_path)
-
-    out = output(world.run(stop_frame(jobs=[job("bshell1")], agent_type=LEAD_TYPE)))
-    assert out["decision"] == "block"
-    assert "does not start one" not in out["reason"]
-    assert "can go undelivered" in out["reason"]
 
 
 def test_a_tmux_teammate_stop_uses_the_separate_process_text(tmp_path):
@@ -652,16 +804,15 @@ def test_a_tmux_teammate_stop_uses_the_separate_process_text(tmp_path):
     assert "will not wake you" not in out["reason"]
 
 
-@pytest.mark.parametrize("role, event, text", [
-    ("ROLE_LEAD", "Stop", "LEAD_BLOCK_TEXT"),
-    ("ROLE_TEAMMATE", "Stop", "SEPARATE_PROCESS_TEAMMATE_BLOCK_TEXT"),
-    ("ROLE_TEAMMATE", "SubagentStop", "TEAMMATE_BLOCK_TEXT"),
+@pytest.mark.parametrize("event, text", [
+    ("Stop", "SEPARATE_PROCESS_TEAMMATE_BLOCK_TEXT"),
+    ("SubagentStop", "TEAMMATE_BLOCK_TEXT"),
 ])
-def test_each_role_and_event_gets_its_block_text(role, event, text):
+def test_each_teammate_event_gets_its_block_text(event, text):
     from shared import turn_end_gate
 
-    chosen = turn_end_gate._block_text_for(getattr(turn_end_gate, role), event)
-    assert chosen is getattr(turn_end_gate, text)
+    assert turn_end_gate._block_text_for(event) is getattr(turn_end_gate, text)
+    assert not hasattr(turn_end_gate, "LEAD_BLOCK_TEXT")
 
 
 def test_a_separate_process_teammate_is_told_about_its_own_monitor(tmp_path):
@@ -735,24 +886,35 @@ def test_the_entry_scripts_share_one_job_filter():
 # --------------------------------------------------------------------------
 
 
+_MATE_FIELDS = {"session_id": MATE_SID, "agent_type": "pact-backend-coder"}
+
+
+def _prepare_mate(world: World) -> None:
+    world.register_teammate(MATE_SID, MATE)
+    world.add_task(7, MATE)
+
+
 def _prepare_told(world: World, as_directory: bool = False) -> None:
-    path = world.session_dir(LEAD_SID) / TOLD_FILENAME
+    _prepare_mate(world)
+    path = world.session_dir(MATE_SID) / TOLD_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
     if as_directory:
         path.mkdir()
     else:
         path.write_text(json.dumps({"ids": ["bjob1"]}))
 
 
+# The lead is never refused, so the block and the told-once verdicts are a teammate's.
 _VERDICT_CASES = {
-    "block": (lambda w: None, {"agent_type": LEAD_TYPE}),
+    "block": (_prepare_mate, _MATE_FIELDS),
     "allow_flagged": (lambda w: None, {"agent_type": LEAD_TYPE, "session_crons": [{"id": "c"}]}),
-    "allow_already_told": (_prepare_told, {"agent_type": LEAD_TYPE}),
+    "allow_already_told": (_prepare_told, _MATE_FIELDS),
     "allow_loop_guard": (lambda w: None, {"agent_type": LEAD_TYPE, "stop_hook_active": True}),
     "allow_role_unresolved": (
         lambda w: None, {"agent_type": "general-purpose", "agent_id": "ab997f00c7cd48288"}
     ),
     # A directory where the told-once file belongs cannot be read as a file.
-    "allow_error": (lambda w: _prepare_told(w, as_directory=True), {"agent_type": LEAD_TYPE}),
+    "allow_error": (lambda w: _prepare_told(w, as_directory=True), _MATE_FIELDS),
     # A monitor passes the fast path's union but is not a job the lead counts.
     "allow_no_job": (
         lambda w: None,
@@ -767,11 +929,39 @@ def test_every_verdict_writes_exactly_one_valid_trace_event(tmp_path, verdict):
     prepare, fields = _VERDICT_CASES[verdict]
     prepare(world)
     proc = world.run(stop_frame(jobs=[job("bjob1")], **fields))
+    session_id = fields.get("session_id", LEAD_SID)
 
     assert proc.returncode == 0, proc.stderr
-    assert [t["verdict"] for t in world.traces(LEAD_SID)] == [verdict]
-    assert not [e for e in world.events(LEAD_SID) if e.get("type") == "journal_emit_skipped"]
+    assert [t["verdict"] for t in world.traces(session_id)] == [verdict]
+    assert not [e for e in world.events(session_id) if e.get("type") == "journal_emit_skipped"]
     assert "journal emit dropped" not in proc.stderr
+
+
+def test_the_journal_row_caps_the_job_ids_and_the_told_record_keeps_them_whole(tmp_path):
+    """REGRESSION (1.3.7 review): the row carried every id at its full length, so one frame
+    could write a journal line of any size."""
+    world = World(tmp_path)
+    _prepare_mate(world)
+    ids = ["b" * 100_000] + [f"bjob{i}" for i in range(24)]
+    proc = world.run(stop_frame(jobs=[job(i) for i in ids], **_MATE_FIELDS))
+
+    assert output(proc)["decision"] == "block"
+    trace = world.traces(MATE_SID)[0]
+    assert trace["running"] == 25
+    assert trace["ids"] == ["b" * 128] + ids[1:20]
+    assert world.told(MATE_SID) == ids
+
+
+def test_stdin_nested_too_deep_to_parse_ends_like_any_unreadable_stdin(tmp_path):
+    """REGRESSION (1.3.7 review): 50,000 nested "[" raise RecursionError, not ValueError, and
+    the hook ended with a traceback and exit 1."""
+    world = World(tmp_path)
+    for raw in ("[" * 50_000 + "]" * 50_000, "{not json"):
+        proc = subprocess.run(
+            [sys.executable, str(HOOK)], input=raw, capture_output=True, text=True,
+            env=world.env(), timeout=60, check=False,
+        )
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", ""), raw[:20]
 
 
 # --------------------------------------------------------------------------
@@ -825,7 +1015,7 @@ def test_an_empty_array_exits_before_importing_the_plugin(tmp_path):
 
 
 def test_hooks_json_registers_the_gate_on_stop_and_nowhere_else():
-    config = json.loads((HOOKS_DIR / "hooks.json").read_text(encoding="utf-8"))
+    config = effective_hooks_config()
     bindings = [
         (event, hook["command"], hook.get("async", False))
         for event, entries in config["hooks"].items()

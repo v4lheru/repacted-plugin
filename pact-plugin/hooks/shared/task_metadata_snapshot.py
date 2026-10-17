@@ -49,6 +49,7 @@ single _canonical_bytes serialization).
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping
 
 from .agent_handoff_marker import (
@@ -89,49 +90,54 @@ from .session_journal import append_event, get_journal_path, make_event
 SNAPSHOT_EXCLUDE: frozenset[str] = frozenset({"handoff"})
 
 # Keys whose WRITE (TaskCreate/TaskUpdate delta) triggers an immediate
-# whole-payload mirror — the open-task-consumed class that a status-blind
-# whole-store drain destroys while load-bearing (mid-arc readers consume
-# these from the task file while the task is still open). The fire predicate is
+# whole-payload mirror, on an open task (the per-write legs) or on an
+# already-completed one (the post-completion backstop). The fire predicate is
 # targeted-key-in-delta; the payload is always the full overlay (never a
 # projection), so cross-seam content-hash dedup stays coherent with the
 # completion-time seams. Disjoint from SNAPSHOT_EXCLUDE by test-pinned
-# invariant. NOT here: "intentional_wait" (rides along in the overlay; a
-# wait-only write is not load-bearing alone).
+# invariant.
 #
-# "variety" IS here, and it was NOT before. The removed comment read that
-# variety was covered at its write point by the dispatch_variety emit. THAT
-# COVERAGE CLAIM FAILS AND NOTHING TESTED IT. dispatch_variety PROJECTS to
-# the canonical score keys and DROPS the four *_rationale strings, so the
-# carrier held the numbers and dropped what makes a number checkable. A
-# container task did reach two variety-carrying events, so the defect was
-# never a missing event: it was a missing HALF OF THE VALUE, which reads as
-# covered from the event count alone. A score is DERIVED FROM its rationale,
-# and the rationale is the half a reader of a calibration record needs. The
-# key rides the full overlay here, so this membership carries the rationales.
+# THE SET IS THE TEACHBACK, REJECTION AND AUDIT-VERDICT WRITES, AND NOTHING
+# ELSE. Every other key (variety with its rationales, scope_contract,
+# nesting_depth, worktree_path, intentional_wait, memory_saved, amend_<n>)
+# rides the overlay of the next targeted write and of the completion seams,
+# which mirror the whole task when the HANDOFF is accepted. Mirroring each of
+# those writes as it happened was 5,585 rows across the audited journals, for
+# readers that list key names (harvest) or take the latest snapshot of a task:
+# neither needs the intermediate rows. The cost,
+# recorded so nobody rediscovers it: a task drained while still OPEN keeps
+# only what its last targeted write mirrored.
 #
-# The audit pair is targeted for the same reasons as teachback_submit:
-# audit_summary (the auditor's live verdict) and audit_summary_authored
-# (the overwrite-protection mirror of the authored verdict) are consumed
-# by the lead at CODE-phase close while the audited task is still OPEN,
-# so a status-blind whole-store drain destroys them exactly while
-# load-bearing (a prior drain lost live audit verdicts mid-arc). Both are
-# teammate-written-class keys (the auditor writes from a teammate frame),
-# so they carry the same canonical-frame tmux asymmetry as
-# teachback_submit: in-process frames mirror per-write; a tmux teammate
-# frame defers to the completion seams. audit_summary_authored rides the
-# overlay whenever audit_summary fires (the gate's own writeback lands
-# before the leg's disk read), but stays targeted in its own right so a
-# direct write of the mirror alone is durability-covered too.
+# The audit pair stays targeted: audit_summary (the auditor's live verdict)
+# and audit_summary_authored (its overwrite-protection mirror) are consumed
+# by the lead at CODE-phase close while the audited task is still OPEN, and a
+# prior drain lost live audit verdicts mid-arc. They are rare writes, so they
+# cost few rows. Like teachback_submit they are teammate-written: in-process
+# frames mirror per-write; a tmux teammate frame defers to the completion
+# seams.
 PER_WRITE_MIRROR_KEYS: frozenset[str] = frozenset({
-    "scope_contract",
-    "nesting_depth",
-    "worktree_path",
     "teachback_submit",
     "teachback_rejection",
+    "handoff_rejection",
     "audit_summary",
     "audit_summary_authored",
-    "variety",
 })
+
+# Lead-written keys that also fire the POST-COMPLETION backstop (never the open-task legs): a
+# ruling (amend_<n>), a grant (<resource>_grant) and a lead's own record (lead_<anything>, such
+# as lead_flag_disposition) written after acceptance had no later seam to ride, so a drained task
+# store took them with it. Every other late ad-hoc key stays unmirrored (journal diet).
+# The key shapes are shared/amendments.py's (_AMEND_KEY, _GRANT_KEY), repeated here because
+# that module is outside this one's import closure; test_snapshot_seams_gate.py holds them equal.
+_LATE_LEAD_KEY = re.compile(r"amend_[1-9][0-9]*|[a-z0-9][a-z0-9_-]{0,40}_grant|lead_[A-Za-z0-9_-]{1,64}")
+
+
+def late_mirror_key(key: object) -> bool:
+    """True when a write of `key` on an already-completed task is mirrored to the journal."""
+    if not isinstance(key, str):
+        return False
+    return key in PER_WRITE_MIRROR_KEYS or _LATE_LEAD_KEY.fullmatch(key) is not None
+
 
 # Size caps on the canonical serialization (see _canonical_bytes). Both are
 # anomaly paths: generous enough to leave observed real payloads whole,

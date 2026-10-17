@@ -1,0 +1,17 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(repact-wait:*)",
+      "Bash(repact-payload:*)",
+      "Bash(repact-status:*)",
+      "Bash(repact-explain:*)",
+      "Bash(repact-doctor:*)",
+      "Bash(pact-which-team)",
+      "Bash(tcount:*)",
+      "Bash(check-index:*)"
+    ]
+  }
+}

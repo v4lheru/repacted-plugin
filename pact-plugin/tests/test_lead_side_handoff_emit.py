@@ -17,7 +17,7 @@ SUPPRESS row carries a same-fixture POSITIVE CONTROL proving the suppression is
 the intended discriminator firing, not an unrelated missing precondition.
 
 is_lead reads input_data["agent_type"] DIRECTLY against
-{"PACT:pact-orchestrator", "pact-orchestrator"} (pact_context.LEAD_AGENT_TYPES).
+{"repacted:pact-orchestrator", "pact-orchestrator"} (pact_context.LEAD_AGENT_TYPES).
 """
 from pathlib import Path
 
@@ -27,7 +27,7 @@ import task_lifecycle_gate as tlg  # noqa: E402
 from fixtures.emitter import VALID_HANDOFF  # noqa: E402
 
 TEAM = "pact-test"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 
 
 @pytest.fixture
@@ -95,7 +95,7 @@ class TestLeadEmits:
         assert ev["task_subject"] == "devops: ship it"
         assert ev["handoff"] == VALID_HANDOFF
 
-    @pytest.mark.parametrize("spelling", ["PACT:pact-orchestrator", "pact-orchestrator"])
+    @pytest.mark.parametrize("spelling", ["repacted:pact-orchestrator", "pact-orchestrator"])
     def test_both_qualified_lead_spellings_emit(
         self, tmp_path, monkeypatch, pact_context, emit_events, spelling
     ):
@@ -155,7 +155,7 @@ class TestCanonicalJournalFrameGate:
         assert ctx.is_lead({"agent_type": ""}) is False
         assert ctx.is_lead({}) is False
         assert ctx.is_lead({"agent_type": "pact-devops-engineer"}) is False
-        assert ctx.is_lead({"agent_type": "PACT:pact-orchestrator"}) is True
+        assert ctx.is_lead({"agent_type": "repacted:pact-orchestrator"}) is True
         assert ctx.is_lead({"agent_type": "pact-orchestrator"}) is True
 
 

@@ -1,31 +1,29 @@
 {
-  "name": "PACT",
-  "version": "4.8.1",
-  "description": "Orchestration harness that turns Claude Code into a coordinated team of specialist AI agents",
+  "name": "repacted",
+  "version": "1.7.0",
+  "description": "rePACTed: a compact orchestration harness for Claude Code, forked from PACT 4.8.1",
   "author": {
-    "name": "Synaptic-Labs-AI",
-    "url": "https://github.com/Synaptic-Labs-AI/PACT-Plugin"
+    "name": "Uros Pesic",
+    "url": "https://github.com/v4lheru"
   },
   "license": "MIT",
-  "repository": "https://github.com/Synaptic-Labs-AI/PACT-Plugin",
-  "homepage": "https://github.com/Synaptic-Labs-AI/PACT-Plugin",
+  "repository": "https://github.com/v4lheru/repacted-plugin",
   "keywords": [
     "pact",
-    "vsm",
-    "viable-system-model",
     "agents",
     "orchestration",
     "development",
     "architecture",
     "testing",
     "multi-agent",
-    "n8n",
     "workflow",
     "telegram",
-    "conversation-theory"
+    "claude-code"
   ],
   "commands": [
     "./commands/bootstrap.md",
+    "./commands/init.md",
+    "./commands/demo.md",
     "./commands/orchestrate.md",
     "./commands/comPACT.md",
     "./commands/rePACT.md",
@@ -47,7 +45,6 @@
     "./agents/pact-database-engineer.md",
     "./agents/pact-devops-engineer.md",
     "./agents/pact-frontend-coder.md",
-    "./agents/pact-n8n.md",
     "./agents/pact-orchestrator.md",
     "./agents/pact-preparer.md",
     "./agents/pact-qa-engineer.md",

@@ -49,6 +49,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+_FAIL_CLOSED_SRC = Path(__file__).parent.parent / "hooks" / "_fail_closed.py"
+
 import pytest
 
 from tests.test_bootstrap_gate import _BREAKAGE_VECTORS, _find_python39
@@ -97,6 +99,8 @@ def _run_degraded_subprocess(tmp_path, stdin_text, interpreter=None,
     hook_src = Path(__file__).parent.parent / "hooks" / "task_lifecycle_gate.py"
     scaffold = tmp_path / "scaffold"
     scaffold.mkdir(parents=True)
+    # The hook's stdlib-only fail-closed sibling travels with it.
+    (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
     (scaffold / "task_lifecycle_gate.py").write_text(
         hook_src.read_text(encoding="utf-8"), encoding="utf-8"
     )
@@ -120,18 +124,13 @@ def _run_healthy_subprocess(tmp_path, stdin_text):
     hooks_src = Path(__file__).parent.parent / "hooks"
     scaffold = tmp_path / "scaffold"
     scaffold.mkdir(parents=True)
+    # The hook's stdlib-only fail-closed sibling travels with it.
+    (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
     (scaffold / "task_lifecycle_gate.py").write_text(
         (hooks_src / "task_lifecycle_gate.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    # shared/__init__.py eagerly imports the hooks/-level sibling pin_caps
-    # (resolvable because the hook's own directory is on sys.path), so the
-    # healthy scaffold needs both the package and that sibling module.
     shutil.copytree(hooks_src / "shared", scaffold / "shared")
-    (scaffold / "pin_caps.py").write_text(
-        (hooks_src / "pin_caps.py").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     return subprocess.run(
         [sys.executable, str(scaffold / "task_lifecycle_gate.py")],
         input=stdin_text,
@@ -284,15 +283,13 @@ def _build_partial_breakage_scaffold(tmp_path):
     hooks_src = Path(__file__).parent.parent / "hooks"
     scaffold = tmp_path / "scaffold"
     scaffold.mkdir(parents=True)
+    # The hook's stdlib-only fail-closed sibling travels with it.
+    (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
     (scaffold / "task_lifecycle_gate.py").write_text(
         (hooks_src / "task_lifecycle_gate.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     shutil.copytree(hooks_src / "shared", scaffold / "shared")
-    (scaffold / "pin_caps.py").write_text(
-        (hooks_src / "pin_caps.py").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     (scaffold / "shared" / "agent_handoff_marker.py").unlink()
 
     premise = subprocess.run(
@@ -512,6 +509,8 @@ def _run_with_breaker(tmp_path, stdin_text, breaker):
     hook_src = Path(__file__).parent.parent / "hooks" / "task_lifecycle_gate.py"
     scaffold = tmp_path / "scaffold"
     scaffold.mkdir(parents=True)
+    # The hook's stdlib-only fail-closed sibling travels with it.
+    (scaffold / "_fail_closed.py").write_bytes(_FAIL_CLOSED_SRC.read_bytes())
     (scaffold / "task_lifecycle_gate.py").write_text(
         hook_src.read_text(encoding="utf-8"), encoding="utf-8"
     )

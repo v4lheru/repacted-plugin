@@ -1,8 +1,7 @@
 """
 Location: pact-plugin/telegram/content_filter.py
 Summary: Outbound message sanitization with regex-based credential redaction.
-Used by: telegram_client.py (applied to every outbound message before sending),
-         notify.py (Stop hook applies the same filter).
+Used by: telegram_client.py (applied to every outbound message before sending).
 
 Security control: This is a MUST-HAVE per the plan's security checklist.
 Every message sent to Telegram passes through filter_outbound() which
@@ -16,14 +15,36 @@ Design decisions:
   tool level, so even unexpected credential leaks are caught
 - Inbound sanitization (strip_control_chars) is also provided for Telegram
   input validation
+- After its own patterns, every message also runs the plugin's shared scrub
+  (bin/_repact_common.scrub_text, every secret class plus the denylist files),
+  so Telegram redacts what every other egress path redacts. A
+  denylist file that exists but cannot be read raises OutboundFilterError:
+  nothing is sent.
 """
 
 from __future__ import annotations
 
+import functools
 import re
+import sys
+import unicodedata
+from pathlib import Path
+
+_BIN = str(Path(__file__).resolve().parent.parent / "bin")
+if _BIN not in sys.path:
+    sys.path.insert(0, _BIN)
+from _repact_common import denylist_paths, load_denylist, scrub_text  # noqa: E402
 
 # Maximum message length for Telegram API (4096 chars)
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+# Only this much of a message is scanned, and nothing past it is ever sent: the shared scrub is
+# quadratic on some repetitive text (100 KB of "a." takes 4 s), and Telegram shows 4096 at most.
+OUTBOUND_SCAN_CAP = 4 * TELEGRAM_MAX_MESSAGE_LENGTH
+CAP_MARKER = "\n\n[...message truncated]"
+
+
+class OutboundFilterError(Exception):
+    """The outbound filter could not run in full; the message must not be sent."""
 
 # Credential patterns to redact in outbound messages.
 # Each tuple is (compiled_regex, replacement_label).
@@ -83,11 +104,27 @@ _CREDENTIAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?<![A-Fa-f0-9])[0-9a-f]{48,}(?![A-Fa-f0-9])"), "[REDACTED:hex_secret]"),
 ]
 
-# Zero-width and invisible Unicode characters to strip before credential
-# scanning. These can be inserted to bypass regex-based redaction.
-_ZERO_WIDTH_PATTERN = re.compile(
-    "[\u200b\u200c\u200d\ufeff\u200e\u200f]"
-)
+
+# Invisible Unicode characters are stripped before credential scanning: inserted into a key,
+# they would split it past the regex-based redaction.
+# Default-ignorable and blank characters outside category Cf: combining grapheme joiner,
+# Hangul fillers, Khmer inherent vowels, Mongolian variation selectors, variation selectors
+# (and their supplement), halfwidth Hangul filler, braille blank.
+_INVISIBLE = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u2800\u3164"
+                        "\ufe00-\ufe0f\uffa0\U000e0100-\U000e01ef]")
+
+
+def _without_format_chars(text: str) -> str:
+    """text without the characters that render as nothing (Unicode format characters,
+    category Cf: zero-width space and joiners, BOM, soft hyphen, word joiner, bidi controls,
+    the tag block; and _INVISIBLE), then NFKC-normalised, so a key split by an invisible
+    character or spelled in fullwidth letters reads as the key. Each of these can hide a
+    key from the regex-based redaction."""
+    if text.isascii():
+        return text
+    visible = "".join(char for char in text if unicodedata.category(char) != "Cf")
+    return unicodedata.normalize("NFKC", _INVISIBLE.sub("", visible))
+
 
 # Control characters to strip from inbound Telegram text.
 # Keeps printable ASCII, common whitespace, and Unicode text.
@@ -117,18 +154,44 @@ def filter_outbound(message: str) -> str:
 
     Returns:
         The filtered message with credential patterns redacted.
+
+    Raises:
+        OutboundFilterError: a denylist file exists but cannot be read.
     """
     if not message:
         return message
+    literals, words = _denylists()
 
-    # Strip zero-width characters before credential scanning so attackers
-    # cannot insert invisible chars to bypass redaction patterns.
-    filtered = _ZERO_WIDTH_PATTERN.sub("", message)
+    # Strip invisible format characters before credential scanning so attackers
+    # cannot insert them to bypass redaction patterns.
+    filtered = _cap(_without_format_chars(message))
 
     for pattern, replacement in _CREDENTIAL_PATTERNS:
         filtered = pattern.sub(replacement, filtered)
 
-    return filtered
+    return scrub_text(filtered, literals, words)
+
+
+@functools.lru_cache(maxsize=1)
+def _denylists() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(literals, whole words) from the scrub denylist files, read once per process. A missing
+    file is an empty list; one that exists but cannot be read raises OutboundFilterError
+    (and is not cached, so the next message tries again)."""
+    try:
+        return tuple(tuple(load_denylist(path, strict=True)) for path in denylist_paths())
+    except (OSError, UnicodeDecodeError) as error:
+        raise OutboundFilterError(
+            f"the scrub denylist could not be read ({type(error).__name__}); nothing was sent") from error
+
+
+def _cap(message: str) -> str:
+    """The first OUTBOUND_SCAN_CAP characters, cut back to the last whitespace in the final 256 so
+    a value split by the cut is dropped whole, then marked. Shorter messages pass unchanged."""
+    if len(message) <= OUTBOUND_SCAN_CAP:
+        return message
+    head = message[:OUTBOUND_SCAN_CAP]
+    space = max(head.rfind(" ", -256), head.rfind("\n", -256), head.rfind("\t", -256))
+    return (head[:space] if space > 0 else head[:-256]) + CAP_MARKER
 
 
 def truncate_message(message: str, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> str:

@@ -20,11 +20,9 @@ from __future__ import annotations
 # The lead's process lists every teammate's and subagent's work too, with no
 # owner; only shell launches are attributable, through Layer 1's record.
 #
-# `subagent` IS DELIBERATELY ABSENT. Counting a subagent entry for the lead needs
-# a row the lead owns, and none is written. The lead's candidates are every
-# counted job MINUS the recorded ones, so counting subagent entries without such
-# a row would refuse the lead over every subagent entry it cannot attribute —
-# its own, and every teammate's.
+# `subagent` IS DELIBERATELY ABSENT. The lead's candidates are the counted jobs
+# a registry row records as the lead's own launch, and that row is written for
+# a shell launch only, so a subagent entry could never match one.
 LEAD_JOB_TYPES = frozenset({"shell"})
 
 # A separate-process teammate's list holds only its own process's work.
@@ -55,5 +53,6 @@ def running_jobs(input_data, job_types=ANY_JOB_TYPES) -> list:
         and e.get("status") == "running"
         and isinstance(e.get("id"), str)
         and e["id"]
-        and e.get("type") in job_types
+        and isinstance(e.get("type"), str)
+        and e["type"] in job_types
     ]

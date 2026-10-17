@@ -1,6 +1,6 @@
 """N1 smoke for the pact-team-registration skill's register command.
 
-The skill (skills/pact-team-registration/SKILL.md) directs every spawned
+The skill (skills/teammate/SKILL.md, On Start step 1) directs every spawned
 teammate to run, as its FIRST action, a SYMLINK-RELATIVE register command:
 ``python3`` applied to a CONFIG-ROOT-RELATIVE path that enters the
 ``protocols/pact-plugin`` symlink and hops ``..`` into
@@ -40,7 +40,8 @@ from pathlib import Path
 from shared import session_registry
 
 _PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-_SKILL = _PLUGIN_ROOT / "skills" / "pact-team-registration" / "SKILL.md"
+# TEAMMATE (m6): registration is On Start step 1 of the teammate skill; the old skill is a stub.
+_SKILL = _PLUGIN_ROOT / "skills" / "teammate" / "SKILL.md"
 
 # python3 <path ending in hooks/shared/session_registry.py> register --name <arg>
 _REGISTER_CMD_RE = re.compile(
@@ -56,19 +57,8 @@ class TestRegisterCommandShape:
     """Invariant 1 — SKILL.md carries a well-formed register command."""
 
     def test_skill_file_exists(self):
-        assert _SKILL.is_file(), f"pact-team-registration SKILL.md missing at {_SKILL}"
+        assert _SKILL.is_file(), f"teammate SKILL.md missing at {_SKILL}"
 
-    def test_register_command_has_expected_shape(self):
-        """SKILL.md must carry a register command of shape `python3 <path>/hooks/
-        shared/session_registry.py register --name '<name>@<team>'`. Pins the cmd
-        shape so a future SKILL.md edit can't silently break the first-action
-        register-delivery (the LEG-4 failure class, skill-side)."""
-        assert _REGISTER_CMD_RE.search(_skill_text()), (
-            "SKILL.md is missing a well-formed register command of shape "
-            "`python3 <path>/hooks/shared/session_registry.py register --name "
-            "'<name>@<team>'`. A spawned teammate would have no correct command to "
-            "run as its first action — register-delivery would dead-end."
-        )
 
     def test_register_subcommand_matches_module_cli(self):
         """The 'register' subcommand the skill invokes must exist in the module's

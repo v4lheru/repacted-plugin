@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 import pytest
+from helpers import effective_hooks_config  # noqa: E402
 
 HOOKS_DIR = Path(__file__).parent.parent / "hooks"
 HOOKS_JSON = HOOKS_DIR / "hooks.json"
@@ -29,6 +30,9 @@ VALID_HOOK_EVENTS = {
     "PostCompact",
     "PreToolUse",
     "PostToolUse",
+    # Fires instead of PostToolUse when a tool call fails (a Bash command's
+    # non-zero exit); the run ledger needs it so a failing test run is recorded.
+    "PostToolUseFailure",
     "UserPromptSubmit",
     "SubagentStart",
     "SubagentStop",
@@ -51,37 +55,35 @@ MUST_BE_SYNC = {
     "track_files.py",     # Tracks file edits (PostToolUse, non-async)
     "precompact_state_reminder.py",  # Emits state snapshot before compaction
     "postcompact_archive.py",  # Archives compact_summary to disk for session_init + secretary
+    # The user-layer hooks emit additionalContext, which an async hook's
+    # discarded stdout would silently lose.
+    "run_ledger.py",  # Records test-run counts; nudges toward tcount when none parse
+    "evidence_gate.py",  # HANDOFF evidence and teachback alignment verdicts
+    "acceptance_flags.py",  # Flags an acceptance over an unevidenced claim
+    # EVENTS (m8a) and the phase D hooks it registers. A deny, and additionalContext,
+    # are lost in an async hook; the journal emitter is sync so its event lands before
+    # the next tool call, which the repeat suppression against a later block relies on.
+    "journal_emitter.py",  # Hook-emitted variety_assessed / agent_dispatch / phase_transition
+    "process_table_guard.py",  # Denies process listings that print command lines
+    "env_guard.py",  # Keeps .env-class file contents out of Read, Grep and Bash
+    "egress_guard.py",  # Denies a credential in MCP, WebFetch, Artifact or network-client input
+    "amendment_gate.py",  # HANDOFF must dispose of every amend_<n> (enforced under the D25 gate)
+    "write_checks.py",  # Notes HANDOFF claims the ledger lacks; returns a rule-breaking commit (D25)
+    "amendment_relay.py",  # Relays new amend_<n> keys to a busy teammate
+    "output_secret_scan.py",  # Replaces a secret value in Bash output before the model sees it
 }
 
 # Hooks that SHOULD be async (non-blocking, fire-and-forget)
 SHOULD_BE_ASYNC = {
     "session_end.py",     # Fire-and-forget cleanup
     "file_tracker.py",    # Advisory tracking only
-    # async is LOAD-BEARING here, not a performance choice. The platform
-    # backgrounds an async hook and reports success before the child exits, so
-    # the marker writer cannot block a user prompt whatever it does.
-    #
-    # THIS ENTRY IS PARTIAL COVER, AND THE EARLIER CLAIM THAT IT TURNS ANY
-    # SILENT REMOVAL OF THE FLAG INTO A RED TEST WAS FALSE. `_get_hook_async_status`
-    # keys its map by SCRIPT NAME and OVERWRITES on each registration, and
-    # PostToolUse is the last event key in hooks.json -- so for a script
-    # registered under two events only the LAST registration's flag is
-    # examined. Measured: removing `async` from the PostToolUse registration
-    # fails as promised, while removing it from the UserPromptSubmit
-    # registration ALONE still PASSES. The UserPromptSubmit side is exactly
-    # where the session-availability argument lives, and it is unguarded.
-    #
-    # Widening the shared helper is tracked separately and deliberately NOT
-    # done here.
-    "pin_marker_writer.py",
 }
 
 
 @pytest.fixture
 def hooks_config():
     """Load and parse hooks.json."""
-    content = HOOKS_JSON.read_text(encoding="utf-8")
-    return json.loads(content)
+    return effective_hooks_config()
 
 
 class TestHooksJsonStructure:
@@ -165,7 +167,12 @@ class TestAsyncFlags:
     """Verify async flags are correctly set on hooks."""
 
     def _get_hook_async_status(self, hooks_config) -> dict:
-        """Build map of script_name -> async status."""
+        """Map script_name -> [(event_type, async flag), ...], one pair per registration.
+
+        A script registered under several events keeps every registration, so a
+        flag dropped from any one of them is visible (a last-registration-wins map
+        hid the second registration of a two-event hook).
+        """
         result = {}
         for event_type, entries in hooks_config["hooks"].items():
             for entry in entries:
@@ -176,27 +183,157 @@ class TestAsyncFlags:
                         if len(parts) == 2:
                             script_name = parts[1].strip('"').strip("'")
                             is_async = hook.get("async", False)
-                            result[script_name] = is_async
+                            result.setdefault(script_name, []).append((event_type, is_async))
         return result
 
     def test_critical_hooks_are_synchronous(self, hooks_config):
-        """Hooks that affect tool decisions MUST be synchronous."""
+        """Hooks that affect tool decisions MUST be synchronous, in every registration."""
         status = self._get_hook_async_status(hooks_config)
         for script in MUST_BE_SYNC:
-            if script in status:
-                assert status[script] is not True, (
-                    f"{script} must be synchronous (no async:true) — "
+            for event_type, is_async in status.get(script, []):
+                assert is_async is not True, (
+                    f"{script} ({event_type}) must be synchronous (no async:true) — "
                     "it affects tool decisions"
                 )
 
     def test_noncritical_hooks_are_async(self, hooks_config):
-        """Non-blocking hooks SHOULD be async."""
+        """Non-blocking hooks SHOULD be async, in every registration."""
         status = self._get_hook_async_status(hooks_config)
         for script in SHOULD_BE_ASYNC:
             assert script in status, f"{script} not found in hooks.json"
-            assert status[script] is True, (
-                f"{script} should be async:true — it is fire-and-forget"
-            )
+            for event_type, is_async in status[script]:
+                assert is_async is True, (
+                    f"{script} ({event_type}) should be async:true — it is fire-and-forget"
+                )
+
+    def test_the_map_keeps_every_registration(self, hooks_config):
+        """Guards the helper: the scripts registered under two events show two entries."""
+        status = self._get_hook_async_status(hooks_config)
+        assert len(status["run_ledger.py"]) >= 2
+
+
+class TestUserLayerHookRegistrations:
+    """The user layer's five entries (repact-user-layer.md section 6.2), merged
+    into the existing event arrays by the UL-integrate milestone, and the
+    task-file backup added after it."""
+
+    EXPECTED = [
+        ("PostToolUse", "Bash", "run_ledger.py"),
+        ("PostToolUseFailure", "Bash", "run_ledger.py"),
+        ("PostToolUse", "TaskCreate|TaskUpdate", "evidence_gate.py"),
+        ("PreToolUse", "TaskUpdate", "acceptance_flags.py"),
+    ]
+
+    @staticmethod
+    def _registrations(hooks_config, script):
+        return [
+            (event, entry.get("matcher"))
+            for event, entries in hooks_config["hooks"].items()
+            for entry in entries
+            for hook in entry.get("hooks", [])
+            if hook.get("command", "").endswith(f'/hooks/{script}"')
+        ]
+
+    @pytest.mark.parametrize("event, matcher, script", EXPECTED,
+                             ids=[f"{e}-{s}" for e, _, s in EXPECTED])
+    def test_each_entry_is_registered_exactly_once(self, hooks_config, event, matcher, script):
+        found = self._registrations(hooks_config, script)
+        assert found.count((event, matcher)) == 1, (
+            f"{script} must be registered once under {event} with matcher "
+            f"{matcher!r}; found {found}"
+        )
+
+    def test_the_run_ledger_sees_failing_commands_too(self, hooks_config):
+        """A non-zero-exit Bash call fires PostToolUseFailure, not PostToolUse,
+        so a ledger registered on one event would never record a failing run."""
+        found = set(self._registrations(hooks_config, "run_ledger.py"))
+        assert found == {("PostToolUse", "Bash"), ("PostToolUseFailure", "Bash")}, found
+
+    def test_no_user_layer_script_is_registered_anywhere_else(self, hooks_config):
+        for script in {s for _, _, s in self.EXPECTED}:
+            expected = {(e, m) for e, m, s in self.EXPECTED if s == script}
+            found = self._registrations(hooks_config, script)
+            assert sorted(found) == sorted(expected), (script, found)
+
+
+class TestEnvGuardRegistration:
+    """ENV-GUARD (task 211): one synchronous PreToolUse entry covering every tool that can
+    read a file's contents into the transcript. A deny and a Grep rewrite are both lost
+    in an async hook."""
+
+    def test_registered_once_for_the_four_reading_tools_and_synchronous(self, hooks_config):
+        found = [
+            (event, entry.get("matcher"), hook.get("async", False))
+            for event, entries in hooks_config["hooks"].items()
+            for entry in entries
+            for hook in entry.get("hooks", [])
+            if hook.get("command", "").endswith('/hooks/env_guard.py"')
+        ]
+        assert found == [("PreToolUse", "Read|NotebookRead|Grep|Bash", False)]
+
+
+class TestEgressGuardRegistration:
+    """the egress guard (task 239): one synchronous PreToolUse entry covering every tool whose
+    input can leave the machine. A deny is lost in an async hook."""
+
+    def test_registered_once_for_the_egress_tools_and_synchronous(self, hooks_config):
+        found = [
+            (event, entry.get("matcher"), hook.get("async", False))
+            for event, entries in hooks_config["hooks"].items()
+            for entry in entries
+            for hook in entry.get("hooks", [])
+            if hook.get("command", "").endswith('/hooks/egress_guard.py"')
+        ]
+        assert found == [("PreToolUse", "mcp__.*|WebFetch|Artifact|Bash", False)]
+
+
+class TestEventsAndWaveDRegistrations:
+    """EVENTS (m8a) registers its journal emitter and the phase D hook files that are on
+    main when it rebases (the design notes section 3, EVENTS phase D deltas). Each
+    entry exactly once, under exactly this event and matcher, and synchronous."""
+
+    EXPECTED = [
+        ("PostToolUse", "TaskCreate|TaskUpdate|Agent", "journal_emitter.py"),
+        ("PreToolUse", "Bash", "process_table_guard.py"),
+        ("PreToolUse", "TaskUpdate", "amendment_gate.py"),
+        ("PreToolUse", "TaskUpdate|Bash", "write_checks.py"),
+        ("PostToolUse", "Bash|Edit|Write|Read|TaskUpdate|MultiEdit|NotebookEdit", "amendment_relay.py"),
+    ]
+
+    @staticmethod
+    def _registrations(hooks_config, script):
+        return [
+            (event, entry.get("matcher"), hook.get("async", False))
+            for event, entries in hooks_config["hooks"].items()
+            for entry in entries
+            for hook in entry.get("hooks", [])
+            if hook.get("command", "").endswith(f'/hooks/{script}"')
+        ]
+
+    # A script with a second, lead-prompt registration (refactor: journal_emitter writes the
+    # prompt_kind row and the straggler line on UserPromptSubmit).
+    ALSO = {"journal_emitter.py": [("UserPromptSubmit", None, False)]}
+
+    @pytest.mark.parametrize("event, matcher, script", EXPECTED,
+                             ids=[s for _, _, s in EXPECTED])
+    def test_registered_once_where_expected_and_synchronous(self, hooks_config, event, matcher, script):
+        assert self._registrations(hooks_config, script) == self.ALSO.get(script, []) + [(event, matcher, False)]
+
+    @pytest.mark.parametrize("script", [s for _, _, s in EXPECTED])
+    def test_the_registered_file_exists(self, script):
+        assert (Path(__file__).parent.parent / "hooks" / script).is_file()
+
+    @pytest.mark.parametrize("script", [s for _, _, s in EXPECTED])
+    def test_pinned_in_must_be_sync(self, script):
+        assert script in MUST_BE_SYNC
+
+    def test_the_journal_emitter_covers_the_three_tool_names_it_reads(self):
+        """journal_emitter.events_for reads TaskCreate, TaskUpdate and Agent; the matcher
+        must name each, or an event type silently never fires."""
+        import journal_emitter
+        matcher = dict((s, m) for _, m, s in self.EXPECTED)["journal_emitter.py"]
+        assert set(matcher.split("|")) == {"TaskCreate", "TaskUpdate", "Agent"}
+        assert journal_emitter.events_for({"tool_name": "Read", "tool_input": {}}, "t") == []
 
 
 class TestNewSDKOptimizationEntries:
@@ -249,16 +386,13 @@ class TestNewSDKOptimizationEntries:
 class TestTrackFilesPostToolUseMatcher:
     """THE REGISTRATION IS PART OF THE MECHANISM, AND IT IS A SEPARATE FAILURE.
 
-    `track_files.py` carries the pin-staleness marker clear, and that clear
-    serves TWO routes. A hand edit of the managed file arrives as `Edit` or
-    `Write`. THE ARCHIVE ITSELF arrives as `Bash`, because the archiving
-    command runs a script through a shell and emits no edit event.
+    `track_files.py` serves TWO routes. A file edit arrives as `Edit` or
+    `Write`; a teammate's background launch arrives as `Bash`.
 
     So a matcher of `Edit|Write` is not a smaller version of the mechanism. It
-    silently drops the route the shipped deny text RECOMMENDS to the user,
-    which is the worst of the outcomes available here. The behaviour tests for
-    the clear all call the function directly, so every one of them stays green
-    while the hook is registered for the wrong events and never fires.
+    silently drops the background-launch record. A behaviour test that calls
+    the recorder directly stays green while the hook is registered for the
+    wrong events and never fires.
     """
 
     def _track_files_entries(self, hooks_config):
@@ -296,7 +430,7 @@ class TestTrackFilesPostToolUseMatcher:
     ):
         """The matcher is pinned as a SET, so a drop and a widening both fire.
 
-        `Bash` is the route the archive takes. `Edit` and `Write` are the hand
+        `Bash` is the background-launch route. `Edit` and `Write` are the file
         edit. The set is compared rather than the string, because the segment
         order carries no meaning and a reorder is not a defect.
         """
@@ -311,12 +445,7 @@ class TestTrackFilesPostToolUseMatcher:
             f"cover Edit, Write and Bash.\n"
             f"  missing: {sorted({'Edit', 'Write', 'Bash'} - segments)}\n"
             f"  unexpected: {sorted(segments - {'Edit', 'Write', 'Bash'})}\n"
-            f"WITHOUT `Bash` the pin-staleness marker clear never sees the "
-            f"archive run, because the archive writes the file through a "
-            f"script and emits no edit event. A user who obeys the refusal "
-            f"then stays denied for the rest of the session. Every behaviour "
-            f"test for the clear calls the function directly and stays green "
-            f"while this happens"
+            f"WITHOUT `Bash` a teammate's background launch is never recorded"
         )
 
 
@@ -361,7 +490,7 @@ class TestMatcherPatterns:
         """SubagentStart must SELECT every spawnable PACT agent type in agents/.
 
         pact-orchestrator.md is excluded: it is delivered through the
-        `claude --agent PACT:pact-orchestrator` flag for the team-lead
+        `claude --agent repacted:pact-orchestrator` flag for the team-lead
         session ONLY and does not spawn through SubagentStart, so the
         peer_inject hook does not have to fire for it.
 
@@ -407,16 +536,14 @@ class TestMatcherPatterns:
 class TestBootstrapGateInvariants:
     """Structural invariants for bootstrap gate hooks."""
 
-    def test_bootstrap_gate_has_no_matcher(self, hooks_config):
-        """bootstrap_gate.py PreToolUse entry must have NO matcher (fires for all tools)."""
-        pre_tool_entries = hooks_config["hooks"].get("PreToolUse", [])
-        for entry in pre_tool_entries:
-            for hook in entry.get("hooks", []):
-                if "bootstrap_gate.py" in hook.get("command", ""):
-                    assert "matcher" not in entry, (
-                        "bootstrap_gate.py must NOT have a matcher — "
-                        "it must fire for ALL hookable tools to enforce the gate"
-                    )
+    def test_bootstrap_gate_matches_the_spawn_tool_and_the_summary_reads(self, hooks_config):
+        """1.4.1: bootstrap_gate denies only the spawn tool (Agent, or Task
+        on a harness that still names it so); Read and Bash reach it for the compaction
+        summary settle. Every other tool no longer starts a process for it."""
+        matchers = [entry.get("matcher") for entry in hooks_config["hooks"]["PreToolUse"]
+                    for hook in entry.get("hooks", [])
+                    if "bootstrap_gate.py" in hook.get("command", "")]
+        assert matchers == ["Agent|Task|Read|Bash"]
 
     def test_bootstrap_prompt_gate_registered(self, hooks_config):
         """bootstrap_prompt_gate.py must be registered as a UserPromptSubmit
@@ -530,19 +657,25 @@ class TestSessionStartCardinality:
       budget invariant is preserved.
     Pin the exact set + order so any FURTHER hook addition is a conscious
     decision, not a silent merge.
+
+    phase D D5 DOCTOR then ADDED doctor_brief.py as the third entry. It reads
+    only repact-doctor's cached result (no check runs at session start) and
+    touches no session_init state or marker; its one line when not green is
+    its own additionalContext.
     """
 
     def test_session_start_registration(self, hooks_config):
-        """SessionStart must have exactly two entries, in order:
-        session_init.py (state-reset) then missed_wake_scan.py
-        (the #903 missed-wake recovery backstop).
+        """SessionStart must have exactly three entries, in order:
+        session_init.py (state-reset), missed_wake_scan.py (the #903
+        missed-wake recovery backstop), then doctor_brief.py (D5).
         """
         session_start = hooks_config["hooks"].get("SessionStart", [])
-        assert len(session_start) == 2, (
-            "SessionStart must have exactly two entries: session_init.py and "
-            "missed_wake_scan.py (the #903 missed-wake recovery backstop). A "
-            "different count indicates accidental restoration or a new hook "
-            "addition that may interact with session_init's state-reset logic."
+        assert len(session_start) == 3, (
+            "SessionStart must have exactly three entries: session_init.py, "
+            "missed_wake_scan.py (the #903 missed-wake recovery backstop) and "
+            "doctor_brief.py (D5). A different count indicates accidental "
+            "restoration or a new hook addition that may interact with "
+            "session_init's state-reset logic."
         )
         for entry in session_start:
             assert len(entry["hooks"]) == 1, (
@@ -555,6 +688,9 @@ class TestSessionStartCardinality:
         assert "missed_wake_scan.py" in session_start[1]["hooks"][0]["command"], (
             "SessionStart's second hook must be missed_wake_scan.py "
             "(the #903 missed-wake recovery backstop)."
+        )
+        assert "doctor_brief.py" in session_start[2]["hooks"][0]["command"], (
+            "SessionStart's third hook must be doctor_brief.py (D5 DOCTOR)."
         )
 
 
@@ -694,3 +830,25 @@ class TestCat2PreservationBaseline:
             f"a TaskCreate/TaskUpdate/TaskList/TaskGet/TaskStop/TaskOutput "
             f"reference."
         )
+
+
+class TestSessionLedgerRegistration:
+    """D3 STATUS: the session ledger runs once at SessionEnd. Synchronous on purpose: the hook starts a detached child and returns at once, so the
+    platform's async backgrounding is not needed and the behaviour does not depend on it."""
+
+    @staticmethod
+    def _registrations(hooks_config):
+        return [
+            (event, entry.get("matcher"), hook.get("async", False))
+            for event, entries in hooks_config["hooks"].items()
+            for entry in entries
+            for hook in entry.get("hooks", [])
+            if hook.get("command", "").endswith('/hooks/session_ledger.py"')
+        ]
+
+    def test_registered_once_at_session_end_and_synchronous(self, hooks_config):
+        assert self._registrations(hooks_config) == [("SessionEnd", None, False)]
+
+    def test_the_registered_file_exists(self):
+        assert (HOOKS_DIR / "session_ledger.py").is_file()
+

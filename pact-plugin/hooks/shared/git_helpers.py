@@ -1,8 +1,8 @@
 """
 Location: pact-plugin/hooks/shared/git_helpers.py
 Summary: Narrow subprocess wrapper for git CLI calls from PACT hooks.
-Used by: git_commit_check.get_staged_files, get_staged_file_content,
-         check_env_file_in_gitignore, and shared/project_scope.py.
+Used by: git_commit_check (committed_files, commit_patch, which turn a None into a deny,
+         and check_env_file_in_gitignore), and shared/project_scope.py.
 
 Encapsulates try/except + subprocess boilerplate only. Callers own:
 - success-path processing (list/string/tuple conversion)

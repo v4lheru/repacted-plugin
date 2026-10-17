@@ -1,19 +1,18 @@
 """
-Parity lint for the 5 CLAUDE.md resolvers.
+Parity lint for the 4 CLAUDE.md resolvers.
 
-Five independent resolvers probe for project-level CLAUDE.md at both
+Four independent resolvers probe for project-level CLAUDE.md at both
 `.claude/CLAUDE.md` (new default, priority) and `./CLAUDE.md` (legacy).
-This test drives all five against the same tmp project for each scenario
+This test drives all four against the same tmp project for each scenario
 and asserts they all agree on the classification (not_found / dot_claude /
 legacy). The test is about CONSISTENCY, not correctness -- if one resolver
 is updated, its siblings must stay in sync.
 
 Resolvers under test:
 1. shared.claude_md_manager.resolve_project_claude_md_path  -- canonical
-2. staleness.get_project_claude_md_path                      -- hooks/
-3. working_memory._get_claude_md_path                        -- skills/
-4. memory_api.PACTMemory._find_project_root                  -- skills/ (walks UP)
-5. worktree_guard inline probe                                -- hooks/ (inline)
+2. working_memory._get_claude_md_path                        -- skills/
+3. memory_api.PACTMemory._find_project_root                  -- skills/ (walks UP)
+4. worktree_guard inline probe                                -- hooks/ (inline)
 """
 
 import os
@@ -60,16 +59,8 @@ def resolver_claude_md_manager(tmp: Path, monkeypatch) -> str:
     return _classify_path(path, tmp)
 
 
-def resolver_staleness(tmp: Path, monkeypatch) -> str:
-    """Public entry exercises env-var short-circuit + git fallback chain."""
-    from staleness import get_project_claude_md_path
-
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp))
-    return _classify_path(get_project_claude_md_path(), tmp)
-
-
 def resolver_working_memory(tmp: Path, monkeypatch) -> str:
-    """Mirror of staleness; same env-var-driven resolution strategy."""
+    """Env-var-driven resolution, then the git fallback chain."""
     from scripts.working_memory import _get_claude_md_path
 
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp))
@@ -129,7 +120,6 @@ def resolver_worktree_guard(tmp: Path, monkeypatch) -> str:
 
 ALL_RESOLVERS = [
     ("claude_md_manager", resolver_claude_md_manager),
-    ("staleness", resolver_staleness),
     ("working_memory", resolver_working_memory),
     ("memory_api", resolver_memory_api),
     ("worktree_guard", resolver_worktree_guard),
@@ -199,7 +189,7 @@ class TestClaudeMdResolverParity:
         self, scenario_name, build_scenario, expected, tmp_path, monkeypatch
     ):
         # Isolate from any ambient CLAUDE_PROJECT_DIR. Per-resolver wrappers
-        # re-set it as needed; without this, staleness and working_memory's
+        # re-set it as needed; without this, working_memory's
         # git fallback would escape tmp_path and find the real project.
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
         build_scenario(tmp_path)

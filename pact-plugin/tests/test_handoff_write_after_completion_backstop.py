@@ -31,7 +31,7 @@ import pytest
 import task_lifecycle_gate as tlg  # noqa: E402
 
 TEAM = "pact-test"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
 HANDOFF = {"decisions": ["x"], "produced": ["f.py"]}
 
@@ -166,7 +166,7 @@ class TestBackstopScoping:
     def test_no_emit_when_task_not_yet_completed(
         self, tmp_path, monkeypatch, pact_context, emit_events
     ):
-        """If the task is NOT yet completed, b2 will fire normally at the later
+        """If the task is NOT yet completed, b2 will fire usually at the later
         completion — no backstop needed. Scoping to status==completed keeps the
         intent precise (a handoff-then-complete two-step is not the race)."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)

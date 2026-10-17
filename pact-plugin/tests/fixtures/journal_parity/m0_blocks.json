@@ -1,0 +1,324 @@
+{
+ "tag": "repacted-m0",
+ "rows": [
+  {
+   "block": "commands/orchestrate.md:219",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "1",
+    "variety": {
+     "novelty": 2,
+     "scope": 3,
+     "uncertainty": 2,
+     "risk": 3,
+     "total": 10
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:295",
+   "event": {
+    "v": 1,
+    "type": "phase_transition",
+    "phase": "PREPARE",
+    "status": "started",
+    "skip_reason": "",
+    "metadata": {},
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:305",
+   "event": {
+    "v": 1,
+    "type": "phase_transition",
+    "phase": "PREPARE",
+    "status": "completed",
+    "skip_reason": "",
+    "metadata": {},
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:318",
+   "event": {
+    "v": 1,
+    "type": "phase_transition",
+    "phase": "ARCHITECT",
+    "status": "skipped",
+    "skip_reason": "structured_gate_passed",
+    "metadata": {},
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:487",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "7",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 1,
+     "scope": 2,
+     "uncertainty": 2,
+     "risk": 1,
+     "total": 6
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:496",
+   "event": {
+    "v": 1,
+    "type": "agent_dispatch",
+    "agent": "preparer",
+    "task_id": "7",
+    "phase": "PREPARE",
+    "scope": [],
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:604",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "9",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 2,
+     "scope": 2,
+     "uncertainty": 3,
+     "risk": 2,
+     "total": 9
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:613",
+   "event": {
+    "v": 1,
+    "type": "agent_dispatch",
+    "agent": "architect",
+    "task_id": "9",
+    "phase": "ARCHITECT",
+    "scope": [],
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:752",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "11",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 2,
+     "scope": 3,
+     "uncertainty": 2,
+     "risk": 3,
+     "total": 10
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:761",
+   "event": {
+    "v": 1,
+    "type": "agent_dispatch",
+    "agent": "backend-coder",
+    "task_id": "11",
+    "phase": "CODE",
+    "scope": [
+     "src/app.py"
+    ],
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:910",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "13",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 1,
+     "scope": 2,
+     "uncertainty": 1,
+     "risk": 2,
+     "total": 6
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/orchestrate.md:919",
+   "event": {
+    "v": 1,
+    "type": "agent_dispatch",
+    "agent": "test-engineer",
+    "task_id": "13",
+    "phase": "TEST",
+    "scope": [],
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/comPACT.md:43",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "20",
+    "variety": {
+     "total": 7
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/comPACT.md:279",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "22",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 2,
+     "scope": 2,
+     "uncertainty": 2,
+     "risk": 2,
+     "total": 8
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/comPACT.md:288",
+   "event": {
+    "v": 1,
+    "type": "agent_dispatch",
+    "agent": "backend-coder-2",
+    "task_id": "22",
+    "phase": "CODE",
+    "scope": [
+     "src/app.py"
+    ],
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/comPACT.md:350",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "24",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 1,
+     "scope": 2,
+     "uncertainty": 1,
+     "risk": 1,
+     "total": 5
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/comPACT.md:359",
+   "event": {
+    "v": 1,
+    "type": "agent_dispatch",
+    "agent": "frontend-coder",
+    "task_id": "24",
+    "phase": "CODE",
+    "scope": [],
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/comPACT.md:452",
+   "event": {
+    "v": 1,
+    "type": "phase_transition",
+    "phase": "CODE",
+    "status": "completed",
+    "skip_reason": "",
+    "metadata": {
+     "workflow": "comPACT"
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/peer-review.md:226",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "15",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 1,
+     "scope": 1,
+     "uncertainty": 2,
+     "risk": 1,
+     "total": 5
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/plan-mode.md:250",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "17",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 3,
+     "scope": 3,
+     "uncertainty": 3,
+     "risk": 2,
+     "total": 11
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/rePACT.md:37",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "30",
+    "variety": {
+     "total": 8
+    },
+    "ts": "<m0-write-time>"
+   }
+  },
+  {
+   "block": "commands/rePACT.md:287",
+   "event": {
+    "v": 1,
+    "type": "variety_assessed",
+    "task_id": "32",
+    "scope": "dispatch",
+    "variety": {
+     "novelty": 2,
+     "scope": 1,
+     "uncertainty": 2,
+     "risk": 2,
+     "total": 7
+    },
+    "ts": "<m0-write-time>"
+   }
+  }
+ ]
+}

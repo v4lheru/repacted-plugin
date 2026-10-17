@@ -13,7 +13,7 @@ Used by: teammate-authored metadata on Task records, team-lead inspection,
          advisory + a `completion_disputed` writeback when a non-exempt
          teammate self-completes) as well as by team-lead instructions and
          audit consumers. No hook BLOCKS on it; the exemption is not enforced
-         (it stays instruction-level). See skills/pact-agent-teams/SKILL.md
+         (it stays instruction-level). See skills/teammate/references/teammate-waiting.md
          and agents/pact-orchestrator.md for the contract.
 
 Contract: pure functions; never raise. Malformed flags fail loud — e.g.
@@ -45,6 +45,10 @@ Public surface:
 - is_teachback_exempt(owner, team_name="", teams_dir=None) — True iff
   the owner's team-config agentType is in TEACHBACK_EXEMPT_AGENT_TYPES.
   Consumed by task_lifecycle_gate.work_addblockedby_missing.
+- is_self_complete_agent_type(owner, team_name="", teams_dir=None) — True
+  iff the owner's team-config agentType is in
+  SELF_COMPLETE_EXEMPT_AGENT_TYPES (no signal-task surface). Consumed by
+  handoff_ordering_gate._handoff_disk_line.
 """
 
 from __future__ import annotations
@@ -172,11 +176,8 @@ def _is_exempt_agent_type(
         return False
     for member in pact_context._iter_members(team_name, teams_dir):
         if member.get("name") == owner:
-            agent_type = member.get("agentType")
-            return (
-                isinstance(agent_type, str)
-                and agent_type in SELF_COMPLETE_EXEMPT_AGENT_TYPES
-            )
+            agent_type = pact_context.member_agent_type(member)
+            return agent_type is not None and agent_type in SELF_COMPLETE_EXEMPT_AGENT_TYPES
     return False
 
 
@@ -216,11 +217,8 @@ def _is_teachback_exempt_agent_type(
         return False
     for member in pact_context._iter_members(team_name, teams_dir):
         if member.get("name") == owner:
-            agent_type = member.get("agentType")
-            return (
-                isinstance(agent_type, str)
-                and agent_type in TEACHBACK_EXEMPT_AGENT_TYPES
-            )
+            agent_type = pact_context.member_agent_type(member)
+            return agent_type is not None and agent_type in TEACHBACK_EXEMPT_AGENT_TYPES
     return False
 
 
@@ -249,6 +247,29 @@ def is_teachback_exempt(
         teams_dir: Override teams directory (for testing).
     """
     return _is_teachback_exempt_agent_type(owner, team_name, teams_dir)
+
+
+def is_self_complete_agent_type(
+    owner: str,
+    team_name: str = "",
+    teams_dir: str | None = None,
+) -> bool:
+    """Return True iff this owner's team-config agentType may self-complete.
+
+    The agentType surface of `is_self_complete_exempt` alone, without the
+    signal-task surface: a signal task carries no HANDOFF, an exempt agent
+    type (the secretary) does. Fail-closed on every error path.
+
+    Used by `handoff_ordering_gate._handoff_disk_line` to give a
+    self-completing owner the HANDOFF disk-state line at its own completion
+    write.
+
+    Args:
+        owner: Task owner name (matched against team-config member.name).
+        team_name: Team name for config path. Empty string returns False.
+        teams_dir: Override teams directory (for testing).
+    """
+    return _is_exempt_agent_type(owner, team_name, teams_dir)
 
 
 def canonical_since() -> str:

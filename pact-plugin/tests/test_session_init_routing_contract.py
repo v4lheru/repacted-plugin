@@ -9,31 +9,31 @@ human-readable status string:
     else:
         context_parts.append(<msg>)        # ordinary context
 
-So the word ``failed`` (and at four of the five sites the word ``skipped``) is
+So the word ``failed`` (and at three of the four sites the word ``skipped``) is
 the ROUTING KEY, and that key is a word inside prose that a person reads. A
 status source that rewords its failure return keeps the signal for a person and
 DOWNGRADES THE ROUTING WITH NO SIGNAL. Nothing goes red, because no test in this
 repository asserted which channel a status string reaches.
 
-THE FAMILY IS SEVEN SITES IN ``hooks/session_init.py``. Six are covered here:
+THE FAMILY WAS SEVEN SITES IN ``hooks/session_init.py``. The pinned-staleness
+site went with the 1.5.0 pin-gate cut, so six remain. Five are covered here:
 
     line 991   setup_plugin_symlinks()         shared/symlinks.py
     line 1005  ensure_project_memory_md()      shared/claude_md_manager.py
     line 1018  migrate_to_managed_structure()  shared/claude_md_manager.py
     line 1032  strip_orphan_kernel_block()     shared/claude_md_manager.py
-    line 1060  check_pinned_staleness()        staleness.py
     line 1601  check_resumption_context()      shared/session_resume.py
 
-The seventh site consumes ``update_session_info()`` from
+The sixth site consumes ``update_session_info()`` from
 ``shared/session_resume.py`` and is covered by the arms in
 ``tests/test_session_resume.py``.
 
 SITE 1601 ROUTES ON A DIFFERENT LITERAL, ``"**Blockers:"``, so the word-based
-sweep that found the other six could not see it. THE FAMILY IS NOT "the
+sweep that found the other five could not see it. THE FAMILY IS NOT "the
 failed-or-skipped predicate". It is ROUTING KEYED ON A SUBSTRING OF PROSE, and
 the word is one spelling of that idea.
 
-HOW THE SEVEN WERE MEASURED, so a later reader can judge the number rather
+HOW THE SEVEN WERE MEASURED (before the cut), so a later reader can judge the number rather
 than inherit it. A word search finds the spelling it is given, and cannot find
 a spelling nobody thought of. So the count comes from an enumeration that reads
 the OPERATOR: parse the module with ``ast``, take each ``Compare`` that uses
@@ -45,17 +45,16 @@ time, or a consumer outside ``hooks/``.
 
 THREE PROPERTIES OF THE FAMILY, MEASURED RATHER THAN ASSUMED.
 
-1. NONE OF THE FIRST FIVE SITES CARRIES A ROLE GATE OR A SOURCE GATE. Each sits
+1. NONE OF THE FIRST FOUR SITES CARRIES A ROLE GATE OR A SOURCE GATE. Each sits
    at ``def main()`` then ``try:`` then ``if <msg>:``. The only condition
    before the routing predicate is that the status source returned a truthy string, so
-   the live population of these five is each SessionStart frame. The seventh
+   the live population of these four is each SessionStart frame. The sixth
    site is different, and its narrower population is stated in its own suite.
 2. THE ORDINARY-CONTEXT BRANCH IS NOT ALWAYS UNGATED. Site 991 sends the
-   no-change message to context only when the frame is not a context reset, and
-   site 1060 sends its advisory to context only for a non-teammate frame. The
+   no-change message to context only when the frame is not a context reset. The
    control tests below thus choose their frame on purpose. See
    ``_route`` and the comment on each control.
-3. SITE 1601 NEEDS TWO GATE CONDITIONS TOGETHER, unlike the other six: ``if
+3. SITE 1601 NEEDS TWO GATE CONDITIONS TOGETHER, unlike the other five: ``if
    tasks:`` and then ``if resumption_msg:``. So its fixture supplies a task
    list, and its class says which task shape reaches which branch.
 
@@ -79,13 +78,13 @@ one collaborator to leave live and patches the others. A test that patched its
 own status source exercises the consumer branch alone: it cannot fire on a
 reword of the status source, which is the only mutation these arms exist to catch.
 The failure and the ordinary states are built from real filesystem conditions
-(a read-only directory, an orphan marker, a stale pin), not from an injected
+(a read-only directory, an orphan marker), not from an injected
 exception, so each arm below is a PRODUCT arm and not a harness arm.
 ============================================================================
 
 ======================== NON-VACUITY (source mutation) =====================
 Each test names its own mutant in its docstring. The shape is the same for the
-five: reword the failure or skip return of the status source so the routing word is
+four: reword the failure or skip return of the status source so the routing word is
 lost while the message stays informative, then run this file.
 EXPECTED: the routing test for that status source fails, and the ordinary-context
 test for the same status source stays green.
@@ -106,7 +105,7 @@ import pytest
 
 _SESSION_ID = "ccdd3344-0000-0000-0000-000000000000"
 
-# The five status sources this file covers, as they are bound in the session_init
+# The four status sources this file covers, as they are bound in the session_init
 # module namespace. ``_route`` patches each name in this set, but not the one
 # left live, so one live status source runs for each measurement.
 _STATUS_SOURCES = (
@@ -114,22 +113,6 @@ _STATUS_SOURCES = (
     "ensure_project_memory_md",
     "migrate_to_managed_structure",
     "strip_orphan_kernel_block",
-    "check_pinned_staleness",
-)
-
-# A stale pin, so check_pinned_staleness has something to report and reaches
-# its write path. The date is from 2020, so it is stale for each plausible
-# staleness window.
-_STALE_PIN_DOC = (
-    "# PACT Framework and Managed Project Memory\n"
-    "\n"
-    "## Pinned Context\n"
-    "\n"
-    "### An outdated pin 2020-01-05\n"
-    "\n"
-    "body text\n"
-    "\n"
-    "## Working Memory\n"
 )
 
 
@@ -157,7 +140,7 @@ def _route(tmp_home, project_dir, live, *, agent_type=None, env=None, tasks=None
     routing assertion fails. It cannot fail to green.
 
     session_init is imported inside the function, matching the sibling suites:
-    a collection-time import of that module pulls staleness, pin_caps and
+    a collection-time import of that module pulls
     claude_md_manager into every test in this file.
     """
     import session_init
@@ -167,7 +150,7 @@ def _route(tmp_home, project_dir, live, *, agent_type=None, env=None, tasks=None
         payload["agent_type"] = agent_type
 
     suppressed = [
-        patch(f"session_init.{name}", return_value=None)
+        patch(f"shared.session_init_common.{name}", return_value=None)
         for name in _STATUS_SOURCES
         if name != live
     ]
@@ -176,12 +159,12 @@ def _route(tmp_home, project_dir, live, *, agent_type=None, env=None, tasks=None
     # persistence. None of them contributes a status string to either channel.
     suppressed += [
         patch("session_init.get_task_list", return_value=tasks),
-        patch("session_init.restore_last_session", return_value=None),
-        patch("session_init.update_session_info", return_value=None),
-        patch("session_init.check_resume_state", return_value=None),
-        patch("session_init.append_event"),
-        patch("session_init.persist_context", return_value=None),
-        patch("session_init.build_context_cache",
+        patch("shared.session_init_lead.restore_last_session", return_value=None),
+        patch("shared.session_init_lead.update_session_info", return_value=None),
+        patch("shared.session_init_lead.check_resume_state", return_value=None),
+        patch("shared.session_init_lead.append_event"),
+        patch("shared.session_init_lead.persist_context", return_value=None),
+        patch("shared.session_init_lead.build_context_cache",
               return_value=(Path("/tmp/ctx.json"), {})),
     ]
 
@@ -503,65 +486,16 @@ class TestKernelStripStatusRouting:
         _assert_routes_to_context(message, system_message, context)
 
 
-class TestPinnedStalenessStatusRouting:
-    """Site 1060, status source ``check_pinned_staleness``.
-
-    MUTANT: in ``hooks/staleness.py``, change the write-failure status
-    ``f"Failed to update pinned staleness: {str(e)[:50]}"`` to
-    ``f"Could not update pinned staleness: {str(e)[:50]}"``. EXPECTED: the
-    routing test fails and the detected test stays green.
-    CONTROL MUTANT: change it to ``f"Pinned staleness update failed: ..."``.
-    EXPECTED: the two tests stay green.
-    """
-
-    def test_failure_status_reaches_system_messages(self, home, project):
-        (project / "CLAUDE.md").write_text(_STALE_PIN_DOC)
-        os.chmod(project, 0o500)  # the staleness write path cannot lock
-        try:
-            from staleness import check_pinned_staleness
-            message = check_pinned_staleness(
-                claude_md_path=project / "CLAUDE.md")
-
-            system_message, context = _route(
-                home, project, live="check_pinned_staleness")
-        finally:
-            os.chmod(project, 0o700)
-
-        _assert_routes_to_system_messages(message, system_message, context)
-
-    def test_ordinary_status_reaches_additional_context(self, home, project):
-        """The control. THE FRAME MATTERS AT THIS SITE. The ordinary advisory
-        reaches context only for a non-teammate frame, so this test uses a
-        frame with no teammate agent type. A teammate frame sends the
-        advisory to no channel at all, and the control then passes for a cause
-        that has nothing to do with routing.
-        """
-        target = project / "CLAUDE.md"
-        target.write_text(_STALE_PIN_DOC)
-        from staleness import check_pinned_staleness
-        message = check_pinned_staleness(claude_md_path=target)
-
-        # The pass writes a stale marker into the document. Restore the
-        # original so main() performs the same pass and returns the same
-        # status.
-        target.write_text(_STALE_PIN_DOC)
-
-        system_message, context = _route(
-            home, project, live="check_pinned_staleness")
-
-        _assert_routes_to_context(message, system_message, context)
-
-
 # ===========================================================================
-# THE SEVENTH SITE, AND THE TWO SECOND OCCURRENCES.
+# THE SIXTH SITE, AND THE TWO SECOND OCCURRENCES.
 #
-# The five classes above pin ONE exit of each status source. Three exits stay
+# The four classes above pin ONE exit of each status source. Three exits stay
 # open, and this block closes them.
 #
 # SITE 1601 IS A DIFFERENT LITERAL, NOT A DIFFERENT WORD. It routes on
 # ``"**Blockers:"``, so a sweep for ``failed`` and ``skipped`` cannot see it.
 # An enumeration that reads the OPERATOR rather than the word does see it, and
-# that enumeration returns these seven and no eighth.
+# that enumeration returns these six (seven before the 1.5.0 pin-gate cut).
 #
 # THE OTHER TWO ARE SECOND EXITS AT SITES THIS FILE BEFORE THIS COVERS. Each of
 # those two status sources emits its status string from TWO handlers, and the

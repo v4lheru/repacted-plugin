@@ -8,7 +8,7 @@ a COORDINATION control — not a security boundary.
 Coverage:
 
 is_lead() truth-table:
-1.  Both lead spellings → True (qualified PACT:pact-orchestrator, unqualified)
+1.  Both lead spellings → True (qualified repacted:pact-orchestrator, unqualified)
 2.  Teammate agent_type → False
 3.  Plain frame (agent_type absent) → False
 4.  Empty-string / None / non-string agent_type → False
@@ -44,8 +44,8 @@ class TestIsLead:
     """is_lead() truth-table — both lead spellings True, everything else False."""
 
     def test_qualified_lead_spelling_is_lead(self):
-        """`--agent PACT:pact-orchestrator` → True."""
-        assert is_lead({"agent_type": "PACT:pact-orchestrator"}) is True
+        """`--agent repacted:pact-orchestrator` → True."""
+        assert is_lead({"agent_type": "repacted:pact-orchestrator"}) is True
 
     def test_unqualified_lead_spelling_is_lead(self):
         """`--agent pact-orchestrator` → True."""
@@ -57,7 +57,7 @@ class TestIsLead:
         "pact-secretary",
         "pact-orchestrator-helper",   # superstring of a lead spelling, not equal
         "orchestrator",               # the Step-4-stripped form is NOT a lead spelling
-        "PACT:pact-backend-coder",
+        "repacted:pact-backend-coder",
     ])
     def test_teammate_agent_types_are_not_lead(self, agent_type):
         """Any non-lead agent_type → False."""
@@ -124,7 +124,7 @@ class TestIsLeadPurity:
         """
         forged = {
             "agent_type": "pact-backend-coder",  # genuine: a teammate
-            "tool_input": {"agent_type": "PACT:pact-orchestrator"},  # forged
+            "tool_input": {"agent_type": "repacted:pact-orchestrator"},  # forged
         }
         assert is_lead(forged) is False
 
@@ -138,7 +138,7 @@ class TestClassifySessionRole:
     """classify_session_role() — the 3-way lead/teammate/unknown classifier."""
 
     @pytest.mark.parametrize("frame, expected", [
-        ({"agent_type": "PACT:pact-orchestrator"}, "lead"),
+        ({"agent_type": "repacted:pact-orchestrator"}, "lead"),
         ({"agent_type": "pact-orchestrator"}, "lead"),
         ({"agent_type": "pact-backend-coder"}, "teammate"),
         ({"agent_type": "orchestrator"}, "teammate"),   # stripped form is a teammate, NOT lead
@@ -164,7 +164,7 @@ class TestLeadAgentTypesSSOT:
     """LEAD_AGENT_TYPES is the single source of truth for both helpers."""
 
     def test_exactly_two_sanctioned_spellings(self):
-        assert LEAD_AGENT_TYPES == frozenset({"PACT:pact-orchestrator", "pact-orchestrator"})
+        assert LEAD_AGENT_TYPES == frozenset({"repacted:pact-orchestrator", "pact-orchestrator"})
 
     def test_is_lead_agrees_with_membership(self):
         """For every member, is_lead is True; for a clear non-member, False."""

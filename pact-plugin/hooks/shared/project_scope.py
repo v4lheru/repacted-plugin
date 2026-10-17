@@ -3,10 +3,9 @@ Location: pact-plugin/hooks/shared/project_scope.py
 Summary: Predicates answering "are these two directories the same project?",
          and the reader for the session record that answers it for a declared
          worktree that no longer exists.
-Used by: scripts/archive_pin.py (pin archival resolution) and
-         skills/pact-memory/scripts/working_memory.py (working-memory
-         projection), both of which resolve a CLAUDE.md and must tell a
-         legitimate fall-through from a wrong-project one. Both call
+Used by: skills/pact-memory/scripts/working_memory.py (working-memory
+         projection), which resolves a CLAUDE.md and must tell a
+         legitimate fall-through from a wrong-project one. It calls
          `stays_in_declared_project` with
          `get_worktree_identity_from_session_record()`; `same_repository` is
          one of its rules. hooks/session_init.py writes the record
@@ -18,13 +17,9 @@ wrapper whose docstring scopes it to "try/except + subprocess boilerplate
 only", with callers owning the decision. `same_repository` IS a decision, so
 it lives here and COMPOSES `run_git` rather than widening that contract.
 
-WHY NOT IN THE MODULE THAT FIRST NEEDED IT. This began as a private helper in
-archive_pin.py, where the defect was found. A function's home follows its
-SUBJECT, not its discovery site — and the subject here is project identity,
-which is neither pin archival nor memory projection. Importing archive_pin to
-reach it is worse than it looks: that module loads two hook modules at import
-time and registers them in sys.modules under bare top-level names, so a
-consumer would acquire a global namespace mutation to borrow one predicate.
+WHY NOT IN THE MODULE THAT USES IT. A function's home follows its SUBJECT,
+not its call site — and the subject here is project identity, which is not
+memory projection.
 """
 
 from __future__ import annotations
@@ -311,9 +306,8 @@ def get_worktree_identity_from_session_record() -> dict:
 
     session_init writes it into the session's own folder, for every role, when
     the session starts inside a linked worktree. The working-memory write guard
-    and archive_pin pass it to `stays_in_declared_project`, which reads it only
-    when the declared directory no longer exists. Both hold this one object:
-    pact_session re-exports it, and archive_pin imports it from here.
+    passes it to `stays_in_declared_project`, which reads it only when the
+    declared directory no longer exists; pact_session re-exports it.
 
     A test process reads no record, and neither does a process without
     CLAUDE_CODE_SESSION_ID. Nothing is cached.

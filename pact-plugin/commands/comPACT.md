@@ -1,5 +1,5 @@
 ---
-description: Dispatch concurrent specialists for self-contained tasks. No PACT phases needed.
+description: Send specialist agents on a small, self-contained task, with no full plan needed
 argument-hint: [backend|frontend|database|prepare|test|architect|devops|security|qa] <task>
 ---
 Dispatch concurrent specialists for this self-contained task: $ARGUMENTS
@@ -8,437 +8,99 @@ Dispatch concurrent specialists for this self-contained task: $ARGUMENTS
 
 > ⚠️ **Independent ≠ same domain.** "Fix CSS layout + add server logging" = 1 frontend-coder + 1 backend-coder in parallel. The key criterion is independence (no shared files, no data dependencies), not domain uniformity.
 
----
+Selection keywords, concurrency examples, output style, signals and escalation: [selection-and-escalation.md](../reference/comPACT/selection-and-escalation.md) (load when the specialist is unclear or the task grows).
 
 ## Task Hierarchy
 
-Create a simpler Task hierarchy than full orchestrate:
-
-```
-1. `TaskCreate`: Feature task "{verb} {feature}" (self-contained task) — stamp metadata.variety.total (see below)
-2. `TaskUpdate`: Feature task status = "in_progress"
-3. Analyze: How many agents needed?
-4. `TaskCreate`: Agent task(s) — direct children of feature
-5. `TaskUpdate`: Agent tasks status = "in_progress"
-6. `TaskUpdate`: Feature task addBlockedBy = [all agent IDs]
-7. Dispatch agents concurrently with task IDs
-8. Monitor via `TaskList` until all agents complete
-9. `TaskUpdate`: Agent tasks status = "completed" (as each completes)
-10. `TaskUpdate`: Feature task status = "completed"
-```
-
-> Steps 8-10 are detailed in the [After Specialist Completes](#after-specialist-completes) section below (includes test verification and commit steps).
-
-> **Feature-task variety stamp (step 1).** Stamp the feature-level variety total on the feature `TaskCreate`, so the wrap-up Orchestration Retrospective can compute feature-vs-dispatch divergence instead of `feature_variety_missing`:
-> ```python
-> `TaskCreate(subject="{verb} {feature}", metadata={"variety": {"total": N}})`  # N = feature-level total, 4-16
-> ```
-> Advisory, not enforced — the feature task has no teachback-gated sibling, so the dispatch-boundary gate cannot apply. The `.total` field is the load-bearing input `compute_variety_divergence` reads (the full 4-rationale block is fine too, but `.total` is the minimum). Mirrors what `orchestrate.md` already persists for its feature task.
->
-> **Journal event**: after the feature `TaskCreate` carries its `metadata.variety` stamp, write a feature-level `variety_assessed` event keyed on the feature task id (no `scope` field — feature-level is the discriminator's absent value):
-> ```bash
-> set -e
-> trap 'rc=$?; echo "[JOURNAL WRITE FAILED] comPACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
-> python3 "{plugin_root}/hooks/shared/session_journal.py" write \
->   --type variety_assessed --session-dir '{session_dir}' --stdin <<'JSON'
-> {"task_id": "{feature_task_id}", "variety": {"total": N}}
-> JSON
-> ```
-
-**Example structure:**
-```
-[Feature] "Fix 3 backend bugs"           (blockedBy: agent1, agent2, agent3)
-├── [Agent] "backend-coder: fix bug A"
-├── [Agent] "backend-coder: fix bug B"
-└── [Agent] "backend-coder: fix bug C"
-```
-
----
+Feature task "{verb} {feature}" (`in_progress`, `addBlockedBy` = every agent task), stamped with the feature-level variety total, whose journaled `variety_assessed` event marks the arc start the wrap-up Orchestration Retrospective scopes its reads from: `TaskCreate(subject="{verb} {feature}", metadata={"variety": {"total": N}})` (4-16; advisory). The hook journals its `variety_assessed` event; do not write it. Then, per specialist (persona §11): a dispatch whose complexity total is 6 or less is single-task dispatch (the work task alone: no teachback task, no `addBlockedBy`); above 6, one Teachback-Gated Dispatch pair. Then [After Specialist Completes](#after-specialist-completes).
 
 ## Specialist Selection
 
-| Shorthand | Specialist | Use For |
-|-----------|------------|---------|
-| `backend` | pact-backend-coder | Server-side logic, APIs, middleware |
-| `frontend` | pact-frontend-coder | UI, React, client-side |
-| `database` | pact-database-engineer | Schema, queries, migrations |
-| `prepare` | pact-preparer | Research, requirements gathering |
-| `test` | pact-test-engineer | Standalone test tasks |
-| `architect` | pact-architect | Design guidance, pattern selection |
-| `devops` | pact-devops-engineer | CI/CD, Docker, scripts, infrastructure |
-| `security` | pact-security-engineer | Security audit of existing code |
-| `qa` | pact-qa-engineer | Runtime verification of app behavior |
-
-### If specialist not specified or unrecognized
-
-If the first word isn't a recognized shorthand, treat the entire argument as the task and apply smart selection below.
-
-**Auto-select when clear**:
-- Task contains domain-specific keywords:
-  - Frontend: React, Vue, UI, CSS, component
-  - Backend: Express, API, endpoint, middleware, server
-  - Database: PostgreSQL, MySQL, SQL, schema, migration, index
-  - Test: Jest, test, spec, coverage
-  - Prepare: research, investigate, requirements, explore, compare
-  - Architect: pattern, singleton, factory, structure, architecture
-  - DevOps: CI/CD, Docker, Dockerfile, pipeline, deploy, infrastructure, Terraform, Makefile, GitHub Actions, workflow, container, Pulumi, CloudFormation
-  - Security: vulnerability, CVE, injection, XSS, auth bypass, security audit, penetration, OWASP, secrets, credential
-  - QA: runtime, exploratory, browser, Playwright, visual, smoke test, manual test, visual regression, user flow
-- Task mentions specific file types (.tsx, .jsx, .sql, .spec.ts, .yml, .yaml, Dockerfile, .sh, .tf, .toml, etc.)
-- Proceed immediately: "Delegating to [specialist]..."
-
-**Ask when ambiguous**:
-- Generic verbs without domain context (fix, improve, update)
-- Feature-level scope that spans domains (login, user profile, dashboard)
-- Performance/optimization without specific layer
-- → Use `AskUserQuestion` tool:
-  - Question: "Which specialist should handle this task?"
-  - Options: List the 2-3 most likely specialists based on context (e.g., "Backend" / "Frontend" / "Database")
-
----
-
-## When to Invoke Multiple Specialists
-
-**MANDATORY: invoke concurrently unless tasks share files.** The burden of proof is on sequential dispatch.
-
-Invoke concurrently when:
-- Multiple independent items (bugs, components, endpoints)
-- No shared files between sub-tasks
-- Same patterns/conventions apply to all
-
-**Examples:**
-| Task | Agents Invoked |
-|------|----------------|
-| "Fix 3 backend bugs" | 3 backend-coders at once |
-| "Add validation to 5 endpoints" | Multiple backend-coders simultaneously |
-| "Update styling on 3 components" | Multiple frontend-coders together |
-| "Add API endpoint + update DB index" | 1 backend-coder + 1 database-engineer (parallel) |
-| "Fix CSS layout + add server logging" | 1 frontend-coder + 1 backend-coder (parallel) |
-
-**Do NOT invoke concurrently when:**
-- Sub-tasks modify the same files
-- Sub-tasks have dependencies on each other
-- Conventions haven't been established yet (run one first to set patterns, then dispatch the rest together)
-
----
+Shorthands: `backend`, `frontend`, `database`, `prepare`, `test`, `architect`, `devops`, `security`, `qa`. Otherwise auto-select on clear keywords or file types, or `AskUserQuestion` "Which specialist should handle this task?" with the 2-3 likeliest.
 
 ## S2 Light Coordination (Required Before Concurrent Dispatch)
 
-Before invoking multiple specialists concurrently, perform this coordination check:
-
-1. **Identify potential conflicts**
-   - List files each sub-task will touch
-   - Flag any overlapping files
-
-2. **Resolve conflicts (if any)**
-   - **Same file**: Sequence those sub-tasks OR assign clear section boundaries
-   - **Style/convention**: First agent's choice becomes standard
-
-3. **Set boundaries**
-   - Clearly state which sub-task handles which files/components
-   - Include this in each specialist's prompt
-
-4. **Environment drift** — When dispatching subsequent agents after earlier ones complete, check `file-edits.json` for modified files and include deltas in prompts (see [pact-s2-coordination.md](../protocols/pact-s2-coordination.md#environment-drift-detection))
-
-5. **Persist `s2_boundaries` and `established_conventions`** — `TaskUpdate(codePhaseTaskId, metadata={"s2_boundaries": {...}, "established_conventions": {...}})`
-
-**If conflicts cannot be resolved**: Sequence the work instead of dispatching concurrently.
-
----
-
-## Output Conciseness
-
-See also: [Communication Charter](../protocols/pact-communication-charter.md) for full plain English, anti-sycophancy, and constructive challenge norms.
-
-**Default: Concise output.** User sees delegation decisions, not coordination analysis.
-
-| Internal (don't show) | External (show) |
-|----------------------|-----------------|
-| S2 coordination analysis, conflict checking | `Delegating to backend coder` |
-| Concurrency reasoning, file boundary decisions | `Invoking 3 frontend coders in parallel` |
-| Specialist selection logic | `Auto-selected: database (SQL keywords detected)` |
-
-**User can always ask** for details (e.g., "Why that specialist?" or "Show me the conflict analysis").
-
-| Verbose (avoid) | Concise (prefer) |
-|-----------------|------------------|
-| "Let me check if these sub-tasks share files..." | (just do it, report result) |
-| "I'm analyzing whether to invoke concurrently..." | `Concurrent: no shared files` |
-
----
+List each sub-task's files; sequence or split overlaps (first agent's convention wins); put boundaries in each prompt; include later drift from `file-edits.json`; persist `TaskUpdate(codePhaseTaskId, metadata={"s2_boundaries": {...}, "established_conventions": {...}})`. **If conflicts cannot be resolved**: sequence the work.
 
 ## Pre-Invocation (Required)
 
-1. **Set up worktree** — If already in a worktree for this feature, reuse it. Otherwise, invoke `/PACT:worktree-setup` with the feature branch name. All subsequent work happens in the worktree.
+1. **Worktree** — reuse the feature's, else `/repacted:worktree-setup`.
 2. **Session team** — The `{team_name}` team is provisioned automatically by the platform — use it for dispatches; you do not create it.
-3. **S2 coordination** (if concurrent) — Check for file conflicts, assign boundaries
-4. **Backlog boundary write** — starting the work is a transition you WITNESSED, so set this item's status to `active` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+3. **S2 coordination** (if concurrent).
+4. **Task-log boundary write** — WITNESSED start: mark the project task `active` WITHOUT asking, via the command, ONCE PER REF the unit owns (the link is what the HANDOFF gate and the acceptance read; a ref only named in the brief is a note, never closed; the HANDOFF owes `handoff.refs` one disposition per ref, so say so in the brief); report the write or refusal and carry on.
    ```bash
-   python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status active
+   python3 "{plugin_root}/bin/repact-task" start <ref> --ptask {team_name}/<task id>
    ```
-   Report what you wrote. If the write is refused, report the refusal and carry on.
-
-> **Teachback**: All dispatched specialists send a TEACHBACK before starting work (see [pact-ct-teachback.md](../protocols/pact-ct-teachback.md)).
-
----
+5. **Repo notes** — read the repo's `.claude/pact-dispatch-notes.md` if present; put the lines that apply in each brief.
 
 ## Teachback-Gated Dispatch
 
-Every specialist dispatch creates **two tasks**, not one:
-
-- **Task A** — TEACHBACK gate. `subject = "{specialist}: TEACHBACK for {sub-task}"`, owner = teammate. Description: teachback expectations + dispatch context.
-- **Task B** — primary work. `subject = "{specialist}: {sub-task}"`, owner = teammate, `blockedBy = [<Task A id>]`.
-
-Both are created BEFORE the `Agent(...)` spawn call so the teammate sees them on first `TaskList`. The teammate claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review and accept via the two-call atomic pair: `TaskUpdate(A, status="completed")` FIRST, then the wake-signal `SendMessage(to=teammate, ...)` — see [Teachback Review](../protocols/pact-completion-authority.md#teachback-review) for the rationale. On accept, the teammate wakes to claim B.
-
-**Dispatch sequence (replaces single-task dispatch)**:
-
-```
-# A-FIRST ORDERING (required): create Task A (the teachback gate) BEFORE Task B so the gate gets the LOWER id. Creating Task B first — giving the gate the HIGHER id — is WRONG: it inverts the intuitive "lower id = earlier" reading. The blocking wiring below legitimately names both ids because it runs AFTER both tasks exist.
-# 1. Create Task A (teachback gate)
-A_id = TaskCreate(
-    subject="{specialist}: TEACHBACK for {sub-task}",
-    description="DOGFOOD TEACHBACK GATE for {sub-task}.\n\n"
-                "Submit TEACHBACK by writing metadata.teachback_submit using the CANONICAL field schema (do NOT improvise key names): understanding, most_likely_wrong, least_confident_item, first_action, variety_acknowledgment (an OBJECT). See the pact-teachback skill for field semantics. "
-                "Then send the notify SendMessage carrying the canonical payload verbatim (pact-teachback Step 2). "
-                "SET intentional_wait{reason=awaiting_lead_completion, expected_resolver=lead, since=<canonical_since() output>, covers_since=<the same value as since>}. Idle. "
-                "DO NOT mark this task completed — team-lead-only completion. Lead will mark completed "
-                "after teachback acceptance, then send a wake-signal SendMessage confirming Task B is claimable.\n\n"
-                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead. Task B stays blocked until the lead accepts this teachback: that is the gate, not a desync.\n\n"
-                "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT this TEACHBACK gate task), identified by its subject (the '{role}: {mission}' pattern). Claim it after this teachback is accepted."
-)
-TaskUpdate(A_id, owner="{specialist-name}")
-
-# 2. Create Task B (primary work) — per-dispatch variety stamping per pact-variety.md
-B_id = TaskCreate(
-    subject="{specialist}: {sub-task}",
-    description="<full mission>\n\nWrite metadata.handoff whatever the size of the diff — a task whose deliverable is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in the diff.",
-    metadata={
-        "variety": {
-            "novelty":               N,
-            "novelty_rationale":     "<1-sentence: the shape of this dispatch's novelty — never what you expect to find>",
-            "scope":                 N,
-            "scope_rationale":       "<1-sentence: the shape of this dispatch's scope — never what you expect to find>",
-            "uncertainty":           N,
-            "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
-            "risk":                  N,
-            "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
-            # Ignorance-dependent dispatch: stamp all four `*_rationale` as "WITHHELD: ignorance-dependent dispatch" — real scores, no prose.
-            "total":                 N
-        }
-    }
-)
-TaskUpdate(B_id, owner="{specialist-name}", addBlockedBy=[A_id])
-TaskUpdate(A_id, addBlocks=[B_id])
-
-# 3. Spawn the teammate via the canonical Agent() form (shown in §Invocation below).
-```
-
-The `Agent()` `prompt` does NOT change shape — the Teachback-Gated Dispatch is encoded in the surrounding `TaskCreate` sequence, not in the `Agent()` call.
-
-**Carve-outs** — single-task dispatch still applies for:
-
-- **Auditor signal-tasks** (`metadata.completion_type="signal"`): no TEACHBACK, no Task B; self-completes tasks.
-- **Secretary** (`member.agentType="pact-secretary"`): no TEACHBACK (single-task dispatch); self-completes its session briefing + memory-save tasks.
-
----
+Read reference/dispatch/teachback-gated-dispatch.md before your first dispatch this session. At a total of 6 or less, create only the Task B below (no Task A). Its carve-outs cover auditor signal-tasks and the secretary. Each dispatch site below gives only its mission fields and its own `agent_dispatch` journal write (comPACT has no phase task for the hook to derive it from).
 
 ## Invocation
 
 ### Multiple Specialists Concurrently (Default)
 
-When the task contains multiple independent items, invoke multiple specialists together with boundary context. For each specialist needed, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
+When the task contains multiple independent items, invoke multiple specialists together with boundary context. For each specialist needed, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch) with `name="{specialist-name}"`, `subagent_type="pact-{specialist-type}"`:
 
-1. `TaskCreate(subject="{specialist-name}: TEACHBACK for {sub-task}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="{specialist-name}: {sub-task}", description=<see below>, metadata=<see below>)` — Task B.
-   - Task B's `description` carries the comPACT-concurrent mission: "comPACT mode (concurrent): You are one of [N] specialists working concurrently.\nYou are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree.\nAs a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead.\n\nYOUR SCOPE: [specific sub-task]\nOTHER AGENTS' SCOPE: [what others handle]\n\nWork directly from this task description.\nIf upstream task IDs are provided, read their task files for prior decisions; `TaskGet` does NOT surface metadata.\nCheck docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist.\nDo not create new documentation artifacts in docs/.\nStay within your assigned scope.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nTesting: New unit tests for logic changes. Fix broken existing tests. Run test suite before HANDOFF.\nImport hygiene: if you modified any .py files, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files '<absolute-path-to-a-file-you-modified>.py' '<absolute-path-to-another>.py'` (one separately quoted absolute path per file, never one quoted list — a filename is untrusted shell input) before the suite; record its final IMPORT-HYGIENE verdict line verbatim in your HANDOFF produced field; fix findings in files you modified (a deliberate side-effect import or re-export keeps a reasoned `# noqa: F401`); if the script is missing or errors, say so in your HANDOFF — never skip silently.\n\nIf you hit a blocker, STOP and `SendMessage` it to the team-lead.\n\nTask: [this agent's specific sub-task]"
-   - Task B's `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema):
-     ```json
-     {
-       "variety": {
-         "novelty":               N,
-         "novelty_rationale":     "<1-sentence: the shape of this dispatch's novelty — never what you expect to find>",
-         "scope":                 N,
-         "scope_rationale":       "<1-sentence: the shape of this dispatch's scope — never what you expect to find>",
-         "uncertainty":           N,
-         "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
-         "risk":                  N,
-         "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
-            # Ignorance-dependent dispatch: stamp all four `*_rationale` as "WITHHELD: ignorance-dependent dispatch" — real scores, no prose.
-         "total":                 N
-       }
-     }
-     ```
-3. `TaskUpdate(A_id, owner="{specialist-name}", addBlocks=[B_id])`
-4. `TaskUpdate(B_id, owner="{specialist-name}", addBlockedBy=[A_id])`
-5. **Journal events** (both before spawning each specialist). First, one `variety_assessed` event per dispatched Task B, mirroring that task's `metadata.variety` stamp — the four dimension scores and the total, `*_rationale` strings omitted, and the top-level `"scope": "dispatch"` discriminator present (the feature-level assessment event carries no `scope` field; journal readers key on that difference):
-   ```bash
-   set -e
-   trap 'rc=$?; echo "[JOURNAL WRITE FAILED] comPACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
-   python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-     --type variety_assessed --session-dir '{session_dir}' --stdin <<'JSON'
-   {"task_id": "{taskId}", "scope": "dispatch", "variety": {"novelty": N, "scope": N, "uncertainty": N, "risk": N, "total": N}}
-JSON
-   ```
+- Task A subject: `"{specialist-name}: TEACHBACK for {sub-task}"`.
+- Task B subject: `"{specialist-name}: {sub-task}"`.
+- Task B's `description` carries the comPACT-concurrent mission: "comPACT mode (concurrent): You are one of [N] specialists working concurrently.\nYou are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree.\nAs a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead.\n\nYOUR SCOPE: [specific sub-task]\nOTHER AGENTS' SCOPE: [what others handle]\n\nWork directly from this task description.\nIf upstream task IDs are provided, read their task files for prior decisions; `TaskGet` does NOT surface metadata.\nCheck docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist.\nDo not create new documentation artifacts in docs/.\nStay within your assigned scope.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nTesting: New unit tests for logic changes. Fix broken existing tests. Run test suite before HANDOFF.\nImport hygiene (pact-coding-standards): before the suite, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files` on each .py file you modified; record its verdict line in HANDOFF `produced`.\n\nIf you hit a blocker, STOP and `SendMessage` it to the team-lead.\n\nTask: [this agent's specific sub-task]"
+- **Journal event** before spawning (the hook journals `variety_assessed` from the stamp; this `agent_dispatch` is yours, comPACT having no phase task to derive it from):
    Then `agent_dispatch`:
    ```bash
-   set -e
-   trap 'rc=$?; echo "[JOURNAL WRITE FAILED] comPACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
-   python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-     --type agent_dispatch --session-dir '{session_dir}' --stdin <<'JSON'
+   "{plugin_root}/bin/repact-journal-write" --site comPACT.md --type agent_dispatch --session-dir '{session_dir}' --stdin <<'JSON'
    {"agent": "{specialist-name}", "task_id": "{taskId}", "phase": "CODE", "scope": ["{assigned_paths}"]}
 JSON
    ```
 
-> ⚠️ **Heredoc-stdin contract**: All journal-event writes in this command file use `--stdin <<'JSON' ... JSON` (quoted delimiter, closing `JSON` on its own line at column 0 — bash heredocs do NOT strip leading whitespace from the delimiter line unless `<<-` with TABS is used). The quoted delimiter disables bash variable expansion so apostrophes, quotes, and backticks in template-substituted values (e.g., `{first_line}` from a commit message) pass through verbatim. The orchestrator must still produce JSON-valid string content (escape `\"`, `\\`, and control chars).
+> ⚠️ **Heredoc-stdin contract**: every journal write here uses `--stdin <<'JSON' ... JSON` (quoted delimiter, closing `JSON` at column 0) so template values pass through unexpanded; still emit JSON-valid strings.
 
-6. Spawn the specialist with the canonical dispatch form. The `prompt` MUST lead with the `YOUR PACT ROLE: teammate ({specialist-name})` marker on its own line (team protocol + teachback content arrive via spawn-time skills frontmatter; the dispatch prompt additionally carries the registration first-action directive):
 
-```
-Agent(
-  name="{specialist-name}",
-  team_name="{team_name}",
-  subagent_type="pact-{specialist-type}",
-  description="Spawn {specialist-name} specialist",
-  prompt="YOUR PACT ROLE: teammate ({specialist-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
-)
-```
-
-Spawn all specialists in parallel (multiple `Agent` calls in one response).
-
-**Progress monitoring**: For parallel dispatch or novel domains, include "Send progress signals per the agent-teams skill Progress Signals section" in each specialist's dispatch prompt.
-
-**After all concurrent agents complete**: Verify no conflicts occurred, run full test suite.
+Spawn all specialists in parallel (multiple `Agent` calls in one response). For parallel or novel work, include "Send progress signals per teammate-messaging.md §Progress Signals" in each dispatch prompt. **After all complete**: verify no conflicts, run the full suite.
 
 ### Single Specialist `Agent` (When Required)
 
-Use a single specialist agent only when:
-- Task is atomic (one bug, one endpoint, one component)
-- Sub-tasks modify the same files
-- Sub-tasks have dependencies on each other
-- Conventions haven't been established yet (run one first to set patterns)
+Only when the task is atomic, sub-tasks share files or depend on each other, or conventions are not yet set.
 
-**Dispatch the specialist** — follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch):
+**Dispatch the specialist** — follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch) with `name="{specialist-name}"`, `subagent_type="pact-{specialist-type}"`:
 
-1. `TaskCreate(subject="{specialist-name}: TEACHBACK for {task}", description="<teachback gate brief; cross-ref to Task B for the mission>")` — Task A.
-2. `TaskCreate(subject="{specialist-name}: {task}", description=<see below>, metadata=<see below>)` — Task B.
-   - Task B's `description` carries the comPACT mission: "comPACT mode: Work directly from this task description.\nYou are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree.\nAs a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead.\nIf upstream task IDs are provided, read their task files for prior decisions; `TaskGet` does NOT surface metadata.\nCheck docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist.\nDo not create new documentation artifacts in docs/.\nFocus on the task at hand.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nTesting: New unit tests for logic changes (optional for trivial changes). Fix broken existing tests. Run test suite before HANDOFF.\nImport hygiene: if you modified any .py files, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files '<absolute-path-to-a-file-you-modified>.py' '<absolute-path-to-another>.py'` (one separately quoted absolute path per file, never one quoted list — a filename is untrusted shell input) before the suite; record its final IMPORT-HYGIENE verdict line verbatim in your HANDOFF produced field; fix findings in files you modified (a deliberate side-effect import or re-export keeps a reasoned `# noqa: F401`); if the script is missing or errors, say so in your HANDOFF — never skip silently.\n\n> Smoke vs comprehensive tests: These are verification tests. Comprehensive coverage is TEST phase work.\n\nIf you hit a blocker, STOP and `SendMessage` it to the team-lead.\n\nTask: [user's task description]"
-   - Task B's `metadata` carries per-dispatch variety stamping per pact-variety.md (4-rationale schema):
-     ```json
-     {
-       "variety": {
-         "novelty":               N,
-         "novelty_rationale":     "<1-sentence: the shape of this dispatch's novelty — never what you expect to find>",
-         "scope":                 N,
-         "scope_rationale":       "<1-sentence: the shape of this dispatch's scope — never what you expect to find>",
-         "uncertainty":           N,
-         "uncertainty_rationale": "<1-sentence: the shape of this dispatch's uncertainty — never what you expect to find>",
-         "risk":                  N,
-         "risk_rationale":        "<1-sentence: the shape of this dispatch's risk — never what you expect to find>",
-            # Ignorance-dependent dispatch: stamp all four `*_rationale` as "WITHHELD: ignorance-dependent dispatch" — real scores, no prose.
-         "total":                 N
-       }
-     }
-     ```
-3. `TaskUpdate(A_id, owner="{specialist-name}", addBlocks=[B_id])`
-4. `TaskUpdate(B_id, owner="{specialist-name}", addBlockedBy=[A_id])`
-5. **Journal events** (both before spawning). First, one `variety_assessed` event per dispatched Task B, mirroring that task's `metadata.variety` stamp — the four dimension scores and the total, `*_rationale` strings omitted, and the top-level `"scope": "dispatch"` discriminator present (the feature-level assessment event carries no `scope` field; journal readers key on that difference):
-   ```bash
-   set -e
-   trap 'rc=$?; echo "[JOURNAL WRITE FAILED] comPACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
-   python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-     --type variety_assessed --session-dir '{session_dir}' --stdin <<'JSON'
-   {"task_id": "{taskId}", "scope": "dispatch", "variety": {"novelty": N, "scope": N, "uncertainty": N, "risk": N, "total": N}}
-JSON
-   ```
+- Task A subject: `"{specialist-name}: TEACHBACK for {task}"`.
+- Task B subject: `"{specialist-name}: {task}"`.
+- Task B's `description` carries the comPACT mission: "comPACT mode: Work directly from this task description.\nYou are working in a git worktree at [worktree_path]. All file paths must be absolute and within this worktree.\nAs a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead.\nIf upstream task IDs are provided, read their task files for prior decisions; `TaskGet` does NOT surface metadata.\nCheck docs/plans/, docs/preparation/, docs/architecture/ briefly if they exist.\nDo not create new documentation artifacts in docs/.\nFocus on the task at hand.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before any implementation tool-use — it is pre-assigned to you but still pending; you flip it, not the lead.\n\nTesting: New unit tests for logic changes (optional for trivial changes). Fix broken existing tests. Run test suite before HANDOFF.\nImport hygiene (pact-coding-standards): before the suite, run `bash {plugin_root}/skills/pact-coding-standards/scripts/lint-check.sh --files` on each .py file you modified; record its verdict line in HANDOFF `produced`.\n\n> Smoke vs comprehensive tests: These are verification tests; HIGH-RISK code (security, validation/parsers, shared contracts) also gets its adversarial boundary tests now. The rest is TEST phase work.\n\nIf you hit a blocker, STOP and `SendMessage` it to the team-lead.\n\nTask: [user's task description]"
+- **Journal event** before spawning, `agent_dispatch` (yours; the hook journals `variety_assessed`):
    Then `agent_dispatch`:
    ```bash
-   set -e
-   trap 'rc=$?; echo "[JOURNAL WRITE FAILED] comPACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
-   python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-     --type agent_dispatch --session-dir '{session_dir}' --stdin <<'JSON'
+   "{plugin_root}/bin/repact-journal-write" --site comPACT.md --type agent_dispatch --session-dir '{session_dir}' --stdin <<'JSON'
    {"agent": "{specialist-name}", "task_id": "{taskId}", "phase": "CODE", "scope": []}
 JSON
    ```
-6. Spawn the specialist with the canonical dispatch form. The `prompt` MUST lead with the `YOUR PACT ROLE: teammate ({specialist-name})` marker on its own line (team protocol + teachback content arrive via spawn-time skills frontmatter; the dispatch prompt additionally carries the registration first-action directive):
-
-```
-Agent(
-  name="{specialist-name}",
-  team_name="{team_name}",
-  subagent_type="pact-{specialist-type}",
-  description="Spawn {specialist-name} specialist",
-  prompt="YOUR PACT ROLE: teammate ({specialist-name}).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"PACT:pact-team-registration\") to record your identity. Then check `TaskList` for tasks assigned to you."
-)
-```
-
----
-
-## Signal Monitoring
-
-Monitor for blocker/algedonic signals via:
-- **`SendMessage`**: Teammates send blockers and algedonic signals directly to the team-lead
-- **`TaskList`**: Check for tasks with blocker metadata or stalled status
-
-On signal detected, handle via the Signal Task Handling procedure:
-
-When an agent reports a blocker or algedonic signal via `SendMessage`:
-1. Create a signal Task (blocker or algedonic type)
-2. Block the agent's task via `addBlockedBy`
-3. For algedonic signals, amplify scope:
-   - ALERT → block current phase task
-   - HALT → block feature task (stops all work)
-4. Present to user and await resolution
-5. On resolution: mark signal task `completed` (unblocks downstream)
-
-For agent stall detection and recovery, see [Agent Stall Detection](orchestrate.md#agent-stall-detection).
-
----
 
 ## Auditor Dispatch
 
-An auditor is dispatched alongside coders unless explicitly skipped. To skip, output on its own line so the decision is visible to the user:
+An auditor is dispatched alongside coders unless explicitly skipped; to skip, output on its own line:
 
 > **Auditor skipped**: [justification]
 
-See the [Concurrent Audit Protocol](../protocols/pact-audit.md) for full details.
-
-**Dispatch is mandatory when**:
-- Variety score >= 7 (Medium or higher)
-- 3+ coders running in parallel (coordination complexity warrants observation)
-- Task touches security-sensitive code (auth, crypto, user input handling)
-- Domain has prior history of architecture drift (from pact-memory calibration data)
-
-**Valid skip reasons**: Single coder on familiar pattern, variety reassessed below 7, user requested skip.
-
-When dispatching an auditor, create its task with `metadata: {"completion_type": "signal"}` so the completion gate accepts `audit_summary` instead of standard HANDOFF.
-
----
+**Dispatch is mandatory when**: variety >= 7, 3+ parallel coders, security-sensitive code, or prior architecture drift, unless the default agent cap (2 at once) is full: then the ONE reviewer's post-artifact audit replaces it, and the skip line says so. Its task carries `metadata: {"completion_type": "signal"}`.
 
 ## After Specialist Completes
 
-- [ ] **Receive HANDOFF** from specialist(s)
-- [ ] Agent tasks marked `completed` (agents self-manage their task status via `TaskUpdate`)
-- [ ] **Agreement verification**: `SendMessage` to specialist to confirm shared understanding of deliverables before committing. Background: [pact-ct-teachback.md](../protocols/pact-ct-teachback.md).
-- [ ] **Run tests** — verify work passes. If tests fail → return to specialist for fixes (create new agent task, repeat).
-- [ ] **Create atomic commit(s)** — stage and commit before proceeding. Lead owns commits; specialists stage + `SendMessage` "stage-ready" and wait. A staging specialist should SET the `intentional_wait` task metadata (reason `awaiting_lead_commit`, resolver `lead`) before the stage-ready notify so TeammateIdle hooks do not nag while the team-lead works through the commit sequence; CLEAR on the team-lead's commit confirmation. See the "Intentional Waiting" section in `pact-agent-teams/SKILL.md` for the SET/CLEAR contract.
+- [ ] **Receive HANDOFF**; **agreement verification** by `SendMessage` before committing.
+- [ ] **Run tests**; on failure return to the specialist (new agent task).
+- [ ] **Create atomic commit(s)** — lead owns commits; specialists stage, SET `intentional_wait` (`awaiting_lead_commit`, `lead`), send "stage-ready"; confirm by `amend_<n>` (kind `commit`) or completion.
 - [ ] **Journal events**: After each commit, write a `commit` event:
   ```bash
-  set -e
-  trap 'rc=$?; echo "[JOURNAL WRITE FAILED] comPACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
-  python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-    --type commit --session-dir '{session_dir}' --stdin <<'JSON'
+  "{plugin_root}/bin/repact-journal-write" --site comPACT.md --type commit --session-dir '{session_dir}' --stdin <<'JSON'
   {"sha": "{short_sha}", "message": "{first_line}", "phase": "CODE"}
 JSON
   ```
-- [ ] **Calibration** — The secretary gathers calibration metrics during HANDOFF processing. When asked, provide a brief difficulty assessment: was actual difficulty higher, lower, or about the same as predicted? Which dimensions surprised you?
-- [ ] **Verify agent task completion**: On receiving each HANDOFF summary via `SendMessage`, check the agent's task status via `TaskList`. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
-- [ ] **Backlog boundary write** — the specialist's work is verified complete, a transition you WITNESSED, so set this item's status to `done` WITHOUT asking. Run the command rather than editing the file: it loads through `load_or_create`, which is what stashes the compare-and-swap baseline. A document built any other way is written with NO lost-update protection and nothing reports that.
+- [ ] **Verify agent task completion** via `TaskList`; if still `in_progress`, `TaskUpdate(taskId, status="completed")`.
+- [ ] **Task-log boundary write** — verified complete is WITNESSED: the acceptance hook closes every linked ref the HANDOFF disposed as `done` and prints what it left open; close those by hand, with the commit as evidence, `--remaining "<title>"` for a part not done; report it (or the refusal).
   ```bash
-  python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status done
+  python3 "{plugin_root}/bin/repact-task" done <ref> --evidence commit:<sha>
   ```
-  Report what you wrote. If the write is refused, report the refusal and carry on.
-- [ ] **Process specialist HANDOFFs** (dispatch as soon as the specialists have reported; the auditor need not have finished — this harvest writes no Working Memory block, and a later harvest picks up the auditor's HANDOFF):
+- [ ] **Harvest HANDOFFs on demand, not by default** (persona §13, lead-reference §Harvest Triggers): only when the user asks or a HANDOFF carries a decision worth keeping across sessions; otherwise the consolidation harvest at wrap-up or pause covers it. When you do, ensure the secretary first: see the on-demand secretary step in [bootstrap.md](bootstrap.md#step-2--on-demand-secretary) (TaskCreate → TaskUpdate(owner="secretary") → spawn if absent → SendMessage).
   ```
   TaskCreate(subject="secretary: harvest pending HANDOFFs",
     description="Harvest HANDOFFs for team {team_name}. Follow the Standard Harvest workflow in your pact-handoff-harvest skill. Report summary when done.")
@@ -446,62 +108,20 @@ JSON
   ```
 - [ ] **Journal event**: Write `phase_transition` to mark comPACT completion:
   ```bash
-  set -e
-  trap 'rc=$?; echo "[JOURNAL WRITE FAILED] comPACT.md (bash line $LINENO): \"${BASH_COMMAND%%$'\''\n'\''*}\" exit=$rc" >&2; exit $rc' ERR
-  python3 "{plugin_root}/hooks/shared/session_journal.py" write \
-    --type phase_transition --session-dir '{session_dir}' --stdin <<'JSON'
+  "{plugin_root}/bin/repact-journal-write" --site comPACT.md --type phase_transition --session-dir '{session_dir}' --stdin <<'JSON'
   {"phase": "CODE", "status": "completed", "skip_reason": "", "metadata": {"workflow": "comPACT"}}
 JSON
   ```
 - [ ] **`TaskUpdate`**: Feature task status = "completed"
 
-> ⚠️ **Do NOT shut down specialists until the user decides the next step.** Ask first, then act.
+> ⚠️ **Stop each specialist once its task is accepted and nothing of its awaits verification** (persona §11). The next step is the user's: ask first, then act.
 
 **Next steps** — After commit, use `AskUserQuestion` to ask: "Work committed. What next?"
 
 | User's decision | Specialists | Next action |
 |----------------|-------------|-------------|
-| **Yes, create PR** (Recommended) | **Keep alive** — review often needs the original specialist to fix findings | Invoke `/PACT:peer-review`. Shut down after all remediation complete + user merge decision (via `AskUserQuestion`). |
-| **Continue working** | **Keep alive** — apply Reuse vs. Spawn table for follow-up | Do nothing — let the user continue. More work may follow via `/PACT:comPACT` or `/PACT:orchestrate`. |
-| **Pause work for now** | **Shut down after consolidation** — pause preserves knowledge | Invoke `/PACT:pause` — consolidates memory, persists state, shuts down teammates. Worktree persists; resume later. |
+| **Yes, create PR** (Recommended) | **Stopped once its task is accepted** — review fixes go to the code's author if it is still running, else to a fresh coder | Invoke `/repacted:peer-review`; a reviewer with open findings stays until they are verified. The merge is the user's decision (via `AskUserQuestion`). |
+| **Continue working** | **Stopped once its task is accepted** — a follow-up goes to a fresh agent (Reuse vs. Spawn table) | Do nothing — let the user continue. More work may follow via `/repacted:comPACT` or `/repacted:orchestrate`. |
+| **Pause work for now** | **Shut down after consolidation** — pause preserves knowledge | Invoke `/repacted:pause` — consolidates memory, persists state, shuts down teammates. Worktree persists; resume later. |
 
-**If blocker reported**:
-
-Examples of blockers:
-- Task requires a different specialist's domain
-- Missing dependencies, access, or information
-- Same error persists after multiple fix attempts
-- Scope exceeds self-contained capability (needs PREPARE/ARCHITECT phases)
-- Concurrent agents have unresolvable conflicts
-
-When blocker is reported:
-1. Receive blocker report from specialist
-2. Run `/PACT:imPACT` to triage
-3. May escalate to `/PACT:orchestrate` if task exceeds self-contained scope
-
----
-
-## When to Escalate
-
-Recommend `/PACT:orchestrate` instead if:
-- Sub-tasks have shared-file dependencies requiring sequenced coordination
-- Task requires PREPARE or ARCHITECT phases (significant research or design decisions)
-- Architectural decisions affect multiple components
-- Full preparation/architecture documentation is needed
-
-### Variety-Aware Escalation
-
-During comPACT execution, if you discover the task is more complex than expected:
-
-| Discovery | Variety Signal | Action |
-|-----------|----------------|--------|
-| Sub-tasks have shared-file dependencies | Medium+ (7+) | Escalate to `/PACT:orchestrate` |
-| Significant ambiguity/uncertainty | High (11+) | Escalate; may need PREPARE phase |
-| Architectural decisions required | High (11+) | Escalate; need ARCHITECT phase |
-| Higher risk than expected | High (11+) | Consider `/PACT:plan-mode` first |
-
-**Heuristic**: If re-assessing variety would now score Medium+ (7+), escalate.
-
-**Conversely**, if the specialist reports the task is simpler than expected:
-- Note in HANDOFF to orchestrator
-- Complete the task; orchestrator may simplify remaining work
+**Blocker reported**: run `/repacted:imPACT`; escalate to `/repacted:orchestrate` if the task outgrows self-contained scope (re-assessed variety 7+).

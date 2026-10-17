@@ -20,8 +20,6 @@ layered on top by callers.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from shared.teachback_schema import (
@@ -190,54 +188,8 @@ class TestObjectFieldsPartition:
             )
 
 
-# ============================================================================
-# Doc-surface field enumeration (#958 Future-2a) — the LLM-loaded gate-template
-# surfaces that enumerate the canonical teachback_submit fields must each name
-# EVERY field in TEACHBACK_REQUIRED_FIELDS, so a future field-add can't silently
-# leave a surface stale.
-# ============================================================================
-
-# Hardcoded list of the LLM-loaded surfaces that enumerate the canonical
-# teachback_submit field names. LIMITATION: this list is hardcoded, so a NEW
-# gate-template surface added later is NOT auto-covered — extend this list when
-# adding a surface that enumerates the fields.
-_FIELD_ENUMERATING_SURFACES: tuple[str, ...] = (
-    "agents/pact-orchestrator.md",
-    "commands/orchestrate.md",
-    "commands/peer-review.md",
-    "commands/comPACT.md",
-    "commands/rePACT.md",
-)
-
-# pact-plugin/ root: this test lives at pact-plugin/tests/, so parent.parent.
-_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-
-
-class TestDocSurfaceFieldEnumeration:
-    """#958 Future-2a: each LLM-loaded gate-template surface must name every
-    canonical teachback_submit field. Substring-per-field (robust to rewording).
-
-    LIMITATIONS (documented):
-      - The surface file LIST (_FIELD_ENUMERATING_SURFACES) is hardcoded — a NEW
-        gate-template surface added later is NOT auto-covered.
-      - "understanding" is a common English word, so its per-file presence check
-        is looser than the 4 distinctive snake_case field names; the snake_case
-        fields carry the real anti-drift signal.
-    """
-
-    @pytest.mark.parametrize("surface", _FIELD_ENUMERATING_SURFACES)
-    def test_surface_names_every_required_field(self, surface):
-        path = _PLUGIN_ROOT / surface
-        assert path.is_file(), (
-            f"expected gate-template surface at {path} "
-            f"(surface moved/renamed — update _FIELD_ENUMERATING_SURFACES?)"
-        )
-        text = path.read_text(encoding="utf-8")
-        for field in TEACHBACK_REQUIRED_FIELDS:
-            assert field in text, (
-                f"{surface} must enumerate canonical field {field!r} "
-                f"(stale surface after a field-add?)"
-            )
+# Doc-surface field enumeration: the surfaces that teach the teachback fields are
+# rendered regions pinned by tests/contract/test_protocol_rendered.py.
 
 
 # ============================================================================

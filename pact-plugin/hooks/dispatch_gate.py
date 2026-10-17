@@ -1,88 +1,34 @@
 #!/usr/bin/env python3
-"""
-Location: pact-plugin/hooks/dispatch_gate.py
-Summary: PreToolUse hook (matcher='Agent') validating PACT specialist
-         spawns: required name, name regex/length/reserved tokens,
-         registered specialist type, SSOT session-team resolution, member
-         uniqueness, task assignment, and prompt heuristics. (#979: the
-         caller team_name arg is platform-ignored — the session team is
-         resolved solely from get_team_name(), never from the spawn arg.)
-Used by: hooks.json PreToolUse matcher='Agent'.
+"""PreToolUse hook (matcher='Agent'): validates PACT specialist spawns.
 
-Closes #662 silent-failure surface: spawning pact-* specialists without a
-name, with malformed names, against unregistered subagent_types, before
-TaskCreate, with long inline missions.
+Rules, cheapest first, short-circuit on the first non-ALLOW: (1) SOLO_EXEMPT carve-out,
+(2) non-pact-* carve-out, (3) name present, (4) name length/NFKC/regex/reserved,
+(5) plugin agents/ + specialist registry, (6) session team from the SSOT (never the
+platform-ignored team_name arg), (7) member-name uniqueness, (8) task assigned,
+(9) inline-mission heuristic (PACT_DISPATCH_INLINE_MISSION_MODE warn|deny|shadow).
+Fail-closed on load failure and on a runtime exception. DENY -> exit 2; ALLOW -> exit 0;
+WARN -> additionalContext. Every decision is journaled with the prompt redacted.
 
-Safety: fail-closed on module-load failure AND on runtime gate-logic
-exception (mirrors PR #660 ``_emit_load_failure_deny`` and the
-bootstrap_gate analogue). hookEventName always emitted (#658 invariant).
-DENY → exit 2 + permissionDecision; ALLOW → suppressOutput + exit 0;
-WARN → additionalContext + exit 0 (advisory; runbook validates injection
-empirically per architect §7(a) / tests/runbooks/662-dispatch-gate.md).
-
-Cheapest-rule-first ordering with short-circuit on first non-ALLOW:
-  ① SOLO_EXEMPT carve-out          ⑥ SSOT session-team resolve (#979)
-  ② non-pact-* carve-out            ⑦ member-name uniqueness in team
-  ③ name presence                   ⑧ task-assigned check
-  ④ name length/NFKC/regex/reserved ⑨ prompt heuristic (WARN)
-  ⑤ plugin agents/ + specialist registry
-
-Every gate decision (ALLOW/DENY/WARN) is journaled. Prompt text is
-redacted at the journal-write boundary (sk-/xoxb-/ghp_/AKIA/JWT
-patterns) so credentials accidentally pasted into a prompt never persist
-to disk; the in-memory ``permissionDecisionReason`` keeps the verbatim
-prompt-fragment for the user-facing error.
-
-Configuration:
-  ``PACT_DISPATCH_INLINE_MISSION_MODE`` env-var (default ``"warn"``)
-  controls the inline-mission heuristic disposition (the heuristic that
-  flags dispatchers inlining mission text into ``prompt=`` instead of
-  using the canonical "check TaskList" form). Allowed values:
-    ``"warn"``   advisory ``additionalContext`` (default)
-    ``"deny"``   blocking deny — flip after the matcher-fidelity
-                 counter-test in ``tests/runbooks/662-dispatch-gate.md``
-                 confirms ``additionalContext`` is silently dropped under
-                 PreToolUse
-    ``"shadow"`` journal-only; the trigger is observable in the session
-                 journal but does not WARN or DENY (calibration mode).
-  Unknown values fall back to ``"warn"``. The other rules are unaffected.
-
-Input: JSON from stdin (tool_name, tool_input, agent_id, etc.)
-Output: stdout JSON per harness contract.
+Map: _emit_load_failure_deny, _redact, _team_member_names, _resolves_a_registered_team,
+_lead_identity_refusal, evaluate_dispatch, _journal_decision,
+_augment_deny_with_stale_diagnosis, _compose_deny_diagnosis, main.
+Rationale: the design notes
 """
 
 from __future__ import annotations
 
 # ─── stdlib first (used by _emit_load_failure_deny BEFORE wrapped imports) ─
 import json
+import re
 import sys
-from typing import NoReturn
+from functools import partial
 
+# The one fail-closed emitter (hooks/_fail_closed.py, stdlib only); bound to this check's name.
+from _fail_closed import emit_load_failure_deny
 
 _SUPPRESS_OUTPUT = json.dumps({"suppressOutput": True})
 
-
-def _emit_load_failure_deny(stage: str, error: BaseException) -> NoReturn:
-    """Stdlib-only fail-closed deny for module-load or runtime gate-logic
-    failure. Mirrors PR #660 ``merge_guard_pre._emit_load_failure_deny``
-    and bootstrap_gate.py analogue. hookEventName MUST be present.
-    """
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                f"PACT dispatch_gate {stage} failure — blocking for safety. "
-                f"{type(error).__name__}: {error}. Check hook installation "
-                "and shared module availability."
-            ),
-        }
-    }))
-    print(
-        f"Hook load error (dispatch_gate / {stage}): {error}",
-        file=sys.stderr,
-    )
-    sys.exit(2)
+_emit_load_failure_deny = partial(emit_load_failure_deny, "dispatch_gate")
 
 
 # ─── fail-closed wrapper on cross-package imports ──────────────────────────
@@ -101,28 +47,20 @@ try:
     from shared.session_journal import append_event_checked, make_event
     from shared.paths import get_claude_config_dir
     from shared.stale_session import detect_stale_session_block
+    from shared.task_store import HALT_RULE, halt_sentence, read_probe_marker
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
     _emit_load_failure_deny("module imports", _module_load_error)
 
 
 # ─── constants ─────────────────────────────────────────────────────────────
 
-# Name validation. Order: length cap → NFKC normalize → regex → reserved.
-# NFKC defends against fullwidth/lookalike chars that pass naive regex.
-# The regex requires at least one alphanumeric and forbids leading or
-# trailing hyphens, so degenerate names like "-", "--", "-foo", "foo-"
-# are rejected. Internal hyphens are permitted; the single-character
-# form must itself be alphanumeric.
+# Name validation: length cap -> NFKC (defeats fullwidth lookalikes) -> regex -> reserved.
+# The regex needs one alphanumeric and forbids leading/trailing hyphens.
 NAME_REGEX = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 NAME_MAX_LENGTH = 64
 
-# Reserved tokens (per Task #25 description / security HANDOFF). Names
-# that would collide with PACT routing literals or schema actor types.
-# Recall pinned memory: ``"team-lead"`` is the canonical lead name AND
-# routing literal — a teammate named ``team-lead`` would shadow message
-# routing. ``lead`` / ``peer`` / ``user`` / ``external`` are
-# ``KNOWN_RESOLVERS`` schema values. ``unknown`` / ``solo`` are
-# semantic-reserved.
+# Reserved: routing literals and schema actor types ("team-lead" would shadow lead routing;
+# lead/peer/user/external are KNOWN_RESOLVERS values).
 RESERVED_NAMES = frozenset({
     "team-lead",
     "lead",
@@ -132,45 +70,14 @@ RESERVED_NAMES = frozenset({
     "unknown",
     "solo",
 })
-# Audit: `secretary` / `pact-secretary` are NOT reserved here. The session
-# secretary is canonically spawned with `name="secretary"` (see
-# bootstrap_marker_writer._SECRETARY_NAME and commands/bootstrap.md
-# Step 2), and the dispatch sites that re-assign housekeeping work to
-# the secretary use `TaskUpdate(owner="secretary")` literally. Reserving
-# the name would block the legitimate ritual.
-#
-# The previous reservation existed as a defense-in-depth name perimeter
-# against a confused-deputy attack on the self-completion carve-out
-# (when the carve-out was keyed on owner name). Post-#682 the
-# task_lifecycle_gate carve-out keys on team-config `agentType`
-# (member.agentType ∈ shared.intentional_wait.SELF_COMPLETE_EXEMPT_AGENT_TYPES,
-# looked up via the harness-managed team config) — NOT on owner name.
-# Owner-name spoofing alone therefore cannot bypass the
-# lead-only-completion advisory; the agentType-keyed predicate is the
-# load-bearing defense, and that defense is independent of which names
-# RESERVED_NAMES holds. See:
-#   - shared/intentional_wait.SELF_COMPLETE_EXEMPT_AGENT_TYPES
-#   - shared/intentional_wait._is_exempt_agent_type
-#   - shared/intentional_wait.is_self_complete_exempt (TRUST BOUNDARY block)
+# "secretary" is deliberately NOT reserved (the ritual spawns it by that name). The
+# self-completion carve-out keys on team-config agentType, not owner name, so name spoofing
+# cannot bypass it (shared/intentional_wait.is_self_complete_exempt).
 
-# Inline-mission heuristic. Long inline mission OR no TaskList reference
-# suggests the dispatcher embedded the mission in the prompt instead of
-# the task description (defeats the harvest pipeline).
-#
-# Audit: the 800-char threshold is duplicated as prose in
-# `agents/pact-orchestrator.md` §Agent Teams Dispatch.
-# The duplication is intentional — the agent-reader-primary axiom prefers
-# inline values over cross-refs because LLM readers under token pressure
-# don't follow cross-refs reliably. There is currently no source-side
-# enforcement that the prose stays in sync; update both surfaces if
-# changing this threshold.
+# Inline-mission heuristic. The 800-char threshold is also stated in
+# agents/pact-orchestrator.md; change both together.
 PROMPT_MAX_LENGTH = 800
-# Audit: this tuple is duplicated as prose in `agents/pact-orchestrator.md`
-# §Agent Teams Dispatch (the spawn-prompt example commentary lists these
-# accepted phrases). The duplication is intentional per the
-# agent-reader-primary axiom (see PROMPT_MAX_LENGTH audit anchor above);
-# update both surfaces together if changing the accepted phrases. Order
-# does not matter — the heuristic uses `any(... in prompt ...)`.
+# Also listed in agents/pact-orchestrator.md; change both together.
 TASK_REFERENCE_PHRASES = (
     "TaskList",
     "task list",
@@ -178,34 +85,9 @@ TASK_REFERENCE_PHRASES = (
     "check your tasks",
 )
 
-# Inline-mission mode. Read at module-load from
-# ``PACT_DISPATCH_INLINE_MISSION_MODE`` env-var. The internal Python
-# identifier is named after the behavior the heuristic checks (whether the
-# dispatcher inlined mission text into ``prompt=`` rather than using the
-# canonical "check TaskList" form).
-# Allowed values:
-#   ``"warn"``   — emit additionalContext (advisory, default; behavior
-#                  unchanged from initial Commit 2 implementation).
-#   ``"deny"``   — promote to a blocking deny. Flip to this if the
-#                  post-merge matcher-fidelity counter-test confirms
-#                  additionalContext is silently dropped under PreToolUse
-#                  (architect §7(a), runbook 662-dispatch-gate.md
-#                  inline-mission section).
-#   ``"shadow"`` — emit a journal event but neither WARN nor DENY
-#                  (first-session safety net for calibration; the gate
-#                  observes without intervening). DENY decisions from the
-#                  other rules still fire normally; only the inline-mission
-#                  heuristic is muted.
-# Unknown values fall back to ``"warn"`` so a typo never disables the
-# gate's other rules. Default ``"warn"`` preserves Commit 2 behavior.
-# Resolution is delegated to the shared PACT_* resolver
-# (``shared.pact_config.get_enum``), which applies the same ``.strip().lower()``
-# normalization BEFORE the membership check (``"DENY"`` / ``" deny "`` → deny;
-# ``""`` / bogus → warn) and owns the allowed-value set in its registry (SSOT).
-# This replaces the read that was copy-pasted identically in
-# handoff_ordering_gate.py's PACT_DISPATCH_VARIETY_MODE knob. get_enum is total
-# (never raises) and is imported inside the fail-closed module-import block
-# above, so a resolver-load failure routes through _emit_load_failure_deny.
+# Inline-mission mode, resolved once by shared.pact_config.get_enum (total; unknown values
+# fall back to "warn" so a typo never disables the other rules). Imported inside the
+# fail-closed import block, so a resolver-load failure denies.
 INLINE_MISSION_MODE = pact_config.get_enum("PACT_DISPATCH_INLINE_MISSION_MODE")
 
 # Credential redaction patterns. Applied to the journal-written prompt
@@ -228,10 +110,7 @@ REDACTION_PATTERNS = (
     re.compile(r"AIza[A-Za-z0-9_-]{35}"),
     # JWT shape: three base64url segments joined with dots.
     re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"),
-    # PEM private-key blocks (any flavor: RSA, EC, OPENSSH, plain
-    # PRIVATE KEY, ENCRYPTED PRIVATE KEY). DOTALL so the body across
-    # newlines is consumed by the redactor; non-greedy to stop at the
-    # first END line.
+    # PEM private-key blocks of any flavour; DOTALL, non-greedy to the first END line.
     re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
         re.DOTALL,
@@ -242,13 +121,7 @@ REDACTION_PATTERNS = (
 # ─── helpers ───────────────────────────────────────────────────────────────
 
 def _redact(prompt: str) -> str:
-    """Scrub credential patterns BEFORE journal write.
-
-    Applied at the journal-write boundary, not at gate-decision boundary
-    — the user-facing ``permissionDecisionReason`` keeps the verbatim
-    prompt fragment so the dispatcher can self-diagnose. Only the
-    on-disk journal entry is redacted.
-    """
+    """Scrub credential patterns before the journal write (the user-facing reason stays verbatim)."""
     if not isinstance(prompt, str):
         return ""
     redacted = prompt
@@ -258,21 +131,8 @@ def _redact(prompt: str) -> str:
 
 
 def _team_member_names(team_name: str) -> set[str]:
-    """Member-roster reader. Read ``~/.claude/teams/{team_name}/config.json``
-    and return the set of currently-live member names. Tolerant: any error
-    returns ``set()`` (no collision detected).
-
-    Private to dispatch_gate (only the uniqueness rule uses it). The
-    architect §5 contract intentionally did NOT include this in
-    dispatch_helpers.py because task_lifecycle_gate has no need for the
-    member roster.
-
-    ACCEPTED CONFIG-LESS GAP: under the config-less Desktop/SDK
-    substrate there is no ``config.json``, so this returns ``set()`` and the
-    name-uniqueness rule degrades to "no collision detected". This is an
-    ACCEPTED degradation, not a deadlock: the rule fails OPEN (permits), so
-    dispatch is not blocked; only the (advisory) duplicate-name check is
-    silently inactive in that substrate.
+    """Live member names from the team config.json; any error (or no config) returns set(), so
+    the uniqueness rule fails open.
     """
     cfg_path = get_claude_config_dir() / "teams" / team_name / "config.json"
     try:
@@ -291,6 +151,33 @@ def _team_member_names(team_name: str) -> set[str]:
     return names
 
 
+_PLAIN_SEGMENT = re.compile(r"(?!\.\.?$)[A-Za-z0-9_.-]{1,128}")
+TEAM_CONFIG_ABSENT_RULE = "team_config_absent"
+
+
+def _team_config_absent(team_name: str) -> bool:
+    """True when teams/<team>/config.json is not a file: the config-less substrate (Desktop Code
+    tab and SDK: teams/<full uuid>/ holds inboxes/ and no config.json, and the teammate was seen
+    to get no Task tools there), or a session context naming a team that is gone. A name that is not one plain path segment is never looked up (False)."""
+    if not isinstance(team_name, str) or not _PLAIN_SEGMENT.fullmatch(team_name):
+        return False
+    try:
+        return not (get_claude_config_dir() / "teams" / team_name / "config.json").is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def _team_config_absent_advisory(team_name: str, name: str) -> str:
+    return (f"PACT dispatch_gate: team {team_name!r} has no teams/{team_name}/config.json on "
+            f"disk. A teammate spawned into a team the host never wrote gets no TaskList, TaskGet "
+            f"or TaskUpdate and cannot reach team-lead by name, so {name!r} will not see its "
+            "tasks. Brief it without them: put the whole mission in the spawn prompt (or "
+            "SendMessage it after the spawn), and ask for the HANDOFF as its final message "
+            "(Produced, Key decisions, next steps). Do not wait on its task file; record the "
+            "result on the task yourself. If the session was resumed, the context may name an "
+            "old team: run /repacted:bootstrap first.")
+
+
 # ─── pure rule-eval composition (testable without stdin/stdout) ────────────
 
 # Rule ⑥'s refusal in a registered teammate's own process. That process never has
@@ -304,12 +191,7 @@ _TEAMMATE_SPAWN_REFUSAL = (
 
 
 def _resolves_a_registered_team(input_data: dict) -> bool:
-    """True iff the frame's own session resolves a team membership.
-
-    A teammate in its own process is registered in its team; a solo specialist
-    session is not. The import lives here so a failure to import or resolve
-    counts as not registered, and rule ⑥ keeps its bootstrap text.
-    """
+    """True iff the frame's own session resolves a team membership."""
     try:
         from shared.background_work import frame_team_and_name
 
@@ -319,69 +201,64 @@ def _resolves_a_registered_team(input_data: dict) -> bool:
         return False
 
 
+def _lead_identity_refusal(name) -> tuple[str, str, str] | None:
+    """The deny for a spawn name that is a lead identity, else None."""
+    if not isinstance(name, str) or not name:
+        return None
+    folded = unicodedata.normalize("NFKC", name).casefold()
+    lead_types = {t.casefold() for t in pact_context.LEAD_AGENT_TYPES}
+    if (folded in lead_types or folded == "team-lead"
+            or folded.rsplit(":", 1)[-1] in {t.rsplit(":", 1)[-1] for t in lead_types}):
+        return ("DENY",
+                f"PACT dispatch_gate: name {name!r} is a lead identity (reserved-token set: "
+                "the lead's agent types and its member name). A teammate with it would be "
+                "taken for the lead. Choose a role-descriptive name.",
+                "name_lead_identity")
+    return None
+
+
 def evaluate_dispatch(
     tool_input: dict, input_data: dict | None = None,
 ) -> tuple[str, str | None, str | None]:
-    """Single composition function. Returns ``(decision, reason, rule)``.
+    """Compose rules (1)-(9). Returns (decision, reason, rule); decision is ALLOW, DENY or WARN.
 
-    ``input_data`` is the full hook frame when the caller has it. Rule ⑥ reads
-    its role and registered team membership to word the refusal; without it,
-    rule ⑥ keeps the bootstrap text.
-
-    decision ∈ {``"ALLOW"``, ``"DENY"``, ``"WARN"``}.
-    reason: human-readable explanation (None for ALLOW).
-    rule: behavioral rule identifier (e.g. ``"name_required"``,
-        ``"long_inline_mission"``); None for ALLOW or carve-out. Values
-        describe what the rule checks.
-
-    Cheapest-rule-first ordering with short-circuit on first non-ALLOW.
-    Pure function — no stdin/stdout, no FS writes, no exceptions raised
-    to caller. ALL exceptions escape to ``main()`` which routes them
-    through ``_emit_load_failure_deny`` (runtime fail-closed).
+    Pure: no stdin/stdout or writes. Exceptions escape to main(), which denies (fail-closed).
     """
     if not isinstance(tool_input, dict):
         tool_input = {}
 
     subagent_type = tool_input.get("subagent_type", "") or ""
-    # The namespaced spelling (`PACT:pact-architect`) is checked as its bare
+    # The namespaced spelling (`repacted:pact-architect`) is checked as its bare
     # stem by every rule below. The journal keeps the spelling the caller used.
     if isinstance(subagent_type, str):
         subagent_type = pact_context.strip_pact_namespace(subagent_type)
     name = tool_input.get("name", "") or ""
     prompt = tool_input.get("prompt", "") or ""
-    # NOTE (#979): the spawn-arg team_name is intentionally NOT bound to a
-    # local here. Claude Code v2.1.178+ ignores Agent(team_name=); the session
-    # team is resolved SOLELY from the SSOT (get_team_name()) at ⑥/⑦/⑧ below,
-    # so the caller arg is never used as a path component in this gate. It is
-    # still recorded verbatim in the decision journal (read directly from
-    # tool_input in _journal_decision) for diagnostics.
+    # The spawn-arg team_name is ignored by the platform, so it is never used as a path here
+    # (only journaled); the team comes from get_team_name() at (6)-(8).
+
+    # ⓪ A lead-identity name is refused for every spawn, before the carve-outs below allow
+    # research and non-pact-* types through (architect-pact R1 on CLEANUP-B).
+    refusal = _lead_identity_refusal(name)
+    if refusal:
+        return refusal
 
     # ① Carve-outs — sub-microsecond. SOLO_EXEMPT covers research agents
     # (general-purpose / Explore / Plan) that legitimately spawn without
-    # name/team_name per pinned feedback_direct_agent_calls.md.
+    # name/team_name by design.
     if subagent_type in SOLO_EXEMPT:
         return ("ALLOW", None, None)
     # ② Non-pact-* spawns are not this gate's business — fall through.
     if not isinstance(subagent_type, str) or not subagent_type.startswith("pact-"):
         return ("ALLOW", None, None)
 
-    # ③ Required string presence on name. (AC-2 / #979: the team_name-presence
-    # check was dropped — Claude Code v2.1.178+ ignores Agent(team_name=), so
-    # requiring or validating the caller-supplied team_name enforces a contract
-    # the platform no longer honors. name-presence + ALL of rule ④ are KEPT:
-    # name validation is a real injection/reserved-token defense, and the
-    # session team is resolved from the SSOT at ⑥/⑦/⑧, never from the arg, so
-    # the caller team_name needs no presence/normalization handling here.)
+    # (3) Name presence. Name validation (4) stays: it is an injection/reserved-token defense.
     if not isinstance(name, str) or not name:
         return ("DENY",
                 "PACT dispatch_gate: name= parameter is required for "
                 "pact-* specialist spawns. See orchestrator persona §11.",
                 "name_required")
 
-    # ④ Name validation. Length cap FIRST (cheap), then NFKC normalization
-    # (defends against fullwidth/lookalike unicode that would otherwise
-    # pass the regex), then regex on the NORMALIZED form, then
-    # reserved-token check on the normalized form.
     if len(name) > NAME_MAX_LENGTH:
         return ("DENY",
                 f"PACT dispatch_gate: name length {len(name)} exceeds "
@@ -403,13 +280,8 @@ def evaluate_dispatch(
                 "role-descriptive name.",
                 "name_reserved_token")
 
-    # ⑤a Context/plugin_root resolution. With the env fallback in
-    # get_plugin_root() and the UserPromptSubmit self-heal, an empty
-    # plugin_root requires context-file-missing AND env-missing — when it
-    # does happen, name the REAL cause (the derived context path and the
-    # session_init root cause) instead of misdirecting recovery at the
-    # plugin install. Caught BEFORE the agents/ stat so the two causes
-    # (context unresolvable vs plugin install broken) stay separable.
+    # (5a) An empty plugin_root means context file AND env both missing: name that cause, not a
+    # broken plugin install, and check it before the agents/ stat.
     plugin_root = pact_context.get_plugin_root()
     if not plugin_root:
         return ("DENY",
@@ -437,16 +309,7 @@ def evaluate_dispatch(
                 "agents/pact-*.md).",
                 "specialist_not_registered")
 
-    # ⑥ Session-team resolution from the SSOT, with empty-source fail-closed.
-    # AC-1 / #979: the prior team_name-arg equality check was DROPPED. Claude
-    # Code v2.1.178+ ignores Agent(team_name=), so the session team is resolved
-    # SOLELY from get_team_name() (the persisted SSOT that generate_team_name
-    # mints as "session-<id8>"). An equality gate against the platform-ignored
-    # arg would DENY a legitimately-dispatched teammate. ⑦/⑧ below resolve
-    # their team-dir reads against session_team, NEVER the caller arg, so the
-    # spawn-arg team_name is not a path component anywhere in this gate. The
-    # empty-session_team fail-closed is RETAINED because ⑦/⑧ structurally
-    # depend on session_team being a non-empty path segment.
+    # (6) Session team from the SSOT; empty fails closed because (7)/(8) use it as a path segment.
     session_team = pact_context.get_team_name()
     if not session_team:
         if (isinstance(input_data, dict)
@@ -455,7 +318,7 @@ def evaluate_dispatch(
             return ("DENY", _TEAMMATE_SPAWN_REFUSAL, "team_name_unavailable")
         message = ("PACT dispatch_gate: session team_name is unavailable "
                    "(pact-session-context.json missing or unreadable). "
-                   "Re-run /PACT:bootstrap to restore session context.")
+                   "Re-run /repacted:bootstrap to restore session context.")
         # Append the shared context diagnosis (non-empty only when the
         # context file is underivable/absent) so the deny names the real
         # root cause instead of leaving recovery to guesswork.
@@ -484,11 +347,13 @@ def evaluate_dispatch(
                 "arrival.",
                 "no_task_assigned")
 
-    # ⑨ Inline-mission heuristic. Mode controlled by
-    # PACT_DISPATCH_INLINE_MISSION_MODE env-var (warn|deny|shadow; default
-    # warn). Shadow is a calibration mode: the rule fires the journal
-    # event but returns ALLOW so first-session operators can observe
-    # trigger frequency without WARN-noise.
+    # (8b) The team is not on disk: the teammate will have no Task tools. Advisory, never a deny
+    # (the spawn still works as a prompt-briefed agent), and it replaces (9): here the mission
+    # belongs in the prompt.
+    if _team_config_absent(session_team):
+        return ("WARN", _team_config_absent_advisory(session_team, name), TEAM_CONFIG_ABSENT_RULE)
+
+    # (9) Inline-mission heuristic; shadow mode journals and allows.
     if (len(prompt) > PROMPT_MAX_LENGTH
             or not any(phrase in prompt for phrase in TASK_REFERENCE_PHRASES)):
         msg = (f"PACT dispatch_gate: prompt is long ({len(prompt)} "
@@ -512,20 +377,7 @@ def evaluate_dispatch(
 
 def _journal_decision(decision: str, reason: str | None, rule: str | None,
                        tool_input: dict) -> None:
-    """Emit one journal event per gate decision. Best-effort sink —
-    errors are swallowed so the gate's primary decision always stands.
-
-    The ``rule`` field carries a behavioral identifier (e.g.
-    ``"name_required"``, ``"long_inline_mission"``).
-
-    Note: ``"dispatch_decision"`` is not registered in
-    ``_REQUIRED_FIELDS_BY_TYPE`` in shared/session_journal.py, so the
-    schema validator passes via the unknown-type opt-in pass-through
-    (validator L317-L320). If a future change registers this type with
-    required fields, update both this call site AND the validator
-    declaration in tandem. Credential redaction applied to the prompt
-    fragment BEFORE the journal write so credentials never persist.
-    """
+    """Journal one dispatch_decision row per decision (prompt redacted); errors are swallowed."""
     try:
         prompt = tool_input.get("prompt", "") if isinstance(tool_input, dict) else ""
         event = make_event(
@@ -538,43 +390,18 @@ def _journal_decision(decision: str, reason: str | None, rule: str | None,
             reason=reason,
             prompt_redacted=_redact(prompt)[:1024],
         )
-        # Captured, not discarded: append_event_checked records a
-        # journal_emit_skipped naming this type when the write does not land,
-        # so a lost dispatch_decision leaves a durable trace rather than
-        # vanishing.
-        # NOTHING READS dispatch_decision TODAY. The liveness check that once
-        # treated it as its own witness was retired together with the Q5
-        # coverage ratio, and Q5's surviving sample-loss report reads only
-        # skipped_type == "dispatch_site". The capture stays — it is the cheap
-        # half, and a stream with no reader is harmless where a silently
-        # dropped one is not — but do NOT justify anything downstream on the
-        # claim that this event is watched.
+        # append_event_checked records journal_emit_skipped if the write fails. Nothing reads
+        # dispatch_decision today; do not justify downstream logic on it being watched.
         append_event_checked(event, "dispatch_decision")
     except Exception:
         # Journal is best-effort; gate decision stands regardless.
         pass
 
 
-# Deny rules whose root cause can be a stale-team/store mismatch after a
-# Claude Code restart/fork (the persisted team_name/session_id diverge from
-# the live platform team, so this gate resolves an orphaned task store while
-# Task* tools write the live one). Both surface as misleading denials —
-# ``team_name_unavailable`` (rule ⑥) and ``no_task_assigned`` (rule ⑧) — that
-# never name the real cause. Other deny rules (name validation, plugin-install,
-# registry) are NOT restart-symptoms, so they are deliberately excluded: a
-# stale-session note on them would misdirect recovery. Rule ⑥'s refusal in a
-# teammate's own process is not a restart symptom either, so the composer
-# returns ``_TEAMMATE_SPAWN_REFUSAL`` verbatim.
+# Deny rules a restart-induced stale team/store can cause; only these get the stale note.
 _STALE_DIAGNOSABLE_RULES = frozenset({"team_name_unavailable", "no_task_assigned"})
 
-# Actionable re-align guidance appended after the shared detector's stale-block
-# warning. The detector names the live-vs-recorded session_id mismatch; this
-# adds the dispatch-specific recovery (the gate read a different task store
-# than the live session's).
-#
-# The remedy is the MEASURED manual repoint, not a bootstrap pointer: the
-# bootstrap ritual does NOT rewrite these records, so a pointer there sends
-# the operator to a ritual that changes nothing for this denial.
+# Remedy is the manual repoint: the bootstrap ritual does not rewrite these records.
 _STALE_REALIGN_HINT = (
     " This dispatch denial is likely a STALE-TEAM/STORE MISMATCH, not a "
     "genuinely missing task: after a Claude Code restart/fork the platform "
@@ -591,40 +418,10 @@ _STALE_REALIGN_HINT = (
 def _augment_deny_with_stale_diagnosis(
     rule: str | None, message: str, input_data: dict,
 ) -> str:
-    """Return ``message`` augmented with a stale-team/store self-diagnosis when
-    a restart-induced session mismatch is detected, else ``message`` UNCHANGED.
+    """Return message plus a stale-team self-diagnosis when a restart mismatch is detected.
 
-    MESSAGE-ONLY: this never alters the gate DECISION — it is called only after
-    ``evaluate_dispatch`` has already returned DENY, and only rewrites the
-    user-facing ``permissionDecisionReason`` text. The deny still fires on
-    exactly the same inputs.
-
-    NEVER RAISES (the single named place the detection call is wrapped — this
-    is NEW code on a path that runs in EVERY consumer session). Any exception
-    from the detector (unreadable/absent CLAUDE.md, missing keys, a tmux frame
-    with no recorded block, an import-time surprise) falls back to the ORIGINAL
-    ``message``. A thrown exception must NEVER break dispatch; a self-diagnosis
-    is strictly a nicety on top of the already-correct deny.
-
-    Gating:
-      * Only the restart-symptom rules in ``_STALE_DIAGNOSABLE_RULES`` are
-        augmented; other deny rules are returned verbatim (a stale-session note
-        on a name-validation deny would misdirect recovery).
-      * UN-GATED from the bootstrap-marker fast path: detection runs regardless
-        of marker presence. On a restart the marker can be present but stamped
-        for the STALE team, so a marker-gated check would miss exactly the case
-        this diagnoses.
-      * When the shared detector returns None (no mismatch — the healthy case,
-        or CLAUDE.md absent as in worktrees), THIS FUNCTION returns the
-        ORIGINAL message unchanged. The augmentation is purely additive on a
-        detected mismatch.
-
-    SCOPE OF THAT LAST CLAIM: it describes THIS FUNCTION's return value, NOT
-    the text the gate finally emits. ``_compose_deny_diagnosis`` reads an
-    unchanged return as "the incumbent did not fire" and may then append the
-    rule-⑧ cause enumeration. So on ``no_task_assigned`` the emitted deny can
-    carry appended text even though this function preserved the message
-    verbatim. The contract here is unchanged; only its consumer is new.
+    Message-only (never changes the decision), never raises (falls back to message), and runs
+    regardless of the bootstrap marker (the marker can be stamped for the stale team).
     """
     try:
         if rule not in _STALE_DIAGNOSABLE_RULES:
@@ -642,74 +439,9 @@ def _augment_deny_with_stale_diagnosis(
         return message
 
 
-# Appended to the rule-⑧ deny when no stale-team mismatch was detected.
-#
-# Rule ⑧ fires whenever no task with this owner is OBSERVED, and that is
-# already a conflated signal: an unreadable store, a symlink escape, an unsafe
-# team name and an I/O error all look identical to an empty store from inside
-# this gate. So the text ENUMERATES the known causes and hands the reader a
-# check they can run themselves, rather than asserting a cause this gate has no
-# way to determine. The framing is deliberately OBSERVATION, not existence.
-#
-# ACTION-FIRST ordering: the check and the pointer come before the cause list,
-# so anything downstream that truncates leaves the actionable part intact.
-#
-# The branch arms NARROW, they do not CLOSE. "All four present" eliminates
-# cause (3) and claims nothing further, because the four causes below are the
-# KNOWN ones rather than a proven-exhaustive set. Naming the complement ("you
-# are in case (1), (2) or (4)") would send a reader outside that set to chase
-# three wrong causes, which is the very defect this text exists to fix.
-#
-# Cause (1) is worded to COVER the store-clearing case rather than leaving it
-# uncovered, and the earlier "creation was genuinely skipped" is exactly what
-# it must not say. The task store is periodically cleared, so a task can be
-# created and then vanish before the spawn is evaluated — leaving a readable,
-# correctly-resolved, genuinely-empty store, which reads as none of (1)-(4).
-# The remedy for that reader is already (1)'s remedy, so the fix is to widen
-# (1)'s DESCRIPTION, not to add a fifth entry. Wording it as an assertion that
-# creation never happened would invite the one reader who KNOWS they created
-# the task to dismiss the only cause whose action would have helped them.
-#
-# Stated as the OBSERVABLE ("created and since cleared") rather than by naming
-# the clearing mechanism: that mechanism is undocumented and its trigger is
-# unknown, so naming it here would present an internal as a stable interface.
-#
-# The self-check is POSITIVE-ONLY, and that is load-bearing. A permissions
-# error PROVES cause (4); listing the store successfully proves NOTHING —
-# ``ls`` follows symlinks and validates no containment, while this gate's
-# iterator refuses a symlink escape, so a team dir symlinked outside the tasks
-# root makes this gate deny while ``ls`` lists fine. A negative arm would
-# therefore report "not case (4)" in precisely the case that IS (4). A cue that
-# NARROWS is admissible; an assertion that ELIMINATES is not.
-#
-# The remedy for cause (3) is a pointer, never an inlined setting.
-#
-# The remedy for cause (2) is the MEASURED manual repoint, not a bootstrap
-# pointer: the bootstrap ritual does NOT rewrite the persisted team records,
-# so the earlier pointer ("Completing the bootstrap ritual rewrites those
-# records.") sent that operator to a ritual that changed nothing.
-#
-# That pointer is an ABSOLUTE URL rather than a section name, and ONE ground
-# carries the two halves. The README shipped INSIDE the plugin package does
-# not contain that section — it lives in the repository README — so a reader
-# searching their local copy for a quoted section title finds nothing, which
-# is worse than no pointer at all. The shipped README links this exact URL
-# once (measured 2026-08-18 as full-URL occurrences in pact-plugin/README.md,
-# the file marketplace.json packages), so this follows an established
-# convention rather than inventing one.
-# Do NOT "simplify" this back to a section name.
-#
-# THE OPENING QUALIFIER IS LOAD-BEARING, not throat-clearing. The rule-⑧ base
-# message ends with an unhedged imperative — create the teachback task and the
-# work task — and that instruction is CORRECT only under cause (1). Under (2)
-# the tasks land in a store this gate does not read, under (3) they cannot be
-# created at all, and under (4) they cannot be read back; in every one of
-# those an operator who acts on the first sentence burns a cycle and gets a
-# byte-identical denial. The base message CANNOT be edited (the journalled
-# reason is pinned byte-identical to base), so the qualification has to live
-# here — and it has to REACH BACK and name that instruction explicitly. A
-# general hedge about observation-versus-existence does not do that, because
-# by the time it registers the reader has already acted on the imperative.
+# Appended to the rule-(8) deny when no stale-team mismatch was detected. Enumerates the KNOWN
+# causes and a positive-only self-check; see the design notes before
+# rewording (the opening qualifier, the cause-(1) wording and the absolute URL are load-bearing).
 _CAUSE_ENUMERATION = (
     "\n\n"
     "DIAGNOSIS — this gate did not OBSERVE a task assigned to this owner.\n"
@@ -723,7 +455,7 @@ _CAUSE_ENUMERATION = (
     "    ToolSearch \"select:TaskCreate,TaskUpdate,TaskList,TaskGet\"\n"
     "  Any missing      -> case (3) below. For the setting that restores\n"
     "                      them, see\n"
-    "                      https://github.com/Synaptic-Labs-AI/PACT-Plugin#if-specialist-agents-will-not-spawn\n"
+    "                      https://github.com/v4lheru/repacted-plugin#if-specialist-agents-will-not-spawn\n"
     "  All four present -> not case (3). That rules out one cause, not the rest.\n"
     "If listing the task store reports a PERMISSIONS ERROR, you are in case (4).\n"
     "\n"
@@ -746,22 +478,8 @@ _CAUSE_ENUMERATION = (
 )
 
 
-# Fail-closed fallback for a violated precondition. Every DENY path in
-# ``evaluate_dispatch`` supplies a real message (11 of 11, verified by
-# enumeration), so this is UNREACHABLE today. It exists because the failure
-# DIRECTION of the alternative is wrong, not because the case is expected.
-#
-# Without it, a non-str ``message`` makes the concatenation below raise
-# TypeError — and the composer runs OUTSIDE the ``try`` that guards
-# ``evaluate_dispatch``, so nothing catches it. The hook would exit 1, and a
-# nonzero-non-2 exit is NON-BLOCKING: the tool call proceeds. A gate whose
-# entire job is to refuse would silently become a pass-through, which is the
-# one direction it must never fail in.
-#
-# Returning a string instead keeps the deny intact: ``main()`` derives exit 2
-# from the DECISION, never from this text. The text is deliberately a real
-# sentence rather than an empty string — ``reason or ""`` would trade a crash
-# for a blank denial, which fails closed but tells the operator nothing.
+# Fail-closed fallback for a non-str message (unreachable today). Without it the concat
+# would raise outside the guarded try, exit 1 is non-blocking, and the spawn would proceed.
 _MISSING_DENY_REASON = (
     "PACT dispatch_gate: dispatch DENIED, but the gate produced no reason "
     "text. That is an internal defect in the gate itself, not a problem with "
@@ -772,64 +490,12 @@ _MISSING_DENY_REASON = (
 def _compose_deny_diagnosis(
     rule: str | None, message: str | None, input_data: dict,
 ) -> str:
-    """Return the user-facing deny text: ``_TEAMMATE_SPAWN_REFUSAL`` verbatim,
-    ELSE the incumbent stale-team diagnosis if it fired, ELSE the cause
-    enumeration on rule ⑧, ELSE ``message`` unchanged.
+    """Deny text: teammate refusal verbatim, else the stale-team diagnosis, else the rule-(8)
+    cause enumeration, else message. The two diagnoses are mutually exclusive by construction.
 
-    A-xor-B BY CONSTRUCTION — the two blocks are mutually exclusive, and the
-    precedence lives HERE, in one dispatcher, rather than as a call-order
-    agreement between two sites in ``main()``. An ordering convention has no
-    mechanism to survive the next edit of ``main()``; this does.
-
-    The incumbent wins because SPECIFIC EVIDENCE BEATS A GENERIC LIST: once the
-    detector has actually identified the mismatch, appending a four-cause "it
-    could be any of these" block would degrade a precise diagnosis into a vague
-    one.
-
-    NEVER RAISES. Its OWN BODY does no I/O and is a pure function of its
-    arguments — one string comparison and one concatenation.
-
-    IT IS NOT I/O-FREE OVERALL, and the distinction is load-bearing. It
-    delegates to ``_augment_deny_with_stale_diagnosis``, which calls
-    ``detect_stale_session_block``, which reads ``CLAUDE_PROJECT_DIR`` and
-    performs ``Path.exists()`` + ``Path.read_text()`` against the project
-    CLAUDE.md. The return value therefore depends on disk contents, not on the
-    arguments alone.
-
-    The true and load-bearing claim is ZERO **NEW** I/O: that read is
-    PRE-EXISTING on exactly this path, so this change adds no filesystem work
-    and cannot introduce the fail-open hang that a new unbounded read would.
-    Writing "no I/O" instead would be false, and would invite a future author
-    to relocate this call somewhere the read WOULD be new — which is precisely
-    the safety case this gate rests on.
-
-    It is called strictly AFTER ``_journal_decision`` has recorded the
-    canonical reason, so the journal keeps the un-augmented text regardless of
-    what this returns.
-
-    GRACEFUL DEGRADATION, and note it is RULE-SCOPED. The incumbent is itself
-    never-raises and returns ``message`` unchanged on any internal failure,
-    which is indistinguishable here from "no mismatch detected". On
-    ``no_task_assigned`` a detector failure therefore falls through to the
-    enumeration — A's failure degrades INTO B rather than into silence.
-
-    On ``team_name_unavailable`` — the OTHER member of
-    ``_STALE_DIAGNOSABLE_RULES`` — there is no B, so the same failure degrades
-    into silence, and that is CORRECT: the un-augmented deny is the right
-    output there. Do not read this as a general property of the composer and
-    do not extend the enumeration to that rule to make it one.
-
-    Note the ``augmented != message`` test infers "the incumbent fired" from a
-    VALUE DIFFERENCE rather than from a flag the incumbent sets. That is sound
-    only because the incumbent's fire path is append-only with a non-empty
-    suffix, so a fired call is always strictly longer. If that ever stops
-    holding, this must become an explicit fired-signal rather than a smarter
-    comparison.
-
-    TOTAL over its argument types: a non-str ``message`` returns the fail-closed
-    fallback rather than raising. See ``_MISSING_DENY_REASON`` for why the
-    annotation alone is not sufficient here — an unenforced precondition on
-    this particular function fails OPEN.
+    Never raises; adds no new I/O (the CLAUDE.md read in the detector already ran on this path).
+    "augmented != message" means the detector fired because its fire path only appends.
+    A non-str message returns _MISSING_DENY_REASON (an unenforced precondition here fails open).
     """
     if not isinstance(message, str):
         return _MISSING_DENY_REASON
@@ -842,6 +508,18 @@ def _compose_deny_diagnosis(
     if rule == "no_task_assigned":
         return message + _CAUSE_ENUMERATION
     return message
+
+
+def _task_store_halt() -> str | None:
+    """The HALT sentence while task_store_probe's marker says the store is dark, else None.
+    An unreadable marker is no marker (fail-open here: the probe, not this gate, decides)."""
+    try:
+        marker = read_probe_marker(pact_context.get_session_dir())
+    except Exception:  # noqa: BLE001
+        return None
+    if marker.get("halt") is not True:
+        return None
+    return halt_sentence(str(marker.get("team") or "?"), str(marker.get("task_id") or "?"))
 
 
 def main() -> None:
@@ -868,6 +546,16 @@ def main() -> None:
     pact_context.init(input_data)
     tool_input = input_data.get("tool_input", {}) or {}
 
+    halted = _task_store_halt()
+    if halted is not None:
+        # The probe found the host task store dark: no spawn can be gated, waited on or
+        # handed off, so none starts until a later probe finds a task file again.
+        _journal_decision("DENY", halted, HALT_RULE, tool_input)
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                 "permissionDecision": "deny",
+                                                 "permissionDecisionReason": halted}}))
+        sys.exit(2)
+
     try:
         decision, reason, rule = evaluate_dispatch(tool_input, input_data)
     except Exception as e:
@@ -882,12 +570,7 @@ def main() -> None:
         print(_SUPPRESS_OUTPUT)
         sys.exit(0)
     if decision == "DENY":
-        # MESSAGE-ONLY self-diagnosis: either the stale-team/store mismatch
-        # explanation (when detected) or, on rule ⑧, the cause enumeration —
-        # never both, per the A-xor-B precedence inside the composer.
-        # Journaling above recorded the canonical (un-augmented) reason; this
-        # augments ONLY the user-facing message and never the decision. The
-        # composer is never-raises — on any error the original reason stands.
+        # Message-only diagnosis (stale-team or rule-(8) causes, never both); never raises.
         deny_message = _compose_deny_diagnosis(rule, reason, input_data)
         print(json.dumps({
             "hookSpecificOutput": {

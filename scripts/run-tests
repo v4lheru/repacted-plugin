@@ -1,0 +1,824 @@
+#!/usr/bin/env python3
+"""run-tests: run the plugin's pytest suite under a machine-wide suite lock.
+
+The wrapper caps heavy test processes on one machine: at most 2 run at once, and only one full
+suite. Run pytest through it, never bare, when several agents or worktrees share a machine.
+
+  run-tests [options]                            QUICK (the default): only the tests that import or
+                                                 name what changed since the merge base with main,
+                                                 plus a small smoke list; holds ONE worker slot
+  run-tests [options] [--] [pytest args...]      targeted run: holds ONE worker slot
+  run-tests --full [options]                     full suite: holds the suite slot + one worker slot
+  run-tests --raw [options] -- <cmd> [args...]   any other heavy command under one worker slot
+  run-tests --status                             who holds which slot, and the suite queue order
+
+Slots, in the lock dir (machine-wide, never HOME or a per-session TMPDIR, since agents may run
+with a scratch HOME and their own TMPDIR): /private/tmp on macOS, /tmp elsewhere, else the
+system temp dir; REPACTED_LOCK_DIR overrides it.
+  <lock dir>/repacted-suite.lock       taken only by --full
+  <lock dir>/repacted-worker-1.lock    one of the two is taken by every run
+  <lock dir>/repacted-worker-2.lock
+Each slot is a flock on the file (on macOS the same lock /usr/bin/lockf takes, so
+`lockf -k /private/tmp/repacted-suite.lock <cmd>` and this wrapper exclude each other).
+The holder writes `<lock>.owner` (package, pid, start, branch) for `--status`; the lock file,
+not the sidecar, is the truth. Never read process command lines to find a holder.
+
+The suite slot is granted in arrival order. Each --full waiter writes a numbered ticket in
+<lock dir>/repacted-suite.queue/ and may try the flock only while its ticket is the lowest
+LIVE one; it keeps the ticket until it releases the slot. A ticket is live while its pid exists
+with the start time it recorded (`ps -o pid=,lstart=`, never a command line), so a dead or
+reused-pid holder or waiter is reaped and never blocks the queue. The flock still decides
+exclusion: tickets only order the waiters. A copy of this script from before the queue ignores
+tickets and just polls the flock, so it can take the slot out of turn but cannot deadlock the
+queue (the head waiter keeps polling a flock that copy releases as before).
+
+--full with no pytest args is the merge gate: it runs the plugin suite through tcount and reads
+the verdict against the versioned baseline scripts/known-failures.txt:
+'gate passed (N known)' only when each suite's failing ids EQUAL its listed ids; a new failure,
+a listed id that now passes or is gone (drift), a failure list tcount truncated, or a missing
+baseline fails the gate. A narrowed `--full <args>` says on stderr that it is not the merge gate.
+Every --full run also gives pytest `--durations=0 --durations-min=0.1`, so tcount's log holds the
+wall of each test phase over 0.1 s; after the counts lines the 10 slowest test files are printed
+(those phases summed per file), and the suite's row copied to the live ledger carries them as
+`slowest: [[file, seconds], ...]`.
+Every suite is given REPACT_PURITY_DENYLIST_DIR, the directory of the scrub denylists
+(~/.config/repacted of the account's home, never $HOME), which the core purity gate reads;
+without a denylist there, that gate fails closed (DENYLIST_REQUIRED), or else is told to run
+without one.
+
+The test process runs:
+  - from pact-plugin (the canonical `cd pact-plugin && python -m pytest` cwd);
+  - with CLAUDE_CONFIG_DIR and CLAUDE_PLUGIN_ROOT unset, PYTHONDONTWRITEBYTECODE=1 and a scratch
+    HOME (a fresh temp dir unless --home is given), so no run reads or writes the live ~/.claude;
+  - with PYTHONUSERBASE kept if set, else the interpreter's user base under the account's home:
+    a pytest installed with `pip install --user` is not found under the scratch HOME without it;
+    likewise HF_HOME, else the account's huggingface cache, where the embedding model lives;
+  - with CLAUDE_PLUGIN_DATA kept if set, else $TMPDIR/repacted-test-runs, so nothing the suite
+    writes lands in the live data dir. Inside a Claude Code session tcount's log goes to the
+    live runs/ directory, beside the run ledger that names it (TCOUNT_LOG_DIR); outside one it
+    stays under $TMPDIR/repacted-test-runs. This wrapper then copies each suite's tcount row
+    into the caller's live run ledger (the child never writes it), where the run-ledger hook
+    attributes it by its log path;
+  - under `nice -n 19`, through tcount, so the counts line is verifiable (D7);
+  - with pytest `-q -p no:cacheprovider`. xdist `-n` is refused: the slot IS the parallelism cap.
+
+Options
+  (no args)         QUICK: the changed files are `git diff --name-only <merge-base main>` plus
+                    uncommitted and untracked files. A changed test file is selected; any other
+                    changed file selects every test file (plugin tests/, skills/*/test_*.py
+                    ) that names it (its file name, or `import <stem>` /
+                    `from ... import <stem>`). SMOKE is always added. The selection is printed.
+                    Use --full for a release or the lead's final merge check.
+  --full            take the suite slot too; with no pytest args, collects the whole plugin
+                    (tests/ and skills/*/test_*.py)
+                    ; with pytest args, runs only those, in the plugin
+  --pkg NAME        package name for the owner sidecar (default: the git branch)
+  --home DIR        scratch HOME to use (kept); default: a temp dir, removed afterwards
+  --python PATH     interpreter with pytest installed (default: $REPACTED_PYTHON, else .venv/bin/python3
+                    in this tree or its main checkout, else python3; the choice is printed)
+  --wait SECONDS    how long to wait for a slot (default 3600)
+
+Environment
+  REPACTED_LOCK_DIR   overrides the lock dir, for the slots and the queue
+  REPACTED_PYTHON     default interpreter
+  REPACTED_KNOWN_FAILURES, REPACTED_DENYLIST_DIR   override the baseline file and the denylist
+                      directory (tests of this wrapper only)
+
+Exit codes
+  75  a slot was not acquired within --wait: report it, never bypass the lock
+  64  usage error
+  *   otherwise tcount's exit code (0 pass, 1 failures, 3 no count parsed); for the merge
+      gate, 0 when the verdict passes against the baseline, else the first non-zero code (1)
+
+Examples
+  python3 scripts/run-tests -- tests/contract
+  python3 scripts/run-tests --full --pkg w0-infra
+  python3 scripts/run-tests --status
+"""
+from __future__ import annotations
+
+import argparse
+import errno
+import fcntl
+import json
+import os
+import pwd
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+EXIT_USAGE, EXIT_LOCK_TIMEOUT = 64, 75
+DEFAULT_LOCK_DIR = "/private/tmp"     # macOS: the real /tmp, shared by every session
+SUITE_LOCK = "repacted-suite.lock"
+WORKER_LOCKS = ("repacted-worker-1.lock", "repacted-worker-2.lock")
+SUITE_QUEUE = "repacted-suite.queue"
+POLL_SECONDS = 2.0
+HEAD_POLL_SECONDS = 0.2  # the head waiter polls faster, so it usually beats a pre-queue copy
+PS = "/bin/ps" if Path("/bin/ps").exists() else "ps"
+XDIST_FLAGS = ("-n", "--numprocesses", "--dist")
+
+REPACTED = Path(__file__).resolve().parent.parent
+PLUGIN = REPACTED / "pact-plugin"
+REPO = REPACTED
+TCOUNT = PLUGIN / "bin" / "tcount"
+SMOKE = ("tests/contract", "tests/test_hooks_json.py", "tests/test_path_setup_pin.py")   # contract: budgets, rule homes
+VENV_PYTHON = Path(".venv") / "bin" / "python3"
+COUNTS_PREFIX = "pytest: collected "
+COUNTS_LINE = re.compile(r"^pytest: collected (\d+) · passed \d+ · failed (\d+) · errors (\d+) ")
+KNOWN_FAILURES = REPACTED / "scripts" / "known-failures.txt"
+SUITES = ("plugin",)
+DENYLISTS = ("scrub-denylist.txt", "scrub-denylist-words.txt")
+# True: the purity gate is always pointed at the denylist directory and fails closed without one.
+# False: with no denylist there, the gate is told to run without one (REPACT_PURITY_NO_DENYLIST).
+DENYLIST_REQUIRED = False
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"      # set in every Bash call of a Claude Code session
+LOG_DIR_ENV = "TCOUNT_LOG_DIR"
+# --full: each test phase over 0.1 s goes into tcount's log, and the slowest files are summed from it
+# (pytest's own top-N ranks phases, not files).
+DURATIONS = ("--durations=0", "--durations-min=0.1")
+SLOWEST_HEADER = re.compile(r"^=+ slowest (?:\d+ )?durations =+$")
+DURATION_LINE = re.compile(r"^(\d+(?:\.\d+)?)s +(?:setup|call|teardown) +(\S.*)$")
+SLOWEST_FILES = 10
+
+
+class Usage(Exception):
+    pass
+
+
+def lock_dir() -> Path:
+    """REPACTED_LOCK_DIR, else /private/tmp (macOS), /tmp, or the system temp dir: the first that
+    is a directory. Never derived from TMPDIR first: a per-session TMPDIR would split the lock."""
+    override = os.environ.get("REPACTED_LOCK_DIR")
+    if override:
+        return Path(override)
+    for candidate in (DEFAULT_LOCK_DIR, "/tmp"):
+        if os.path.isdir(candidate):
+            return Path(candidate)
+    return Path(tempfile.gettempdir())
+
+
+def try_lock(path: Path) -> int | None:
+    """An open fd holding an exclusive flock on path, or None if another process holds it."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(fd)
+        if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+            return None
+        raise
+    return fd
+
+
+def acquire(paths: tuple[Path, ...], deadline: float) -> tuple[int, Path] | None:
+    """Wait for the first free lock among paths until deadline. None on timeout."""
+    while True:
+        for path in paths:
+            fd = try_lock(path)
+            if fd is not None:
+                return fd, path
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(POLL_SECONDS)
+
+
+def queue_dir() -> Path:
+    return lock_dir() / SUITE_QUEUE
+
+
+def process_start(pid: int) -> str | None:
+    """The start time of pid as ps prints it, or None when no such process exists. Reads no
+    command line. LC_ALL and TZ are pinned so every waiter formats the same process identically."""
+    env = {"PATH": "/bin:/usr/bin", "LC_ALL": "C", "TZ": "UTC"}
+    try:
+        out = subprocess.run([PS, "-o", "pid=,lstart=", "-p", str(pid)], capture_output=True,
+                             text=True, timeout=10, env=env).stdout.split(None, 1)
+    except (OSError, subprocess.SubprocessError):
+        # ps unusable: fall back to existence only, and never reap a process that may be alive.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return None
+        except PermissionError:
+            pass
+        return "?"
+    if len(out) != 2 or out[0] != str(pid):
+        return None
+    return " ".join(out[1].split())
+
+
+def is_live(ticket: dict) -> bool:
+    start = process_start(ticket["pid"])
+    return start is not None and (start == "?" or start == ticket["lstart"])
+
+
+def write_ticket(path: Path, ticket: dict) -> None:
+    # Written aside and renamed in, so a reader never sees a half-written ticket.
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(ticket), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def read_tickets() -> list[tuple[Path, dict | None]]:
+    """Every ticket in arrival order; None for one that does not parse."""
+    found = []
+    for path in sorted(queue_dir().glob("*.ticket")):
+        try:
+            found.append((path, json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError):
+            found.append((path, None))
+    return found
+
+
+def take_ticket(pkg: str) -> tuple[Path, dict]:
+    """Append this process to the suite queue. The sequence counter lives in `.seq`, under its own
+    flock held only for the increment; it never goes below an existing ticket, so a lost counter
+    cannot let a newcomer cut in."""
+    queue = queue_dir()
+    queue.mkdir(exist_ok=True)
+    fd = os.open(queue / ".seq", os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        raw_seq = os.read(fd, 64).decode("ascii", "replace").strip()
+        last = int(raw_seq) if raw_seq.isdigit() else 0
+        for path, _ in read_tickets():
+            if path.stem.isdigit():
+                last = max(last, int(path.stem))
+        seq = last + 1
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, str(seq).encode("ascii"))
+        ticket = {"seq": seq, "pid": os.getpid(), "lstart": process_start(os.getpid()) or "?",
+                  "pkg": pkg, "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        path = queue / f"{seq:012d}.ticket"
+        write_ticket(path, ticket)
+    finally:
+        os.close(fd)
+    return path, ticket
+
+
+def head_of_queue(own: Path, ticket: dict) -> bool:
+    """True when own is the lowest live ticket. Reaps dead and unreadable tickets on the way, and
+    restores own if another waiter reaped it by mistake, so no process loses its place."""
+    if not own.exists():
+        write_ticket(own, ticket)
+    for path, other in read_tickets():
+        if path == own:
+            return True
+        if other is None or not is_live(other):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        return False
+    return False
+
+
+def acquire_suite(pkg: str, deadline: float) -> tuple[int, Path, Path] | None:
+    """Queue for the suite slot and take its flock in turn. Returns (fd, lock, ticket); the caller
+    removes the ticket when it releases the slot. None on timeout, with the ticket already gone."""
+    lock = lock_dir() / SUITE_LOCK
+    own, ticket = take_ticket(pkg)
+    granted = False
+    try:
+        while True:
+            poll = POLL_SECONDS
+            if head_of_queue(own, ticket):
+                fd = try_lock(lock)
+                if fd is not None:
+                    granted = True
+                    return fd, lock, own
+                poll = HEAD_POLL_SECONDS
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            time.sleep(min(poll, remaining))
+    finally:
+        if not granted:
+            try:
+                own.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def owner_line(pkg: str) -> str:
+    return f"pkg={pkg} pid={os.getpid()} since={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n"
+
+
+def write_owner(lock: Path, pkg: str) -> Path:
+    sidecar = lock.with_name(lock.name + ".owner")
+    sidecar.write_text(owner_line(pkg), encoding="utf-8")
+    return sidecar
+
+
+def current_branch() -> str:
+    try:
+        out = subprocess.run(["git", "-C", str(REPACTED), "branch", "--show-current"],
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() or "detached"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def status() -> int:
+    for name in (SUITE_LOCK, *WORKER_LOCKS):
+        path = lock_dir() / name
+        fd = try_lock(path)
+        if fd is None:
+            sidecar = path.with_name(name + ".owner")
+            who = sidecar.read_text(encoding="utf-8").strip() if sidecar.exists() else "no sidecar"
+            print(f"{name}: HELD ({who})")
+        else:
+            os.close(fd)
+            print(f"{name}: free")
+    tickets = read_tickets() if queue_dir().is_dir() else []
+    print(f"suite queue: {len(tickets) or 'empty'}")
+    for n, (path, ticket) in enumerate(tickets, 1):
+        if ticket is None:
+            print(f"  {n}. {path.name}: unreadable")
+            continue
+        state = "live" if is_live(ticket) else "dead"
+        print(f"  {n}. pkg={ticket['pkg']} pid={ticket['pid']} since={ticket['since']} ({state})")
+    return 0
+
+
+def build_steps(args, pytest_args: list[str]) -> list[tuple[str, list[str], Path]]:
+    """(label, command, cwd) for each suite to run, in order."""
+    if args.raw:
+        if not pytest_args:
+            raise Usage("--raw needs a command after --")
+        return [("raw", ["nice", "-n", "19", *pytest_args], PLUGIN)]
+    for arg in pytest_args:
+        if arg.split("=", 1)[0] in XDIST_FLAGS or (arg.startswith("-n") and arg[2:].isdigit()):
+            raise Usage(f"refused: {arg!r}. The worker slot is the parallelism cap (D11); run without xdist")
+    python = default_python(args.python)
+    print(f"run-tests: interpreter {shutil.which(python) or python}", file=sys.stderr)
+
+    def pytest(*extra: str) -> list[str]:
+        return ["nice", "-n", "19", python, str(TCOUNT), "--", python, "-m", "pytest",
+                *(DURATIONS if args.full else ()), "-q", "-p", "no:cacheprovider", *extra]
+
+    if pytest_args:
+        return [("plugin", pytest(*pytest_args), PLUGIN)]
+    if not args.full:
+        plugin_tests, picked = quick_selection(changed_files())
+        steps = [("plugin", pytest(*plugin_tests), PLUGIN)]
+        counts, listed = f"{len(plugin_tests)} plugin", list(plugin_tests)
+        print(f"run-tests: QUICK: {counts} test file(s) (--full runs everything)", file=sys.stderr)
+        for name in listed:
+            print(f"  {name}", file=sys.stderr)
+        return steps
+    # --full with no args is the merge gate: the whole plugin (tests/ AND the skills/*/test_*.py
+    # modules).
+    steps = [("plugin", pytest(), PLUGIN)]
+    return steps
+
+
+def _git(*args: str) -> list[str]:
+    run = subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True, timeout=30)
+    return [line for line in run.stdout.splitlines() if line.strip()] if run.returncode == 0 else []
+
+
+def changed_files() -> list[str]:
+    """Repo-relative paths changed since the merge base with main, plus uncommitted and untracked."""
+    base = _git("merge-base", "HEAD", "main")
+    names = set(_git("diff", "--name-only", base[0])) if base else set()
+    names |= set(_git("diff", "--name-only", "HEAD")) | set(_git("ls-files", "--others", "--exclude-standard"))
+    return sorted(names)
+
+
+def _test_files() -> list[Path]:
+    """Every test file a QUICK run may select. tests/slow/ (worst-case timings) is left to
+    --full, whose bare collection reaches it; QUICK never times a regex on a shared laptop."""
+    slow = PLUGIN / "tests" / "slow"
+    found = {*(p for p in (PLUGIN / "tests").rglob("test_*.py") if slow not in p.parents),
+             *(PLUGIN / "skills").glob("*/test_*.py")}
+    return sorted(found)
+
+
+def quick_selection(changed: list[str]) -> tuple[list[str], list[str]]:
+    """(plugin-relative, repo-relative) test files for a QUICK run: changed tests, tests that name
+    a changed file, and SMOKE."""
+    tests = _test_files()
+    chosen: set[Path] = set()
+    for rel in changed:
+        path = REPO / rel
+        if path in tests:
+            chosen.add(path)
+            continue
+        stem = Path(rel).stem
+        if not stem or path.suffix not in ("", ".py", ".sh", ".md", ".json"):
+            continue
+        pattern = re.compile(rf"(?:{re.escape(Path(rel).name)}\b|import {re.escape(stem)}\b|"
+                             rf"from [\w.]+ import [^\n]*\b{re.escape(stem)}\b)")
+        for test in tests:
+            try:
+                if pattern.search(test.read_text(encoding="utf-8", errors="replace")):
+                    chosen.add(test)
+            except OSError:
+                continue
+    chosen |= {PLUGIN / name for name in SMOKE if (PLUGIN / name).exists()}
+    plugin = sorted(str(p.relative_to(PLUGIN)) for p in chosen if PLUGIN in p.parents)
+    root = sorted(str(p.relative_to(REPO)) for p in chosen if PLUGIN not in p.parents)
+    return plugin, root
+
+
+def main_checkout() -> Path | None:
+    """The main checkout this tree belongs to (itself, outside a worktree), or None."""
+    try:
+        out = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--path-format=absolute",
+                              "--git-common-dir"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    common = out.stdout.strip()
+    return Path(common).parent if not out.returncode and common else None
+
+
+
+
+def default_python(given: str | None = None) -> str:
+    """ONE interpreter for every builder: --python, else $REPACTED_PYTHON, else the
+    venv of this tree or of its main checkout, else python3 from PATH. A bare python3 differs between
+    builders' PATHs, which is how one builder lacked pytest-asyncio and failed 148 tests."""
+    if given or os.environ.get("REPACTED_PYTHON"):
+        return given or os.environ["REPACTED_PYTHON"]
+    for root in dict.fromkeys(r for r in (REPO, main_checkout()) if r):
+        venv = root / VENV_PYTHON
+        if os.access(venv, os.X_OK):
+            return str(venv)
+    return "python3"
+
+
+
+
+def account_home() -> str:
+    """The account's home from the password database, never $HOME (a builder's is a scratch dir)."""
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+def user_base(python: str) -> str | None:
+    """Where `python` keeps its user site under the account's home (site.getuserbase()), or None
+    when it cannot be asked. The scratch HOME moves that directory, and with it a user-installed
+    pytest: the run then printed NO TEST COUNT."""
+    env = {**os.environ, "HOME": account_home()}
+    try:
+        out = subprocess.run([python, "-c", "import site; print(site.getuserbase())"], env=env,
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
+
+
+def live_runs_dir() -> str | None:
+    """The run ledger's directory as the run-ledger hook resolves it (_repact_common.ledger_path,
+    under the caller's environment), when this is a Claude Code session; else None."""
+    if not os.environ.get(SESSION_ENV):
+        return None
+    try:
+        sys.path.insert(0, str(PLUGIN / "bin"))
+        from _repact_common import ledger_path
+
+        return str(ledger_path().parent)
+    except Exception:   # noqa: BLE001 - the suite still runs; its log stays in the scratch data dir
+        return None
+
+
+def child_env(home: Path, python: str = "python3", through_tcount: bool = True) -> dict[str, str]:
+    env = dict(os.environ)
+    # Resolved before the scratch HOME is set. A --raw command is not run through tcount, so it
+    # would hand the variable to whatever it runs.
+    runs_dir = live_runs_dir() if through_tcount and not env.get("CLAUDE_PLUGIN_DATA") else None
+    for key in ("CLAUDE_CONFIG_DIR", "CLAUDE_PLUGIN_ROOT"):
+        env.pop(key, None)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    if not env.get("PYTHONUSERBASE"):
+        base = user_base(python)
+        if base:
+            env["PYTHONUSERBASE"] = base
+    # huggingface_hub keeps the embedding model under $HOME/.cache/huggingface, so the scratch HOME
+    # would hide it and the requires_embedding_backend tests would fail offline: keep the account's
+    # cache unless the caller named one.
+    if not (env.get("HF_HOME") or env.get("HF_HUB_CACHE")):
+        env["HF_HOME"] = str(Path(env.get("XDG_CACHE_HOME") or Path(account_home()) / ".cache")
+                             / "huggingface")
+    env["HOME"] = str(home)
+    # The core purity gate (tests/contract/test_core_purity.py) fails closed without the scrub
+    # denylist, so every suite is told where the real one lives; it only reads it.
+    source = denylist_dir()
+    if DENYLIST_REQUIRED or any((source / name).is_file() for name in DENYLISTS):
+        env["REPACT_PURITY_DENYLIST_DIR"] = str(source)
+    else:
+        env["REPACT_PURITY_NO_DENYLIST"] = "1"
+    # tcount's log and run-ledger record must outlive a temp HOME, and must never land in the live one.
+    env.setdefault("CLAUDE_PLUGIN_DATA", str(Path(tempfile.gettempdir()) / "repacted-test-runs"))
+    if runs_dir:
+        env[LOG_DIR_ENV] = runs_dir     # tcount's own log only; tcount does not pass it on
+    return env
+
+
+class Runner:
+    """Runs each step (no inherited lock fds) in its own process group, forwarding HUP/INT/TERM to
+    the WHOLE group: a signal that reached only tcount would orphan pytest, which would then keep
+    running after this wrapper released the slot. After a signal no further step starts."""
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen | None = None
+        self.signalled: int | None = None
+        self.last_log: str | None = None     # tcount's `log: <path>` line of the last captured step
+        for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, self.forward)
+
+    def forward(self, signum, _frame) -> None:
+        self.signalled = signum
+        if self.proc is not None:
+            try:
+                os.killpg(self.proc.pid, signum)
+            except ProcessLookupError:
+                pass
+
+    def run(self, cmd: list[str], cwd: Path, env: dict[str, str],
+            capture: bool) -> tuple[int, str, list[str]]:
+        """(exit code, the tcount counts line, the failing ids tcount listed), the last two only
+        when capture is set. A captured stdout is still echoed line by line as it arrives."""
+        self.proc = subprocess.Popen(cmd, cwd=cwd, env=env, close_fds=True, start_new_session=True,
+                                     stdout=subprocess.PIPE if capture else None,
+                                     text=True if capture else None)
+        if self.signalled is not None:  # a signal landed between steps, before this one started
+            self.forward(self.signalled, None)
+        counts, failing = "", []
+        self.last_log = None
+        if capture:
+            for line in self.proc.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                if line.startswith(COUNTS_PREFIX) and not counts:
+                    counts = line.strip()
+                elif line.startswith("FAILED "):
+                    failing.append(line[len("FAILED "):].strip())
+                elif line.startswith("log: "):
+                    self.last_log = line[len("log: "):].strip()
+        return self.proc.wait(), counts, failing
+
+
+def load_baseline(path: Path) -> tuple[dict[str, set[str]], list[str]]:
+    """{suite: known failing node ids} from `<suite> <node id> # <reason>` lines, and problems.
+    A missing file, an unknown suite or an entry without a reason is a problem: fail closed."""
+    known: dict[str, set[str]] = {suite: set() for suite in SUITES}
+    if not path.is_file():
+        return known, [f"no known-failures baseline at {path}"]
+    problems = []
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        head, _, reason = line.partition(" # ")
+        suite, _, node = head.strip().partition(" ")
+        if suite not in known or not node.strip() or not reason.strip():
+            problems.append(f"baseline line {n} is not '<suite> <node id> # <reason>': {line!r}")
+            continue
+        known[suite].add(node.strip())
+    return known, problems
+
+
+def gate_verdict(results: list[tuple[str, int, str, list[str]]],
+                 known: dict[str, set[str]], problems: list[str]) -> list[str]:
+    """Verdict lines. The gate passes only when every suite's failing ids EQUAL its known set:
+    a new failure fails it, and so does a known one that now passes or is gone (drift)."""
+    problems = list(problems)
+    new, drift, known_seen = [], [], 0
+    for label, code, counts, failing in results:
+        match = COUNTS_LINE.match(counts)
+        if not match:
+            problems.append(f"{label}: no count line (exit {code})")
+            continue
+        collected, failed = int(match.group(1)), int(match.group(2)) + int(match.group(3))
+        observed = set(failing)
+        if collected == 0:
+            problems.append(f"{label}: no tests ran")
+        if failed > len(observed):
+            problems.append(f"{label}: {failed} failures but {len(observed)} listed; "
+                            f"{failed - len(observed)} not listed, so the baseline cannot be compared")
+        elif code != 0 and failed == 0:
+            problems.append(f"{label}: exit {code} with no failing test")
+        new += [f"{label} {node}" for node in sorted(observed - known[label])]
+        drift += [f"{label} {node}" for node in sorted(known[label] - observed)]
+        known_seen += len(observed & known[label])
+    if not (new or drift or problems):
+        return [f"run-tests: gate passed ({known_seen} known)"]
+    lines = ["run-tests: gate FAILED"]
+    if new:
+        lines.append(f"run-tests: gate NEW failures: {', '.join(new)}")
+    if drift:
+        lines.append(f"run-tests: gate baseline drift (a known failure now passes or is gone): "
+                     f"{', '.join(drift)}")
+    lines += [f"run-tests: gate {problem}" for problem in problems]
+    return lines
+
+
+def denylist_dir() -> Path:
+    """Where the real scrub denylists live: the account's home, never $HOME (a scratch HOME may
+    already be in force). REPACTED_DENYLIST_DIR overrides it (tests of this wrapper only)."""
+    override = os.environ.get("REPACTED_DENYLIST_DIR")
+    return Path(override) if override else Path(pwd.getpwuid(os.getuid()).pw_dir) / ".config" / "repacted"
+
+
+
+
+def slowest_files(lines, top: int = SLOWEST_FILES) -> list[list]:
+    """[[file, seconds], ...]: the `top` test files with the most wall in pytest's durations block
+    (every setup, call and teardown line it lists, summed per file), slowest first; [] when the
+    output holds no block. The file is the node id up to its first `::`."""
+    walls: dict[str, float] = {}
+    inside = False
+    for line in lines:
+        line = line.rstrip("\n")
+        if SLOWEST_HEADER.match(line):
+            inside = True
+        elif inside and line.startswith("="):
+            break
+        elif inside and (match := DURATION_LINE.match(line.strip())):
+            file = match.group(2).split("::", 1)[0]
+            walls[file] = walls.get(file, 0.0) + float(match.group(1))
+    ranked = sorted(walls.items(), key=lambda item: (-item[1], item[0]))[:top]
+    return [[file, round(seconds, 2)] for file, seconds in ranked]
+
+
+def log_slowest(log_path: str | None) -> list[list]:
+    """slowest_files of a tcount log; [] when there is no log or it cannot be read."""
+    if not log_path:
+        return []
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as handle:
+            return slowest_files(handle)
+    except OSError:
+        return []
+
+
+def print_slowest(label: str, slowest: list[list]) -> None:
+    if slowest:
+        print(f"run-tests: {label:<10} slowest {len(slowest)} test files (s, setup+call+teardown over 0.1 s)")
+        for file, seconds in slowest:
+            print(f"  {seconds:8.2f}  {file}")
+
+
+def publish_run(log_path: str | None, env: dict[str, str], slowest: list[list] | None = None) -> None:
+    """Copy tcount's row for one suite run from the child's ledger (the scratch data dir) to the
+    caller's live run ledger, so a HANDOFF that cites the run's counts or log resolves (e1baab9f:
+    full-gate counts read as MISMATCH because only $TMPDIR/repacted-test-runs held them). Only
+    this parent writes the live ledger; the child keeps its scratch HOME and data dir. The
+    run-ledger hook attributes the row to the agent by its log path. A --full run's slowest
+    files go into the copied row as `slowest`. Never fails the run."""
+    if not log_path:
+        return
+    try:
+        sys.path.insert(0, str(PLUGIN / "bin"))
+        from _repact_common import LEDGER_FIELDS, ledger_append, ledger_path, read_ledger
+
+        child = Path(env["CLAUDE_PLUGIN_DATA"]).expanduser() / "runs" / "ledger.jsonl"
+        live = ledger_path()
+        if child.resolve() == live.resolve():
+            return
+        rows = [row for row in read_ledger(child) if row.get("source") == "tcount" and row.get("log_path") == log_path]
+        if rows:
+            row = {key: rows[-1].get(key) for key in LEDGER_FIELDS}
+            if slowest:
+                row["slowest"] = slowest
+            ledger_append(row, live)
+    except Exception as exc:   # noqa: BLE001 - the suite's result stands whatever happens here
+        print(f"run-tests: run not copied to the live ledger ({type(exc).__name__})", file=sys.stderr)
+
+
+def run_steps(steps: list[tuple[str, list[str], Path]], env: dict[str, str], home: Path,
+              gate: bool = True, verdict: bool = False) -> int:
+    """Run the steps; with verdict (the merge gate) the result is read against the baseline."""
+    runner = Runner()
+    if len(steps) == 1 and not verdict:
+        label, cmd, cwd = steps[0]
+        code = runner.run(cmd, cwd, env, capture=True)[0]
+        slowest = log_slowest(runner.last_log) if gate else []
+        print_slowest(label, slowest)
+        publish_run(runner.last_log, env, slowest)
+        return code
+    results: list[tuple[str, int, str, list[str]]] = []
+    slowest_of: dict[str, list[list]] = {}
+    for label, cmd, cwd in steps:
+        if runner.signalled is not None:
+            break
+        print(f"run-tests: [{label}] {cwd}", file=sys.stderr, flush=True)
+        links: list[Path] = []
+        step_env = env
+        try:
+            code, counts, failing = runner.run(cmd, cwd, step_env, capture=True)
+        finally:
+            for link in links:
+                link.unlink(missing_ok=True)
+        slowest_of[label] = log_slowest(runner.last_log) if gate else []
+        publish_run(runner.last_log, env, slowest_of[label])
+        results.append((label, code, counts, failing))
+    for label, code, counts, _ in results:
+        print(f"run-tests: {label:<10} {counts or f'NO COUNT LINE (exit {code})'}")
+    for label, _, _, _ in results:
+        print_slowest(label, slowest_of[label])
+    skipped = [label for label, _, _ in steps[len(results):]]
+    if skipped:
+        print(f"run-tests: stopped by signal {runner.signalled}; not run: {', '.join(skipped)}")
+        codes = [code for _, code, _, _ in results if code != 0]
+        return codes[0] if codes else 128 + (runner.signalled or 0)
+    if not gate:                    # QUICK: counts only; the baseline verdict is the --full gate's
+        codes = [code for _, code, _, _ in results if code != 0]
+        return codes[0] if codes else 0
+    baseline_path = Path(os.environ.get("REPACTED_KNOWN_FAILURES") or KNOWN_FAILURES)
+    known, problems = load_baseline(baseline_path)
+    lines = gate_verdict(results, known, problems)
+    for line in lines:
+        print(line)
+    if lines[0].startswith("run-tests: gate passed"):
+        return 0
+    codes = [code for _, code, _, _ in results if code != 0]
+    return codes[0] if codes else 1
+
+
+def parse(argv: list[str]):
+    parser = argparse.ArgumentParser(prog="run-tests", add_help=True,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     epilog=__doc__.split("Examples", 1)[1].join(["Examples", ""]))
+    parser.add_argument("--full", action="store_true")
+    parser.add_argument("--raw", action="store_true")
+    parser.add_argument("--status", action="store_true")
+    parser.add_argument("--pkg")
+    parser.add_argument("--home")
+    parser.add_argument("--python")
+    parser.add_argument("--wait", type=float, default=3600.0)
+    if "--" in argv:
+        cut = argv.index("--")
+        own, rest = argv[:cut], argv[cut + 1:]
+    else:
+        own, rest = argv, []
+    args, extra = parser.parse_known_args(own)
+    return args, extra + rest
+
+
+def main(argv: list[str]) -> int:
+    try:
+        args, pytest_args = parse(argv)
+        if args.status:
+            return status()
+        if args.full and args.raw:
+            raise Usage("--full and --raw are exclusive")
+        steps = build_steps(args, pytest_args)
+        if args.full and pytest_args:
+            print("run-tests: narrowed --full: only the named tests run (not the merge gate)", file=sys.stderr)
+    except Usage as exc:
+        print(f"run-tests: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    pkg = args.pkg or current_branch()
+    deadline = time.monotonic() + args.wait
+    held: list[int] = []
+    sidecars: list[Path] = []
+    ticket: Path | None = None
+    try:
+        if args.full:
+            got = acquire_suite(pkg, deadline)
+            if got is None:
+                print(f"run-tests: suite slot not acquired within {args.wait:.0f}s; see --status. "
+                      "Report it; do not bypass the lock.", file=sys.stderr)
+                return EXIT_LOCK_TIMEOUT
+            held.append(got[0])
+            ticket = got[2]
+            sidecars.append(write_owner(got[1], pkg))
+        got = acquire(tuple(lock_dir() / name for name in WORKER_LOCKS), deadline)
+        if got is None:
+            print(f"run-tests: no worker slot free within {args.wait:.0f}s; see --status. "
+                  "Report it; do not bypass the lock.", file=sys.stderr)
+            return EXIT_LOCK_TIMEOUT
+        held.append(got[0])
+        sidecars.append(write_owner(got[1], pkg))
+        print(f"run-tests: {pkg} holds {', '.join(p.name[:-len('.owner')] for p in sidecars)}",
+              file=sys.stderr)
+
+        scratch = Path(args.home) if args.home else Path(tempfile.mkdtemp(prefix="repacted-home."))
+        try:
+            python = default_python(args.python)
+            return run_steps(steps, child_env(scratch, python, not args.raw), scratch, gate=args.full,
+                             verdict=args.full and not pytest_args)
+        finally:
+            if not args.home:
+                shutil.rmtree(scratch, ignore_errors=True)
+    finally:
+        for path in [*sidecars, *([ticket] if ticket else [])]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        for fd in held:
+            os.close(fd)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

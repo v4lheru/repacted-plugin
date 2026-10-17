@@ -368,8 +368,10 @@ class TestTocTouContainmentRecheck:
         def _boom(_path):
             raise OSError("simulated resolution failure")
 
-        monkeypatch.setattr(os.path, "realpath", _boom)
-        assert already_emitted("pact-test", "5", "occ") is False
+        # Scoped: the autouse plugin-data guard calls realpath in its teardown.
+        with monkeypatch.context() as scoped:
+            scoped.setattr(os.path, "realpath", _boom)
+            assert already_emitted("pact-test", "5", "occ") is False
 
     def test_contained_marker_dir_proceeds_positive_control(self, tmp_path, monkeypatch):
         """POSITIVE CONTROL: an ordinary contained marker_dir passes the

@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 import pytest
 
-from shared import BOOTSTRAP_MARKER_NAME
+from shared.constants import BOOTSTRAP_MARKER_NAME
 
 _SUPPRESS_EXPECTED = {
     "suppressOutput": True,
@@ -150,7 +150,7 @@ class TestCheckBootstrapNeeded:
 
         result = _check_bootstrap_needed(_make_input())
         assert result is not None
-        assert 'Skill("PACT:bootstrap")' in result
+        assert 'Skill("repacted:bootstrap")' in result
         assert f"PACT_SESSION_DIR={session_dir}" in result
 
     def test_returns_none_when_no_session_dir(self, monkeypatch):
@@ -191,31 +191,31 @@ class TestCheckBootstrapNeeded:
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
-        input_data = _make_input(agent_type="PACT:pact-backend-coder")
+        input_data = _make_input(agent_type="repacted:pact-backend-coder")
 
         result = _check_bootstrap_needed(input_data)
         assert result is None
 
     def test_instruction_content_mentions_bootstrap_skill(self, monkeypatch, tmp_path):
-        """The injected instruction must reference Skill("PACT:bootstrap")."""
+        """The injected instruction must reference Skill("repacted:bootstrap")."""
         from bootstrap_prompt_gate import _check_bootstrap_needed
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
         result = _check_bootstrap_needed(_make_input())
         assert result is not None
-        assert 'Skill("PACT:bootstrap")' in result
+        assert 'Skill("repacted:bootstrap")' in result
 
     def test_instruction_mentions_blocked_tools(self, monkeypatch, tmp_path):
-        """The injected instruction should mention which tools are blocked."""
+        """The injected instruction names the blocked tool: since 1.4.1 only Agent."""
         from bootstrap_prompt_gate import _check_bootstrap_needed
 
         _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
 
         result = _check_bootstrap_needed(_make_input())
         assert result is not None
-        assert "Edit" in result
-        assert "Write" in result
+        assert "Agent dispatch (Agent)" in result
+        assert "Edit" not in result and "Write" not in result
 
 
 # =============================================================================
@@ -242,7 +242,7 @@ class TestMainEntryPoint:
         hso = output["hookSpecificOutput"]
         assert hso["hookEventName"] == "UserPromptSubmit"
         assert "additionalContext" in hso
-        assert 'Skill("PACT:bootstrap")' in hso["additionalContext"]
+        assert 'Skill("repacted:bootstrap")' in hso["additionalContext"]
 
     def test_suppress_when_marker_exists(self, monkeypatch, tmp_path, capsys):
         """Marker exists → suppressOutput."""
@@ -349,7 +349,7 @@ class TestFailOpen:
         assert "hookSpecificOutput" in output
         assert output["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
         assert "additionalContext" in output["hookSpecificOutput"]
-        assert "Skill(\"PACT:bootstrap\")" in output["hookSpecificOutput"]["additionalContext"]
+        assert "Skill(\"repacted:bootstrap\")" in output["hookSpecificOutput"]["additionalContext"]
 
 
 # =============================================================================
@@ -529,7 +529,7 @@ class TestSelfHealWiring:
             "healed lead session without marker must flow into the inject "
             "branch, not suppress"
         )
-        assert "PACT:bootstrap" in result
+        assert "repacted:bootstrap" in result
         assert "PACT_SESSION_DIR=" in result
 
     def test_missing_context_plain_frame_no_heal_no_inject(
@@ -754,9 +754,9 @@ class TestStalenessComposition:
         # NOTE: _setup_pact_session pre-writes the context file keyed on
         # _SESSION_ID; the heal is a no-op here (file present).
         assert result is not None
-        assert "PACT:bootstrap" in result            # instruction present
+        assert "repacted:bootstrap" in result            # instruction present
         assert "stale session block" in result       # warning appended
-        assert result.index("PACT:bootstrap") < result.index(
+        assert result.index("repacted:bootstrap") < result.index(
             "stale session block"), "warning is APPENDED, not prepended"
 
     def test_match_returns_instruction_only(self, monkeypatch, tmp_path):
@@ -776,7 +776,7 @@ class TestStalenessComposition:
             session_id=self._ACTUAL_HEX))
 
         assert result is not None
-        assert "PACT:bootstrap" in result
+        assert "repacted:bootstrap" in result
         assert "stale session block" not in result
 
     def test_non_utf8_claude_md_keeps_instruction(
@@ -807,7 +807,7 @@ class TestStalenessComposition:
         assert exit_code == 0
         injected = output.get("hookSpecificOutput", {}).get(
             "additionalContext", "")
-        assert "PACT:bootstrap" in injected, (
+        assert "repacted:bootstrap" in injected, (
             "non-UTF-8 CLAUDE.md must not suppress the bootstrap "
             "instruction — the advisory's failure budget is 'no warning', "
             "never 'no bootstrap'"
@@ -839,7 +839,7 @@ class TestStalenessComposition:
             session_id=invalid_id))
 
         assert result is not None
-        assert "PACT:bootstrap" in result            # instruction intact
+        assert "repacted:bootstrap" in result            # instruction intact
         assert "stale session block" not in result   # no warning
         assert "INJECTED LINE" not in result         # id never interpolated
 
@@ -856,7 +856,7 @@ class TestStalenessComposition:
         result = _check_bootstrap_needed(_make_input())
 
         assert result is not None
-        assert "PACT:bootstrap" in result
+        assert "repacted:bootstrap" in result
         assert "stale session block" not in result
 
     def test_marker_set_fast_path_never_runs_staleness(
@@ -1032,12 +1032,12 @@ class TestSubprocessStalenessE2E:
         hso = out["hookSpecificOutput"]
         assert hso["hookEventName"] == "UserPromptSubmit"
         context = hso["additionalContext"]
-        assert "PACT:bootstrap" in context
+        assert "repacted:bootstrap" in context
         assert "PACT_SESSION_DIR=" in context
         assert "stale session block" in context
         assert self._STALE_SID in context, "recorded (stale) id named"
         assert self._SID in context, "actual id named"
-        assert context.index("PACT:bootstrap") < context.index(
+        assert context.index("repacted:bootstrap") < context.index(
             "stale session block"), "warning is APPENDED, not prepended"
         assert "suppressOutput" not in out
         assert result.returncode == 0, (
@@ -1060,7 +1060,7 @@ class TestSubprocessStalenessE2E:
 
         out = json.loads(result.stdout.strip())
         context = out["hookSpecificOutput"]["additionalContext"]
-        assert "PACT:bootstrap" in context
+        assert "repacted:bootstrap" in context
         assert "stale session block" not in context
         assert result.returncode == 0, (
             f"stderr={result.stderr!r} stdout={result.stdout!r}"

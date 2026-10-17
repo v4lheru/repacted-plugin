@@ -1,559 +1,113 @@
 ---
 name: pact-coding-standards
-description: |
-  Clean code principles, error handling patterns, and coding standards for PACT Code phase.
-  Use when: implementing features, refactoring code, reviewing code quality,
-  establishing coding conventions, or handling errors and exceptions.
-  Triggers on: code quality, clean code, refactoring, error handling,
-  logging patterns, naming conventions, code review, code phase.
+description: "Use when writing, refactoring or reviewing code in the PACT Code phase: clean-code principles, error handling, logging, naming, and the lint and unused-import checks."
 ---
 
 # PACT Coding Standards
 
-Clean code principles for the Code phase of PACT. This skill provides
-essential coding guidelines and links to detailed patterns for implementation.
+The Code-phase standards, in short form. Each section links to the full text with examples:
+[standards-in-depth](references/standards-in-depth.md), [error-handling-patterns](references/error-handling-patterns.md),
+[clean-code-principles](references/clean-code-principles.md), [import-hygiene-and-cli-examples](references/import-hygiene-and-cli-examples.md).
 
-## Core Principles
+## Core principles
 
-### 1. Single Responsibility Principle
+1. **Single responsibility**: each function, class or module has exactly one reason to change.
+2. **DRY**: extract duplicated logic (e.g. one `validateEmail` used by create and update).
+3. **KISS**: the simplest solution that works; a plain config object beats a factory-builder chain.
+4. **Defensive programming**: guard clauses first, safe property access (`?.`, `??`), clamp
+   invalid values, fail with a typed error.
 
-Each function, class, or module should have exactly one reason to change.
+Examples: [standards-in-depth §Core Principles](references/standards-in-depth.md). SOLID, smells and
+refactoring: [clean-code-principles](references/clean-code-principles.md).
 
-```javascript
-// BAD: Multiple responsibilities
-class UserManager {
-  createUser(data) { }
-  validateEmail(email) { }
-  sendWelcomeEmail(user) { }
-  generateReport() { }
-  updateUserPreferences(userId, prefs) { }
-}
+## Naming
 
-// GOOD: Single responsibility each
-class UserService {
-  createUser(data) { }
-  updateUser(userId, data) { }
-}
+- Functions: verb + noun (`getUser`, `createOrder`, `validateEmail`, `calculateTotal`, `formatDate`);
+  boolean checks `isActive`, `hasPermission`, `canEdit`.
+- Variables: descriptive nouns (`userCount`, not `n`); booleans take `is/has/can/should`;
+  collections are plural (`users`); maps name the key (`userById`, `priceByProductId`).
+- Constants: `SCREAMING_SNAKE_CASE`; config objects frozen (`Object.freeze`).
+- Classes: PascalCase nouns (`UserRepository`, `EmailValidator`); TypeScript interfaces are
+  adjectives for capabilities (`Cacheable`) and nouns for contracts.
 
-class EmailValidator {
-  validate(email) { }
-}
+## Error handling
 
-class NotificationService {
-  sendWelcomeEmail(user) { }
-}
+- **Fail fast, recover gracefully**: validate early, check business rules, catch specific errors,
+  log them with context, and re-throw what you did not expect.
+- **One error hierarchy**: an `AppError` base with `code` and `statusCode`;
+  `ValidationError` 400 (with details), `UnauthorizedError` 401, `NotFoundError` 404
+  (resource + id), `ConflictError` 409.
+- No silent failures; user-facing messages stay friendly.
 
-class UserReportGenerator {
-  generate(criteria) { }
-}
-```
-
-### 2. DRY (Don't Repeat Yourself)
-
-Extract duplicated logic into reusable functions.
-
-```javascript
-// BAD: Duplicated validation logic
-function createUser(data) {
-  if (!data.email || !data.email.includes('@')) {
-    throw new Error('Invalid email');
-  }
-  // ...
-}
-
-function updateUser(id, data) {
-  if (data.email && !data.email.includes('@')) {
-    throw new Error('Invalid email');
-  }
-  // ...
-}
-
-// GOOD: Extracted validation
-function validateEmail(email) {
-  if (!email || !email.includes('@')) {
-    throw new ValidationError('Invalid email format');
-  }
-}
-
-function createUser(data) {
-  validateEmail(data.email);
-  // ...
-}
-
-function updateUser(id, data) {
-  if (data.email) {
-    validateEmail(data.email);
-  }
-  // ...
-}
-```
-
-### 3. KISS (Keep It Simple, Stupid)
-
-Choose the simplest solution that works.
-
-```javascript
-// BAD: Over-engineered
-class ConfigurationFactoryBuilderManager {
-  static getInstance() {
-    return new ConfigurationFactoryBuilder()
-      .withDefaults()
-      .withEnvironment()
-      .build()
-      .getConfiguration();
-  }
-}
-
-// GOOD: Simple and direct
-const config = {
-  port: process.env.PORT || 3000,
-  dbUrl: process.env.DATABASE_URL,
-  debug: process.env.NODE_ENV !== 'production'
-};
-```
-
-### 4. Defensive Programming
-
-Validate inputs, handle edge cases, and fail gracefully.
-
-```javascript
-function processOrder(order) {
-  // Guard clauses
-  if (!order) {
-    throw new ValidationError('Order is required');
-  }
-
-  if (!order.items || order.items.length === 0) {
-    throw new ValidationError('Order must have at least one item');
-  }
-
-  if (order.total < 0) {
-    throw new ValidationError('Order total cannot be negative');
-  }
-
-  // Safe property access
-  const customerEmail = order.customer?.email ?? 'no-email@placeholder.com';
-
-  // Proceed with valid data
-  return {
-    id: generateOrderId(),
-    items: order.items.map(item => ({
-      ...item,
-      price: Math.max(0, item.price)  // Ensure non-negative
-    })),
-    total: order.total,
-    customerEmail
-  };
-}
-```
-
----
-
-## Naming Conventions
-
-### Functions
-
-```javascript
-// Use verb + noun pattern
-function getUser(id) { }           // Retrieval
-function createOrder(data) { }     // Creation
-function updateProfile(id, data) { } // Mutation
-function deleteComment(id) { }     // Deletion
-function validateEmail(email) { }  // Validation
-function calculateTotal(items) { } // Calculation
-function formatDate(date) { }      // Transformation
-function isActive(user) { }        // Boolean check
-function hasPermission(user, action) { } // Boolean check
-function canEdit(user, resource) { }     // Boolean check
-```
-
-### Variables
-
-```javascript
-// Descriptive nouns
-const userCount = 42;               // Not: n, count, uc
-const activeUsers = users.filter(); // Not: arr, filtered
-const maxRetryAttempts = 3;         // Not: max, retries
-
-// Boolean variables
-const isActive = true;              // is/has/can/should prefix
-const hasPermission = false;
-const canEdit = user.role === 'admin';
-const shouldRetry = attempts < maxRetryAttempts;
-
-// Collections are plural
-const users = [];                   // Not: userList, userArray
-const orderItems = [];              // Not: items (too generic)
-
-// Maps/objects describe content
-const userById = {};                // Not: userMap
-const priceByProductId = {};        // Describes key-value relationship
-```
-
-### Constants
-
-```javascript
-// SCREAMING_SNAKE_CASE for true constants
-const MAX_RETRY_ATTEMPTS = 3;
-const DEFAULT_PAGE_SIZE = 20;
-const API_BASE_URL = 'https://api.example.com';
-
-// Configuration objects
-const CONFIG = Object.freeze({
-  database: {
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT, 10)
-  }
-});
-```
-
-### Classes
-
-```javascript
-// PascalCase, noun-based
-class UserRepository { }     // Not: UsersRepo, UserRepo
-class OrderService { }       // Not: OrdersService
-class EmailValidator { }     // Not: ValidateEmail
-class PaymentGateway { }     // Not: PaymentGatewayService
-
-// Interface names (TypeScript)
-interface Cacheable { }      // Adjective for capabilities
-interface UserRepository { } // Noun for contracts
-```
-
----
-
-## Error Handling
-
-### Fail Fast, Recover Gracefully
-
-```javascript
-async function createUser(data) {
-  // Validate early
-  if (!data.email) {
-    throw new ValidationError('Email is required');
-  }
-
-  if (!isValidEmail(data.email)) {
-    throw new ValidationError('Invalid email format');
-  }
-
-  // Check business rules
-  const existing = await userRepo.findByEmail(data.email);
-  if (existing) {
-    throw new ConflictError('Email already registered');
-  }
-
-  // Proceed with operation
-  try {
-    const user = await userRepo.save(data);
-    await emailService.sendWelcome(user.email);
-    return user;
-  } catch (error) {
-    // Handle specific errors
-    if (error instanceof DatabaseError) {
-      logger.error('Database error creating user', { error, data });
-      throw new ServiceError('Unable to create user, please try again');
-    }
-    throw error; // Re-throw unexpected errors
-  }
-}
-```
-
-### Custom Error Classes
-
-```javascript
-// Base application error
-class AppError extends Error {
-  constructor(message, code, statusCode = 500) {
-    super(message);
-    this.name = this.constructor.name;
-    this.code = code;
-    this.statusCode = statusCode;
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
-
-// Specific error types
-class ValidationError extends AppError {
-  constructor(message, details = []) {
-    super(message, 'VALIDATION_ERROR', 400);
-    this.details = details;
-  }
-}
-
-class NotFoundError extends AppError {
-  constructor(resource, id) {
-    super(`${resource} with id ${id} not found`, 'NOT_FOUND', 404);
-    this.resource = resource;
-    this.resourceId = id;
-  }
-}
-
-class ConflictError extends AppError {
-  constructor(message) {
-    super(message, 'CONFLICT', 409);
-  }
-}
-
-class UnauthorizedError extends AppError {
-  constructor(message = 'Authentication required') {
-    super(message, 'UNAUTHORIZED', 401);
-  }
-}
-```
-
-For comprehensive error patterns: See [references/error-handling-patterns.md](references/error-handling-patterns.md)
-
----
+Code and language-specific patterns (Express/Flask handlers, retries, circuit breakers, error
+response format): [error-handling-patterns](references/error-handling-patterns.md).
 
 ## Logging
 
-### Log Levels
+| Level | When |
+|---|---|
+| ERROR | failures that need attention (database connection failed) |
+| WARN | potentially harmful situations (rate limit approaching) |
+| INFO | normal operational events (user created, order placed) |
+| DEBUG | detail for debugging (parameters, intermediate values) |
 
-| Level | When to Use | Example |
-|-------|-------------|---------|
-| **ERROR** | Failures requiring attention | Database connection failed |
-| **WARN** | Potentially harmful situations | Rate limit approaching |
-| **INFO** | Normal operational events | User created, order placed |
-| **DEBUG** | Detailed debugging info | Function parameters, intermediate values |
+Log structured objects (ids, codes, the error and its stack), never concatenated strings; tag every
+request with a request id and log its completion with status and duration.
 
-### Structured Logging
+## Code organization
 
-```javascript
-const logger = require('./logger');
-
-// BAD: Unstructured logging
-console.log('User created: ' + user.id);
-console.log('Error: ' + error.message);
-
-// GOOD: Structured logging
-logger.info('User created', {
-  userId: user.id,
-  email: user.email,
-  source: 'signup'
-});
-
-logger.error('Failed to process payment', {
-  orderId: order.id,
-  amount: order.total,
-  error: error.message,
-  errorCode: error.code,
-  stack: error.stack
-});
-
-// Request logging middleware
-app.use((req, res, next) => {
-  const requestId = req.headers['x-request-id'] || uuidv4();
-  req.requestId = requestId;
-
-  logger.info('Request received', {
-    requestId,
-    method: req.method,
-    path: req.path,
-    userAgent: req.headers['user-agent'],
-    ip: req.ip
-  });
-
-  res.on('finish', () => {
-    logger.info('Request completed', {
-      requestId,
-      statusCode: res.statusCode,
-      duration: Date.now() - req.startTime
-    });
-  });
-
-  next();
-});
-```
-
----
-
-## Code Organization
-
-### File Size Guidelines
-
-- **Maximum file size**: 500 lines
-- **Maximum function size**: 50 lines
-- **Maximum line length**: 100 characters
-
-### Module Structure
-
-```javascript
-// 1. Imports (external first, then internal)
-const express = require('express');
-const { validate } = require('class-validator');
-
-const { UserService } = require('../services/UserService');
-const { logger } = require('../utils/logger');
-
-// 2. Constants and configuration
-const MAX_PAGE_SIZE = 100;
-const DEFAULT_PAGE_SIZE = 20;
-
-// 3. Main exports (class, function, or router)
-class UserController {
-  constructor(userService) {
-    this.userService = userService;
-  }
-
-  async getUsers(req, res, next) {
-    // Implementation
-  }
-}
-
-// 4. Helper functions (private to module)
-function validatePagination(page, limit) {
-  // Implementation
-}
-
-// 5. Export statement
-module.exports = { UserController };
-```
-
----
+- Files ≤ 500 lines, functions ≤ 50 lines, lines ≤ 100 characters, nesting ≤ 3 levels.
+- Module order: imports (external, then internal) → constants → the main export → private
+  helpers → the export statement.
 
 ## Interpreting design-doc optionals
 
-When a design doc spec'd an OPTIONAL cross-link sentence, closing paragraph, or sister-section reference, the CODE author MUST evaluate the optional content's logical relationship to the preceding paragraph before deciding how to render it.
+When a design doc marks a cross-link sentence, closing paragraph or sister-section reference as
+OPTIONAL ("CODE may include or drop", "optional closing cross-link", "optional discursive
+paragraph"), judge its relation to the preceding paragraph before writing it:
+- a **strengthening clause** (reinforces, qualifies or extends that directive, e.g. where the next
+  level of detail lives): FOLD it into the preceding paragraph;
+- a **discursive observation** (a new framing or an adjacent concern): KEEP it standalone.
 
-- **Strengthening clause** — the optional content reinforces, qualifies, or extends the directive in the preceding paragraph (e.g., a cross-link that tells the reader where the next degree of detail lives). FOLD it inline into the preceding paragraph for tighter prose flow.
-- **Discursive observation** — the optional content introduces a new framing, raises a separate point, or pivots to an adjacent concern. KEEP it as a standalone paragraph.
+Never default to either form mechanically. Worked example: [standards-in-depth](references/standards-in-depth.md).
 
-The judgment lives at write time: read the preceding paragraph and ask "does this optional content add to that paragraph's directive, or does it start a new one?" Strengthening = fold; discursive = keep.
+## Import hygiene check (run before the suite)
 
-### Detection signature
-
-Design-doc phrasings like "CODE may include or drop", "optional closing cross-link", or "optional discursive paragraph" mark the entry condition. Apply the strengthening-vs-discursive judgment before composing the section; do not default to either form mechanically.
-
-### Worked example — fold-in cross-link
-
-In `pact-plugin/skills/pact-testing-strategies/SKILL.md`, the section "Sibling-file convention for parametrized noise-budget regression" closes its canonical-mitigation paragraph with an inline cross-reference to the sister "Author-blindness in HANDOFF arithmetic" section rather than a standalone closing paragraph. The cross-link functions as a strengthening clause on the elevated-priority directive that precedes it — telling the reader where the pair-with-cross-stream-verifier rule lives — so it folds into the same paragraph instead of opening a new one. The fold preserves the cross-reference content while keeping the canonical mitigation a single tight directive.
-
----
-
-## Code Quality Checklist
-
-Before completing CODE phase:
-
-### Structure
-- [ ] Functions under 50 lines
-- [ ] Files under 500 lines
-- [ ] Single responsibility per function/class
-- [ ] No deeply nested code (max 3 levels)
-
-### Naming
-- [ ] Descriptive variable names
-- [ ] Consistent naming conventions
-- [ ] No abbreviations (except common ones: id, url, api)
-- [ ] Boolean variables have is/has/can prefix
-
-### Error Handling
-- [ ] All async operations have error handling
-- [ ] Errors include relevant context
-- [ ] No silent failures
-- [ ] User-facing errors are friendly
-
-### Documentation
-- [ ] Complex logic has comments
-- [ ] Public APIs have JSDoc/docstrings
-- [ ] No commented-out code
-- [ ] No TODO comments without tickets
-
-### Quality
-- [ ] No magic numbers (use named constants)
-- [ ] No duplicate code
-- [ ] Consistent code style
-- [ ] Logging at appropriate levels
-
----
-
-## Scripts
-
-### Import Hygiene Check (--files mode)
-
-Behavioral tests cannot see an unused import — a dead `import os` passes
-every test green. The import-hygiene check closes that blind spot
-mechanically. Run it over EXACTLY the `.py` files you modified before
-running the test suite:
+Behavioural tests cannot see an unused import. Run the check over EXACTLY the `.py` files you
+modified, one separately quoted absolute path per file (a filename is untrusted shell input):
 
 ```bash
-bash <skill-directory>/scripts/lint-check.sh --files '/abs/path/to/modified_a.py' '/abs/path/to/modified_b.py'
+bash <skill-directory>/scripts/lint-check.sh --files '/abs/path/a.py' '/abs/path/b.py'
 ```
 
-One separately quoted absolute path per file, never one quoted list — a filename is untrusted shell input.
+With a plugin root in your dispatch the script is `<plugin-root>/skills/pact-coding-standards/scripts/lint-check.sh`.
+A bare `lint-check.sh` is refused; never present it as a lint command. Whole-tree detection needs a
+directory argument (`./scripts/lint-check.sh /path/to/project`).
 
-(When your dispatch names a plugin root, the script lives at
-`<plugin-root>/skills/pact-coding-standards/scripts/lint-check.sh`.)
+The LAST stdout line is always one verdict. Record it verbatim in your HANDOFF `produced` field:
 
-A bare `lint-check.sh` with no arguments is refused. Do not present it as a lint command.
+| Verdict | Meaning | Exit |
+|---|---|---|
+| `IMPORT-HYGIENE: PASS` | no findings in the checked files | 0 |
+| `IMPORT-HYGIENE: FINDINGS (n)` | n findings printed above | 1 |
+| `IMPORT-HYGIENE: SKIPPED (<reason>)` | could not run (no arguments, no checkable .py file, no usable checker) | 0 |
 
-### Lint Check Script (legacy directory mode)
+Fix every finding in files you modified (delete the import or fix the name); never lint-fix files
+you did not touch. A deliberate side-effect import or re-export keeps a reasoned suppression:
+`# noqa: F401  # re-export: <why>`, never a bare `# noqa`. If the script is missing or errors, say so
+in the HANDOFF. How the checker ladder works: [import-hygiene-and-cli-examples](references/import-hygiene-and-cli-examples.md).
 
-Whole-tree project-type detection is reachable only with a directory argument:
+## Teaching examples for agent-facing CLIs
 
-```bash
-# From within the skill directory:
-chmod +x scripts/lint-check.sh
-./scripts/lint-check.sh /path/to/project
-```
+Build every example as `python3 "<script-path>" <verb> ...` (bare `python3`, quoted path). `--help`'s
+epilog lists all examples; a usage error appends exactly one example (the offending subcommand's
+own) after a blank line. Keep each CLI's usage-error exit code.
 
-**Verdict-line contract** — the LAST stdout line is always exactly one of:
+## Checklist before leaving the Code phase
 
-| Verdict | Meaning | Exit code |
-|---------|---------|-----------|
-| `IMPORT-HYGIENE: PASS` | No findings in the checked files | 0 |
-| `IMPORT-HYGIENE: FINDINGS (n)` | n findings printed above the verdict | 1 |
-| `IMPORT-HYGIENE: SKIPPED (<reason>)` | Check could not run (no arguments given, arguments given but none a checkable .py file, or no usable checker) | 0 |
-
-Record the verdict line verbatim in your HANDOFF `produced` field — every
-run ends in a verdict, and a SKIPPED must be visible, never silent.
-
-**What to do with findings:**
-
-- Fix every finding in files you modified: delete the unused import, or fix
-  the undefined name.
-- Never lint-fix files you did not touch — the check's scope is your diff.
-- A deliberate side-effect import or re-export keeps a reasoned suppression
-  at the import site: `# noqa: F401  # re-export: <why>`. Never a bare
-  `# noqa` without a reason.
-- If the script is missing or errors, state that in your HANDOFF instead of
-  skipping silently.
-
-**How it checks** (internal — the coder-facing contract is just the command
-and the verdict): an execution-probed ladder tries ruff, then pyflakes, then
-flake8, each restricted to the unused-import/undefined-name classes only
-(`--select F401,F821`) so you are never asked to fix style noise; when no
-linter is installed it falls back to the stdlib AST checker
-`scripts/check_unused_imports.py` (unused imports only, try/except-scoped
-imports treated as advisory). A checker crash degrades to `SKIPPED` — the
-check fails open and never blocks you on its own breakage.
-
-### Teach examples for agent-facing CLIs
-
-When you add or change an agent-facing CLI, teach it with examples that
-paste-execute verbatim: build every example as
-`python3 "<script-path>" <verb> ...` — bare `python3`, never a pinned
-interpreter, and always quote the script path. In `--help`, the epilog lists
-all of the CLI's examples; a usage error appends exactly one example — the
-offending subcommand's own — separated from the error line by a blank line.
-Keep each CLI's pre-existing usage-error exit code; teaching examples never
-changes an exit contract.
-
----
-
-## Detailed References
-
-For comprehensive coding guidance:
-
-- **Clean Code Principles**: [references/clean-code-principles.md](references/clean-code-principles.md)
-  - SOLID principles in depth
-  - Code smells and refactoring
-  - Function design guidelines
-  - Comment best practices
-
-- **Error Handling Patterns**: [references/error-handling-patterns.md](references/error-handling-patterns.md)
-  - Error handling by language
-  - Global error handlers
-  - Retry strategies
-  - Circuit breaker patterns
+- Structure: functions ≤ 50 lines, files ≤ 500, one responsibility each, nesting ≤ 3.
+- Naming: descriptive, consistent, no abbreviations beyond id/url/api, boolean prefixes.
+- Errors: every async operation handled, context in errors, no silent failures.
+- Documentation: comments on complex logic, docstrings on public APIs, no commented-out code, no
+  TODO without a ticket.
+- Quality: no magic numbers, no duplication, consistent style, logging at the right level.

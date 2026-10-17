@@ -14,6 +14,11 @@ Two phrasing conventions exist:
 These tests check link RESOLUTION; phrasing-convention enforcement is a
 separate concern (and a separate test).
 
+The orchestrator's `Read(file_path="...")` pointers are not markdown links: they are
+paths from the plugin root, written `{plugin_root}/protocols/name.md`, because a path
+relative to the persona file does not resolve from the lead's working directory.
+test_read_pointers_are_plugin_root_paths_that_resolve covers them.
+
 No test here carries an xfail or skip marker; every one is an ordinary guard.
 test_every_expected_agent_file_is_present pins the agent file set by name, and
 the others check the cross-references and @-refs in whichever agent bodies exist.
@@ -33,7 +38,6 @@ EXPECTED_AGENT_FILES = {
     "pact-database-engineer.md",
     "pact-devops-engineer.md",
     "pact-frontend-coder.md",
-    "pact-n8n.md",
     "pact-orchestrator.md",
     "pact-preparer.md",
     "pact-qa-engineer.md",
@@ -47,6 +51,12 @@ EXPECTED_AGENT_FILES = {
 LINK_PATTERN = re.compile(
     r"\[(?P<text>[^\]]+)\]\((?P<href>\.\.\/(?:protocols|skills)\/[^)]+\.md)\)"
 )
+
+
+# Match a Read tool-call pointer: Read(file_path="<path>")
+READ_POINTER_PATTERN = re.compile(r'Read\(file_path="(?P<path>[^"]+)"\)')
+ROOT_PLACEHOLDER = "{plugin_root}/"
+ORCHESTRATOR_READ_POINTERS = 8
 
 
 def _resolve(agent_path: Path, href: str) -> Path:
@@ -99,14 +109,29 @@ def test_skill_cross_references_resolve():
     assert not failures, "dangling skill cross-references:\n" + "\n".join(failures)
 
 
+def test_read_pointers_are_plugin_root_paths_that_resolve():
+    """Every Read(file_path=...) pointer in an agent body starts at {plugin_root} and resolves."""
+    failures = []
+    for agent_path in sorted(AGENTS_DIR.glob("*.md")):
+        for m in READ_POINTER_PATTERN.finditer(agent_path.read_text(encoding="utf-8")):
+            path = m.group("path")
+            if not path.startswith(ROOT_PLACEHOLDER):
+                failures.append(f"{agent_path.name}: not a plugin-root path: {path}")
+            elif not (PLUGIN_ROOT / path[len(ROOT_PLACEHOLDER):]).is_file():
+                failures.append(f"{agent_path.name}: dangling {path}")
+    assert not failures, "bad Read pointers:\n" + "\n".join(failures)
+    orchestrator = (AGENTS_DIR / "pact-orchestrator.md").read_text(encoding="utf-8")
+    found = READ_POINTER_PATTERN.findall(orchestrator)
+    assert len(found) == ORCHESTRATOR_READ_POINTERS, found
+
+
 def test_imperative_protocols_referenced_by_at_least_one_agent():
-    """Each of the 5 imperative protocols must appear in at least one agent body."""
+    """Each imperative protocol (PROTO targets, m4) must appear in at least one agent body."""
     imperative = [
         "algedonic.md",
-        "pact-s4-tension.md",
-        "pact-s5-policy.md",
-        "pact-state-recovery.md",
-        "pact-completion-authority.md",
+        "workflows.md",
+        "recovery.md",
+        "completion.md",
     ]
     bodies = {
         p.name: p.read_text() for p in AGENTS_DIR.glob("*.md")

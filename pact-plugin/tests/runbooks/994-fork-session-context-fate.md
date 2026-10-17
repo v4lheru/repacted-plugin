@@ -109,7 +109,7 @@ it is byte-unchanged after the run. A changed sha means isolation failed -> HALT
 
 The context-file write is **`is_lead`-gated**: `session_init` calls
 `persist_context(...)` only `if frame_is_lead`, and `is_lead` is TRUE only for
-`agent_type in {"PACT:pact-orchestrator", "pact-orchestrator"}`
+`agent_type in {"repacted:pact-orchestrator", "pact-orchestrator"}`
 (`LEAD_AGENT_TYPES`, `pact_context.py`). A PLAIN `claude -p` frame carries no
 `agent_type` -> `is_lead` FALSE -> `persist_context` SKIPPED -> **no context
 file at all**, and the probe would falsely read "no context".
@@ -278,18 +278,16 @@ three snapshots of the NEW-id context file's `session_id` field:
 `t1` distinguishes "durable fix REQUIRED" (never self-heals) from "the
 cheap-win dispatch-deny self-diagnosis already covers the transient window".
 
-### Instrument: a SessionStart logging shim (DEV-only, reversible)
+### Instrument: none shipped (rePACTed)
 
-Reuse the atomic-tee idiom in the repo-root
-`dev/install_session_start_logging_shim.sh` (`.tmp`-sibling + `os.rename`,
-`try/except: pass`, `.preshim.bak` backup, single in-file marker). That script
-lives in the PACT source repository and is deliberately NOT distributed in the
-plugin package — if you are reading this from an installed plugin cache,
-`dev/` is absent by design, not missing. Adapt it so
-each SessionStart fire ALSO appends the firing PID, wall-clock, and — if the
-NEW-id `pact-session-context.json` exists — its `session_id` field. That
-yields `t0`; a post-prompt read yields `t1`/`t2`. The shim is a **conditional**
-deliverable: do NOT install it unless §3 returns `CASE 3`.
+PACT's version of this section reused `dev/install_session_start_logging_shim.sh`.
+The rePACTed fork deleted that script at M0b, and §3's executed verdict (CASE 1,
+recorded in §6) makes this section moot. If a future run of §3 prints `CASE 3`,
+write a new DEV-only SessionStart instrument first: on each SessionStart fire it
+appends the firing PID, wall-clock and, if the NEW-id `pact-session-context.json`
+exists, its `session_id` field (write atomically via a `.tmp` sibling +
+`os.rename`, and never raise). That yields `t0`; a post-prompt read yields
+`t1`/`t2`. Do not look for the old script.
 
 ---
 

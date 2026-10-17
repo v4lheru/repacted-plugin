@@ -23,7 +23,7 @@ behavior end-to-end. Issue #961 closure is gated on this logged PASS.
 |---|---|---|
 | Installed plugin == v4.4.24 | ✅ | `.claude-plugin/plugin.json` → `"version": "4.4.24"` |
 | Hook wired as PreToolUse `Edit\|Write\|Bash` | ✅ | `hooks/hooks.json:137` → `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/task_claim_gate.py"`; module docstring declares `matcher="Edit\|Write\|Bash"` (lead pre-verified the matcher) |
-| Live hook == installed cache copy | ✅ | authoritative path read: `/Users/mj/.claude/plugins/cache/pact-plugin/PACT/4.4.24/hooks/task_claim_gate.py` (NOT a worktree/source copy) |
+| Live hook == installed cache copy | ✅ | authoritative path read: `/Users/alice/.claude/plugins/cache/pact-plugin/PACT/4.4.24/hooks/task_claim_gate.py` (NOT a worktree/source copy) |
 | teammateMode == tmux (distinct session) | ✅ | my `session_id` `fef3f483-6b54-4ec1-b81e-aa3c0da69ffd` (registry line) ≠ `leadSessionId` `860c2595-02b8-484a-b6ca-c638fff6bcfa` (team config) → genuine distinct-session teammate (the M2-relevant frame) |
 
 **Mode:** tmux (N processes, N:1 session:team). The auto-flip (M2) path exists
@@ -50,7 +50,7 @@ Read from the live cache copy (`task_claim_gate.py`):
   False) → `mine` empty → silent NO-OP, leaving #8 pending for a clean capture.
 - **Discrimination (3 tiers, structural signal, never a mode flag):**
   Step 0 `pact_context.is_lead(stdin)` → `agent_type ∈ {"pact-orchestrator",
-  "PACT:pact-orchestrator"}` → NO-OP (lead). Step 3 topology:
+  "repacted:pact-orchestrator"}` → NO-OP (lead). Step 3 topology:
   `in_process = (session_id == leadSessionId from team config)`; in-process →
   generic advisory only, tmux → M1/M2 enforce.
 - **Identity:** `session_registry.resolve(session_id)` self-lookup against the

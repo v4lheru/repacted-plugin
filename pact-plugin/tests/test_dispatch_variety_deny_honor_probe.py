@@ -59,7 +59,7 @@ import pytest
 _HOOK = Path(__file__).parent.parent / "hooks" / "handoff_ordering_gate.py"
 
 # Frame agent_type spellings — is_lead reads top-level agent_type directly.
-_LEAD = "PACT:pact-orchestrator"
+_LEAD = "repacted:pact-orchestrator"
 _TEAMMATE = "pact-backend-coder"
 
 _SID = "deadbeef-4242-4242-4242-deadbeef4242"

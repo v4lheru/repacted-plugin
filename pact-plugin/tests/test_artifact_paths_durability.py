@@ -12,7 +12,7 @@ Covers the four committed seams of the artifact_paths durability mechanism:
 DISCIPLINE (per the locked plan + this session's plan-mode strategy):
   - BOTH-MODES AXIS = agent_type AND session_id. The backstop keys on
     is_canonical_journal_frame, which reads BOTH: the role leg on agent_type
-    (LEAD = 'PACT:pact-orchestrator' / 'pact-orchestrator'; TEAMMATE = a pact-*
+    (LEAD = 'repacted:pact-orchestrator' / 'pact-orchestrator'; TEAMMATE = a pact-*
     type), and the topology leg on session_id against the leadSessionId of the
     team config. The teammate-frame arms below assert the backstop is ABSENT,
     and that absence holds ONLY because those fixtures seed no leadSessionId
@@ -39,7 +39,7 @@ DISCIPLINE (per the locked plan + this session's plan-mode strategy):
     is false-empty for the RIGHT reason, not a missing fixture).
 
 Run with the 3.13.7 interpreter (default python3 has no pytest):
-    /Users/mj/.pyenv/versions/3.13.7/bin/python3 -m pytest \
+    /Users/alice/.pyenv/versions/3.13.7/bin/python3 -m pytest \
         pact-plugin/tests/test_artifact_paths_durability.py -rA
 """
 
@@ -60,7 +60,7 @@ from shared.session_journal import (  # noqa: E402
 )
 
 # --- agent_type axis constants (the both-modes discriminator for this surface) ---
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 LEAD_BARE = "pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
 
@@ -851,7 +851,7 @@ class TestB1SessionDirReconstructSanitizationParity:
     Probe-confirmed divergence: writer 'my_project' vs raw-join 'my.project'.
     """
 
-    DOTTED_PROJECT = "/Users/x/my.project"
+    DOTTED_PROJECT = "/Users/alice/my.project"
     # session_id carrying a non-allowlist '.' — exercises the SECOND
     # sanitization axis (the writer's init() sanitizes session_id too).
     SESSION_ID = "abc.def-123"

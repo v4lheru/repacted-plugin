@@ -109,7 +109,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 # {"task": "T", "status": "pending"}, and a probe over the LONGEST string
 # leaf reports a text length of 7 and calls the item healthy. Only the
 # primary value carries the evidence, so the extractor must know which key
-# is primary for each field. That is the reason for the map below.
+# is primary for each field. That is why the key map that follows exists.
 STRING_LIST_FIELDS: Tuple[str, ...] = (
     "agreements_reached",
     "disagreements_resolved",
@@ -458,7 +458,7 @@ def render_text(report: Dict[str, Any]) -> str:
 
 # A malformed command line is not a REFUSAL. argparse exits 2 by default and
 # this script already returns 2 for "REFUSED", so the two were indistinguishable
-# to a caller. 64 is EX_USAGE from sysexits.h; it matches backlog.py's split and
+# to a caller. 64 is EX_USAGE from sysexits.h; it
 # sits below the 126-255 range shells reserve.
 _EXIT_USAGE = 64
 

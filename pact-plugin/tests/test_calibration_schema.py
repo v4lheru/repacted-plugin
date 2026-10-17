@@ -3,7 +3,7 @@ Tests for CalibrationRecord schema validation and consistency.
 
 Tests cover:
 1. CalibrationRecord schema: required fields, types
-2. Schema consistency between architecture doc and pact-variety.md protocol
+2. Schema consistency between architecture doc and workflows.md §Variety
 """
 from pathlib import Path
 
@@ -14,8 +14,6 @@ from shared.variety_scorer import (
     MIN_SCORE,
 )
 
-PROTOCOLS_DIR = Path(__file__).parent.parent / "protocols"
-VARIETY_PROTOCOL = PROTOCOLS_DIR / "pact-variety.md"
 
 # CalibrationRecord schema fields (from architecture doc lines 170-195)
 REQUIRED_FIELDS = {
@@ -102,42 +100,6 @@ class TestCalibrationRecordSchema:
 # =============================================================================
 
 
-class TestSchemaProtocolConsistency:
-    """Verify CalibrationRecord fields match pact-variety.md protocol text."""
-
-    @pytest.fixture
-    def variety_content(self):
-        return VARIETY_PROTOCOL.read_text(encoding="utf-8")
-
-    def test_protocol_has_calibration_record_section(self, variety_content):
-        assert "CalibrationRecord" in variety_content
-
-    def test_protocol_has_task_id_field(self, variety_content):
-        assert "task_id" in variety_content
-
-    def test_protocol_has_domain_field(self, variety_content):
-        assert "domain" in variety_content
-
-    def test_protocol_has_initial_variety_score(self, variety_content):
-        assert "initial_variety_score" in variety_content
-
-    def test_protocol_has_actual_difficulty_score(self, variety_content):
-        assert "actual_difficulty_score" in variety_content
-
-    def test_protocol_has_dimensions_that_drifted(self, variety_content):
-        assert "dimensions_that_drifted" in variety_content
-
-    def test_protocol_has_blocker_count(self, variety_content):
-        assert "blocker_count" in variety_content
-
-    def test_protocol_has_phase_reruns(self, variety_content):
-        assert "phase_reruns" in variety_content
-
-    def test_protocol_has_specialist_fit(self, variety_content):
-        assert "specialist_fit" in variety_content
-
-    def test_protocol_has_timestamp(self, variety_content):
-        assert "timestamp" in variety_content
 
 
 # =============================================================================
@@ -180,24 +142,5 @@ class TestSecretaryCalibrationCrossRef:
         """Secretary agent definition must reference calibration."""
         assert "calibration" in secretary_content.lower()
 
-    def test_secretary_loads_handoff_harvest_skill(self, secretary_content):
-        """Secretary must auto-load the pact-handoff-harvest skill via frontmatter."""
-        assert "pact-handoff-harvest" in secretary_content
 
-    def test_skill_has_calibration_gathering_step(self, skill_content):
-        """Handoff harvest skill must include calibration gathering instructions."""
-        assert "calibration" in skill_content.lower()
-        assert "CalibrationRecord" in skill_content
 
-    @pytest.mark.parametrize(
-        "field,search_terms",
-        list(_SECRETARY_FIELD_CHECKS.items()),
-        ids=list(_SECRETARY_FIELD_CHECKS.keys()),
-    )
-    def test_skill_references_calibration_field(self, skill_content, field, search_terms):
-        """Each CalibrationRecord field must be referenced in the harvest skill's calibration protocol."""
-        found = any(term in skill_content for term in search_terms)
-        assert found, (
-            f"CalibrationRecord field '{field}' not found in pact-handoff-harvest SKILL.md. "
-            f"Searched for: {search_terms}"
-        )

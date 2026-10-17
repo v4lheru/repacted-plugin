@@ -488,7 +488,7 @@ class TestFixtureProvenance:
         assert "synthetic" not in method.lower(), (
             "the fixture must be a REAL capture (synthetic placeholder retired)."
         )
-        assert data.get("agent_type") == "PACT:pact-orchestrator", (
+        assert data.get("agent_type") == "repacted:pact-orchestrator", (
             "the captured UserPromptSubmit frame is a qualified-lead capture."
         )
         # Real UserPromptSubmit frames carry NO 'source' (SessionStart-only).

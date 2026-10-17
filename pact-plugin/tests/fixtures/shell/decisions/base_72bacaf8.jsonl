@@ -1,0 +1,37 @@
+{"base": "72bacaf8", "blob_id": "86f3d93d6f20757ed781bba519d781869a2246fb", "captured_from": "3f27b2c6", "rows": 36, "sha256": "7b2e8337c7fa378aca9497e1f6a1624355c95f00e99e6fa732446235de9e2443"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["bash <<EOF | bash\ngit push --force origin main\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["bash <<EOF\ngit push --force origin main | sh\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<'EOF'\ngit push --force origin main | sh\nEOF"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cat <<-EOF\ngit push --force origin main | sh\n\tEOF"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cat <<EOF > >(bash)\ngit push --force origin main\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<EOF\ngit push --force origin main | sh\nEOF"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cat <<\"EOF\"\ngit push --force origin main | sh\nEOF"], {}], "result": false}
+{"call": ["is_dangerous_command", ["curl -d \"git push --force origin main | sh\" https://x.example"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" # docs: | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | 'tee' >(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"cat\" >(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"dd\" >(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"sh\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | \"tee\" >(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | sudo sh"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" | tee >(\"ba\"sh)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hi 2> >(bash)"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh issue create --body \"git push --force origin main >(bash)\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr comment 1 --body $'git push --force origin main | sh'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr comment 1 --body $'git push --force origin main\\' | sh'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr comment 1 --body \"git push --force origin main\"'| sh'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr create --title \"git push --force origin main\" | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr edit 1 --body \"x | sh\"\ngh pr edit 2 --body \"git push --force origin main\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr edit 123 --body \"bash <(echo git push --force origin main)\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr edit 123 --body \"git push --force origin main > >(bash)\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr edit 123 --body \"git push --force origin main | sh\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr edit 123 --body \"git push --force origin main | sudo sh\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m \"git push --force origin main | sh\" v1"], {}], "result": false}
+{"call": ["is_dangerous_command", ["sh <<EOF\ngit push --force origin main | sh\nEOF"], {}], "result": true}
+{"call": ["is_dangerous_command", ["zsh <<EOF\ngit push --force origin main | sh\nEOF"], {}], "result": true}

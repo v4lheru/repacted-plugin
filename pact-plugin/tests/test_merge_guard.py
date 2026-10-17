@@ -1,6 +1,10 @@
 """
 Tests for merge guard hooks — merge_guard_post.py and merge_guard_pre.py.
 
+Folded 2026-10-04 (refactor shell lane): its row tests (a recorded decision function on a
+literal command) are decision-table rows now (tests/fixtures/shell/decisions/fold_manifest.json
+names the rows of each); the mechanism, view and structure tests stay here.
+
 Tests cover:
 1. merge_guard_post: keyword detection in AskUserQuestion text
 2. merge_guard_post: affirmative answer detection
@@ -33,6 +37,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
+from merge_guard_repo_fixture import minted_context  # noqa: E402  (amend_3 on #141: mint-side repo binding)
+from merge_guard_repo_fixture import git_bound  # noqa: E402  (1.4.1 U13: git checkout/remote binding)
+from helpers import effective_hooks_config  # noqa: E402
 
 
 # =============================================================================
@@ -355,81 +363,6 @@ class TestPostMainEntryPoint:
 # =============================================================================
 
 
-class TestIsDangerousCommand:
-    """Tests for merge_guard_pre.is_dangerous_command()."""
-
-    def test_gh_pr_merge(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr merge 42")
-
-    def test_gh_pr_merge_with_flags(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr merge 42 --squash --delete-branch")
-
-    def test_git_push_force(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push --force origin main")
-
-    def test_git_push_f(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push -f origin main")
-
-    def test_git_branch_D(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git branch -D feat/old")
-
-    def test_git_branch_delete_force(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git branch --delete --force feat/old")
-
-    def test_git_branch_force_delete(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git branch --force --delete feat/old")
-
-    def test_git_push_origin_main_is_dangerous(self):
-        """git push origin main pushes directly to default branch — dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push origin main")
-
-    def test_safe_git_branch(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git branch -d feat/old")
-
-    def test_safe_git_status(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git status")
-
-    def test_safe_gh_pr_list(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr list")
-
-    def test_safe_non_git_command(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("ls -la")
-
-    def test_empty_command(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("")
-
-    def test_git_push_combined_flags_with_f(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push -uf origin main")
-
-
 class TestFindValidToken:
     """Tests for merge_guard_pre.find_valid_token()."""
 
@@ -527,7 +460,7 @@ class TestFindValidToken:
         token_path.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"pr_number": "42", "operation_type": "merge"},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "merge"},
             "max_uses": MAX_USES,
             "uses_remaining": 0,
         }))
@@ -585,7 +518,7 @@ class TestCheckMergeAuthorization:
         token_data = {
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"operation_type": "merge", "pr_number": "42"},
+            "context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"},
         }
         token_file = tmp_path / "merge-authorized-12345"
         token_file.write_text(json.dumps(token_data))
@@ -656,7 +589,7 @@ class TestPreMainEntryPoint:
         token_data = {
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"operation_type": "merge", "pr_number": "42"},
+            "context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"},
         }
         token_file = tmp_path / "merge-authorized-12345"
         token_file.write_text(json.dumps(token_data))
@@ -725,12 +658,11 @@ class TestIntegration:
     def test_approval_flow(self, tmp_path):
         """Full flow: user approves merge (command-anchored), then the matching
         dangerous command is allowed."""
-        from shared.merge_guard_common import extract_command_context
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
         # Simulate post hook: mint a token from the approved command.
-        context = extract_command_context("gh pr merge 42")
+        context = minted_context("gh pr merge 42")
         token_path = write_token(context, token_dir=tmp_path)
         assert token_path is not None
 
@@ -801,11 +733,11 @@ class TestIntegration:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        write_token({"operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path)
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path)
         # Force a different filename by manipulating time
         with patch("merge_guard_post.time") as mock_time:
             mock_time.time.return_value = time.time() + 1
-            write_token({"operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path)
+            write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path)
 
         # I-1: exactly one unused token after the second write; the first
         # has been atomically retired to .consumed by cleanup_unused_tokens.
@@ -869,7 +801,7 @@ class TestNUseBoundedToken:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         assert token_path is not None
         assert Path(token_path).exists()
 
@@ -888,7 +820,7 @@ class TestNUseBoundedToken:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         result1 = check_merge_authorization("gh pr merge 42", token_dir=tmp_path)
         assert result1 is None
@@ -908,7 +840,7 @@ class TestNUseBoundedToken:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         # Burn through both slots
         assert check_merge_authorization("gh pr merge 42", token_dir=tmp_path) is None
@@ -925,7 +857,7 @@ class TestNUseBoundedToken:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         result = check_merge_authorization("git status", token_dir=tmp_path)
         assert result is None
@@ -935,7 +867,7 @@ class TestNUseBoundedToken:
         assert not Path(token_path + USE_MARKER_SUFFIX + "2").exists()
 
     def test_consumption_does_not_interfere_with_expired_cleanup(self, tmp_path):
-        """Expired tokens are cleaned up normally alongside N-use consumption."""
+        """Expired tokens are cleaned up usually alongside N-use consumption."""
         from shared.merge_guard_common import USE_MARKER_SUFFIX
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
@@ -952,7 +884,7 @@ class TestNUseBoundedToken:
         expired_file.write_text(json.dumps(expired_data))
 
         # Create a valid token
-        valid_path = write_token({"operation_type": "merge", "pr_number": "99"}, token_dir=tmp_path)
+        valid_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "99"}, token_dir=tmp_path)
 
         # Authorize: expired cleaned up, valid claims slot 1 (token still
         # present because MAX_USES=2 and only one slot has been used).
@@ -969,7 +901,7 @@ class TestNUseBoundedToken:
         from merge_guard_pre import check_merge_authorization
 
         # First approval: authorizes MAX_USES merges
-        write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         for _ in range(MAX_USES):
             assert check_merge_authorization("gh pr merge 42", token_dir=tmp_path) is None
 
@@ -979,7 +911,8 @@ class TestNUseBoundedToken:
         # Second approval (different op): authorizes MAX_USES force-pushes
         with patch("merge_guard_post.time") as mock_time:
             mock_time.time.return_value = time.time() + 1
-            write_token({"operation_type": "force-push", "target_ref": "main"}, token_dir=tmp_path)
+            write_token(git_bound({"operation_type": "force-push", "target_ref": "main"},
+                                  "git push --force origin main"), token_dir=tmp_path)
         for _ in range(MAX_USES):
             assert check_merge_authorization(
                 "git push --force origin main", token_dir=tmp_path
@@ -993,7 +926,7 @@ class TestNUseBoundedToken:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         # Simulate external deletion before any consume happens.
         os.unlink(token_path)
@@ -1009,7 +942,7 @@ class TestNUseBoundedToken:
         from merge_guard_post import write_token
         from merge_guard_pre import _consume_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         # Two back-to-back consumes simulate concurrent invocations
         # racing on the same token.
@@ -1044,7 +977,7 @@ class TestNUseBackwardCompat:
         token_path.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"pr_number": "42", "operation_type": "merge"},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "merge"},
         }))
         return str(token_path)
 
@@ -1106,7 +1039,7 @@ class TestNUseAuditEmit:
         from merge_guard_post import write_token
         from merge_guard_pre import _consume_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         # Drain prior stderr (write_token also emits)
         capfd.readouterr()
@@ -1127,7 +1060,7 @@ class TestNUseAuditEmit:
         from merge_guard_post import write_token
         from merge_guard_pre import _consume_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         capfd.readouterr()
 
         _consume_token(token_path)
@@ -1142,7 +1075,7 @@ class TestNUseAuditEmit:
         from merge_guard_post import write_token
         from merge_guard_pre import _consume_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         for _ in range(MAX_USES):
             _consume_token(token_path)
 
@@ -1170,7 +1103,7 @@ class TestNUseSlotMarkerCleanup:
         from merge_guard_post import write_token
         from merge_guard_pre import _consume_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         for _ in range(MAX_USES):
             _consume_token(token_path)
 
@@ -1201,7 +1134,7 @@ class TestNUseSlotMarkerCleanup:
         from merge_guard_post import write_token
         from merge_guard_pre import _consume_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         for _ in range(MAX_USES):
             _consume_token(token_path)
 
@@ -1254,119 +1187,6 @@ class TestNUseSlotMarkerCleanup:
 # =============================================================================
 # Adversarial: command bypass attempts
 # =============================================================================
-
-
-class TestAdversarialCommandDetection:
-    """Attempt to bypass dangerous command detection via shell tricks."""
-
-    def test_command_in_subshell(self):
-        """Dangerous command inside $() subshell is still caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("$(gh pr merge 42)")
-
-    def test_command_after_semicolon(self):
-        """Dangerous command after semicolon is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("echo hello; gh pr merge 42")
-
-    def test_command_after_pipe(self):
-        """Dangerous command after pipe is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("echo hello | gh pr merge 42")
-
-    def test_command_after_and(self):
-        """Dangerous command chained with && is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("cd /tmp && gh pr merge 42")
-
-    def test_command_after_or(self):
-        """Dangerous command chained with || is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("false || gh pr merge 42")
-
-    def test_git_push_force_with_lease(self):
-        """git push --force-with-lease is allowed — it's a safer alternative."""
-        from merge_guard_pre import is_dangerous_command
-
-        # --force-with-lease is intentionally excluded from force-push patterns
-        # because it refuses to overwrite remote work not yet pulled locally.
-        # Use a feature branch to isolate from "push to main" detection.
-        assert not is_dangerous_command("git push --force-with-lease origin feature/my-branch")
-
-    def test_git_push_force_with_remote_url(self):
-        """Force push to explicit remote URL is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "git push --force https://github.com/user/repo.git main"
-        )
-
-    def test_multiline_command_with_backslash_detected(self):
-        """Backslash-continuation across lines IS detected after normalization.
-
-        Line continuations (\\<newline>) are normalized to spaces before pattern
-        matching, closing a bypass vector.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push \\\n--force origin main")
-
-    def test_git_push_force_via_config_flag_detected(self):
-        """git -c ... push --force with interleaved -c flags IS detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        # Patterns now handle optional -c flags between git and push
-        assert is_dangerous_command("git -c push.default=current push --force origin")
-
-    def test_safe_command_containing_merge_as_substring(self):
-        """Commands that contain 'merge' as substring but aren't dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git merge feature-branch")
-        assert not is_dangerous_command("git mergetool")
-
-    def test_safe_gh_pr_view(self):
-        """gh pr view with merge-like URL is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr view 42")
-
-    def test_safe_branch_lowercase_d(self):
-        """git branch -d (lowercase) is safe — only -D is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git branch -d old-branch")
-
-    def test_dangerous_in_heredoc_style(self):
-        """Dangerous command embedded in bash heredoc syntax."""
-        from merge_guard_pre import is_dangerous_command
-
-        # The command string still contains the dangerous pattern
-        assert is_dangerous_command("bash -c 'gh pr merge 42'")
-
-    def test_dangerous_with_env_var_prefix(self):
-        """Dangerous command prefixed with env var assignment."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("GH_TOKEN=abc gh pr merge 42")
-
-    def test_git_push_f_combined_with_other_flags(self):
-        """git push with -f combined in various flag positions."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push -vf origin main")
-        assert is_dangerous_command("git push -fu origin main")
-
-    def test_git_branch_D_with_multiple_branches(self):
-        """git branch -D with multiple branch args."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git branch -D branch1 branch2 branch3")
 
 
 # =============================================================================
@@ -1507,360 +1327,14 @@ class TestStripNonExecutableContent:
         assert _strip_non_executable_content(cmd) == cmd
 
 
-class TestFalsePositivePrevention:
-    """Verify that dangerous-pattern text in non-executable contexts
-    does NOT trigger is_dangerous_command()."""
-
-    def test_echo_double_quoted_not_dangerous(self):
-        """echo with quoted dangerous text is not a real command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "gh pr merge 255"')
-
-    def test_echo_single_quoted_not_dangerous(self):
-        """echo with single-quoted dangerous text is not a real command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("echo 'git push --force origin main'")
-
-    def test_variable_assignment_not_dangerous(self):
-        """Variable assignment containing dangerous text is not a command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('X="gh pr merge"')
-
-    def test_variable_assignment_single_quoted_not_dangerous(self):
-        """Single-quoted variable assignment is not a command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("CMD='git branch -D feat/old'")
-
-    def test_comment_not_dangerous(self):
-        """Commented-out dangerous command is not a real command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("# gh pr merge 42")
-
-    def test_inline_comment_not_dangerous(self):
-        """Inline comment after safe command is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git status # gh pr merge 42")
-
-    def test_heredoc_not_dangerous(self):
-        """Dangerous text inside heredoc body is not a command."""
-        from merge_guard_pre import is_dangerous_command
-
-        cmd = "python3 << 'PYEOF'\nre.compile(r\"\\bgh\\s+pr\\s+merge\\b\")\nPYEOF"
-        assert not is_dangerous_command(cmd)
-
-    def test_heredoc_unquoted_not_dangerous(self):
-        """Dangerous text inside unquoted heredoc is not a command."""
-        from merge_guard_pre import is_dangerous_command
-
-        cmd = "cat << EOF\ngh pr merge 42\nEOF"
-        assert not is_dangerous_command(cmd)
-
-    def test_printf_not_dangerous(self):
-        """printf with dangerous text is not a command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('printf "git push --force %s" origin')
-
-    def test_echo_with_flags_not_dangerous(self):
-        """echo -e with dangerous text is not a command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo -e "git branch -D feat/old"')
-
-    # --- Real dangerous commands still detected ---
-
-    def test_real_gh_pr_merge_still_detected(self):
-        """Bare gh pr merge is still caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr merge 42")
-
-    def test_real_force_push_still_detected(self):
-        """Bare git push --force is still caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push --force origin main")
-
-    def test_real_branch_D_still_detected(self):
-        """Bare git branch -D is still caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git branch -D feat/old")
-
-    def test_bash_c_still_detected(self):
-        """bash -c with dangerous command is still caught (genuinely dangerous)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash -c 'gh pr merge 42'")
-
-    def test_chained_after_echo_still_detected(self):
-        """Dangerous command chained after echo is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("echo done && gh pr merge 42")
-
-    def test_semicolon_after_echo_still_detected(self):
-        """Dangerous command after semicolon is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("echo hello; gh pr merge 42")
-
-    def test_env_var_prefix_still_detected(self):
-        """Dangerous command with env var prefix is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("GH_TOKEN=abc gh pr merge 42")
-
-    def test_subshell_still_detected(self):
-        """Dangerous command in $() subshell is still caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("$(gh pr merge 42)")
-
-    # --- Edge cases: mixed contexts ---
-
-    def test_echo_then_real_command(self):
-        """echo of safe text followed by real dangerous command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "hello" && gh pr merge 42')
-
-    def test_comment_then_real_command_on_new_line(self):
-        """Comment on one line, real command on next."""
-        from merge_guard_pre import is_dangerous_command
-
-        cmd = "# just a comment\ngh pr merge 42"
-        assert is_dangerous_command(cmd)
-
-    def test_variable_then_real_command(self):
-        """Variable assignment followed by real dangerous command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('X="value" && gh pr merge 42')
-
-    def test_echo_force_push_not_dangerous(self):
-        """echo of force push text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "git push --force origin main"')
-
-    def test_echo_branch_delete_not_dangerous(self):
-        """echo of branch delete text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "git branch -D feat/old"')
-
-    def test_echo_push_main_not_dangerous(self):
-        """echo of push to main text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "git push origin main"')
-
-
 # =============================================================================
 # Bypass vector prevention: execution-via-indirection
 # =============================================================================
 
 
-class TestBypassVectorPrevention:
-    """Verify that execution-via-indirection patterns are NOT stripped
-    and remain detectable as dangerous commands.
-
-    These are regression tests for bypass vectors introduced by the
-    _strip_non_executable_content() stripping — commands that LOOK like
-    non-executable contexts but actually execute the dangerous content.
-    """
-
-    # --- Pipe to shell interpreter ---
-
-    def test_echo_piped_to_bash_is_dangerous(self):
-        """echo piped to bash executes the content."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "gh pr merge 42" | bash')
-
-    def test_echo_piped_to_sh_is_dangerous(self):
-        """echo piped to sh executes the content."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "gh pr merge 42" | sh')
-
-    def test_echo_piped_to_zsh_is_dangerous(self):
-        """echo piped to zsh executes the content."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "gh pr merge 42" | zsh')
-
-    def test_printf_piped_to_bash_is_dangerous(self):
-        """printf piped to bash executes the content."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('printf "gh pr merge 42" | bash')
-
-    def test_printf_piped_to_sh_is_dangerous(self):
-        """printf piped to sh executes the content."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('printf "gh pr merge 42" | sh')
-
-    def test_echo_single_quoted_piped_to_bash_is_dangerous(self):
-        """echo single-quoted piped to bash executes the content."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("echo 'gh pr merge 42' | bash")
-
-    def test_echo_force_push_piped_to_bash(self):
-        """echo of force push piped to bash is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "git push --force origin main" | bash')
-
-    # --- Variable assignment + eval ---
-
-    def test_var_eval_double_ampersand_is_dangerous(self):
-        """Variable assignment followed by eval via && is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr merge 42" && eval $CMD')
-
-    def test_var_eval_semicolon_is_dangerous(self):
-        """Variable assignment followed by eval via ; is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr merge 42"; eval $CMD')
-
-    def test_var_source_is_dangerous(self):
-        """Variable assignment with source in command is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr merge 42"; source /dev/stdin <<< "$CMD"')
-
-    def test_export_eval_is_dangerous(self):
-        """export + eval pattern is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('export CMD="gh pr merge 42" && eval $CMD')
-
-    def test_var_single_quoted_eval_is_dangerous(self):
-        """Single-quoted variable with eval is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("CMD='gh pr merge 42'; eval $CMD")
-
-    # --- Command substitution in quotes ---
-
-    def test_cmd_sub_in_echo_is_dangerous(self):
-        """$() inside echo double quotes executes the command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "$(gh pr merge 42)"')
-
-    def test_cmd_sub_in_var_assignment_is_dangerous(self):
-        """$() inside variable assignment executes the command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="$(gh pr merge 42)"')
-
-    def test_backtick_in_echo_is_dangerous(self):
-        """Backtick inside echo double quotes executes the command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "`gh pr merge 42`"')
-
-    def test_backtick_in_var_assignment_is_dangerous(self):
-        """Backtick inside variable assignment executes the command."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="`gh pr merge 42`"')
-
-    # --- Heredoc to shell interpreter ---
-
-    def test_heredoc_to_bash_is_dangerous(self):
-        """Heredoc fed to bash executes the body."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash << EOF\ngh pr merge 42\nEOF")
-
-    def test_heredoc_to_sh_is_dangerous(self):
-        """Heredoc fed to sh executes the body."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("sh << EOF\ngh pr merge 42\nEOF")
-
-    def test_heredoc_to_zsh_is_dangerous(self):
-        """Heredoc fed to zsh executes the body."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("zsh << EOF\ngh pr merge 42\nEOF")
-
-    # --- Ensure non-shell heredocs are still stripped (false positive prevention) ---
-
-    def test_heredoc_to_cat_not_dangerous(self):
-        """Heredoc to cat is not executable — still stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("cat << EOF\ngh pr merge 42\nEOF")
-
-    def test_heredoc_to_python_not_dangerous(self):
-        """Heredoc to python is not executable by shell — still stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "python3 << EOF\nre.compile(r'gh pr merge')\nEOF"
-        )
-
-    # --- Ensure normal echo/var false-positive prevention still works ---
-
-    def test_echo_not_piped_still_stripped(self):
-        """echo NOT piped to shell is still stripped (false positive fix)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "gh pr merge 42"')
-
-    def test_var_no_eval_still_stripped(self):
-        """Variable without eval is still stripped (false positive fix)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('CMD="gh pr merge 42"')
-
-
 class TestStripHelpers:
     """Tests for the execution-via-indirection detection helpers."""
 
-    def test_has_pipe_to_bash(self):
-        from merge_guard_pre import _has_pipe_to_shell
-
-        assert _has_pipe_to_shell("echo x | bash")
-        assert _has_pipe_to_shell("echo x | sh")
-        assert _has_pipe_to_shell("echo x | zsh")
-        assert _has_pipe_to_shell("echo x |bash")
-        assert not _has_pipe_to_shell("echo x | grep bash")
-        assert not _has_pipe_to_shell("echo x")
-
-    def test_has_pipe_to_xargs_shell(self):
-        from merge_guard_pre import _has_pipe_to_shell
-
-        assert _has_pipe_to_shell("echo x | xargs bash")
-        assert _has_pipe_to_shell("echo x | xargs sh")
-        assert _has_pipe_to_shell("echo x | xargs zsh")
-        assert _has_pipe_to_shell("echo x | xargs -I {} bash -c {}")
-        assert not _has_pipe_to_shell("echo x | xargs grep")
-        assert not _has_pipe_to_shell("echo x | xargs echo")
-
-    def test_has_eval_or_source(self):
-        from merge_guard_pre import _has_eval_or_source
-
-        assert _has_eval_or_source("eval $CMD")
-        assert _has_eval_or_source('CMD="x" && eval $CMD')
-        assert _has_eval_or_source("source script.sh")
-        assert not _has_eval_or_source('CMD="x"')
-        assert not _has_eval_or_source("echo evaluation")
 
     def test_has_command_substitution(self):
         from merge_guard_pre import _has_command_substitution
@@ -1869,44 +1343,6 @@ class TestStripHelpers:
         assert _has_command_substitution("`gh pr merge 42`")
         assert not _has_command_substitution("gh pr merge 42")
         assert not _has_command_substitution("safe string")
-
-    def test_has_process_substitution_to_shell(self):
-        from merge_guard_pre import _has_process_substitution_to_shell
-
-        assert _has_process_substitution_to_shell("bash <(echo x)")
-        assert _has_process_substitution_to_shell("sh <(echo x)")
-        assert _has_process_substitution_to_shell("zsh <(echo x)")
-        assert not _has_process_substitution_to_shell("cat <(echo x)")
-        assert not _has_process_substitution_to_shell("grep <(echo x)")
-        assert not _has_process_substitution_to_shell("echo x")
-
-
-class TestAdditionalDangerousPatterns:
-    """Additional dangerous command detection tests (minor gaps from review)."""
-
-    def test_bash_c_double_quoted_is_dangerous(self):
-        """bash -c with double-quoted dangerous command is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('bash -c "gh pr merge 42"')
-
-    def test_sh_c_single_quoted_is_dangerous(self):
-        """sh -c with single-quoted dangerous command is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("sh -c 'gh pr merge 42'")
-
-    def test_eval_double_quoted_is_dangerous(self):
-        """eval with double-quoted dangerous command is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('eval "gh pr merge 42"')
-
-    def test_echo_backtick_substitution_is_dangerous(self):
-        """echo with backtick command substitution is caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "`gh pr merge 42`"')
 
 
 # =============================================================================
@@ -1918,41 +1354,6 @@ class TestBareVariableExpansion:
     """Verify that bare $VAR / ${VAR} expansion of a variable containing
     dangerous text is detected, even without eval/source."""
 
-    def test_bare_dollar_var_after_ampersand(self):
-        """CMD="gh pr merge 42" && $CMD — bare expansion executes."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr merge 42" && $CMD')
-
-    def test_bare_dollar_var_after_semicolon(self):
-        """CMD="gh pr merge 42"; $CMD — bare expansion executes."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr merge 42"; $CMD')
-
-    def test_bare_dollar_brace_var(self):
-        """CMD="gh pr merge 42" && ${CMD} — braced expansion executes."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr merge 42" && ${CMD}')
-
-    def test_bare_var_single_quoted(self):
-        """CMD='gh pr merge 42'; $CMD — single-quoted + bare expansion."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("CMD='gh pr merge 42'; $CMD")
-
-    def test_var_without_expansion_still_stripped(self):
-        """CMD="gh pr merge 42" alone (no $CMD) is still a false positive fix."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('CMD="gh pr merge 42"')
-
-    def test_different_var_expanded_not_affected(self):
-        """CMD="gh pr merge 42" with $OTHER expanded — CMD still stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('CMD="gh pr merge 42" && $OTHER')
 
     def test_var_is_expanded_helper(self):
         """_var_is_expanded detects $VAR and ${VAR} patterns."""
@@ -1973,29 +1374,6 @@ class TestHeredocIndentedMarker:
     """Verify that <<- heredocs with tab-indented closing markers are
     properly stripped (non-shell targets) or preserved (shell targets)."""
 
-    def test_heredoc_dash_indented_to_cat(self):
-        """<<- heredoc with tab-indented EOF to cat is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("cat <<- EOF\n\tgh pr merge 42\n\tEOF")
-
-    def test_heredoc_dash_non_indented_to_cat(self):
-        """<<- heredoc with non-indented EOF to cat is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("cat <<- EOF\n\tgh pr merge 42\nEOF")
-
-    def test_heredoc_dash_indented_to_bash(self):
-        """<<- heredoc with tab-indented EOF to bash is preserved (dangerous)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash <<- EOF\n\tgh pr merge 42\n\tEOF")
-
-    def test_heredoc_dash_non_indented_to_bash(self):
-        """<<- heredoc with non-indented EOF to bash is preserved (dangerous)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash <<- EOF\n\tgh pr merge 42\nEOF")
 
     def test_strip_helper_indented_marker(self):
         """_strip_non_executable_content handles tab-indented markers."""
@@ -2015,47 +1393,6 @@ class TestGitCommitMessageStripping:
     """Verify that git commit -m messages containing dangerous text
     are stripped (false positive prevention) while real commands are detected."""
 
-    def test_commit_msg_merge_text(self):
-        """git commit -m with merge text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('git commit -m "gh pr merge 42"')
-
-    def test_commit_msg_force_push_text(self):
-        """git commit -m with force push text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('git commit -m "git push --force origin main"')
-
-    def test_commit_msg_branch_delete_text(self):
-        """git commit -m with branch delete text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('git commit -m "git branch -D feat/old"')
-
-    def test_commit_msg_single_quoted(self):
-        """git commit -m with single-quoted message is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git commit -m 'gh pr merge 42'")
-
-    def test_commit_msg_cmd_substitution_is_dangerous(self):
-        """git commit -m with command substitution IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('git commit -m "$(gh pr merge 42)"')
-
-    def test_commit_msg_push_main_text(self):
-        """git commit -m with push-to-main text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('git commit -m "git push origin main"')
-
-    def test_real_merge_still_detected(self):
-        """Real gh pr merge is still detected alongside commit."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('git commit -m "done" && gh pr merge 42')
 
     def test_strip_helper_commit_msg(self):
         """_strip_non_executable_content strips commit message."""
@@ -2277,7 +1614,7 @@ class TestTokenEdgeCases:
         # Stub Layer 5 cleanup so the collision survives to O_EXCL. This
         # mirrors a transient cleanup failure or a true concurrent-writer
         # race on the microsecond window.
-        with patch.object(merge_guard_post, "_cleanup_unused_tokens", lambda _td: None), \
+        with patch.object(merge_guard_post, "_cleanup_unused_tokens", lambda *_a: None), \
              patch("merge_guard_post.time") as mock_time:
             mock_time.time.return_value = now
             result = write_token({"test": True, "operation_type": "merge"}, token_dir=tmp_path)
@@ -2517,7 +1854,7 @@ class TestTokenSecurity:
         """Token file content must be parseable JSON with expected fields."""
         from merge_guard_post import write_token
 
-        result = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        result = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         with open(result) as f:
             data = json.load(f)
 
@@ -2618,7 +1955,6 @@ class TestTokenSecurity:
 
 
 HOOKS_DIR = Path(__file__).parent.parent / "hooks"
-HOOKS_JSON = HOOKS_DIR / "hooks.json"
 
 
 class TestMergeGuardHooksRegistration:
@@ -2626,8 +1962,7 @@ class TestMergeGuardHooksRegistration:
 
     @pytest.fixture
     def hooks_config(self):
-        content = HOOKS_JSON.read_text(encoding="utf-8")
-        return json.loads(content)
+        return effective_hooks_config()
 
     def test_merge_guard_pre_in_pretooluse_bash(self, hooks_config):
         """merge_guard_pre.py must be registered under PreToolUse Bash."""
@@ -2751,351 +2086,9 @@ class TestMergeGuardHooksRegistration:
 # =============================================================================
 
 
-class TestAPIBypassPatterns:
-    """Tests for API-based merge bypass detection (gh api, curl, direct push)."""
-
-    def test_gh_api_merge(self):
-        """gh api with merge endpoint is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/merge -X PUT"
-        )
-
-    def test_gh_api_merge_case_insensitive(self):
-        """gh api merge detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/MERGE -X PUT"
-        )
-
-    def test_curl_api_merge(self):
-        """curl to GitHub merge API is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -X PUT https://api.github.com/repos/owner/repo/pulls/42/merge'
-        )
-
-    def test_curl_api_merge_case_insensitive(self):
-        """curl merge detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -X PUT https://api.github.com/repos/owner/repo/pulls/42/Merge'
-        )
-
-    def test_git_push_head_main(self):
-        """git push origin HEAD:main bypasses PR merge — dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push origin HEAD:main")
-
-    def test_git_push_head_master(self):
-        """git push origin HEAD:master bypasses PR merge — dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push origin HEAD:master")
-
-    def test_git_push_head_main_with_c_flag(self):
-        """git -c ... push origin HEAD:main with config flag is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "git -c push.default=current push origin HEAD:main"
-        )
-
-    def test_git_push_head_feature_branch_is_safe(self):
-        """git push origin HEAD:feature-branch is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git push origin HEAD:feature/my-branch")
-
-    def test_gh_api_merge_with_method_flag(self):
-        """gh api with --method PUT and merge endpoint is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/merge --method PUT"
-        )
-
-    def test_gh_api_merge_with_post_method(self):
-        """gh api with -X POST and merge endpoint is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X POST repos/owner/repo/pulls/42/merge"
-        )
-
-    def test_gh_api_merge_with_patch_method(self):
-        """gh api with --method PATCH and merge endpoint is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/merge --method PATCH"
-        )
-
-    def test_gh_api_merge_readonly_is_safe(self):
-        """gh api with merge in URL but no mutating method is safe (GET)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/merge"
-        )
-
-    def test_gh_api_merge_explicit_get_is_safe(self):
-        """gh api with -X GET and merge in URL is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/merge -X GET"
-        )
-
-    def test_gh_api_mergeable_query_is_safe(self):
-        """gh api querying mergeable status is safe (read-only)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/pulls --jq .mergeable"
-        )
-
-    def test_gh_api_merge_workflow_is_safe(self):
-        """gh api referencing workflow with 'merge' in name is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/actions/workflows/merge-check.yml"
-        )
-
-    def test_gh_api_without_merge_is_safe(self):
-        """gh api without merge keyword is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh api repos/owner/repo/pulls/42")
-
-    def test_curl_merge_readonly_is_safe(self):
-        """curl to merge API without mutating method is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/pulls/42/merge"
-        )
-
-    def test_curl_merge_explicit_get_is_safe(self):
-        """curl -X GET to merge API is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl -X GET https://api.github.com/repos/owner/repo/pulls/42/merge"
-        )
-
-    def test_curl_without_merge_is_safe(self):
-        """curl without merge keyword is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/pulls/42"
-        )
-
-
 # =============================================================================
 # API-based branch deletion detection (gh api + curl DELETE git/refs)
 # =============================================================================
-
-
-class TestAPIBranchDeletion:
-    """Tests for API-based branch deletion via DELETE to git/refs endpoint."""
-
-    # --- gh api: dangerous DELETE commands ---
-
-    def test_gh_api_delete_branch_ref(self):
-        """gh api -X DELETE to git/refs/heads is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X DELETE repos/owner/repo/git/refs/heads/feature-branch"
-        )
-
-    def test_gh_api_delete_branch_ref_method_flag(self):
-        """gh api --method DELETE to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api --method DELETE repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_delete_tag_ref(self):
-        """gh api -X DELETE to git/refs/tags is dangerous (defense-in-depth)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X DELETE repos/owner/repo/git/refs/tags/v1.0"
-        )
-
-    def test_gh_api_delete_ref_case_insensitive(self):
-        """gh api DELETE detection is case-insensitive for HTTP method."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X delete repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_delete_ref_mixed_case(self):
-        """gh api Delete (mixed case) is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X Delete repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_delete_ref_method_after_url(self):
-        """gh api with -X DELETE after the URL is still detected (lookahead)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/feature -X DELETE"
-        )
-
-    def test_gh_api_delete_ref_method_flag_after_url(self):
-        """gh api with --method DELETE after the URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/feature --method DELETE"
-        )
-
-    def test_gh_api_delete_ref_with_repo_flag(self):
-        """gh --repo owner/repo api -X DELETE git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo api -X DELETE repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_delete_ref_with_R_flag(self):
-        """gh -R owner/repo api -X DELETE git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh -R owner/repo api -X DELETE repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_delete_ref_with_hostname_flag(self):
-        """gh --hostname host api -X DELETE git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --hostname github.example.com api -X DELETE repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_delete_ref_with_multiple_global_flags(self):
-        """gh --repo X --hostname Y api -X DELETE git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo --hostname github.example.com api -X DELETE repos/owner/repo/git/refs/heads/feature"
-        )
-
-    # --- curl: dangerous DELETE commands ---
-
-    def test_curl_delete_branch_ref(self):
-        """curl -X DELETE to git/refs API endpoint is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X DELETE https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_delete_ref_request_flag(self):
-        """curl --request DELETE to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request DELETE https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_delete_ref_case_insensitive(self):
-        """curl DELETE detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X delete https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_delete_ref_method_after_url(self):
-        """curl with -X DELETE after the URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/feature -X DELETE"
-        )
-
-    def test_curl_delete_ref_request_after_url(self):
-        """curl with --request DELETE after the URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/feature --request DELETE"
-        )
-
-    def test_curl_delete_tag_ref(self):
-        """curl -X DELETE to git/refs/tags is dangerous (defense-in-depth)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X DELETE https://api.github.com/repos/owner/repo/git/refs/tags/v1.0"
-        )
-
-    def test_curl_delete_ref_with_auth_header(self):
-        """curl with auth header and DELETE to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -H "Authorization: token ghp_xxx" -X DELETE https://api.github.com/repos/owner/repo/git/refs/heads/feature'
-        )
-
-    # --- Safe GET operations (must NOT be detected) ---
-
-    def test_gh_api_get_ref_is_safe(self):
-        """gh api to git/refs without mutating method is safe (default GET)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_gh_api_explicit_get_ref_is_safe(self):
-        """gh api -X GET to git/refs is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api -X GET repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_gh_api_list_refs_is_safe(self):
-        """gh api to git/refs (list all refs) is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs"
-        )
-
-    def test_curl_get_ref_is_safe(self):
-        """curl to git/refs without -X flag is safe (default GET)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_curl_explicit_get_ref_is_safe(self):
-        """curl -X GET to git/refs is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl -X GET https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
 
 
 # =============================================================================
@@ -3103,454 +2096,9 @@ class TestAPIBranchDeletion:
 # =============================================================================
 
 
-class TestAPIRefMutation:
-    """Tests for API-based ref mutation via PATCH/POST/PUT to git/refs endpoint."""
-
-    # --- gh api: dangerous mutating commands ---
-
-    def test_gh_api_patch_ref(self):
-        """gh api -X PATCH to git/refs is dangerous (ref update)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PATCH repos/owner/repo/git/refs/heads/feature -f sha=abc123 -f force=true"
-        )
-
-    def test_gh_api_post_ref(self):
-        """gh api -X POST to git/refs is dangerous (ref creation)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X POST repos/owner/repo/git/refs -f ref=refs/heads/new-branch -f sha=abc123"
-        )
-
-    def test_gh_api_put_ref(self):
-        """gh api -X PUT to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PUT repos/owner/repo/git/refs/heads/feature -f sha=abc123"
-        )
-
-    def test_gh_api_method_patch_ref(self):
-        """gh api --method PATCH to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api --method PATCH repos/owner/repo/git/refs/heads/feature -f sha=abc123"
-        )
-
-    def test_gh_api_method_post_ref(self):
-        """gh api --method POST to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api --method POST repos/owner/repo/git/refs -f ref=refs/heads/new -f sha=abc"
-        )
-
-    def test_gh_api_method_put_ref(self):
-        """gh api --method PUT to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api --method PUT repos/owner/repo/git/refs/heads/feature -f sha=abc123"
-        )
-
-    def test_gh_api_patch_ref_case_insensitive(self):
-        """gh api PATCH detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X patch repos/owner/repo/git/refs/heads/feature -f sha=abc"
-        )
-
-    def test_gh_api_post_ref_case_insensitive(self):
-        """gh api POST detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X Post repos/owner/repo/git/refs/heads/feature -f sha=abc"
-        )
-
-    def test_gh_api_put_ref_case_insensitive(self):
-        """gh api PUT detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X put repos/owner/repo/git/refs/heads/feature -f sha=abc"
-        )
-
-    def test_gh_api_patch_ref_method_after_url(self):
-        """gh api with -X PATCH after URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/feature -X PATCH -f sha=abc123"
-        )
-
-    def test_gh_api_ref_mutation_with_repo_flag(self):
-        """gh --repo flag with api ref mutation is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo api -X PATCH repos/owner/repo/git/refs/heads/feature -f sha=abc"
-        )
-
-    def test_gh_api_ref_mutation_with_R_flag(self):
-        """gh -R flag with api ref mutation is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh -R owner/repo api -X POST repos/owner/repo/git/refs -f ref=refs/heads/new -f sha=abc"
-        )
-
-    def test_gh_api_ref_mutation_with_hostname(self):
-        """gh --hostname flag with api ref mutation is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --hostname github.example.com api -X PATCH repos/owner/repo/git/refs/heads/feature -f sha=abc"
-        )
-
-    # --- curl: dangerous mutating commands ---
-
-    def test_curl_patch_ref(self):
-        """curl -X PATCH to git/refs API is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -X PATCH https://api.github.com/repos/owner/repo/git/refs/heads/feature -d \'{"sha":"abc","force":true}\''
-        )
-
-    def test_curl_post_ref(self):
-        """curl -X POST to git/refs API is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -X POST https://api.github.com/repos/owner/repo/git/refs -d \'{"ref":"refs/heads/new","sha":"abc"}\''
-        )
-
-    def test_curl_put_ref(self):
-        """curl -X PUT to git/refs API is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X PUT https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_request_patch_ref(self):
-        """curl --request PATCH to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request PATCH https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_request_post_ref(self):
-        """curl --request POST to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request POST https://api.github.com/repos/owner/repo/git/refs"
-        )
-
-    def test_curl_request_put_ref(self):
-        """curl --request PUT to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request PUT https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_patch_ref_case_insensitive(self):
-        """curl PATCH detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X patch https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_ref_mutation_method_after_url(self):
-        """curl with -X PATCH after URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/feature -X PATCH"
-        )
-
-    def test_curl_ref_mutation_request_after_url(self):
-        """curl with --request POST after URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/feature --request POST"
-        )
-
-    # --- Safe operations (must NOT be detected) ---
-
-    def test_gh_api_get_ref_info_is_safe(self):
-        """gh api to git/refs without mutating method is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_explicit_get_ref_info_is_safe(self):
-        """gh api -X GET to git/refs is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api -X GET repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_get_ref_info_is_safe(self):
-        """curl to git/refs without -X flag is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_explicit_get_ref_is_safe(self):
-        """curl -X GET to git/refs is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl -X GET https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-
 # =============================================================================
 # API-based push to main/master detection (PATCH/POST/PUT to git/refs/heads/main|master)
 # =============================================================================
-
-
-class TestAPIPushToMain:
-    """Tests for API-based push to main/master via mutating method to git/refs/heads/main|master."""
-
-    # --- gh api: dangerous mutating commands to main/master ---
-
-    def test_gh_api_patch_main_ref(self):
-        """gh api -X PATCH to git/refs/heads/main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PATCH repos/owner/repo/git/refs/heads/main -f sha=abc123"
-        )
-
-    def test_gh_api_patch_master_ref(self):
-        """gh api -X PATCH to git/refs/heads/master is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PATCH repos/owner/repo/git/refs/heads/master -f sha=abc123"
-        )
-
-    def test_gh_api_post_main_ref(self):
-        """gh api -X POST to git/refs/heads/main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X POST repos/owner/repo/git/refs/heads/main -f sha=abc123"
-        )
-
-    def test_gh_api_put_main_ref(self):
-        """gh api -X PUT to git/refs/heads/main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PUT repos/owner/repo/git/refs/heads/main -f sha=abc123"
-        )
-
-    def test_gh_api_method_patch_main_ref(self):
-        """gh api --method PATCH to git/refs/heads/main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api --method PATCH repos/owner/repo/git/refs/heads/main -f sha=abc123"
-        )
-
-    def test_gh_api_method_post_master_ref(self):
-        """gh api --method POST to git/refs/heads/master is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api --method POST repos/owner/repo/git/refs/heads/master -f sha=abc123"
-        )
-
-    def test_gh_api_patch_main_case_insensitive(self):
-        """gh api PATCH detection for main is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X patch repos/owner/repo/git/refs/heads/main -f sha=abc"
-        )
-
-    def test_gh_api_patch_main_method_after_url(self):
-        """gh api with -X PATCH after main URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main -X PATCH -f sha=abc123"
-        )
-
-    def test_gh_api_patch_main_with_repo_flag(self):
-        """gh --repo flag with api PATCH to main is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo api -X PATCH repos/owner/repo/git/refs/heads/main -f sha=abc"
-        )
-
-    def test_gh_api_patch_main_with_R_flag(self):
-        """gh -R flag with api PATCH to main is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh -R owner/repo api -X PATCH repos/owner/repo/git/refs/heads/main -f sha=abc"
-        )
-
-    def test_gh_api_patch_master_with_hostname(self):
-        """gh --hostname flag with api PATCH to master is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --hostname github.example.com api -X PATCH repos/owner/repo/git/refs/heads/master -f sha=abc"
-        )
-
-    def test_gh_api_patch_main_with_multiple_global_flags(self):
-        """gh --repo X --hostname Y api PATCH to main is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo --hostname github.example.com api -X PATCH repos/owner/repo/git/refs/heads/main -f sha=abc"
-        )
-
-    # --- curl: dangerous mutating commands to main/master ---
-
-    def test_curl_patch_main_ref(self):
-        """curl -X PATCH to git/refs/heads/main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X PATCH https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_curl_patch_master_ref(self):
-        """curl -X PATCH to git/refs/heads/master is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X PATCH https://api.github.com/repos/owner/repo/git/refs/heads/master"
-        )
-
-    def test_curl_post_main_ref(self):
-        """curl -X POST to git/refs/heads/main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X POST https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_curl_put_main_ref(self):
-        """curl -X PUT to git/refs/heads/main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X PUT https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_curl_request_patch_main(self):
-        """curl --request PATCH to git/refs/heads/main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request PATCH https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_curl_request_patch_master(self):
-        """curl --request PATCH to git/refs/heads/master is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request PATCH https://api.github.com/repos/owner/repo/git/refs/heads/master"
-        )
-
-    def test_curl_patch_main_case_insensitive(self):
-        """curl PATCH to main detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X patch https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_curl_patch_main_method_after_url(self):
-        """curl with -X PATCH after main URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/main -X PATCH"
-        )
-
-    def test_curl_request_post_master_after_url(self):
-        """curl with --request POST after master URL is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/master --request POST"
-        )
-
-    # --- Safe operations (must NOT be detected) ---
-
-    def test_gh_api_get_main_ref_is_safe(self):
-        """gh api to git/refs/heads/main without mutating method is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_gh_api_explicit_get_main_ref_is_safe(self):
-        """gh api -X GET to git/refs/heads/main is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api -X GET repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_gh_api_get_master_ref_is_safe(self):
-        """gh api to git/refs/heads/master without mutating method is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/master"
-        )
-
-    def test_curl_get_main_ref_is_safe(self):
-        """curl to git/refs/heads/main without -X flag is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_curl_explicit_get_main_is_safe(self):
-        """curl -X GET to git/refs/heads/main is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl -X GET https://api.github.com/repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_gh_api_patch_feature_branch_is_dangerous(self):
-        """gh api PATCH to feature branch ref is caught by generic ref mutation pattern."""
-        from merge_guard_pre import is_dangerous_command
-
-        # Feature branch ref mutation is dangerous — caught by the generic git/refs pattern.
-        assert is_dangerous_command(
-            "gh api -X PATCH repos/owner/repo/git/refs/heads/feature -f sha=abc"
-        )
 
 
 # =============================================================================
@@ -3558,194 +2106,9 @@ class TestAPIPushToMain:
 # =============================================================================
 
 
-class TestAPIBypassFalsePositivePrevention:
-    """Tests that the stripping pipeline correctly handles API bypass patterns
-    in non-executable contexts (echo, variable assignments, etc.)."""
-
-    def test_echo_gh_api_delete_ref_stripped(self):
-        """echo 'gh api -X DELETE ...' is stripped and NOT flagged."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'echo "gh api -X DELETE repos/owner/repo/git/refs/heads/main"'
-        )
-
-    def test_echo_single_quote_gh_api_delete_stripped(self):
-        """echo 'gh api -X DELETE ...' (single quotes) is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "echo 'gh api -X DELETE repos/owner/repo/git/refs/heads/main'"
-        )
-
-    def test_var_assignment_gh_api_delete_stripped(self):
-        """VAR='gh api -X DELETE ...' is stripped and NOT flagged."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'CMD="gh api -X DELETE repos/owner/repo/git/refs/heads/main"'
-        )
-
-    def test_var_assignment_single_quote_stripped(self):
-        """VAR='gh api -X DELETE ...' (single quotes) is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "CMD='gh api -X DELETE repos/owner/repo/git/refs/heads/main'"
-        )
-
-    def test_echo_curl_delete_ref_stripped(self):
-        """echo 'curl -X DELETE ...' is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'echo "curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"'
-        )
-
-    def test_echo_gh_api_patch_ref_stripped(self):
-        """echo 'gh api -X PATCH ... git/refs ...' is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'echo "gh api -X PATCH repos/owner/repo/git/refs/heads/main -f sha=abc"'
-        )
-
-    def test_var_assignment_curl_patch_main_stripped(self):
-        """VAR='curl -X PATCH ... git/refs/heads/main' is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'CMD="curl -X PATCH https://api.github.com/repos/o/r/git/refs/heads/main"'
-        )
-
-    def test_comment_gh_api_delete_stripped(self):
-        """# gh api -X DELETE ... is stripped as a comment."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "# gh api -X DELETE repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_git_commit_msg_gh_api_delete_stripped(self):
-        """git commit -m 'gh api -X DELETE ...' is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'git commit -m "Blocked: gh api -X DELETE repos/o/r/git/refs/heads/main"'
-        )
-
-    def test_printf_gh_api_patch_ref_stripped(self):
-        """printf 'gh api -X PATCH ... git/refs ...' is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'printf "gh api -X PATCH repos/owner/repo/git/refs/heads/main"'
-        )
-
-    # --- Guard: echo piped to shell preserves content ---
-
-    def test_echo_gh_api_delete_piped_to_bash_preserved(self):
-        """echo 'gh api -X DELETE ...' | bash is NOT stripped (executes)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'echo "gh api -X DELETE repos/owner/repo/git/refs/heads/main" | bash'
-        )
-
-    def test_echo_curl_patch_ref_piped_to_sh_preserved(self):
-        """echo 'curl ...' | sh is NOT stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'echo "curl -X PATCH https://api.github.com/repos/o/r/git/refs/heads/main" | sh'
-        )
-
-    # --- Guard: eval preserves variable content ---
-
-    def test_var_with_eval_preserved(self):
-        """CMD='gh api -X DELETE ...' && eval $CMD is NOT stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'CMD="gh api -X DELETE repos/owner/repo/git/refs/heads/main" && eval $CMD'
-        )
-
-    # --- Guard: command substitution inside echo preserves ---
-
-    def test_echo_with_command_substitution_preserved(self):
-        """echo \"$(gh api -X DELETE ...)\" is NOT stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'echo "$(gh api -X DELETE repos/owner/repo/git/refs/heads/main)"'
-        )
-
-    # --- Non-ref API operations are safe ---
-
-    def test_gh_api_issues_close_is_safe(self):
-        """gh api to close an issue (not PR) is safe — no git/refs involvement."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api -X PATCH repos/owner/repo/issues/42 -f state=closed"
-        )
-
-    def test_gh_api_read_pr_info_is_safe(self):
-        """gh api to read PR info is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42"
-        )
-
-    def test_curl_read_refs_with_jq_is_safe(self):
-        """curl to read refs piped to jq is safe (no mutating method)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl https://api.github.com/repos/owner/repo/git/refs | jq '.'"
-        )
-
-
 # =============================================================================
 # API bypass — line continuation normalization
 # =============================================================================
-
-
-class TestAPIBypassLineContinuation:
-    """Tests that line continuations in API bypass commands are normalized."""
-
-    def test_gh_api_delete_ref_line_continuation(self):
-        """gh api -X DELETE \\ repos/.../git/refs is detected after normalization."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X DELETE \\\nrepos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_patch_main_line_continuation(self):
-        """gh api -X PATCH \\ to main is detected after normalization."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PATCH \\\nrepos/owner/repo/git/refs/heads/main \\\n-f sha=abc123"
-        )
-
-    def test_curl_delete_ref_line_continuation(self):
-        """curl -X DELETE \\ to git/refs is detected after normalization."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X DELETE \\\nhttps://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_with_repo_flag_line_continuation(self):
-        """gh --repo \\ api -X PATCH git/refs is detected after normalization."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo \\\napi -X PATCH repos/owner/repo/git/refs/heads/main -f sha=abc"
-        )
 
 
 # =============================================================================
@@ -3812,11 +2175,12 @@ class TestAPIBypassAuthorizationFlow:
         assert "approval" in result.lower() or "AskUserQuestion" in result
 
     def test_gh_api_delete_ref_allowed_with_token(self, tmp_path):
-        """gh api DELETE to git/refs is allowed with valid authorization token."""
+        """gh api DELETE to git/refs is allowed with valid authorization token (the REST
+        delete binds its repo: amend_4 on #141)."""
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        write_token({"operation_type": "branch-delete", "branch": "feature"},
+        write_token({"operation_type": "branch-delete", "branch": "api:owner/repo:feature", "host": "github.com"},
                     token_dir=tmp_path)
 
         result = check_merge_authorization(
@@ -3826,11 +2190,12 @@ class TestAPIBypassAuthorizationFlow:
         assert result is None  # Allowed
 
     def test_gh_api_patch_main_allowed_with_token(self, tmp_path):
-        """gh api PATCH to main is allowed with valid authorization token."""
+        """gh api PATCH to main is allowed with valid authorization token (the API
+        force-push binds its repo and host: amend_5/amend_6 on #141)."""
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        write_token({"operation_type": "force-push", "target_ref": "main"},
+        write_token({"operation_type": "force-push", "target_ref": "api:owner/repo:main", "host": "github.com"},
                     token_dir=tmp_path)
 
         result = check_merge_authorization(
@@ -3839,8 +2204,10 @@ class TestAPIBypassAuthorizationFlow:
         )
         assert result is None  # Allowed
 
-    def test_curl_patch_ref_allowed_with_token(self, tmp_path):
-        """curl PATCH to git/refs is allowed with valid token."""
+    def test_curl_patch_ref_denied_even_with_token(self, tmp_path):
+        """curl PATCH to git/refs is gated but never approvable (amend_7 on #141: no
+        sound flag walk over curl's options, so its URL path names no identity): even a
+        matching-looking token is refused, and the command always asks."""
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
@@ -3851,7 +2218,7 @@ class TestAPIBypassAuthorizationFlow:
             "curl -X PATCH https://api.github.com/repos/owner/repo/git/refs/heads/feature",
             token_dir=tmp_path,
         )
-        assert result is None  # Allowed
+        assert result is not None  # Refused: curl never mints
 
     def test_gh_api_get_ref_not_blocked(self, tmp_path):
         """gh api GET to git/refs does not require a token (safe operation)."""
@@ -3869,257 +2236,9 @@ class TestAPIBypassAuthorizationFlow:
 # =============================================================================
 
 
-class TestGhApiImplicitPost:
-    """Tests for gh api implicit POST detection via body parameter flags.
-
-    gh api defaults to POST when body params (-f, -F, --field, --raw-field,
-    --input) are present without an explicit -X/--method flag. These tests
-    verify that such commands targeting git/refs or merge endpoints are detected.
-    """
-
-    # --- Dangerous: implicit POST to git/refs ---
-
-    def test_gh_api_f_flag_git_refs(self):
-        """gh api with -f flag targeting git/refs is dangerous (implicit POST)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main -f sha=abc123 -f force=true"
-        )
-
-    def test_gh_api_F_flag_git_refs(self):
-        """gh api with -F flag targeting git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main -F sha=abc123"
-        )
-
-    def test_gh_api_field_flag_git_refs(self):
-        """gh api with --field flag targeting git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main --field sha=abc123"
-        )
-
-    def test_gh_api_raw_field_flag_git_refs(self):
-        """gh api with --raw-field flag targeting git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main --raw-field sha=abc123"
-        )
-
-    def test_gh_api_input_flag_git_refs(self):
-        """gh api with --input flag targeting git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main --input body.json"
-        )
-
-    def test_gh_api_f_flag_generic_git_refs(self):
-        """gh api with -f flag to bare git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/git/refs -f ref=refs/heads/new -f sha=abc123"
-        )
-
-    # --- Dangerous: implicit POST to merge endpoint ---
-
-    def test_gh_api_f_flag_merge(self):
-        """gh api with -f flag targeting merge endpoint is dangerous (implicit POST)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/merge -f merge_method=squash"
-        )
-
-    def test_gh_api_input_flag_merge(self):
-        """gh api with --input flag targeting merge endpoint is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/merge --input merge-body.json"
-        )
-
-    # --- Safe: explicit GET overrides implicit POST ---
-
-    def test_gh_api_explicit_get_overrides_f_flag(self):
-        """gh api -X GET with -f flag is safe (explicit GET overrides implicit POST)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main -X GET -f sha=abc"
-        )
-
-    def test_gh_api_method_get_overrides_f_flag(self):
-        """gh api --method GET with -f flag is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main --method GET -f sha=abc"
-        )
-
-    def test_gh_api_explicit_get_overrides_merge_f_flag(self):
-        """gh api -X GET with -f flag targeting merge is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/pulls/42/merge -X GET -f merge_method=squash"
-        )
-
-    # --- Safe: no body param flags (plain GET) ---
-
-    def test_gh_api_no_flags_git_refs_is_safe(self):
-        """gh api to git/refs without body params or method is safe (GET)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs/heads/main"
-        )
-
-    def test_gh_api_jq_flag_is_safe(self):
-        """gh api with --jq flag (output filter, not body param) is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/git/refs --jq '.[0].ref'"
-        )
-
-    # --- Global flag variants ---
-
-    def test_gh_api_implicit_post_with_repo_flag(self):
-        """gh --repo with implicit POST to git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo api repos/owner/repo/git/refs/heads/main -f sha=abc"
-        )
-
-    def test_gh_api_implicit_post_with_R_flag(self):
-        """gh -R with implicit POST to git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh -R owner/repo api repos/owner/repo/git/refs/heads/main -f sha=abc"
-        )
-
-    # --- Case insensitivity ---
-
-    def test_gh_api_implicit_post_case_insensitive(self):
-        """gh api implicit POST detection is case-insensitive for path."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api repos/owner/repo/Git/Refs/heads/main -f sha=abc"
-        )
-
-
 # =============================================================================
 # curl implicit POST detection (-d, --data, --data-raw, --data-binary)
 # =============================================================================
-
-
-class TestCurlImplicitPost:
-    """Tests for curl implicit POST detection via data flags.
-
-    curl defaults to POST when -d/--data/--data-raw/--data-binary flags are
-    present without an explicit -X/--request flag. These tests verify detection
-    for git/refs and merge API endpoints.
-    """
-
-    # --- Dangerous: implicit POST to git/refs ---
-
-    def test_curl_d_flag_git_refs(self):
-        """curl -d with git/refs URL is dangerous (implicit POST)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -d \'{"sha":"abc","force":true}\' https://api.github.com/repos/o/r/git/refs/heads/main'
-        )
-
-    def test_curl_data_flag_git_refs(self):
-        """curl --data with git/refs URL is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl --data \'{"sha":"abc"}\' https://api.github.com/repos/o/r/git/refs/heads/main'
-        )
-
-    def test_curl_data_raw_flag_git_refs(self):
-        """curl --data-raw with git/refs URL is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl --data-raw \'{"sha":"abc"}\' https://api.github.com/repos/o/r/git/refs/heads/main'
-        )
-
-    def test_curl_data_binary_flag_git_refs(self):
-        """curl --data-binary with git/refs URL is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --data-binary @body.json https://api.github.com/repos/o/r/git/refs/heads/main"
-        )
-
-    # --- Dangerous: implicit POST to merge endpoint ---
-
-    def test_curl_d_flag_merge(self):
-        """curl -d with merge URL is dangerous (implicit POST)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -d \'{"merge_method":"squash"}\' https://api.github.com/repos/o/r/pulls/42/merge'
-        )
-
-    def test_curl_data_flag_merge(self):
-        """curl --data with merge URL is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl --data \'{"merge_method":"squash"}\' https://api.github.com/repos/o/r/pulls/42/merge'
-        )
-
-    # --- Safe: explicit GET overrides implicit POST ---
-
-    def test_curl_explicit_get_overrides_d_flag(self):
-        """curl -X GET with -d flag is safe (explicit GET overrides)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl -X GET -d '' https://api.github.com/repos/o/r/git/refs"
-        )
-
-    def test_curl_request_get_overrides_data_flag(self):
-        """curl --request GET with --data flag is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl --request GET --data '' https://api.github.com/repos/o/r/git/refs"
-        )
-
-    # --- Safe: no data flags (plain GET) ---
-
-    def test_curl_no_flags_git_refs_is_safe(self):
-        """curl to git/refs without data flags is safe (GET)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl https://api.github.com/repos/o/r/git/refs/heads/main"
-        )
-
-    # --- Case insensitivity ---
-
-    def test_curl_implicit_post_case_insensitive(self):
-        """curl implicit POST detection is case-insensitive for path."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -d \'{"sha":"abc"}\' https://api.github.com/repos/o/r/Git/Refs/heads/main'
-        )
 
 
 # =============================================================================
@@ -4127,335 +2246,9 @@ class TestCurlImplicitPost:
 # =============================================================================
 
 
-class TestContentsAPI:
-    """Tests for Contents API write operation detection.
-
-    The Contents API allows creating/updating/deleting files via PUT/PATCH/POST
-    to /contents/ endpoints. These tests verify detection when targeting
-    main or master branches.
-    """
-
-    # --- gh api: dangerous writes to contents on main/master ---
-
-    def test_gh_api_put_contents_main(self):
-        """gh api -X PUT to /contents/ with main branch is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PUT repos/owner/repo/contents/README.md -f branch=main -f sha=abc"
-        )
-
-    def test_gh_api_put_contents_master(self):
-        """gh api -X PUT to /contents/ with master branch is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PUT repos/owner/repo/contents/README.md -f branch=master"
-        )
-
-    def test_gh_api_patch_contents_main(self):
-        """gh api -X PATCH to /contents/ with main branch is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PATCH repos/owner/repo/contents/README.md -f branch=main"
-        )
-
-    def test_gh_api_post_contents_main(self):
-        """gh api -X POST to /contents/ with main branch is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X POST repos/owner/repo/contents/src/app.py -f branch=main"
-        )
-
-    def test_gh_api_method_put_contents_main(self):
-        """gh api --method PUT to /contents/ with main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api --method PUT repos/owner/repo/contents/README.md -f branch=main"
-        )
-
-    def test_gh_api_put_contents_main_case_insensitive(self):
-        """Contents API detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PUT repos/owner/repo/Contents/README.md -f branch=Main"
-        )
-
-    def test_gh_api_put_contents_main_with_repo_flag(self):
-        """gh --repo with PUT to /contents/ main is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo api -X PUT repos/owner/repo/contents/README.md -f branch=main"
-        )
-
-    # --- curl: dangerous writes to contents on main/master ---
-
-    def test_curl_put_contents_main(self):
-        """curl -X PUT to /contents/ API with main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -X PUT https://api.github.com/repos/o/r/contents/README.md -d \'{"branch":"main","sha":"abc"}\''
-        )
-
-    def test_curl_put_contents_master(self):
-        """curl -X PUT to /contents/ API with master is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl -X PUT https://api.github.com/repos/o/r/contents/README.md -d \'{"branch":"master"}\''
-        )
-
-    def test_curl_request_put_contents_main(self):
-        """curl --request PUT to /contents/ with main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request PUT https://api.github.com/repos/o/r/contents/README.md -d '{\"branch\":\"main\"}'"
-        )
-
-    # --- Safe: GET operations on contents ---
-
-    def test_gh_api_get_contents_main_is_safe(self):
-        """gh api to /contents/ without mutating method is safe (read file)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api repos/owner/repo/contents/README.md"
-        )
-
-    def test_curl_get_contents_main_is_safe(self):
-        """curl to /contents/ without mutating method is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl https://api.github.com/repos/o/r/contents/README.md"
-        )
-
-    # --- Safe: writes to contents on feature branches ---
-
-    def test_gh_api_put_contents_feature_is_safe(self):
-        """gh api PUT to /contents/ on a feature branch is safe (no main/master)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api -X PUT repos/owner/repo/contents/README.md -f branch=feature"
-        )
-
-    def test_curl_put_contents_feature_is_safe(self):
-        """curl PUT to /contents/ on a feature branch is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl -X PUT https://api.github.com/repos/o/r/contents/README.md -d '{\"branch\":\"feature\"}'"
-        )
-
-
 # =============================================================================
 # wget and httpie detection (alternative HTTP clients)
 # =============================================================================
-
-
-class TestAlternativeHttpClients:
-    """Tests for wget (gated) and httpie (ungated by design) handling.
-
-    Both clients can perform the same API operations as curl/gh api. wget uses
-    the --method= flag and IS gated (it is in the mint classifier's _is_api_form).
-    httpie (positional method arg) is WHOLLY ungated — out of charter, accepted
-    under-block (#1077) — see the httpie tripwire section below.
-    """
-
-    # --- wget: dangerous operations ---
-
-    def test_wget_delete_git_refs(self):
-        """wget --method=DELETE to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_wget_patch_git_refs(self):
-        """wget --method=PATCH to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "wget --method=PATCH https://api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_wget_post_git_refs(self):
-        """wget --method=POST to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "wget --method=POST https://api.github.com/repos/o/r/git/refs"
-        )
-
-    def test_wget_put_git_refs(self):
-        """wget --method=PUT to git/refs is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "wget --method=PUT https://api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_wget_delete_merge(self):
-        """wget --method=DELETE to merge endpoint is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "wget --method=DELETE https://api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    def test_wget_patch_merge(self):
-        """wget --method=PATCH to merge endpoint is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "wget --method=PATCH https://api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    def test_wget_case_insensitive(self):
-        """wget --method= detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "wget --method=delete https://api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    # --- wget: safe operations ---
-
-    def test_wget_get_git_refs_is_safe(self):
-        """wget to git/refs without --method is safe (default GET)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "wget https://api.github.com/repos/o/r/git/refs"
-        )
-
-    def test_wget_get_merge_is_safe(self):
-        """wget to merge endpoint without --method is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "wget https://api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    # --- httpie (http command): ungated BY DESIGN — accepted under-block tripwires ---
-    #
-    # httpie (`http`/`https` CLI) is WHOLLY out of charter (#1077, #1079-consistent):
-    # its two read-floor arms (git/refs + merge) were REMOVED because the mint
-    # classifier covers gh-api/curl/wget only — an httpie read arm gates a form the
-    # mint cannot bind = a gated-but-unmintable over-block (a PERMANENT faithful-click
-    # block). These pins assert ungated ON PURPOSE, mirroring
-    # TestAcceptedRecognitionLimitationPins: if one flips RED, httpie was re-gated
-    # without mint coverage. Do NOT re-gate.
-
-    def test_http_delete_git_refs(self):
-        """httpie DELETE to git/refs is ungated BY DESIGN — do NOT re-gate; a read
-        arm without mint coverage is a gated-but-unmintable over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http DELETE api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_http_patch_git_refs(self):
-        """httpie PATCH to git/refs is ungated BY DESIGN — do NOT re-gate; a read
-        arm without mint coverage is a gated-but-unmintable over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http PATCH api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_http_post_git_refs(self):
-        """httpie POST to git/refs is ungated BY DESIGN — do NOT re-gate; a read
-        arm without mint coverage is a gated-but-unmintable over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http POST api.github.com/repos/o/r/git/refs"
-        )
-
-    def test_http_put_git_refs(self):
-        """httpie PUT to git/refs is ungated BY DESIGN — do NOT re-gate; a read
-        arm without mint coverage is a gated-but-unmintable over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http PUT api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_http_delete_merge(self):
-        """httpie DELETE to a merge endpoint is ungated BY DESIGN — do NOT re-gate;
-        a read arm without mint coverage is a gated-but-unmintable over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http DELETE api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    def test_http_patch_merge(self):
-        """httpie PATCH to a merge endpoint is ungated BY DESIGN — do NOT re-gate;
-        a read arm without mint coverage is a gated-but-unmintable over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http PATCH api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    def test_http_with_auth_flags(self):
-        """httpie with auth flags before the method is ungated BY DESIGN — do NOT
-        re-gate; a read arm without mint coverage is a gated-but-unmintable
-        over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http -a user:pass DELETE api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_http_case_insensitive(self):
-        """httpie with a lowercase method is ungated BY DESIGN — do NOT re-gate; a
-        read arm without mint coverage is a gated-but-unmintable over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http delete api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_https_command_delete_git_refs(self):
-        """https (httpie alias) DELETE to git/refs is ungated BY DESIGN — do NOT
-        re-gate; a read arm without mint coverage is a gated-but-unmintable
-        over-block."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "https DELETE api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    # --- httpie: safe operations ---
-
-    def test_http_get_git_refs_is_safe(self):
-        """http GET to git/refs is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http GET api.github.com/repos/o/r/git/refs"
-        )
-
-    def test_http_get_merge_is_safe(self):
-        """http GET to merge endpoint is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "http GET api.github.com/repos/o/r/pulls/42/merge"
-        )
 
 
 # =============================================================================
@@ -4463,77 +2256,9 @@ class TestAlternativeHttpClients:
 # =============================================================================
 
 
-class TestToolSpecificFlagExclusion:
-    """Tests documenting that patterns correctly distinguish tool-specific flags.
-
-    gh api uses -X/--method (not --request).
-    curl uses -X/--request (not --method).
-    Using the wrong tool's flag should not be detected — these tests
-    document that the flag specificity is intentional, not accidental.
-    """
-
-    def test_gh_api_request_flag_not_detected(self):
-        """gh api --request DELETE is NOT detected (gh uses --method, not --request)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api --request DELETE repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_curl_method_flag_not_detected(self):
-        """curl --method DELETE is NOT detected (curl uses --request, not --method)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl --method DELETE https://api.github.com/repos/owner/repo/git/refs/heads/feature"
-        )
-
-    def test_gh_api_request_flag_merge_not_detected(self):
-        """gh api --request PUT to merge is NOT detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh api --request PUT repos/owner/repo/pulls/42/merge"
-        )
-
-    def test_curl_method_flag_merge_not_detected(self):
-        """curl --method PUT to merge is NOT detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "curl --method PUT https://api.github.com/repos/owner/repo/pulls/42/merge"
-        )
-
-
 # =============================================================================
 # Variable indirection bypass documentation
 # =============================================================================
-
-
-class TestVariableIndirectionBypass:
-    """Tests documenting that variable indirection bypasses regex detection.
-
-    This is an inherent limitation of command-line regex matching — when
-    the URL path is stored in a variable and expanded at runtime, the
-    regex cannot see the actual path. These tests document the limitation.
-    """
-
-    def test_variable_url_bypasses_detection(self):
-        """Variable indirection: URL in variable is NOT detected (inherent regex limit)."""
-        from merge_guard_pre import is_dangerous_command
-
-        # The URL is in a variable — regex sees $URL, not the actual path
-        assert not is_dangerous_command(
-            'URL="repos/owner/repo/git/refs/heads/main" && gh api -X DELETE $URL'
-        )
-
-    def test_variable_endpoint_bypasses_detection(self):
-        """Variable endpoint: endpoint in variable is NOT detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'ENDPOINT="git/refs/heads/main" && gh api -X PATCH repos/owner/repo/$ENDPOINT'
-        )
 
 
 # =============================================================================
@@ -4541,131 +2266,14 @@ class TestVariableIndirectionBypass:
 # =============================================================================
 
 
-class TestAPIHeredocToShell:
-    """Tests that API commands inside heredocs fed to shells are detected."""
-
-    def test_heredoc_gh_api_delete_ref(self):
-        """bash << EOF with gh api -X DELETE git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "bash << EOF\ngh api -X DELETE repos/o/r/git/refs/heads/main\nEOF"
-        )
-
-    def test_heredoc_gh_api_patch_ref(self):
-        """bash << EOF with gh api -X PATCH git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "bash << EOF\ngh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc\nEOF"
-        )
-
-    def test_heredoc_curl_delete_ref(self):
-        """bash << EOF with curl -X DELETE git/refs is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "bash << EOF\ncurl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main\nEOF"
-        )
-
-
 # =============================================================================
 # Multi-break line continuation tests for API patterns
 # =============================================================================
 
 
-class TestAPIMultiBreakLineContinuation:
-    """Tests for multi-break line continuations in API commands.
-
-    Commands split across multiple lines with backslash-newline are
-    normalized before pattern matching. These tests verify that
-    commands with 2+ breaks are correctly detected.
-    """
-
-    def test_gh_api_delete_multi_break(self):
-        """gh api -X DELETE with multiple line breaks is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api \\\n-X DELETE \\\nrepos/o/r/git/refs/heads/feature"
-        )
-
-    def test_gh_api_patch_main_multi_break(self):
-        """gh api -X PATCH to main with multiple line breaks is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api \\\n-X PATCH \\\nrepos/o/r/git/refs/heads/main \\\n-f sha=abc"
-        )
-
-    def test_curl_delete_multi_break(self):
-        """curl -X DELETE with multiple line breaks is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl \\\n-X DELETE \\\nhttps://api.github.com/repos/o/r/git/refs/heads/feature"
-        )
-
-    def test_curl_patch_multi_break_with_auth(self):
-        """curl with auth header and multiple line breaks is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'curl \\\n-H "Authorization: token ghp_xxx" \\\n-X PATCH \\\nhttps://api.github.com/repos/o/r/git/refs/heads/main'
-        )
-
-
 # =============================================================================
 # curl --request merge pattern fix (M2: previously only matched -X)
 # =============================================================================
-
-
-class TestCurlRequestMergeFix:
-    """Tests that curl --request (long form) is now detected for merge patterns.
-
-    Previously the curl merge pattern only matched -X, not --request.
-    The remediation added --request support. These tests verify the fix.
-    """
-
-    def test_curl_request_put_merge(self):
-        """curl --request PUT to merge endpoint is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request PUT https://api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    def test_curl_request_patch_merge(self):
-        """curl --request PATCH to merge endpoint is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request PATCH https://api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    def test_curl_request_post_merge(self):
-        """curl --request POST to merge endpoint is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request POST https://api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    def test_curl_X_merge_still_works(self):
-        """curl -X PUT to merge still works (regression check)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl -X PUT https://api.github.com/repos/o/r/pulls/42/merge"
-        )
-
-    def test_curl_request_merge_case_insensitive(self):
-        """curl --request detection is case-insensitive."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "curl --request put https://api.github.com/repos/o/r/pulls/42/merge"
-        )
 
 
 # =============================================================================
@@ -4676,51 +2284,14 @@ class TestCurlRequestMergeFix:
 class TestDirectPushToDefaultBranch:
     """Tests for detecting regular pushes to main/master branches."""
 
-    def test_git_push_origin_main(self):
-        """git push origin main is dangerous — bypasses PR workflow."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push origin main")
-
-    def test_git_push_origin_master(self):
-        """git push origin master is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push origin master")
-
-    def test_git_push_u_origin_main(self):
-        """git push -u origin main with tracking flag is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push -u origin main")
-
-    def test_git_push_origin_feature_branch_is_safe(self):
-        """git push origin feature-branch is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git push origin feature/my-branch")
-
-    def test_git_push_origin_main_with_c_flag(self):
-        """git -c ... push origin main with config flag is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "git -c push.default=current push origin main"
-        )
-
-    def test_git_push_upstream_main(self):
-        """git push upstream main (different remote name) is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push upstream main")
 
     def test_git_push_origin_main_with_valid_token(self, tmp_path):
         """git push origin main is allowed with a valid authorization token."""
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        write_token({"operation_type": "push-to-main", "target_ref": "main"},
-                    token_dir=tmp_path)
+        write_token(git_bound({"operation_type": "push-to-main", "target_ref": "main"},
+                              "git push origin main"), token_dir=tmp_path)
 
         result = check_merge_authorization("git push origin main", token_dir=tmp_path)
         assert result is None  # Allowed
@@ -4732,19 +2303,6 @@ class TestDirectPushToDefaultBranch:
         result = check_merge_authorization("git push origin main", token_dir=tmp_path)
         assert result is not None
         assert "AskUserQuestion" in result
-
-    def test_git_push_set_upstream_origin_main(self):
-        """git push --set-upstream origin main is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push --set-upstream origin main")
-
-    def test_git_push_origin_main_colon_refspec_safe(self):
-        """git push origin main:feature is safe — pushes local main to remote feature."""
-        from merge_guard_pre import is_dangerous_command
-
-        # 'main:feature' is a single token; 'main' is not at word boundary end
-        assert not is_dangerous_command("git push origin main:feature-branch")
 
 
 # =============================================================================
@@ -4759,7 +2317,7 @@ class TestOperationScoping:
         """A typed merge token matches a command with the same PR number."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "merge", "pr_number": "42"}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}}
         assert _token_matches_command(token, "gh pr merge 42")
 
     def test_token_with_mismatched_pr_number(self):
@@ -4767,14 +2325,14 @@ class TestOperationScoping:
         mismatched target -> REFUSE)."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "merge", "pr_number": "42"}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}}
         assert not _token_matches_command(token, "gh pr merge 99")
 
     def test_token_with_matching_branch(self):
         """A typed branch-delete token matches a branch -D command."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "branch-delete", "branch": "old-feature"}}
+        token = {"context": git_bound({"operation_type": "branch-delete", "branch": "old-feature"}, "git branch -D old-feature")}
         assert _token_matches_command(token, "git branch -D old-feature")
 
     def test_token_with_mismatched_branch(self):
@@ -4788,7 +2346,7 @@ class TestOperationScoping:
         """A typed branch-delete token matches a --delete --force command."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "branch-delete", "branch": "cleanup"}}
+        token = {"context": git_bound({"operation_type": "branch-delete", "branch": "cleanup"}, "git branch --delete --force cleanup")}
         assert _token_matches_command(token, "git branch --delete --force cleanup")
 
     def test_empty_context_denies_all(self):
@@ -4857,7 +2415,7 @@ class TestOperationScoping:
         `-D` and the `--delete --force` single-branch forms."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "branch-delete", "branch": "a"}}
+        token = {"context": git_bound({"operation_type": "branch-delete", "branch": "a"}, "git branch -D a")}
         assert _token_matches_command(token, "git branch -D a")
         assert _token_matches_command(token, "git branch --delete --force a")
 
@@ -4865,10 +2423,10 @@ class TestOperationScoping:
         """NO-REGRESSION control (API-ref-DELETE single form): a branch-delete
         token still authorizes the single-ref `gh api -X DELETE .../git/refs/
         heads/<ref>` form (the API-ref parser is unaffected by the CLI
-        multi-target positional count)."""
+        multi-target positional count). The REST delete binds its repo (amend_4 on #141)."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "branch-delete", "branch": "a"}}
+        token = {"context": {"operation_type": "branch-delete", "branch": "api:o/r:a", "host": "github.com"}}
         assert _token_matches_command(
             token, "gh api -X DELETE repos/o/r/git/refs/heads/a"
         )
@@ -4880,7 +2438,7 @@ class TestOperationScoping:
         from merge_guard_pre import check_merge_authorization
 
         # Token scoped to PR #42 (typed + targeted so write_token accepts it).
-        write_token({"operation_type": "merge", "pr_number": "42"},
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"},
                     token_dir=tmp_path)
 
         # Attempt to merge PR #99 — should be blocked.
@@ -4959,8 +2517,9 @@ class TestSessionScoping:
         # Token NOT cleaned up — it may be valid for its own session
         assert (tmp_path / "merge-authorized-22222").exists()
 
-    def test_no_session_id_accepts_any_token(self, tmp_path):
-        """When no session ID is available, any valid token is accepted."""
+    def test_no_session_id_reads_only_a_token_minted_without_one(self, tmp_path):
+        """A reader with no session id took any session's token; it now reads only a token
+        minted without one (rows: tests/test_merge_guard_pre.py)."""
         from merge_guard_pre import find_valid_token
 
         now = time.time()
@@ -4974,7 +2533,11 @@ class TestSessionScoping:
 
         with patch("merge_guard_pre.get_session_id", return_value=""):
             result, path = find_valid_token(token_dir=tmp_path)
-        assert result is not None
+            assert result is None
+            del token_data["session_id"]
+            (tmp_path / "merge-authorized-33334").write_text(json.dumps(token_data))
+            result, path = find_valid_token(token_dir=tmp_path)
+        assert result is not None and path.endswith("33334")
 
     def test_token_without_session_REJECTED_when_current_session_known(self, tmp_path):
         """SEC-S1 cycle-2 inversion: token without session_id is REJECTED
@@ -5198,15 +2761,13 @@ class TestTokenWriteExceptionHandling:
 
         now = time.time()
         timestamp = int(now)
-        ms_suffix = int(now * 1000) % 1000
 
-        # Pre-create both the primary and fallback files
-        primary = tmp_path / f"merge-authorized-{timestamp}"
-        fallback = tmp_path / f"merge-authorized-{timestamp}-{ms_suffix}"
-        primary.write_text("taken")
-        fallback.write_text("taken")
+        # Pre-create the primary and every fallback name write_token tries
+        (tmp_path / f"merge-authorized-{timestamp}").write_text("taken")
+        for n in range(1, merge_guard_post._MAX_NAME_TRIES):
+            (tmp_path / f"merge-authorized-{timestamp}-{n}").write_text("taken")
 
-        with patch.object(merge_guard_post, "_cleanup_unused_tokens", lambda _td: None), \
+        with patch.object(merge_guard_post, "_cleanup_unused_tokens", lambda *_a: None), \
              patch("merge_guard_post.time") as mock_time:
             mock_time.time.return_value = now
             result = write_token({"test": True, "operation_type": "merge"}, token_dir=tmp_path)
@@ -5751,14 +3312,14 @@ class TestSchemaFixEndToEnd:
                 "questions": [{
                     "question": "Delete the old feature branch?",
                     "options": [
-                        {"label": "Yes, delete", "description": "Run `git branch -D feat/old-feature`"},
+                        {"label": "Yes, delete local branch", "description": "Run `git branch -D feat/old-feature`"},
                         {"label": "Cancel", "description": "Abort"},
                     ],
                 }]
             },
             "tool_response": {
                 "answers": {
-                    "Delete the old feature branch?": "Yes, delete",
+                    "Delete the old feature branch?": "Yes, delete local branch",
                 },
             },
         })
@@ -6023,41 +3584,6 @@ class TestProcessSubstitutionBypass:
     shell, so echo content must not be stripped.
     """
 
-    def test_bash_process_sub_is_dangerous(self):
-        """bash <(echo 'dangerous') is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash <(echo 'gh pr merge 42')")
-
-    def test_sh_process_sub_is_dangerous(self):
-        """sh <(printf 'dangerous') is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("sh <(printf 'gh pr merge 42')")
-
-    def test_zsh_process_sub_is_dangerous(self):
-        """zsh <(echo 'dangerous') is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("zsh <(echo 'gh pr merge 42')")
-
-    def test_bash_process_sub_double_quoted(self):
-        """bash <(echo "dangerous") with double quotes is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('bash <(echo "gh pr merge 42")')
-
-    def test_non_shell_process_sub_still_stripped(self):
-        """cat <(echo 'dangerous') is NOT a shell — still stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("cat <(echo 'gh pr merge 42')")
-
-    def test_grep_process_sub_still_stripped(self):
-        """grep <(echo 'dangerous') is NOT a shell — still stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("grep <(echo 'gh pr merge 42')")
 
     def test_strip_helper_process_sub(self):
         """_strip_non_executable_content preserves echo args when process sub to shell."""
@@ -6080,43 +3606,6 @@ class TestXargsBypass:
     arguments to bash, which executes them.
     """
 
-    def test_echo_xargs_bash_is_dangerous(self):
-        """echo piped to xargs bash is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "gh pr merge 42" | xargs bash')
-
-    def test_echo_xargs_sh_is_dangerous(self):
-        """echo piped to xargs sh is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "gh pr merge 42" | xargs sh')
-
-    def test_echo_xargs_zsh_is_dangerous(self):
-        """echo piped to xargs zsh is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "gh pr merge 42" | xargs zsh')
-
-    def test_echo_xargs_with_flags_bash(self):
-        """echo piped to xargs with flags to bash is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'echo "gh pr merge 42" | xargs -I {} bash -c {}'
-        )
-
-    def test_printf_xargs_bash_is_dangerous(self):
-        """printf piped to xargs bash is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('printf "gh pr merge 42" | xargs bash')
-
-    def test_echo_xargs_grep_still_stripped(self):
-        """echo piped to xargs grep is NOT a shell — still stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "gh pr merge 42" | xargs grep')
 
     def test_strip_helper_xargs(self):
         """_strip_non_executable_content preserves echo args when piped to xargs shell."""
@@ -6137,59 +3626,6 @@ class TestHereStringStripping:
     """Verify that here-strings (<<<) are stripped to prevent false positives,
     with guards for shell interpreters and command substitution."""
 
-    def test_cat_herestring_single_quoted_not_dangerous(self):
-        """cat <<< 'dangerous' is not a command — stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("cat <<< 'gh pr merge 42'")
-
-    def test_cat_herestring_double_quoted_not_dangerous(self):
-        """cat <<< "dangerous" is not a command — stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('cat <<< "gh pr merge 42"')
-
-    def test_grep_herestring_not_dangerous(self):
-        """grep <<< 'dangerous' is not a command — stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("grep <<< 'gh pr merge 42'")
-
-    def test_bash_herestring_single_quoted_is_dangerous(self):
-        """bash <<< 'dangerous' IS executed — preserved."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash <<< 'gh pr merge 42'")
-
-    def test_bash_herestring_double_quoted_is_dangerous(self):
-        """bash <<< "dangerous" IS executed — preserved."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('bash <<< "gh pr merge 42"')
-
-    def test_sh_herestring_is_dangerous(self):
-        """sh <<< 'dangerous' IS executed — preserved."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("sh <<< 'gh pr merge 42'")
-
-    def test_zsh_herestring_is_dangerous(self):
-        """zsh <<< 'dangerous' IS executed — preserved."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("zsh <<< 'gh pr merge 42'")
-
-    def test_herestring_cmd_substitution_is_dangerous(self):
-        """cat <<< "$(dangerous)" has command substitution — preserved."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('cat <<< "$(gh pr merge 42)"')
-
-    def test_herestring_backtick_substitution_is_dangerous(self):
-        """cat <<< "`dangerous`" has backtick substitution — preserved."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('cat <<< "`gh pr merge 42`"')
 
     def test_strip_helper_herestring_single(self):
         """_strip_non_executable_content strips single-quoted here-string."""
@@ -6211,18 +3647,6 @@ class TestHereStringStripping:
 
         result = _strip_non_executable_content("bash <<< 'gh pr merge 42'")
         assert "gh pr merge" in result
-
-    def test_herestring_force_push_not_dangerous(self):
-        """Here-string with force push text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('cat <<< "git push --force origin main"')
-
-    def test_herestring_branch_delete_not_dangerous(self):
-        """Here-string with branch delete text is not dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("cat <<< 'git branch -D feat/old'")
 
 
 # =============================================================================
@@ -6454,7 +3878,7 @@ class TestIdempotentTokenConsumption:
         os.utime(str(stale), (old_mtime, old_mtime))
 
         # Create a new token — should clean up stale consumed files
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         assert token_path is not None
         assert not stale.exists()  # Stale consumed cleaned up
@@ -6467,7 +3891,7 @@ class TestIdempotentTokenConsumption:
         fresh = tmp_path / "merge-authorized-00001.consumed"
         fresh.write_text('{}')
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         assert token_path is not None
         assert fresh.exists()  # Fresh consumed preserved
@@ -6565,7 +3989,7 @@ class TestIdempotentTokenConsumption:
         token_file.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"operation_type": "merge", "pr_number": "42"},
+            "context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"},
         }))
 
         # Mock _consume_token to return False (unexpected failure). The token
@@ -6587,7 +4011,7 @@ class TestIdempotentTokenConsumption:
         token_file.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"operation_type": "merge", "pr_number": "42"},
+            "context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"},
         }))
 
         result = check_merge_authorization("gh pr merge 42", token_dir=tmp_path)
@@ -6599,7 +4023,7 @@ class TestIdempotentTokenConsumption:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         assert token_path is not None
 
         # Burn through the full MAX_USES budget
@@ -6623,7 +4047,7 @@ class TestIdempotentTokenConsumption:
         from merge_guard_post import write_token
         from merge_guard_pre import _consume_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
 
         # First invocation: claims slot 1 (token still on disk; budget left)
         assert _consume_token(token_path) is True
@@ -6642,7 +4066,7 @@ class TestIdempotentTokenConsumption:
     # -------------------------------------------------------------------------
 
     def test_consumed_and_original_both_exist(self, tmp_path):
-        """Edge case: both original and .consumed exist (shouldn't happen normally).
+        """Edge case: both original and .consumed exist (shouldn't happen usually).
 
         _consume_token should still succeed by renaming (overwriting .consumed).
         """
@@ -6691,7 +4115,7 @@ class TestIdempotentTokenConsumption:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         assert token_path is not None
 
         # Verify original has secure permissions
@@ -6722,7 +4146,7 @@ class TestIdempotentTokenConsumption:
         )
 
         # 1. Create token
-        token_path = write_token({"operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}, token_dir=tmp_path)
         assert token_path is not None
         assert Path(token_path).exists()
 
@@ -6762,7 +4186,7 @@ class TestIdempotentTokenConsumption:
         token.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"operation_type": "merge", "pr_number": "99"},
+            "context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "99"},
         }))
 
         # Running a DIFFERENT PR's merge is blocked (target mismatch)...
@@ -6783,74 +4207,23 @@ class TestIdempotentTokenConsumption:
 class TestGhPrCloseDetection:
     """Tests for gh pr close detection in merge guard pre-hook.
 
-    Only 'gh pr close --delete-branch' is dangerous. Bare 'gh pr close'
-    (without --delete-branch) is trivially reversible and ALLOWED.
+    Every 'gh pr close' is dangerous (FIX-MERGE f3, amend_1 a: PR close is on the S5
+    irreversible list). The --delete-branch variant stays a distinct approval through
+    the close op's bound --delete-branch flag.
 
     Covers: --delete-branch position variants, bare close (safe), flags,
     chained commands, false positive prevention, and edge cases.
     """
 
     # -------------------------------------------------------------------------
-    # Bare gh pr close (no --delete-branch) is SAFE
+    # Bare gh pr close (no --delete-branch) is GATED (FIX-MERGE f3)
     # -------------------------------------------------------------------------
 
-    def test_gh_pr_close_bare_is_safe(self):
-        """Bare 'gh pr close' without --delete-branch is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr close")
-
-    def test_gh_pr_close_with_number_is_safe(self):
-        """'gh pr close 123' without --delete-branch is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr close 123")
-
-    def test_gh_pr_close_with_large_number_is_safe(self):
-        """'gh pr close 99999' without --delete-branch is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr close 99999")
-
-    def test_gh_pr_close_with_comment_flag_is_safe(self):
-        """'gh pr close --comment' without --delete-branch is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr close 42 --comment 'closing as wontfix'")
-
-    def test_gh_pr_close_with_repo_flag_is_safe(self):
-        """'gh pr close --repo' without --delete-branch is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr close 42 --repo owner/repo")
 
     # -------------------------------------------------------------------------
     # gh pr close --delete-branch IS dangerous
     # -------------------------------------------------------------------------
 
-    def test_gh_pr_close_delete_branch_after_number(self):
-        """'gh pr close 42 --delete-branch' is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 42 --delete-branch")
-
-    def test_gh_pr_close_delete_branch_before_number(self):
-        """'gh pr close --delete-branch 42' is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close --delete-branch 42")
-
-    def test_gh_pr_close_delete_branch_no_number(self):
-        """'gh pr close --delete-branch' (no PR number) is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close --delete-branch")
-
-    def test_gh_pr_close_delete_branch_with_comment(self):
-        """'gh pr close --delete-branch --comment' is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 42 --delete-branch --comment 'done'")
 
     def test_gh_pr_close_delete_branch_parenthesized_comment_not_overblocked(self, tmp_path):
         """REGRESSION GUARD — the marquee faithful-click over-block: a close carrying a
@@ -6873,7 +4246,6 @@ class TestGhPrCloseDetection:
             check_merge_authorization,
         )
         from merge_guard_post import write_token
-        from shared.merge_guard_common import extract_command_context
 
         cmd = 'gh pr close 7 --comment "(done)" --delete-branch'
         # Gated as a single destructive op — NOT refused-outright as >=2-compound.
@@ -6881,208 +4253,39 @@ class TestGhPrCloseDetection:
         assert is_compound_destructive_command(cmd) is False
         # Faithful click: the clicked option mints a token for this exact command and
         # the read side AUTHORIZES it (returns None) — no metachar over-block.
-        ctx = extract_command_context(cmd)
+        ctx = minted_context(cmd)
         assert write_token(ctx, token_dir=tmp_path) is not None
         assert check_merge_authorization(cmd, token_dir=tmp_path) is None
 
-    def test_gh_pr_close_delete_branch_with_repo(self):
-        """'gh pr close --delete-branch --repo' is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 42 --delete-branch --repo owner/repo")
 
     # -------------------------------------------------------------------------
     # Whitespace and formatting edge cases
     # -------------------------------------------------------------------------
 
-    def test_gh_pr_close_delete_branch_extra_whitespace(self):
-        """'gh  pr  close' with extra whitespace + --delete-branch is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh  pr  close 42 --delete-branch")
-
-    def test_gh_pr_close_delete_branch_tab_separated(self):
-        """'gh pr close' with tabs + --delete-branch is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh\tpr\tclose 42 --delete-branch")
-
-    def test_gh_pr_close_bare_extra_whitespace_safe(self):
-        """'gh  pr  close' without --delete-branch is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh  pr  close 42")
 
     # -------------------------------------------------------------------------
     # Chained commands with --delete-branch
     # -------------------------------------------------------------------------
 
-    def test_gh_pr_close_delete_branch_after_and(self):
-        """'gh pr close --delete-branch' after && is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("cd /tmp && gh pr close 42 --delete-branch")
-
-    def test_gh_pr_close_delete_branch_after_semicolon(self):
-        """'gh pr close --delete-branch' after semicolon is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("echo done; gh pr close 42 --delete-branch")
-
-    def test_gh_pr_close_delete_branch_after_or(self):
-        """'gh pr close --delete-branch' after || is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("false || gh pr close 42 --delete-branch")
-
-    def test_gh_pr_close_delete_branch_in_subshell(self):
-        """'gh pr close --delete-branch' in $() subshell is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("$(gh pr close 42 --delete-branch)")
-
-    def test_gh_pr_close_delete_branch_with_env_var(self):
-        """'gh pr close --delete-branch' with env var prefix is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("GH_TOKEN=abc gh pr close 42 --delete-branch")
-
-    def test_gh_pr_close_delete_branch_in_bash_c(self):
-        """'gh pr close --delete-branch' inside bash -c is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash -c 'gh pr close 42 --delete-branch'")
 
     # -------------------------------------------------------------------------
     # Bare close in chained commands is SAFE
     # -------------------------------------------------------------------------
 
-    def test_gh_pr_close_bare_after_and_safe(self):
-        """Bare 'gh pr close' (no --delete-branch) after && is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("cd /tmp && gh pr close 42")
-
-    def test_gh_pr_close_bare_after_semicolon_safe(self):
-        """Bare 'gh pr close' after semicolon is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("echo done; gh pr close 42")
 
     # -------------------------------------------------------------------------
     # False positive prevention (stripping logic) with --delete-branch
     # -------------------------------------------------------------------------
 
-    def test_echo_gh_pr_close_delete_branch_not_dangerous(self):
-        """echo with 'gh pr close --delete-branch' text is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "gh pr close 42 --delete-branch"')
-
-    def test_echo_single_quoted_gh_pr_close_delete_branch_not_dangerous(self):
-        """echo with single-quoted 'gh pr close --delete-branch' is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("echo 'gh pr close 42 --delete-branch'")
-
-    def test_comment_gh_pr_close_delete_branch_not_dangerous(self):
-        """Commented-out 'gh pr close --delete-branch' is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("# gh pr close 42 --delete-branch")
-
-    def test_variable_assignment_gh_pr_close_delete_branch_not_dangerous(self):
-        """Variable assignment containing 'gh pr close --delete-branch' is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('CMD="gh pr close 42 --delete-branch"')
-
-    def test_heredoc_gh_pr_close_delete_branch_not_dangerous(self):
-        """'gh pr close --delete-branch' inside heredoc is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        cmd = "cat << 'EOF'\ngh pr close 42 --delete-branch\nEOF"
-        assert not is_dangerous_command(cmd)
-
-    def test_git_commit_msg_gh_pr_close_delete_branch_not_dangerous(self):
-        """'gh pr close --delete-branch' in commit message is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('git commit -m "gh pr close 42 --delete-branch"')
-
-    def test_echo_push_main_not_dangerous_still(self):
-        """Ensure other false positive prevention still works alongside new pattern."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "git push origin main"')
 
     # -------------------------------------------------------------------------
     # Bypass vector prevention with --delete-branch
     # -------------------------------------------------------------------------
 
-    def test_pipe_to_bash_gh_pr_close_delete_branch_detected(self):
-        """echo piped to bash with 'gh pr close --delete-branch' IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("echo 'gh pr close 42 --delete-branch' | bash")
-
-    def test_eval_var_gh_pr_close_delete_branch_detected(self):
-        """eval with variable containing 'gh pr close --delete-branch' IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr close 42 --delete-branch" && eval $CMD')
-
-    def test_bare_var_expansion_gh_pr_close_delete_branch_detected(self):
-        """Bare variable expansion with 'gh pr close --delete-branch' IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr close 42 --delete-branch" && $CMD')
 
     # -------------------------------------------------------------------------
     # Negative tests: similar but safe commands
     # -------------------------------------------------------------------------
-
-    def test_gh_pr_list_safe(self):
-        """'gh pr list' is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr list")
-
-    def test_gh_pr_view_safe(self):
-        """'gh pr view' is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr view 42")
-
-    def test_gh_pr_create_safe(self):
-        """'gh pr create' is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr create --title 'test'")
-
-    def test_gh_pr_checkout_safe(self):
-        """'gh pr checkout' is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr checkout 42")
-
-    def test_gh_pr_review_safe(self):
-        """'gh pr review' is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr review 42 --approve")
-
-    def test_gh_issue_close_safe(self):
-        """'gh issue close' is NOT dangerous (intentionally excluded per #265)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh issue close 42")
-
-    def test_close_as_substring_safe(self):
-        """Words containing 'close' as substring are NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("echo 'disclosure notice'")
 
 
 # =============================================================================
@@ -7159,14 +4362,14 @@ class TestGhPrCloseTokenMatching:
         # GAP2: a faithful close --delete-branch token binds --delete-branch, so it
         # set-matches the --delete-branch exec (bare-close→delete escalation is the
         # NEW escalation-denied counter-test below).
-        token = {"context": {"pr_number": "42", "operation_type": "close", "bound_flags": ["--delete-branch"]}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close", "bound_flags": ["--delete-branch"]}}
         assert _token_matches_command(token, "gh pr close 42 --delete-branch")
 
     def test_token_rejects_gh_pr_close_different_pr(self):
         """Token with PR number rejects gh pr close for different PR."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"pr_number": "42", "operation_type": "close"}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close"}}
         assert not _token_matches_command(token, "gh pr close 99 --delete-branch")
 
     def test_token_no_context_denies_gh_pr_close(self):
@@ -7189,14 +4392,14 @@ class TestGhPrCloseTokenMatching:
         """Close token does NOT authorize merge (operation_type mismatch)."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"pr_number": "42", "operation_type": "close"}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close"}}
         assert not _token_matches_command(token, "gh pr merge 42")
 
     def test_merge_token_rejects_close_command(self):
         """Merge token does NOT authorize close (operation_type mismatch)."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"pr_number": "42", "operation_type": "merge"}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "merge"}}
         assert not _token_matches_command(token, "gh pr close 42 --delete-branch")
 
     def test_token_without_operation_type_denies_any(self):
@@ -7225,12 +4428,12 @@ class TestGhPrCloseAuthorization:
         assert result is not None
         assert "approval" in result.lower()
 
-    def test_gh_pr_close_bare_allowed_without_token(self, tmp_path):
-        """Bare gh pr close (no --delete-branch) is allowed without token."""
+    def test_gh_pr_close_bare_denied_without_token(self, tmp_path):
+        """FIX-MERGE f3 (amend_1 a): a bare close now gates like any close. It needs an approval token."""
         from merge_guard_pre import check_merge_authorization
 
         result = check_merge_authorization("gh pr close 42", token_dir=tmp_path)
-        assert result is None
+        assert result is not None
 
     def test_gh_pr_close_delete_branch_allowed_with_valid_token(self, tmp_path):
         """gh pr close --delete-branch allowed when valid token exists."""
@@ -7245,7 +4448,7 @@ class TestGhPrCloseAuthorization:
             "expires_at": now + 300,
             # GAP2: a FAITHFUL close --delete-branch mint binds --delete-branch, so it
             # set-matches the --delete-branch exec → authorizes.
-            "context": {"pr_number": "42", "operation_type": "close", "bound_flags": ["--delete-branch"]},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close", "bound_flags": ["--delete-branch"]},
         }))
 
         result = check_merge_authorization("gh pr close 42 --delete-branch", token_dir=tmp_path)
@@ -7267,7 +4470,7 @@ class TestGhPrCloseAuthorization:
             "created_at": now,
             "expires_at": now + 300,
             # MATCHING pr+op, NO --delete-branch bound → the bare-close token.
-            "context": {"pr_number": "42", "operation_type": "close", "bound_flags": []},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close", "bound_flags": []},
         }))
 
         result = check_merge_authorization("gh pr close 42 --delete-branch", token_dir=tmp_path)
@@ -7284,7 +4487,7 @@ class TestGhPrCloseAuthorization:
         token_file.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"pr_number": "99", "operation_type": "close"},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "99", "operation_type": "close"},
         }))
 
         result = check_merge_authorization("gh pr close 42 --delete-branch", token_dir=tmp_path)
@@ -7302,7 +4505,7 @@ class TestGhPrCloseAuthorization:
         token_file.write_text(json.dumps({
             "created_at": now - 600,
             "expires_at": now - 300,
-            "context": {"pr_number": "42", "operation_type": "close"},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close"},
         }))
 
         result = check_merge_authorization("gh pr close 42 --delete-branch", token_dir=tmp_path)
@@ -7319,7 +4522,7 @@ class TestGhPrCloseAuthorization:
         token_file.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"operation_type": "close", "pr_number": "42", "bound_flags": ["--delete-branch"]},
+            "context": {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "42", "bound_flags": ["--delete-branch"]},
         }))
 
         # First call — allowed and consumes token
@@ -7348,7 +4551,7 @@ class TestGhPrCloseAuthorization:
         token_file.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"pr_number": "42", "operation_type": "merge"},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "merge"},
         }))
 
         result = check_merge_authorization("gh pr close 42 --delete-branch", token_dir=tmp_path)
@@ -7366,7 +4569,7 @@ class TestGhPrCloseAuthorization:
         token_file.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"pr_number": "42", "operation_type": "close"},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close"},
         }))
 
         result = check_merge_authorization("gh pr merge 42", token_dir=tmp_path)
@@ -7379,307 +4582,14 @@ class TestGhPrCloseAuthorization:
 # =============================================================================
 
 
-class TestGhPrCloseBypassVectors:
-    """Adversarial tests for gh pr close --delete-branch — execution-via-indirection.
-
-    Only tests with --delete-branch should be dangerous. Bare close bypass
-    vectors are now safe (bare close is allowed).
-    """
-
-    # --- Process substitution bypass ---
-
-    def test_bash_process_sub_gh_pr_close_delete_branch(self):
-        """bash <(echo 'gh pr close 42 --delete-branch') executes — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash <(echo 'gh pr close 42 --delete-branch')")
-
-    def test_sh_process_sub_gh_pr_close_delete_branch(self):
-        """sh <(printf 'gh pr close 42 --delete-branch') executes — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("sh <(printf 'gh pr close 42 --delete-branch')")
-
-    def test_bash_process_sub_bare_close_safe(self):
-        """bash <(echo 'gh pr close 42') without --delete-branch — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("bash <(echo 'gh pr close 42')")
-
-    # --- xargs bypass ---
-
-    def test_echo_xargs_bash_gh_pr_close_delete_branch(self):
-        """echo piped to xargs bash with gh pr close --delete-branch — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "gh pr close 42 --delete-branch" | xargs bash')
-
-    def test_echo_xargs_bash_bare_close_safe(self):
-        """echo piped to xargs bash with bare gh pr close — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "gh pr close 42" | xargs bash')
-
-    # --- Here-string bypass ---
-
-    def test_bash_herestring_sq_gh_pr_close_delete_branch(self):
-        """bash <<< 'gh pr close 42 --delete-branch' IS executed — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash <<< 'gh pr close 42 --delete-branch'")
-
-    def test_bash_herestring_bare_close_safe(self):
-        """bash <<< 'gh pr close 42' without --delete-branch — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("bash <<< 'gh pr close 42'")
-
-    # --- Heredoc to shell bypass ---
-
-    def test_heredoc_to_bash_gh_pr_close_delete_branch(self):
-        """bash << EOF with gh pr close --delete-branch — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("bash << EOF\ngh pr close 42 --delete-branch\nEOF")
-
-    def test_heredoc_to_bash_bare_close_safe(self):
-        """bash << EOF with bare gh pr close — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("bash << EOF\ngh pr close 42\nEOF")
-
-    # --- Command substitution ---
-
-    def test_cmd_sub_gh_pr_close_delete_branch(self):
-        """echo "$(gh pr close 42 --delete-branch)" — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('echo "$(gh pr close 42 --delete-branch)"')
-
-    def test_cmd_sub_bare_close_safe(self):
-        """echo "$(gh pr close 42)" without --delete-branch — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('echo "$(gh pr close 42)"')
-
-    # --- Pipe to shell variants ---
-
-    def test_echo_piped_to_sh_gh_pr_close_delete_branch(self):
-        """echo piped to sh with gh pr close --delete-branch — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("echo 'gh pr close 42 --delete-branch' | sh")
-
-    def test_echo_piped_to_sh_bare_close_safe(self):
-        """echo piped to sh with bare gh pr close — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("echo 'gh pr close 42' | sh")
-
-    # --- eval/source variants ---
-
-    def test_var_eval_gh_pr_close_delete_branch(self):
-        """Variable + eval with gh pr close --delete-branch — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('CMD="gh pr close 42 --delete-branch"; eval $CMD')
-
-    def test_var_eval_bare_close_safe(self):
-        """Variable + eval with bare gh pr close — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('CMD="gh pr close 42"; eval $CMD')
-
-
 # =============================================================================
 # gh pr close: additional edge cases (TEST phase)
 # =============================================================================
 
 
-class TestGhPrCloseEdgeCases:
-    """Edge cases and boundary conditions for gh pr close detection.
-
-    With the --delete-branch requirement, bare close edge cases are now safe.
-    """
-
-    def test_gh_pr_close_delete_branch_multiple_in_chain(self):
-        """Multiple gh pr close --delete-branch in a chain — dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 1 --delete-branch && gh pr close 2 --delete-branch")
-
-    def test_gh_pr_close_bare_multiple_in_chain_safe(self):
-        """Multiple bare gh pr close in a chain — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr close 1 && gh pr close 2")
-
-    def test_gh_pr_close_mixed_with_merge(self):
-        """Bare gh pr close alongside gh pr merge — merge makes it dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 1 && gh pr merge 2")
-
-    def test_gh_pr_close_bare_with_newlines_safe(self):
-        """Bare gh pr close in multi-line command — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("echo start\ngh pr close 42\necho done")
-
-    def test_gh_pr_close_delete_branch_with_redirect(self):
-        """gh pr close --delete-branch with redirection — dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 42 --delete-branch > /dev/null 2>&1")
-
-    def test_gh_pr_close_bare_with_redirect_safe(self):
-        """Bare gh pr close with redirection — safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh pr close 42 > /dev/null 2>&1")
-
-    def test_gh_pr_close_delete_branch_in_if_block(self):
-        """gh pr close --delete-branch inside if block — dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("if true; then gh pr close 42 --delete-branch; fi")
-
-    def test_gh_pr_close_delete_branch_with_url(self):
-        """gh pr close --delete-branch with URL — dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh pr close https://github.com/owner/repo/pull/42 --delete-branch"
-        )
-
-    def test_gh_issue_close_with_flags_safe(self):
-        """gh issue close with flags is still NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh issue close 42 --reason completed")
-
-    def test_gh_issue_close_with_comment_safe(self):
-        """gh issue close with --comment is still NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh issue close 42 --comment 'done'")
-
-    def test_gh_issue_close_in_chain_safe(self):
-        """gh issue close in chained command is NOT dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("cd /tmp && gh issue close 42")
-
-    def test_gh_pr_close_no_word_boundary_prefix(self):
-        """'agh pr close --delete-branch' is NOT detected (word boundary)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("agh pr close 42 --delete-branch")
-
-    def test_gh_pr_closed_not_detected(self):
-        """'gh pr closed' (past tense) is NOT detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("echo 'gh pr closed yesterday'")
-
-    def test_gh_pr_closeable_not_detected(self):
-        """'gh pr closeable' is NOT detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("echo 'gh pr closeable'")
-
-    def test_herestring_cmd_sub_gh_pr_close_delete_branch(self):
-        """cat <<< "$(gh pr close 42 --delete-branch)" — detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('cat <<< "$(gh pr close 42 --delete-branch)"')
-
-    def test_herestring_cmd_sub_bare_close_safe(self):
-        """cat <<< "$(gh pr close 42)" — safe (no --delete-branch)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('cat <<< "$(gh pr close 42)"')
-
-
 # =============================================================================
 # gh pr close: regression tests for existing patterns (TEST phase)
 # =============================================================================
-
-
-class TestGhPrCloseRegressionExistingPatterns:
-    """Verify that adding gh pr close did not break existing dangerous patterns.
-
-    Spot-check each existing DANGEROUS_PATTERNS entry to ensure they still work
-    correctly alongside the new pattern.
-    """
-
-    def test_gh_pr_merge_still_detected(self):
-        """gh pr merge is still detected after adding close pattern."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr merge 42")
-
-    def test_force_push_still_detected(self):
-        """git push --force is still detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push --force origin main")
-
-    def test_force_push_f_flag_still_detected(self):
-        """git push -f is still detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push -f origin main")
-
-    def test_branch_D_still_detected(self):
-        """git branch -D is still detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git branch -D feature-branch")
-
-    def test_branch_delete_force_still_detected(self):
-        """git branch --delete --force is still detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git branch --delete --force feature-branch")
-
-    def test_api_merge_bypass_still_detected(self):
-        """gh api merge bypass is still detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh api -X PUT repos/owner/repo/pulls/42/merge"
-        )
-
-    def test_push_to_main_still_detected(self):
-        """git push origin main is still detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push origin main")
-
-    def test_push_head_main_still_detected(self):
-        """git push origin HEAD:main is still detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push origin HEAD:main")
-
-    def test_safe_commands_still_safe(self):
-        """Safe commands are still not flagged."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git status")
-        assert not is_dangerous_command("gh pr list")
-        assert not is_dangerous_command("git push origin feature-branch")
-        assert not is_dangerous_command("git branch -d feature-branch")
-
-    def test_force_with_lease_still_allowed(self):
-        """--force-with-lease to a non-default branch is excluded from force push detection."""
-        from merge_guard_pre import is_dangerous_command
-
-        # --force-with-lease to a feature branch is safe
-        assert not is_dangerous_command("git push --force-with-lease origin feature-branch")
-        # But --force-with-lease to main is STILL dangerous (matches push-to-main pattern)
-        assert is_dangerous_command("git push --force-with-lease origin main")
 
 
 # =============================================================================
@@ -7713,8 +4623,8 @@ class TestGhPrClosePreHookE2E:
         # Issue #658: deny-emit must include hookEventName uniformity polish.
         assert output["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
 
-    def test_pre_hook_allows_bare_gh_pr_close(self, tmp_path, capsys):
-        """Pre-hook main() allows bare gh pr close (no --delete-branch) — exits 0."""
+    def test_pre_hook_denies_bare_gh_pr_close(self, tmp_path, capsys):
+        """FIX-MERGE f3 (amend_1 a): a bare close now gates like any close. Pre-hook main() denies it without a token."""
         from merge_guard_pre import main
 
         input_data = {
@@ -7726,12 +4636,11 @@ class TestGhPrClosePreHookE2E:
             patch("sys.stdin", stdin),
             patch("merge_guard_pre.TOKEN_DIR", tmp_path),
         ):
-            with pytest.raises(SystemExit) as exc_info:
+            with pytest.raises(SystemExit):
                 main()
-            assert exc_info.value.code == 0
 
         captured = capsys.readouterr()
-        assert json.loads(captured.out) == {"suppressOutput": True}
+        assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_pre_hook_allows_gh_pr_close_delete_branch_with_token(self, tmp_path, capsys):
         """Pre-hook main() allows gh pr close --delete-branch with valid token."""
@@ -7742,7 +4651,7 @@ class TestGhPrClosePreHookE2E:
         token_file.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + 300,
-            "context": {"pr_number": "42", "operation_type": "close", "bound_flags": ["--delete-branch"]},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close", "bound_flags": ["--delete-branch"]},
         }))
 
         input_data = {
@@ -7930,14 +4839,14 @@ class TestGhPrCloseTokenMatchingEdgeCases:
         """Close token cannot authorize merge (operation_type enforced)."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"pr_number": "42", "operation_type": "close"}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "close"}}
         assert not _token_matches_command(token, "gh pr merge 42")
 
     def test_merge_token_cross_operation_blocked(self):
         """Merge token cannot authorize close (operation_type enforced)."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"pr_number": "42", "operation_type": "merge"}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "pr_number": "42", "operation_type": "merge"}}
         assert not _token_matches_command(token, "gh pr close 42 --delete-branch")
 
 
@@ -7956,7 +4865,6 @@ class TestGhPrCloseFullIntegration:
     def test_close_flow_approve_then_execute(self, tmp_path):
         """Full flow: user approves a command-bearing close question → token
         minted from the command → matching command allowed."""
-        from shared.merge_guard_common import extract_command_context
         from merge_guard_post import is_merge_question, write_token
         from merge_guard_pre import check_merge_authorization
 
@@ -7965,7 +4873,7 @@ class TestGhPrCloseFullIntegration:
         assert is_merge_question(question)
 
         # Step 2: mint a token from the command (the command-anchored SSOT).
-        context = extract_command_context("gh pr close 42 --delete-branch")
+        context = minted_context("gh pr close 42 --delete-branch")
         assert context["pr_number"] == "42"
         assert context["operation_type"] == "close"
         token_path = write_token(context, token_dir=tmp_path)
@@ -7977,11 +4885,11 @@ class TestGhPrCloseFullIntegration:
 
     def test_close_flow_token_blocks_after_budget_exhausted(self, tmp_path):
         """After MAX_USES close ops authorized, next attempt blocks (#720 Bug C)."""
-        from shared.merge_guard_common import MAX_USES, extract_command_context
+        from shared.merge_guard_common import MAX_USES
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        context = extract_command_context("gh pr close 42 --delete-branch")
+        context = minted_context("gh pr close 42 --delete-branch")
         write_token(context, token_dir=tmp_path)
 
         # MAX_USES close ops all authorized
@@ -8037,12 +4945,12 @@ class TestGhPrCloseFullIntegration:
         assert result is not None
         assert "does not match" in result.lower()
 
-    def test_bare_close_allowed_without_token(self, tmp_path):
-        """Bare gh pr close (no --delete-branch) is allowed without any token."""
+    def test_bare_close_denied_without_token(self, tmp_path):
+        """FIX-MERGE f3 (amend_1 a): a bare close now gates like any close. It needs an approval token."""
         from merge_guard_pre import check_merge_authorization
 
         result = check_merge_authorization("gh pr close 42", token_dir=tmp_path)
-        assert result is None
+        assert result is not None
 
 
 # =============================================================================
@@ -8050,126 +4958,9 @@ class TestGhPrCloseFullIntegration:
 # =============================================================================
 
 
-class TestDetectCommandOperationType:
-    """Direct unit tests for detect_command_operation_type helper."""
-
-    def test_merge_command(self):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("gh pr merge 42") == "merge"
-
-    def test_close_command(self):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("gh pr close 42") == "close"
-
-    def test_force_push_returns_force_push(self):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("git push --force origin main") == "force-push"
-
-    def test_branch_delete_returns_branch_delete(self):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("git branch -D feature") == "branch-delete"
-
-    def test_force_push_short_flag(self):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("git push -f origin main") == "force-push"
-
-    def test_force_push_with_lease_to_topic_branch_returns_none(self):
-        """git push --force-with-lease WITHOUT a main/master target stays None.
-
-        The push-to-main detect arm covers lease pushes to a DEFAULT branch
-        (the lease fold); a lease push to a topic branch is unrecognized
-        because no default-branch target matches — not because of a lease
-        exclusion. Force-push classification still excludes lease forms
-        entirely.
-        """
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("git push --force-with-lease origin feature") is None
-
-    def test_api_ref_delete_classified_as_branch_delete(self):
-        """API DELETE on git/refs is a branch-delete class operation."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type(
-            "gh api -X DELETE repos/owner/repo/git/refs/heads/feature"
-        ) == "branch-delete"
-
-    def test_api_ref_patch_classified_as_force_push(self):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type(
-            "gh api -X PATCH repos/owner/repo/git/refs/heads/main -f sha=abc"
-        ) == "force-push"
-
-    def test_curl_ref_patch_classified_as_force_push(self):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type(
-            "curl -X PATCH https://api.github.com/repos/o/r/git/refs/heads/main"
-        ) == "force-push"
-
-    def test_branch_delete_force_long_form(self):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("git branch --delete --force feature") == "branch-delete"
-
-    def test_unknown_command_returns_none(self):
-        """Non-destructive shapes correctly return None."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("ls -la") is None
-        assert detect_command_operation_type("git status") is None
-
-
 # =============================================================================
 # Line continuation normalization tests
 # =============================================================================
-
-
-class TestLineContinuationNormalization:
-    """Tests that bash line continuations (\\<newline>) don't bypass pattern matching."""
-
-    def test_close_with_delete_branch_split(self):
-        """gh pr close with --delete-branch split across lines is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 42 \\\n--delete-branch")
-
-    def test_merge_split_across_lines(self):
-        """gh pr merge split across lines is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr merge \\\n42")
-
-    def test_force_push_split_across_lines(self):
-        """git push --force split across lines is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git push \\\n--force origin main")
-
-    def test_branch_delete_split_across_lines(self):
-        """git branch -D split across lines is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git branch \\\n-D feature")
-
-    def test_multiple_continuations(self):
-        """Multiple line continuations in a single command are all normalized."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh \\\npr \\\nmerge \\\n42")
-
-    def test_no_false_positive_on_literal_backslash_n(self):
-        """Literal backslash-n in text (not a line continuation) is not affected."""
-        from merge_guard_pre import is_dangerous_command
-
-        # This is a literal \\n inside a string, not a line continuation
-        assert not is_dangerous_command("echo 'line1\\nline2'")
 
 
 # =============================================================================
@@ -8188,173 +4979,18 @@ class TestGhGlobalFlagBypass:
 
     # --- gh pr merge with global flags ---
 
-    def test_merge_with_repo_flag(self):
-        """'gh --repo owner/repo pr merge 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh --repo owner/repo pr merge 42")
-
-    def test_merge_with_short_repo_flag(self):
-        """'gh -R owner/repo pr merge 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh -R owner/repo pr merge 42")
-
-    def test_merge_with_hostname_flag(self):
-        """'gh --hostname github.example.com pr merge 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh --hostname github.example.com pr merge 42")
-
-    def test_merge_with_multiple_global_flags(self):
-        """'gh --repo owner/repo --hostname host pr merge 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo --hostname github.example.com pr merge 42"
-        )
-
-    def test_merge_with_repo_equals_syntax(self):
-        """'gh --repo=owner/repo pr merge 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh --repo=owner/repo pr merge 42")
 
     # --- gh pr close --delete-branch with global flags ---
 
-    def test_close_delete_branch_with_repo_flag(self):
-        """'gh --repo owner/repo pr close 42 --delete-branch' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo pr close 42 --delete-branch"
-        )
-
-    def test_close_delete_branch_with_short_repo_flag(self):
-        """'gh -R owner/repo pr close 42 --delete-branch' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh -R owner/repo pr close 42 --delete-branch")
-
-    def test_close_delete_branch_with_hostname_flag(self):
-        """'gh --hostname host pr close 42 --delete-branch' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --hostname github.example.com pr close 42 --delete-branch"
-        )
-
-    def test_close_delete_branch_with_multiple_flags(self):
-        """'gh --repo X --hostname Y pr close 42 --delete-branch' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo --hostname github.example.com pr close 42 --delete-branch"
-        )
-
-    def test_close_delete_branch_with_repo_equals(self):
-        """'gh --repo=owner/repo pr close 42 --delete-branch' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo=owner/repo pr close 42 --delete-branch"
-        )
-
-    def test_close_delete_branch_reversed_with_repo_flag(self):
-        """'--delete-branch before gh --repo ... pr close' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "--delete-branch gh --repo owner/repo pr close 42"
-        )
 
     # --- bare gh pr close with global flags is SAFE ---
 
-    def test_bare_close_with_repo_flag_is_safe(self):
-        """'gh --repo owner/repo pr close 42' (no --delete-branch) is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh --repo owner/repo pr close 42")
-
-    def test_bare_close_with_short_repo_flag_is_safe(self):
-        """'gh -R owner/repo pr close 42' (no --delete-branch) is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh -R owner/repo pr close 42")
 
     # --- gh api with global flags ---
 
-    def test_api_merge_with_repo_flag(self):
-        """'gh --repo owner/repo api ... merge -X PUT' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo api repos/owner/repo/pulls/42/merge -X PUT"
-        )
-
-    def test_api_merge_with_short_repo_flag(self):
-        """'gh -R owner/repo api ... merge -X PUT' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh -R owner/repo api repos/owner/repo/pulls/42/merge -X PUT"
-        )
-
-    def test_api_merge_with_hostname_flag(self):
-        """'gh --hostname host api ... merge --method PUT' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --hostname github.example.com api repos/owner/repo/pulls/42/merge --method PUT"
-        )
-
-    def test_api_merge_with_multiple_flags(self):
-        """'gh --repo X --hostname Y api ... merge -X PUT' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo --hostname github.example.com api repos/owner/repo/pulls/42/merge -X PUT"
-        )
-
-    def test_api_read_with_repo_flag_is_safe(self):
-        """'gh --repo owner/repo api ... merge' (no mutating method) is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh --repo owner/repo api repos/owner/repo/pulls/42/merge"
-        )
 
     # --- detect_command_operation_type with global flags ---
 
-    def test_operation_type_merge_with_repo_flag(self):
-        """detect_command_operation_type finds 'merge' with --repo flag."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("gh --repo owner/repo pr merge 42") == "merge"
-
-    def test_operation_type_close_with_repo_flag(self):
-        """detect_command_operation_type finds 'close' with --repo flag."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("gh --repo owner/repo pr close 42") == "close"
-
-    def test_operation_type_merge_with_short_repo_flag(self):
-        """detect_command_operation_type finds 'merge' with -R flag."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("gh -R owner/repo pr merge 42") == "merge"
-
-    def test_operation_type_close_with_short_repo_flag(self):
-        """detect_command_operation_type finds 'close' with -R flag."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("gh -R owner/repo pr close 42") == "close"
-
-    def test_operation_type_none_with_repo_flag(self):
-        """detect_command_operation_type returns None for non-PR gh commands."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("gh --repo owner/repo issue list") is None
 
     # --- _token_matches_command with global flags ---
 
@@ -8365,7 +5001,7 @@ class TestGhGlobalFlagBypass:
 
         token = {
             "context": {
-                "operation_type": "merge",
+                "host": "github.com", "operation_type": "merge",
                 "pr_number": 42,
                 "bound_flags": ["--repo=owner/repo"],  # #1042: -R/--repo now bound
             }
@@ -8398,7 +5034,7 @@ class TestGhGlobalFlagBypass:
 
         token = {
             "context": {
-                "operation_type": "merge",
+                "host": "github.com", "operation_type": "merge",
                 "pr_number": "42",
                 "bound_flags": ["--repo=owner/repo"],  # #1042: -R/--repo now bound
             }
@@ -8438,20 +5074,6 @@ class TestGhGlobalFlagBypass:
 
     # --- Line continuation combined with global flags ---
 
-    def test_merge_with_repo_flag_line_continuation(self):
-        """'gh --repo owner/repo \\ pr merge 42' is detected after normalization."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh --repo owner/repo \\\npr merge 42")
-
-    def test_close_delete_branch_repo_flag_line_continuation(self):
-        """'gh --repo owner/repo \\ pr close 42 --delete-branch' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo \\\npr close 42 --delete-branch"
-        )
-
 
 # =============================================================================
 # gh global flag bypass — comprehensive edge cases, adversarial, integration
@@ -8472,74 +5094,9 @@ class TestGhGlobalFlagBypassEdgeCases:
 
     # --- Unusual flag values ---
 
-    def test_repo_with_nested_org(self):
-        """Repo value with nested org path (org/suborg/repo) is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo my-org/my-subrepo pr merge 42"
-        )
-
-    def test_repo_with_dots_in_name(self):
-        """Repo value containing dots (e.g., example.com/repo) is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh --repo my-org/my.repo.name pr merge 42")
-
-    def test_repo_with_hyphens_and_underscores(self):
-        """Repo value with mixed separators is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo my_org-name/my_repo-name pr merge 42"
-        )
-
-    def test_hostname_with_port(self):
-        """Hostname value including port number is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --hostname github.example.com:8443 pr merge 42"
-        )
-
-    def test_repo_equals_with_special_chars(self):
-        """--repo=value with special chars in value is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh --repo=my-org/my.repo pr merge 42")
-
-    def test_short_repo_with_long_path(self):
-        """-R with a long repo path is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh -R very-long-organization-name/very-long-repository-name pr merge 42"
-        )
 
     # --- Many flags chained ---
 
-    def test_three_global_flags(self):
-        """Three global flags before subcommand is detected.
-
-        Uses --verbose (like the sibling test_five_flag_tokens), NOT --help: a
-        --help leg is an INERT help request (gh short-circuits to help and exits,
-        merging nothing), so it is correctly NOT gated. This test targets
-        flag-chaining robustness (many global flags must not bypass detection of
-        the real merge), not help suppression.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo --hostname host.com --verbose pr merge 42"
-        )
-
-    def test_five_flag_tokens(self):
-        """Five flag+value tokens before subcommand is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo --hostname host.com -R other/repo --verbose --debug pr merge 42"
-        )
 
     # --- Greedy matching: false positive defense ---
     # (?:\S+\s+)* can over-match. These verify the KNOWN behavior:
@@ -8547,306 +5104,21 @@ class TestGhGlobalFlagBypassEdgeCases:
     # other gh subcommands will match. This is acceptable (false positive >
     # missed threat per the codebase philosophy), but we document it.
 
-    def test_gh_issue_with_pr_merge_in_args_is_false_positive(self):
-        """gh search issues 'pr merge' matches — known false positive.
-
-        The (?:\\S+\\s+)* pattern eats 'search issues' tokens, then matches
-        'pr merge'. This is a conservative false positive, not a bypass.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        # Document the known false positive behavior
-        result = is_dangerous_command("gh search issues pr merge")
-        assert result is True  # Known false positive — acceptable
-
-    def test_gh_pr_view_no_false_positive(self):
-        """gh pr view (without 'merge' as separate word) is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh --repo owner/repo pr view 42")
-
-    def test_gh_pr_list_no_false_positive(self):
-        """gh pr list with --repo is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh --repo owner/repo pr list")
-
-    def test_gh_pr_create_no_false_positive(self):
-        """gh pr create with --repo is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh --repo owner/repo pr create --fill")
-
-    def test_gh_pr_checkout_no_false_positive(self):
-        """gh pr checkout with --repo is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh --repo owner/repo pr checkout 42")
-
-    def test_gh_issue_list_no_false_positive(self):
-        """gh issue list with --repo is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh --repo owner/repo issue list")
-
-    def test_gh_release_create_no_false_positive(self):
-        """gh release create with --repo is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("gh --repo owner/repo release create v1.0")
-
-    def test_bare_close_with_multiple_flags_is_safe(self):
-        """gh --repo X --hostname Y pr close (no --delete-branch) is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh --repo owner/repo --hostname host.com pr close 42"
-        )
 
     # --- Stripping helper interactions ---
 
-    def test_echo_flagged_merge_stripped(self):
-        """echo of 'gh --repo ... pr merge' is stripped and not detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'echo "gh --repo owner/repo pr merge 42"'
-        )
-
-    def test_echo_flagged_close_delete_branch_stripped(self):
-        """echo of 'gh --repo ... pr close --delete-branch' is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'echo "gh --repo owner/repo pr close 42 --delete-branch"'
-        )
-
-    def test_var_assign_flagged_merge_stripped(self):
-        """Variable assignment of flagged merge command is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'CMD="gh --repo owner/repo pr merge 42"'
-        )
-
-    def test_comment_flagged_merge_stripped(self):
-        """Comment containing flagged merge command is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "# gh --repo owner/repo pr merge 42"
-        )
-
-    def test_heredoc_flagged_merge_stripped(self):
-        """Heredoc containing flagged merge command is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "cat << 'EOF'\ngh --repo owner/repo pr merge 42\nEOF"
-        )
-
-    def test_echo_flagged_api_merge_stripped(self):
-        """echo of 'gh --repo ... api ... merge -X PUT' is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'echo "gh --repo owner/repo api repos/o/r/pulls/1/merge -X PUT"'
-        )
-
-    def test_printf_flagged_merge_stripped(self):
-        """printf of flagged merge command is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "printf 'gh --repo owner/repo pr merge 42'"
-        )
-
-    def test_git_commit_msg_flagged_merge_stripped(self):
-        """git commit -m with flagged merge text is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'git commit -m "feat: gh --repo owner/repo pr merge 42"'
-        )
-
-    def test_herestring_flagged_merge_stripped(self):
-        """Here-string containing flagged merge command is stripped."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'grep -c merge <<< "gh --repo owner/repo pr merge 42"'
-        )
 
     # --- Stripping helpers that PRESERVE dangerous content ---
 
-    def test_echo_piped_to_bash_with_flags_detected(self):
-        """echo of flagged merge piped to bash IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'echo "gh --repo owner/repo pr merge 42" | bash'
-        )
-
-    def test_eval_var_with_flags_detected(self):
-        """Variable with flagged merge passed to eval IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'CMD="gh --repo owner/repo pr merge 42" && eval $CMD'
-        )
-
-    def test_var_expanded_with_flags_detected(self):
-        """Variable with flagged merge expanded bare IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'CMD="gh --repo owner/repo pr merge 42" && $CMD'
-        )
-
-    def test_heredoc_to_bash_with_flags_detected(self):
-        """Heredoc with flagged merge fed to bash IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "bash << 'EOF'\ngh --repo owner/repo pr merge 42\nEOF"
-        )
-
-    def test_command_substitution_in_echo_with_flags_detected(self):
-        """echo with $() containing flagged merge IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'echo "$(gh --repo owner/repo pr merge 42)"'
-        )
-
-    def test_process_substitution_to_bash_with_flags_detected(self):
-        """bash <(echo 'flagged merge') IS dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "bash <(echo 'gh --repo owner/repo pr merge 42')"
-        )
 
     # --- Chained commands with flags ---
 
-    def test_chained_and_flagged_merge(self):
-        """Safe command && flagged merge is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "echo done && gh --repo owner/repo pr merge 42"
-        )
-
-    def test_chained_semicolon_flagged_merge(self):
-        """Safe command ; flagged merge is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "echo done; gh --repo owner/repo pr merge 42"
-        )
-
-    def test_subshell_flagged_merge(self):
-        """$(flagged merge) in subshell is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "$(gh --repo owner/repo pr merge 42)"
-        )
-
-    def test_env_var_prefix_flagged_merge(self):
-        """ENV=val flagged merge is dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "GH_TOKEN=abc gh --repo owner/repo pr merge 42"
-        )
 
     # --- Line continuation combined with global flags (extended) ---
 
-    def test_flag_value_split_by_line_continuation(self):
-        """Flag value split across line continuation is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        # gh --repo \<newline>owner/repo pr merge 42
-        assert is_dangerous_command("gh --repo \\\nowner/repo pr merge 42")
-
-    def test_multiple_flags_with_line_continuations(self):
-        """Multiple flags each split by line continuation is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo \\\nowner/repo \\\n--hostname \\\nhost.com \\\npr merge 42"
-        )
-
-    def test_api_merge_with_flags_and_line_continuation(self):
-        """API merge with flags and line continuation is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --repo owner/repo \\\napi repos/o/r/pulls/1/merge \\\n-X PUT"
-        )
-
-    def test_close_delete_branch_flags_all_line_continued(self):
-        """Close --delete-branch with flags and max line continuations."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh \\\n--repo \\\nowner/repo \\\npr \\\nclose \\\n42 \\\n--delete-branch"
-        )
 
     # --- Adversarial: creative bypass attempts ---
 
-    def test_repo_value_contains_pr_merge(self):
-        """--repo value that itself contains 'pr merge' is still dangerous.
-
-        gh --repo pr merge — this looks like --repo flag with value 'pr'
-        followed by actual 'merge', but the pattern catches it because
-        (?:\\S+\\s+)* eats '--repo' and 'pr' is left as subcommand.
-        Actually 'gh --repo pr merge' would parse as gh --repo=pr merge=subcommand.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        # This is ambiguous but should be caught (conservative)
-        assert is_dangerous_command("gh --repo pr merge 42")
-
-    def test_flag_that_looks_like_subcommand(self):
-        """Flag value 'pr' followed by real subcommand tokens."""
-        from merge_guard_pre import is_dangerous_command
-
-        # gh --hostname pr merge 42 — hostname=pr, subcommand=merge
-        # Pattern sees: gh + '--hostname pr ' (eaten by flags) + 'merge' — but
-        # we need 'pr\s+merge' to match, so this should still match
-        assert is_dangerous_command("gh --hostname pr merge 42")
-
-    def test_double_pr_merge_in_command(self):
-        """Command with 'pr merge' appearing twice — still dangerous."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "echo 'test pr merge' && gh --repo owner/repo pr merge 42"
-        )
-
-    def test_tabs_instead_of_spaces(self):
-        """Tabs between gh and flags and subcommand — still matches \\s+."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh\t--repo\towner/repo\tpr\tmerge\t42")
-
-    def test_multiple_spaces_between_tokens(self):
-        """Multiple spaces between tokens — still matches \\s+."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh   --repo   owner/repo   pr   merge   42"
-        )
-
-    def test_mixed_whitespace(self):
-        """Mixed tabs and spaces — still matches \\s+."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh \t --repo \t owner/repo \t pr \t merge 42"
-        )
 
     # --- Token matching: PR number extraction with global flags ---
 
@@ -8856,7 +5128,7 @@ class TestGhGlobalFlagBypassEdgeCases:
 
         token = {
             "context": {
-                "operation_type": "merge",
+                "host": "github.com", "operation_type": "merge",
                 "pr_number": 42,
                 "bound_flags": ["--repo=owner/repo"],  # #1042: --hostname unbound
             }
@@ -8871,7 +5143,7 @@ class TestGhGlobalFlagBypassEdgeCases:
 
         token = {
             "context": {
-                "operation_type": "merge",
+                "host": "github.com", "operation_type": "merge",
                 "pr_number": 42,
                 "bound_flags": ["--repo=owner/repo"],  # #1042: --repo=value form
             }
@@ -8906,7 +5178,7 @@ class TestGhGlobalFlagBypassEdgeCases:
 
         token = {
             "context": {
-                "operation_type": "close",
+                "host": "github.com", "operation_type": "close",
                 "pr_number": 100,
                 # #1042: -R bound; GAP2 — --delete-branch is now BOUND on close too, so
                 # a faithful close --delete-branch token carries BOTH.
@@ -8938,21 +5210,6 @@ class TestGhGlobalFlagBypassEdgeCases:
             token, "gh -R owner/repo pr close 200 --delete-branch"
         )
 
-    def test_token_op_type_close_with_multiple_flags(self):
-        """Operation type 'close' detected with multiple global flags."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type(
-            "gh --repo owner/repo --hostname host.com pr close 42"
-        ) == "close"
-
-    def test_token_op_type_merge_with_equals_syntax(self):
-        """Operation type 'merge' detected with --repo=value syntax."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type(
-            "gh --repo=owner/repo pr merge 42"
-        ) == "merge"
 
     # --- Full authorization flow with flags and valid tokens ---
 
@@ -8964,7 +5221,7 @@ class TestGhGlobalFlagBypassEdgeCases:
         token_data = {
             "expires_at": time.time() + 300,
             "context": {
-                "operation_type": "merge",
+                "host": "github.com", "operation_type": "merge",
                 "pr_number": 42,
                 "bound_flags": ["--repo=owner/repo"],  # #1042: -R/--repo now bound
             },
@@ -9004,7 +5261,7 @@ class TestGhGlobalFlagBypassEdgeCases:
 
         token_data = {
             "expires_at": time.time() + 300,
-            "context": {"operation_type": "merge", "pr_number": 99},
+            "context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": 99},
         }
         token_path = tmp_path / f"{TOKEN_PREFIX}test"
         token_path.write_text(json.dumps(token_data))
@@ -9032,53 +5289,9 @@ class TestGhGlobalFlagBypassEdgeCases:
 # =============================================================================
 
 
-class TestReversedDeleteBranchWithFlags:
-    """Tests for reversed --delete-branch pattern (--delete-branch before
-    'gh ... pr close') with -R and --hostname flag variants.
-
-    Supplements the single --repo test in TestGhGlobalFlagBypass.
-    """
-
-    def test_reversed_with_short_repo_flag(self):
-        """'--delete-branch ... gh -R owner/repo pr close 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "--delete-branch gh -R owner/repo pr close 42"
-        )
-
-    def test_reversed_with_hostname_flag(self):
-        """'--delete-branch ... gh --hostname host pr close 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "--delete-branch gh --hostname github.example.com pr close 42"
-        )
-
-    def test_reversed_with_multiple_flags(self):
-        """'--delete-branch ... gh -R X --hostname Y pr close 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "--delete-branch gh -R owner/repo --hostname host.com pr close 42"
-        )
-
-
 # =============================================================================
 # Review remediation: --hostname=host.com equals syntax (#269)
 # =============================================================================
-
-
-class TestHostnameEqualsSyntax:
-    """Test for --hostname=value equals syntax (extends --repo= coverage)."""
-
-    def test_hostname_equals_merge(self):
-        """'gh --hostname=github.example.com pr merge 42' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh --hostname=github.example.com pr merge 42"
-        )
 
 
 # =============================================================================
@@ -9099,7 +5312,7 @@ class TestSubcommandFlagsBeforePrNumber:
 
         token = {
             "context": {
-                "operation_type": "merge",
+                "repo": "o/r", "host": "github.com", "operation_type": "merge",
                 "pr_number": 42,
                 "bound_flags": ["--admin"],  # #1042: --admin now bound
             }
@@ -9110,7 +5323,7 @@ class TestSubcommandFlagsBeforePrNumber:
         """'gh pr merge --squash 42' — PR number extracted past the flag."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "merge", "pr_number": 42}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": 42}}
         assert _token_matches_command(token, "gh pr merge --squash 42")
 
     def test_merge_multiple_flags_before_pr_number(self):
@@ -9119,7 +5332,7 @@ class TestSubcommandFlagsBeforePrNumber:
 
         token = {
             "context": {
-                "operation_type": "merge",
+                "repo": "o/r", "host": "github.com", "operation_type": "merge",
                 "pr_number": 42,
                 # #1042: --delete-branch on MERGE is a bound side-effect; --squash
                 # is a merge-method flag (unbound).
@@ -9134,7 +5347,7 @@ class TestSubcommandFlagsBeforePrNumber:
         """'gh pr close --comment "done" 42' — PR number extracted (close op)."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "close", "pr_number": 42}}
+        token = {"context": {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": 42}}
         assert _token_matches_command(token, "gh pr close --comment done 42")
 
     def test_merge_admin_flag_pr_number_mismatch(self):
@@ -9149,7 +5362,7 @@ class TestSubcommandFlagsBeforePrNumber:
 
         token = {
             "context": {
-                "operation_type": "merge",
+                "repo": "o/r", "host": "github.com", "operation_type": "merge",
                 "pr_number": 42,
                 "bound_flags": ["--admin"],
             }
@@ -9162,7 +5375,7 @@ class TestSubcommandFlagsBeforePrNumber:
 
         token = {
             "context": {
-                "operation_type": "merge",
+                "host": "github.com", "operation_type": "merge",
                 "pr_number": 42,
                 "bound_flags": ["--admin", "--repo=owner/repo"],  # #1042: both bound
             }
@@ -9209,107 +5422,15 @@ class TestGitGlobalFlagBypass:
 
     # --- Force push with git global flags ---
 
-    def test_force_push_with_C_flag(self):
-        """'git -C /path push --force origin main' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git -C /tmp/repo push --force origin main")
-
-    def test_force_push_with_git_dir_flag(self):
-        """'git --git-dir=/path/.git push --force origin main' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "git --git-dir=/tmp/repo/.git push --force origin main"
-        )
-
-    def test_force_push_with_work_tree_flag(self):
-        """'git --work-tree=/path push -f origin main' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "git --work-tree=/tmp/repo push -f origin main"
-        )
-
-    def test_force_push_with_multiple_git_flags(self):
-        """'git -C /path -c key=val push --force origin main' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "git -C /tmp/repo -c user.name=test push --force origin main"
-        )
 
     # --- Branch delete with git global flags ---
 
-    def test_branch_delete_with_C_flag(self):
-        """'git -C /path branch -D feature' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git -C /tmp/repo branch -D feature")
-
-    def test_branch_delete_force_with_git_dir(self):
-        """'git --git-dir=/path/.git branch --delete --force feature' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "git --git-dir=/tmp/repo/.git branch --delete --force feature"
-        )
 
     # --- Push to main/master with git global flags ---
 
-    def test_push_main_with_C_flag(self):
-        """'git -C /path push origin main' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git -C /tmp/repo push origin main")
-
-    def test_push_master_with_C_flag(self):
-        """'git -C /path push origin master' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git -C /tmp/repo push origin master")
-
-    def test_push_head_main_with_C_flag(self):
-        """'git -C /path push origin HEAD:main' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("git -C /tmp/repo push origin HEAD:main")
-
-    def test_push_head_master_with_git_dir(self):
-        """'git --git-dir=/path push origin HEAD:master' is detected."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "git --git-dir=/tmp/repo/.git push origin HEAD:master"
-        )
 
     # --- Safe commands with git global flags ---
 
-    def test_git_C_status_is_safe(self):
-        """'git -C /path status' is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git -C /tmp/repo status")
-
-    def test_git_C_log_is_safe(self):
-        """'git -C /path log --oneline' is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git -C /tmp/repo log --oneline")
-
-    def test_git_C_push_feature_branch_is_safe(self):
-        """'git -C /path push origin feature-branch' is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "git -C /tmp/repo push origin feature-branch"
-        )
-
-    def test_git_C_branch_lowercase_d_is_safe(self):
-        """'git -C /path branch -d feature' (lowercase d) is safe."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command("git -C /tmp/repo branch -d feature")
 
     # --- Token matching: branch delete with git global flags ---
 
@@ -9317,10 +5438,9 @@ class TestGitGlobalFlagBypass:
         """Typed branch-delete token matching works past a git -C flag."""
         from merge_guard_pre import _token_matches_command
 
-        token = {"context": {"operation_type": "branch-delete", "branch": "feature"}}
-        assert _token_matches_command(
-            token, "git -C /tmp/repo branch -D feature"
-        )
+        cmd = "git -C /tmp/repo branch -D feature"
+        token = {"context": git_bound({"operation_type": "branch-delete", "branch": "feature"}, cmd)}
+        assert _token_matches_command(token, cmd)
 
     def test_token_branch_mismatch_with_C_flag(self):
         """Typed branch-delete token mismatch detected past a git -C flag."""
@@ -9332,13 +5452,15 @@ class TestGitGlobalFlagBypass:
         )
 
     def test_token_branch_delete_force_with_git_dir(self):
-        """Typed branch-delete token matches --delete --force past --git-dir."""
+        """--delete --force is read past --git-dir; the directory a --git-dir names is not
+        resolved, so no approval binds the command (the user runs it)."""
         from merge_guard_pre import _token_matches_command
+        from shared.merge_guard_common import extract_command_context
 
-        token = {"context": {"operation_type": "branch-delete", "branch": "feature"}}
-        assert _token_matches_command(
-            token, "git --git-dir=/tmp/.git branch --delete --force feature"
-        )
+        cmd = "git --git-dir=/tmp/.git branch --delete --force feature"
+        context = extract_command_context(cmd)
+        assert (context["operation_type"], context["branch"]) == ("branch-delete", "feature")
+        assert not _token_matches_command({"context": git_bound(context, cmd)}, cmd)
 
 
 # =============================================================================
@@ -9409,7 +5531,7 @@ class TestModuleLoadFailClosed:
         output = json.loads(stdout)
         assert output["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
         assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "Merge guard failed to load" in output["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "PACT merge_guard_pre module imports failure" in output["hookSpecificOutput"]["permissionDecisionReason"]
         # Stderr must explain the cause for operator debugging.
         assert "merge_guard_pre" in stderr
         assert "simulated load failure" in stderr
@@ -9443,16 +5565,25 @@ class TestModuleLoadFailClosed:
         _missing = object()
         original_mgp = sys.modules.get("merge_guard_pre", _missing)
         original_smc = sys.modules.get("shared.merge_guard_common", _missing)
-        # Pop BOTH so shared.merge_guard_common rebuilds its pattern bank (where
-        # DANGEROUS_PATTERNS now compiles) during the merge_guard_pre re-import.
+        # Pop ALL so the pattern bank rebuilds during the merge_guard_pre re-import:
+        # DANGEROUS_PATTERNS compiles in the hooks/shell/merge package the façade imports.
+        original_pkg = {name: module for name, module in sys.modules.items()
+                        if name.startswith("shell.merge")}
         sys.modules.pop("merge_guard_pre", None)
         sys.modules.pop("shared.merge_guard_common", None)
+        for name in original_pkg:
+            sys.modules.pop(name, None)
 
         def _restore_modules():
             sys.modules.pop("merge_guard_pre", None)
             sys.modules.pop("shared.merge_guard_common", None)
+            for name in [n for n in sys.modules if n.startswith("shell.merge")]:
+                sys.modules.pop(name, None)
+            sys.modules.update(original_pkg)
             if original_smc is not _missing:
                 sys.modules["shared.merge_guard_common"] = original_smc
+                import shared as _shared
+                _shared.merge_guard_common = original_smc   # `import shared.x as y` reads the attribute
             if original_mgp is not _missing:
                 sys.modules["merge_guard_pre"] = original_mgp
 
@@ -9497,14 +5628,13 @@ class TestModuleLoadFailClosed:
         hook_path = Path(__file__).parent.parent / "hooks" / "merge_guard_pre.py"
         source = hook_path.read_text()
 
-        # The shared emit helper must reference Issue #658 + hookEventName.
-        assert "_emit_load_failure_deny" in source
-        # Audit-anchor must be present in the helper's docstring/comments.
-        def_idx = source.index("def _emit_load_failure_deny")
-        # Inspect the helper body (next ~1200 chars covers docstring + body).
-        helper_body = source[def_idx:def_idx + 1200]
-        assert "Issue #658" in helper_body or "PR #660" in helper_body
-        assert "hookEventName" in helper_body
+        # The hook denies through the one shared emitter (hooks/_fail_closed.py).
+        assert "from _fail_closed import emit_load_failure_deny" in source
+        # The emitter's header carries the audit anchor and names the schema field.
+        helper = (Path(__file__).parent.parent / "hooks" / "_fail_closed.py").read_text()
+        def_idx = helper.index("def emit_load_failure_deny")
+        assert "#658" in helper[:def_idx]
+        assert "hookEventName" in helper[def_idx:def_idx + 1200]
 
 
 class TestCompoundDestructiveCommandRejection:
@@ -9524,7 +5654,7 @@ class TestCompoundDestructiveCommandRejection:
 
         # Token for the headline op exists
         write_token(
-            {"pr_number": "100", "operation_type": "merge"},
+            {"repo": "o/r", "host": "github.com", "pr_number": "100", "operation_type": "merge"},
             token_dir=tmp_path,
         )
         cmd = "gh pr merge 100 && gh pr merge 999 --admin"
@@ -9590,50 +5720,12 @@ class TestCompoundDestructiveCommandRejection:
         from merge_guard_pre import check_merge_authorization
 
         write_token(
-            {"pr_number": "100", "operation_type": "merge"},
+            {"repo": "o/r", "host": "github.com", "pr_number": "100", "operation_type": "merge"},
             token_dir=tmp_path,
         )
         result = check_merge_authorization("gh pr merge 100", token_dir=tmp_path)
         assert result is None, "single destructive with token must be allowed"
 
-    # Regression pins for the five true-positive compound arms after the
-    # _COMPOUND_OPS_RE tightening. These exercise is_compound_destructive_command
-    # directly so the predicate is anchored independently of token state.
-    def test_compound_double_amp_still_matches(self):
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100 && gh pr merge 999 --admin"
-        ) is True
-
-    def test_compound_double_pipe_still_matches(self):
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100 || gh pr merge 999 --admin"
-        ) is True
-
-    def test_compound_semicolon_still_matches(self):
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100; gh pr merge 999 --admin"
-        ) is True
-
-    def test_bare_pipe_single_destructive_not_compound(self):
-        """Honest-mistake ≥2: `gh pr merge 100 | tee logfile` is ONE destructive leg
-        + a benign pipe → NOT compound. The single merge op stays is_dangerous-gated."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        assert is_compound_destructive_command("gh pr merge 100 | tee logfile") is False
-        assert is_dangerous_command("gh pr merge 100 | tee logfile") is True
-
-    def test_compound_newline_still_matches(self):
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100\ngh pr merge 999"
-        ) is True
 
     # New negatives — these previously triggered the compound predicate
     # via the loose `[&;|\n]` character class. The tightened pattern
@@ -9648,43 +5740,11 @@ class TestCompoundDestructiveCommandRejection:
         # End-to-end: with valid token, the FD redirect should NOT be denied
         # as compound. (Token-match still applies; check authorization passes.)
         write_token(
-            {"pr_number": "100", "operation_type": "merge"},
+            {"repo": "o/r", "host": "github.com", "pr_number": "100", "operation_type": "merge"},
             token_dir=tmp_path,
         )
         result = check_merge_authorization(cmd, token_dir=tmp_path)
         assert result is None, "FD redirect must not be flagged as compound"
-
-    def test_fd_merge_stdout_to_stderr_not_compound(self):
-        """`git push --force 1>&2` — other-direction FD merge."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "git push --force origin main 1>&2"
-        ) is False
-
-    def test_fd_merge_with_stdout_redirect_not_compound(self):
-        """`gh pr merge 100 >foo 2>&1` — combined stdout-file + stderr-to-stdout."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100 >foo 2>&1"
-        ) is False
-
-    def test_fd_duplication_input_not_compound(self):
-        """`gh pr merge 100 3<&0` — FD-duplication on stdin."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100 3<&0"
-        ) is False
-
-    def test_clobber_redirect_not_compound(self):
-        """`gh pr merge 100 >| file` — `>|` clobber redirect (the `|` is preceded by `>`)."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100 >| file"
-        ) is False
 
 
 class TestSplitIntoLegsExtractionParity:
@@ -9803,11 +5863,11 @@ class TestBenignContinuationGuarantee:
     # as the mint side extracts it from the approval text. ``merge`` /
     # ``force-push`` / ``branch-delete`` carry no privileged flag.
     _AUTHORIZED_OPS = [
-        ("merge", "gh pr merge 5", {"operation_type": "merge", "pr_number": "5"}),
+        ("merge", "gh pr merge 5", {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"}),
         (
             "close",
             "gh pr close 7 --delete-branch",
-            {"operation_type": "close", "pr_number": "7",
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "7",
              "bound_flags": ["--delete-branch"]},
         ),
         (
@@ -9843,34 +5903,9 @@ class TestBenignContinuationGuarantee:
         cmd = f"{base} {cont}"
         assert is_dangerous_command(cmd) is True
         assert is_compound_destructive_command(cmd) is False
-        assert write_token(dict(ctx), token_dir=tmp_path) is not None
+        assert write_token(git_bound(dict(ctx), cmd), token_dir=tmp_path) is not None
         assert check_merge_authorization(cmd, token_dir=tmp_path) is None
 
-    @pytest.mark.parametrize(
-        "cmd",
-        ["gh pr merge 5 | bash", "gh pr merge 5 | sh"],
-    )
-    def test_pipe_to_shell_is_dangerous_indirection_not_benign_viewer(self, cmd):
-        """Non-vacuity boundary: a pipe to a SHELL is dangerous indirection, NOT a
-        benign viewer. ``_has_pipe_to_shell`` recognizes ``| bash`` / ``| sh`` and
-        the command stays is_dangerous — so 'benign continuation' is bounded, not a
-        blanket pipe pass.
-        """
-        from merge_guard_pre import is_dangerous_command
-        from shared.merge_guard_common import _has_pipe_to_shell
-
-        assert _has_pipe_to_shell(cmd) is True
-        assert is_dangerous_command(cmd) is True
-
-    @pytest.mark.parametrize("viewer", ["| tail", "| less", "| grep merged"])
-    def test_benign_viewers_are_not_pipe_to_shell(self, viewer):
-        """Companion to the boundary: the benign viewers are NOT classified as
-        pipe-to-shell. Together with the prior test this proves the boundary
-        DISCRIMINATES (viewers False, shells True) rather than passing everything.
-        """
-        from shared.merge_guard_common import _has_pipe_to_shell
-
-        assert _has_pipe_to_shell(f"gh pr merge 5 {viewer}") is False
 
     @pytest.mark.parametrize(
         "cmd",
@@ -9896,7 +5931,7 @@ class TestBenignContinuationGuarantee:
 
         assert is_compound_destructive_command(cmd) is True
         write_token(
-            {"operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path
         )
         result = check_merge_authorization(cmd, token_dir=tmp_path)
         assert result is not None
@@ -9924,7 +5959,7 @@ class TestBenignContinuationGuarantee:
         from merge_guard_pre import check_merge_authorization
 
         # Approval is for PR 5; the executed command targets PR 99.
-        write_token({"operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path)
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"}, token_dir=tmp_path)
         cmd = f"gh pr merge 99 {cont}"
         assert check_merge_authorization(cmd, token_dir=tmp_path) is not None
 
@@ -9948,7 +5983,7 @@ class TestBenignContinuationGuarantee:
         from merge_guard_pre import check_merge_authorization
 
         # Token for the close op WITHOUT the --delete-branch bound flag.
-        write_token({"operation_type": "close", "pr_number": "7"}, token_dir=tmp_path)
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "7"}, token_dir=tmp_path)
         cmd = f"gh pr close 7 --delete-branch {cont}"
         assert check_merge_authorization(cmd, token_dir=tmp_path) is not None
 
@@ -9976,20 +6011,6 @@ class TestEvalHeredocRejection:
         cmd = "eval `cat <<HEREDOC\ngh pr merge 999\nHEREDOC\n`"
         assert is_dangerous_command(cmd) is True
 
-    def test_eval_without_heredoc_not_flagged_by_helper(self):
-        """Plain eval (no heredoc) is not caught by the eval+heredoc helper.
-
-        A plain ``eval "$VAR"`` may still be dangerous via other paths
-        (the eval-or-source variable-expansion guards in
-        ``_strip_non_executable_content``), but the categorical
-        eval+heredoc helper specifically targets the strip-pipeline
-        bypass class. Pin the helper's narrow scope.
-        """
-        from merge_guard_pre import _has_eval_with_heredoc
-
-        assert _has_eval_with_heredoc('eval "$VAR"') is False
-        assert _has_eval_with_heredoc("eval $(echo hi)") is False  # $() but no heredoc
-        assert _has_eval_with_heredoc("cat <<EOF\nhi\nEOF") is False  # heredoc but no eval
 
     def test_eval_heredoc_routes_through_check_authorization(self, tmp_path):
         """End-to-end: eval+heredoc with no token is denied via standard flow."""
@@ -10024,7 +6045,7 @@ class TestCrossOperationAuthorizationDenied:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        write_token({"operation_type": "merge", "pr_number": "100"}, token_dir=tmp_path)
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "100"}, token_dir=tmp_path)
         result = check_merge_authorization(
             "git push --force origin main", token_dir=tmp_path
         )
@@ -10088,109 +6109,12 @@ class TestCrossOperationAuthorizationDenied:
         from merge_guard_post import write_token
         from merge_guard_pre import check_merge_authorization
 
-        write_token({"operation_type": "force-push", "target_ref": "feature"},
-                    token_dir=tmp_path)
+        write_token(git_bound({"operation_type": "force-push", "target_ref": "feature"},
+                              "git push --force origin feature"), token_dir=tmp_path)
         result = check_merge_authorization(
             "git push --force origin feature", token_dir=tmp_path
         )
         assert result is None, "matching force-push token must authorize git push --force"
-
-
-class TestExtractPRNumberLongFlagValueGuard:
-    """Pin the F3 long-flag-value defensive check.
-
-    `_GH_PR_NUMBER_RE` matches `gh pr merge --max-retries 5 --auto` and
-    captures `5` as the PR number — but `5` is the value of `--max-retries`,
-    not a positional. The wrapper `_extract_pr_number()` rejects digits
-    that are immediately preceded by a long-form flag, returning None
-    (which the caller treats as ambiguous-permissive on the pr_number
-    axis). No current `gh pr merge|close` flag takes a digit value, so
-    the realistic risk is theoretical — this is defense-in-depth post the
-    cycle-3 strict-match enforcement.
-    """
-
-    def test_long_flag_numeric_value_not_captured(self):
-        """`--max-retries 5 --auto`: `5` is the flag's value, not a PR number."""
-        from merge_guard_pre import _extract_pr_number
-
-        cmd = "gh pr merge --max-retries 5 --auto"
-        assert _extract_pr_number(cmd) is None
-
-    def test_long_flag_then_real_positional_captures_positional(self):
-        """`--max-retries 5 999`: `999` is the real positional, captured correctly."""
-        from merge_guard_pre import _extract_pr_number
-
-        cmd = "gh pr merge --max-retries 5 999 --squash"
-        assert _extract_pr_number(cmd) == "999"
-
-    def test_value_less_long_flag_before_positional_captures_positional(self):
-        """`--auto 999`: `--auto` is value-less, so `999` IS the positional.
-
-        The allowlist `_GH_PR_VALUE_TAKING_FLAGS` excludes value-less
-        flags like `--admin`, `--auto`, `--squash`. A digit immediately
-        following one of those flags IS the PR positional and is
-        captured correctly.
-        """
-        from merge_guard_pre import _extract_pr_number
-
-        cmd = "gh pr merge --auto 999"
-        assert _extract_pr_number(cmd) == "999"
-
-    def test_admin_flag_then_positional_unchanged(self):
-        """Regression-protection: `--admin 99` still captures 99 (--admin is value-less)."""
-        from merge_guard_pre import _extract_pr_number
-
-        assert _extract_pr_number("gh pr merge --admin 99") == "99"
-
-    def test_known_value_taking_flag_blocks_capture(self):
-        """`--body 123 --auto`: `--body` IS in the allowlist; `123` rejected."""
-        from merge_guard_pre import _extract_pr_number
-
-        cmd = "gh pr merge --body 123 --auto"
-        assert _extract_pr_number(cmd) is None
-
-    def test_subject_flag_blocks_capture(self):
-        """`--subject 999`: `--subject` is in the allowlist."""
-        from merge_guard_pre import _extract_pr_number
-
-        cmd = "gh pr merge --subject 999"
-        assert _extract_pr_number(cmd) is None
-
-    def test_positional_then_long_flag_with_numeric_value_captures_positional(self):
-        """`999 --max-retries 5`: `999` is the positional (matched first)."""
-        from merge_guard_pre import _extract_pr_number
-
-        cmd = "gh pr merge 999 --max-retries 5"
-        assert _extract_pr_number(cmd) == "999"
-
-    def test_short_flag_with_numeric_value_not_blocked(self):
-        """Short flags (`-n 5`) are not checked by the defensive guard.
-
-        The guard is narrowly scoped to long-form flags. Short flags are
-        combinable and rarely take numeric values; if a real `gh` short
-        flag emerges that takes a digit value, this test pins the
-        current narrow-scope behavior so any future widening is
-        reviewed in lockstep.
-        """
-        from merge_guard_pre import _extract_pr_number
-
-        cmd = "gh pr merge -n 5 999"
-        # 999 is captured as the positional; the regex's _GH_FLAG_TOKENS
-        # walk consumed `-n 5` as a flag pair, leaving 999 to capture.
-        assert _extract_pr_number(cmd) == "999"
-
-    def test_simple_positional_unchanged(self):
-        """Regression-protection: simple `gh pr merge 999` still works."""
-        from merge_guard_pre import _extract_pr_number
-
-        assert _extract_pr_number("gh pr merge 999 --squash") == "999"
-
-    def test_no_pr_match_returns_none(self):
-        """No PR-number match → None (regression-protection)."""
-        from merge_guard_pre import _extract_pr_number
-
-        assert _extract_pr_number("ls -la") is None
-        assert _extract_pr_number("gh pr merge --auto") is None  # no positional
 
 
 # (removed class TestSymmetryContract — superseded by the command-anchored
@@ -10218,7 +6142,7 @@ class TestConcurrentConsumptionThreaded:
         """Helper: write a fresh token, return its path."""
         from merge_guard_post import write_token
 
-        return write_token({"operation_type": "merge", "pr_number": pr_number}, token_dir=token_dir)
+        return write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": pr_number}, token_dir=token_dir)
 
     def test_two_threads_race_on_n2_token_distinct_slots(self, tmp_path):
         """2 threads racing on a N=2 token: each claims a distinct slot.
@@ -10357,7 +6281,7 @@ class TestConcurrentConsumptionThreaded:
         from shared.merge_guard_common import MAX_USES, USE_MARKER_SUFFIX
         from merge_guard_post import write_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "99"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "99"}, token_dir=tmp_path)
         hooks_dir = Path(__file__).parent.parent / "hooks"
 
         # Use a filesystem barrier: each child polls for a "go" file before
@@ -10420,7 +6344,7 @@ class TestLegacyTokenBoundary:
         token_path.write_text(json.dumps({
             "created_at": now,
             "expires_at": now + ttl_offset,
-            "context": {"pr_number": pr_number, "operation_type": "merge"},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": pr_number, "operation_type": "merge"},
         }))
         return str(token_path)
 
@@ -10451,7 +6375,7 @@ class TestLegacyTokenBoundary:
         from merge_guard_pre import _consume_token
 
         legacy_path = self._write_legacy_token(tmp_path, "100")
-        n_use_path = write_token({"operation_type": "merge", "pr_number": "200"}, token_dir=tmp_path)
+        n_use_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "200"}, token_dir=tmp_path)
 
         # Consume each token directly via _consume_token to bypass the
         # token-vs-command matching (which is orthogonal to legacy/N-use
@@ -10485,7 +6409,7 @@ class TestLegacyTokenBoundary:
         expired_path.write_text(json.dumps({
             "created_at": now - 600,
             "expires_at": now - 1,
-            "context": {"pr_number": "43", "operation_type": "merge"},
+            "context": {"repo": "o/r", "host": "github.com", "pr_number": "43", "operation_type": "merge"},
         }))
         result = check_merge_authorization("gh pr merge 43", token_dir=tmp_path)
         assert result is not None
@@ -10519,264 +6443,6 @@ class TestLegacyTokenBoundary:
         assert not Path(str(token_path) + ".consumed").exists()
 
 
-class TestRmAsDestructiveLeg:
-    """User-ratified rm-as-destructive-leg (#46): an `rm` head-token counts as a
-    destructive leg in the COMPOUND count, so a gh/git-destructive op chained with
-    `rm` is >=2-destructive → refuse. This does NOT widen the single-command gate:
-    `rm` ALONE (or a pure rm&&rm chain with no gh/git op) is is_dangerous=False — the
-    merge guard ignores arbitrary `rm` (no scope creep), and obfuscated `rm` spellings
-    are NOT chased (no obfuscation-arms-race)."""
-
-    def test_gh_op_chained_with_rm_is_compound(self):
-        """`gh pr merge 5 && rm -rf /` — gh-merge + rm = TWO destructive legs → COMPOUND
-        → refuse. NON-VACUITY: drop `rm` from the leg set → ONE leg → not compound → RED."""
-        from merge_guard_pre import is_compound_destructive_command
-        assert is_compound_destructive_command("gh pr merge 5 && rm -rf /") is True
-
-    def test_gh_op_chained_with_benign_is_not_compound(self):
-        """`gh pr merge 5 && echo ok` — ONE destructive leg (merge) + a benign `echo`
-        → NOT compound; the merge mints/gates as a single op (is_dangerous=True). The
-        rm-leg rule must not over-fire on a benign continuation."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-        assert is_compound_destructive_command("gh pr merge 5 && echo ok") is False
-        assert is_dangerous_command("gh pr merge 5 && echo ok") is True
-
-    @pytest.mark.parametrize("cmd", ["rm -rf /", "rm -rf node_modules", "rm -rf a && rm -rf b"])
-    def test_pure_rm_is_not_gated_no_scope_creep(self, cmd):
-        """ANTI-SCOPE-CREEP: `rm` with NO gh/git op is NOT gated — bare `rm` and even a
-        pure `rm && rm` chain return is_dangerous=False, so the merge guard never blocks
-        arbitrary `rm` (rm only matters as a leg ALONGSIDE a gh/git op). The compound
-        PREDICATE may count pure-rm legs, but the gate is is_dangerous, which stays
-        False here, so the read floor allows it and no mint is ever involved."""
-        from merge_guard_pre import is_dangerous_command
-        assert is_dangerous_command(cmd) is False
-
-    @pytest.mark.parametrize("cmd", [
-        "gh pr merge 5 && /bin/rm -rf /",     # path-qualified
-        "gh pr merge 5 && r''m -rf /",        # quote-concat
-        "gh pr merge 5 && $(echo rm) -rf /",  # command-substitution
-        "gh pr merge 5 && rmdir /tmp/x",      # different binary
-    ])
-    def test_obfuscated_rm_is_not_chased(self, cmd):
-        """NO-OBFUSCATION-CHASING: only a bare `rm` head-token counts as a destructive
-        leg. Obfuscated spellings (path-qualified, quote-concat, command-sub, a
-        different binary) are NOT treated as `rm` → ONE destructive leg (the gh op)
-        → NOT compound. The gh op itself is still is_dangerous-gated as a single op."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True  # the gh op leg is still gated
-
-
-class TestFDRedirectAdversarial:
-    """Adversarial extensions to Bug A's FD-redirect negatives (#720 Bug A).
-
-    Backend-coder added 5 negative tests. These extend to compound
-    redirect shapes, process substitution, here-strings, and combined
-    redirect+chain forms that should each be correctly classified —
-    either as compound (real chain) or as not-compound (pure redirect).
-    """
-
-    def test_redirect_with_dev_null_input_not_compound(self):
-        """`git push origin main > file.log 2>&1 < /dev/null` — three
-        redirects, no chain operator."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "git push origin main > file.log 2>&1 < /dev/null"
-        ) is False
-
-    def test_redirect_then_and_chain_single_destructive_not_compound(self):
-        """`git push origin main 2>&1 && echo done` — ONE destructive leg (push-to-main)
-        + a benign `echo` → NOT compound under the honest-mistake ≥2 model. The single
-        push op stays is_dangerous-gated (the && operator does not make it compound)."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = "git push origin main 2>&1 && echo done"
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True
-
-    def test_redirect_then_or_chain_single_destructive_not_compound(self):
-        """`gh pr merge 100 2>&1 || echo failed` — ONE destructive leg (merge) + a
-        benign `echo` → NOT compound (≥2 model). The merge stays is_dangerous-gated."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = "gh pr merge 100 2>&1 || echo failed"
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True
-
-    def test_process_substitution_output_not_compound(self):
-        """`git push origin main > >(tee push.log)` — bash process
-        substitution `>(...)`. No chain operator, so not compound.
-
-        Note: the inner `>` of `>(...)` is part of process substitution
-        syntax. The compound regex correctly identifies this as not chained.
-        """
-        from merge_guard_pre import is_compound_destructive_command
-
-        cmd = "git push origin main > >(tee push.log)"
-        # Behavior: this should not be flagged as compound (no real chain).
-        assert is_compound_destructive_command(cmd) is False
-
-    def test_here_string_input_not_compound(self):
-        """`gh pr merge 42 <<< 'yes'` — here-string `<<<`, no chain."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command("gh pr merge 42 <<< 'yes'") is False
-
-    def test_combined_fd_redirects_in_sequence_not_compound(self):
-        """`gh pr merge 100 0<&-  1>&2  2>output.log` — multiple FD
-        redirects in a single command, none of which form a chain."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100 0<&-  1>&2  2>output.log"
-        ) is False
-
-    def test_append_redirect_not_compound(self):
-        """`gh pr merge 100 >> output.log 2>&1` — append `>>` redirect."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100 >> output.log 2>&1"
-        ) is False
-
-    def test_redirect_then_semicolon_single_destructive_not_compound(self):
-        """`git push --force 2>&1 ; ls` — ONE destructive leg (force-push) + a benign
-        `ls` → NOT compound (≥2 model). The force-push stays is_dangerous-gated."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = "git push --force 2>&1 ; ls"
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True
-
-    def test_spaceless_fd_redirect_then_pipe_two_destructive_is_compound(self):
-        """`gh pr merge 100 2>&1|gh pr merge 999 --admin` — TWO destructive legs
-        (merge 100 + merge 999 --admin) chained by a real pipe → STILL compound under
-        the honest-mistake ≥2 model. The spaceless `2>&1|` FD-tail-then-pipe must not
-        slip past detection (the FD pre-strip neutralizes `2>&1`, the surviving `|`
-        splits two destructive legs)."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100 2>&1|gh pr merge 999 --admin"
-        ) is True
-
-    def test_spaceless_fd_redirect_then_pipe_force_push_single_not_compound(self):
-        """`git push --force 2>&1|cat` — ONE destructive leg (force-push) + a benign
-        `cat` → NOT compound (≥2 model). The force-push stays is_dangerous-gated."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = "git push --force 2>&1|cat"
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True
-
-    def test_spaceless_fd_redirect_then_pipe_branch_delete_with_rm_is_compound(self):
-        """`git branch -D foo 2>&1|rm -rf ~` — branch-delete (gh/git-destructive) piped
-        to `rm -rf` (a destructive head-token). Under the FINAL model (user-ratified
-        rm-as-destructive-leg), the FD pre-strip's length-preserving offset fix slices
-        the legs correctly and the two destructive legs (branch-delete + rm) → ≥2 →
-        COMPOUND → refuse. NON-VACUITY: drop `rm` from the destructive-leg set → ONE
-        leg → not compound → flips RED."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = "git branch -D foo 2>&1|rm -rf ~"
-        assert is_compound_destructive_command(cmd) is True
-        assert is_dangerous_command(cmd) is True
-
-    # --- Class A bypass-regression pins (#723 cycle 1 remediation) ---
-    #
-    # Class A: digit-then-pipe with no FD redirect. Pre-fix lookbehind
-    # `(?<![0-9>])` suppressed the bare-`|` match whenever the preceding
-    # character was a digit — including the trailing digit of a PR-number
-    # positional. Post-fix simplified regex has no lookbehind, so the
-    # bare-`|` matches unconditionally. Pre-strip is a no-op on Class-A
-    # inputs (no FD-redirect token to strip).
-
-    def test_class_a_digit_then_pipe_gh_pr_merge_is_compound(self):
-        """Class A — `gh pr merge 100|gh pr merge 999` — no FD redirect;
-        trailing PR-number digit immediately followed by bare pipe to a
-        second destructive command. Pre-fix bypass."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "gh pr merge 100|gh pr merge 999"
-        ) is True
-
-    def test_class_a_digit_then_pipe_force_push_with_rm_is_compound(self):
-        """Class A — `git push --force 100|rm -rf ~` — force-push (gh/git-destructive)
-        piped to `rm -rf` (a destructive head-token). Under the FINAL model (user-
-        ratified rm-as-destructive-leg), the two destructive legs (force-push + rm) →
-        ≥2 → COMPOUND → refuse. The trailing PR-number digit `100` adjacent to `|` does
-        not suppress the split. NON-VACUITY: drop `rm` from the destructive-leg set →
-        ONE leg → not compound → flips RED."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = "git push --force 100|rm -rf ~"
-        assert is_compound_destructive_command(cmd) is True
-        assert is_dangerous_command(cmd) is True
-
-    def test_class_a_alpha_then_pipe_branch_delete_single_not_compound(self):
-        """Class A variant — `git branch -D foo|cat` — ONE destructive leg
-        (branch-delete) + a benign `cat` → NOT compound (≥2 model). The branch-delete
-        stays is_dangerous-gated."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = "git branch -D foo|cat"
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True
-
-    # --- Class B variant pins (#723 cycle 1 remediation) ---
-
-    def test_class_b_reverse_fd_redirect_then_pipe_single_not_compound(self):
-        """Class B variant — `git push --force 1>&2|cat` — reverse FD direction
-        (`1>&2`). ONE destructive leg (force-push) + a benign `cat` → NOT compound
-        (≥2 model). The force-push stays is_dangerous-gated; the FD pre-strip still
-        correctly neutralizes the reverse `1>&2` so it is not mistaken for a leg."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = "git push --force 1>&2|cat"
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True
-
-    def test_fd_to_file_redirect_alone_not_compound(self):
-        """Negative regression pin — `cat 1>file 2>&1` — has an FD-to-FD
-        redirect (`2>&1`) and a write redirect (`1>file`) but NO chain
-        operator. Must remain not-compound. Verifies the strip pattern
-        does NOT over-match `1>file` (no `&` after the `>`)."""
-        from merge_guard_pre import is_compound_destructive_command
-
-        assert is_compound_destructive_command(
-            "cat 1>file 2>&1"
-        ) is False
-
-
-class TestSymmetryAdversarial:
-    """Adversarial Bug B symmetry cases — multi-quoted-region prose,
-    mistyped commands, defensive empty/None inputs (#720 Bug B).
-
-    These extend the verification-tests' 5 happy-path symmetry pairings
-    with surfaces the orchestrator's question-generation behavior could
-    realistically produce: multiple backticked tokens, typos, and
-    edge-case empty prose.
-    """
-
-    # (removed 7 methods that exercised the dropped prose extractor
-    #  merge_guard_post.extract_context — multi-quoted-region precedence, the
-    #  typo→keyword-ladder fallback, empty/whitespace/no-keyword prose, and the
-    #  prose ladder-reorder. The command-anchored model (locate_command_regions +
-    #  extract_command_context) is covered by the bidirectional suite in
-    #  test_merge_guard_auth_symmetry.py; classifier edge inputs stay below.)
-
-    def test_none_safe_classifier(self):
-        """detect_command_operation_type on edge inputs: empty string
-        and short non-command-shape strings return None."""
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type("") is None
-        assert detect_command_operation_type("xyz") is None
-        assert detect_command_operation_type("git status") is None
-
-
 class TestAuditEmitFormatAdversarial:
     """Bug C audit-emit format invariance under adversarial conditions
     (#720 Bug C, backend-coder open question #3 implicit).
@@ -10792,7 +6458,7 @@ class TestAuditEmitFormatAdversarial:
         from merge_guard_post import write_token
         from merge_guard_pre import _consume_token
 
-        token_path = write_token({"operation_type": "merge", "pr_number": "7"}, token_dir=tmp_path)
+        token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "7"}, token_dir=tmp_path)
         capfd.readouterr()  # drain write_token's emit
 
         _consume_token(token_path)
@@ -10828,7 +6494,7 @@ class TestAuditEmitFormatAdversarial:
         try:
             from merge_guard_post import write_token
 
-            token_path = write_token({"operation_type": "merge", "pr_number": "13"}, token_dir=tmp_path)
+            token_path = write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "13"}, token_dir=tmp_path)
             # Confirm token records max_uses=5
             token_data = json.loads(Path(token_path).read_text())
             assert token_data["max_uses"] == 5
@@ -10874,7 +6540,7 @@ class TestAuditEmitFormatAdversarial:
         from merge_guard_pre import _consume_token
 
         token_path = write_token(
-            {"operation_type": "merge", "pr_number": "123"},
+            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "123"},
             token_dir=tmp_path,
         )
         capfd.readouterr()
@@ -11044,9 +6710,9 @@ class TestEnvelopeIntegration:
         branch-delete from the OPTION's command (not the 'merged' prose), so the
         old ladder-reorder ambiguity cannot mis-mint a merge."""
         post_code = self._invoke_post(
-            "Delete the merged feature branch?", tmp_path, answer="Yes, delete",
+            "Delete the merged feature branch?", tmp_path, answer="Yes, delete local branch",
             options=[
-                {"label": "Yes, delete", "description": "Run `git branch -D feat/old`"},
+                {"label": "Yes, delete local branch", "description": "Run `git branch -D feat/old`"},
                 {"label": "Cancel", "description": "Abort"},
             ],
         )
@@ -11137,7 +6803,7 @@ class TestEnvelopeIntegration:
 
     def test_envelope_with_extra_unknown_fields_ignored(self, tmp_path):
         """Forward-compat: envelope contains unknown extra top-level
-        fields. Hook ignores them and processes normally."""
+        fields. Hook ignores them and processes usually."""
         from merge_guard_pre import main as pre_main
 
         envelope = json.dumps({
@@ -11253,27 +6919,6 @@ class TestLeaseToDefaultGateAndMint:
                 pre_main()
         return exc_info.value.code, stdout_buf.getvalue()
 
-    @pytest.mark.parametrize("cmd", [
-        "git push --force-with-lease origin main",
-        "git push --force-with-lease origin master",
-        "git push --force-with-lease=main:abc123 origin main",
-    ], ids=["bare-main", "bare-master", "equals-value-main"])
-    def test_lease_to_default_detects_as_push_to_main(self, cmd):
-        from shared.merge_guard_common import detect_command_operation_type
-
-        assert detect_command_operation_type(cmd) == "push-to-main"
-
-    def test_lease_to_feature_branch_stays_unrecognized(self):
-        """Contrast control: the fold widens ONLY the default-branch arm — a lease
-        push to a topic branch is still unrecognized AND ungated (must not widen)."""
-        from shared.merge_guard_common import (
-            detect_command_operation_type,
-            is_dangerous_command,
-        )
-
-        assert detect_command_operation_type(
-            "git push --force-with-lease origin feature/x") is None
-        assert not is_dangerous_command("git push --force-with-lease origin feature/x")
 
     def test_lease_approval_mints_and_authorizes_byte_identical(self, tmp_path):
         """The #1064 DENY->ALLOW flip: a faithful lease click mints a push-to-main
@@ -11459,7 +7104,7 @@ class TestTokenLifecycleInvariants:
         from merge_guard_pre import check_merge_authorization
 
         assert MAX_USES >= 2, "test assumes MAX_USES >= 2"
-        write_token({"operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path)
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path)
 
         # First call: authorized (slot 1)
         assert check_merge_authorization("gh pr merge 1", token_dir=tmp_path) is None
@@ -11813,13 +7458,13 @@ class TestTokenLifecycleExtensions:
         """
         from pathlib import Path
 
-        common_path = (
+        common_path = (                     # the token lifecycle's home since the carve
             Path(__file__).resolve().parent.parent
-            / "hooks" / "shared" / "merge_guard_common.py"
+            / "hooks" / "shell" / "merge" / "tokens.py"
         )
         src = common_path.read_text()
         anchors = [
-            "I-1 (at most one unused token at any time):",
+            "I-1 (at most one unused token per full binding):",
             "I-2 (successful operation immediately retires the token):",
             "I-3 (TTL expiry retires the token):",
             "I-4 (failed operation preserves token for retry within TTL up to MAX_USES):",
@@ -12375,7 +8020,7 @@ class TestTokenLifecycleExtensions:
         from merge_guard_pre import check_merge_authorization
 
         assert MAX_USES >= 2
-        write_token({"operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path)
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "1"}, token_dir=tmp_path)
 
         # First retry — claims slot 1
         assert check_merge_authorization("gh pr merge 1", token_dir=tmp_path) is None
@@ -12410,7 +8055,7 @@ class TestTokenLifecycleExtensions:
         from merge_guard_pre import check_merge_authorization
 
         # Write a token authorized for PR #42
-        ctx = {"operation_type": "merge", "pr_number": "42"}
+        ctx = {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42"}
         write_token(ctx, token_dir=tmp_path)
 
         # Cross-context call: different PR — should NOT match token, should
@@ -13003,7 +8648,7 @@ class TestTokenLifecycleExtensions:
 
         The question: the per-leg op-filter widening lets an EARLIER leg claim a
         verdict a later leg used to win, which RE-LABELS 216 commands across 6
-        distinct transitions (e.g. `cd /repo && git branch -Df temp && git push
+        distinct transitions (e.g. `cd . && git branch -Df temp && git push
         origin main` classifies branch-delete, not push-to-main). That was measured
         BENIGN for retirement — 0 tokens survive that previously retired.
 
@@ -13098,9 +8743,9 @@ class TestTargetAwareRetirement:
     @pytest.mark.parametrize(
         "token_ctx,unrelated_cmd,op",
         [
-            ({"operation_type": "close", "pr_number": "42",
+            ({"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "42",
               "bound_flags": ["--delete-branch"]}, "gh pr close 43", "close"),
-            ({"operation_type": "merge", "pr_number": "42",
+            ({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42",
               "bound_flags": []}, "gh pr merge 43", "merge"),
         ],
     )
@@ -13127,7 +8772,7 @@ class TestTargetAwareRetirement:
         cmd_target None != token_target '42'."""
         from merge_guard_post import write_token, _retire_token_for_command
 
-        write_token({"operation_type": "merge", "pr_number": "42",
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "42",
                      "bound_flags": []}, token_dir=tmp_path)
         retired = _retire_token_for_command("gh pr merge", "merge", token_dir=tmp_path)
         assert retired is False
@@ -13143,7 +8788,8 @@ class TestTargetAwareRetirement:
         target arithmetic for the API spelling, the belt-and-suspenders layer.)"""
         from merge_guard_post import write_token, _retire_token_for_command
 
-        write_token({"operation_type": "merge", "pr_number": "42",
+        # amend_2 (#141): the API form's identity is repo-qualified.
+        write_token({"operation_type": "merge", "pr_number": "api:o/r#42",
                      "bound_flags": []}, token_dir=tmp_path)
         unrelated = _retire_token_for_command(
             "gh api -X PUT /repos/o/r/pulls/43/merge", "merge", token_dir=tmp_path)
@@ -13161,7 +8807,7 @@ class TestTargetAwareRetirement:
         (target matches) — the one-approval-one-operation discipline is intact."""
         from merge_guard_post import write_token, _retire_token_for_command
 
-        write_token({"operation_type": "close", "pr_number": "42",
+        write_token({"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "42",
                      "bound_flags": ["--delete-branch"]}, token_dir=tmp_path)
         retired = _retire_token_for_command(
             "gh pr close 42 --delete-branch", "close", token_dir=tmp_path)
@@ -13213,12 +8859,12 @@ class TestTargetAwareRetirement:
         for cmd in approvals:
             question = {
                 "question": "Proceed?",
-                "options": [{"label": "Yes, do it",
+                "options": [{"label": "Yes",
                              "description": f"Run `{cmd}` now"}],
                 "multiSelect": False,
             }
             ctx, refusal = _mint_context_from_bundle(
-                [question], {"Proceed?": "Yes, do it"})
+                [question], {"Proceed?": "Yes"})
             assert ctx is not None, f"canonical approval failed to mint: {cmd!r} ({refusal})"
             assert _target_value(ctx) is not None, (
                 f"TARGET-LESS PRODUCTION MINT for {cmd!r} — the defensive "
@@ -13247,7 +8893,7 @@ class TestTargetAwareRetirement:
         # a second, independent blocker and the target-neuter alone could not
         # restore coarse retirement (the #1100/#1097 interaction). Survival in
         # direction 1 is therefore attributable solely to the target mismatch.
-        mgp.write_token({"operation_type": "close", "pr_number": "42",
+        mgp.write_token({"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "42",
                          "bound_flags": []}, token_dir=tmp_path)
         assert mgp._retire_token_for_command(
             "gh pr close 43", "close", token_dir=tmp_path) is False
@@ -13468,7 +9114,10 @@ class TestFlagAwareRetirement:
             "gh pr close 5", "close", token_dir=tmp_path) is False
         assert len(self._live(tmp_path)) == 1
         # direction 2 — neuter the SSOT both arms derive flags from; re-mint so
-        # the token's stored bound_flags also collapse to [] (symmetric neuter)
+        # the token's stored bound_flags also collapse to [] (symmetric neuter).
+        # The escalated token is another binding now, so the re-mint leaves it: drop it.
+        for live in self._live(tmp_path):
+            live.unlink()
         monkeypatch.setattr(
             "shared.merge_guard_common.extract_privileged_flags",
             lambda *a, **k: [])
@@ -13575,7 +9224,7 @@ class TestMalformedTokenRetirementRobustness:
 
         self._write_token_json(
             tmp_path,
-            {"operation_type": "close", "pr_number": "5", "bound_flags": bad_flags},
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "5", "bound_flags": bad_flags},
         )
         try:
             retired = _retire_token_for_command(
@@ -13609,12 +9258,12 @@ class TestMalformedTokenRetirementRobustness:
 
         malformed = self._write_token_json(
             tmp_path,
-            {"operation_type": "close", "pr_number": "5", "bound_flags": bad_flags},
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "5", "bound_flags": bad_flags},
             name="merge-authorized-1000",
         )
         valid = self._write_token_json(
             tmp_path,
-            {"operation_type": "close", "pr_number": "5",
+            {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "5",
              "bound_flags": ["--delete-branch"]},
             name="merge-authorized-2000",
         )
@@ -13648,7 +9297,10 @@ class TestD1MatcherQuoteNormalization:
 
     @staticmethod
     def _tok(branch):
-        return {"context": {"branch": branch, "operation_type": "branch-delete"}}
+        # bound to this checkout like a minted approval (1.4.1 U13; the branch name does not
+        # enter a branch-delete's checkout binding)
+        return {"context": git_bound({"branch": branch, "operation_type": "branch-delete"},
+                                     "git branch -D x")}
 
     def test_matches_single_quoted_branch(self):
         from merge_guard_pre import _token_matches_command
@@ -13722,121 +9374,12 @@ class TestD2GhCarrierStrip:
 
     # ---- POSITIVE: benign carrier no longer over-blocks ----
 
-    def test_issue_create_title_with_danger_literal_not_dangerous(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create --title "repro: git branch -D feat/x" --body "ctx"'
-        )
-
-    def test_issue_edit_body_with_push_literal_not_dangerous(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue edit 5 --body "see git push --force origin main"'
-        )
-
-    def test_pr_create_title_with_danger_literal_not_dangerous(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh pr create --title "fix: git branch -D cleanup"'
-        )
-
-    def test_issue_create_single_quoted_title_not_dangerous(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            "gh issue create --title 'repro: git branch -D feat/x'"
-        )
 
     # ---- DEVIATION PIN: two-value strip (the as-built carrier-span shape) ----
 
-    def test_two_value_strip_both_aliases(self):
-        """As-built deviation pin: `-t "..." -b "..."` (two carriers on one
-        command) strips BOTH values. A single global re.sub would consume the
-        verb prefix on the first match and leave the SECOND value un-stripped
-        (a false-positive over-block); the carrier-span inner-strip fixes that.
-
-        # non-vacuity: revert the 7th carrier to a single-re.sub-per-quote-
-        #   style form (strip only the first --title/--body) → the second
-        #   value's `git push --force` survives → is_dangerous returns True →
-        #   this assertion FAILS.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create -t "git branch -D a" -b "git push --force b"'
-        )
-
-    def test_two_value_strip_long_flags(self):
-        """Two-value strip with the long --title/--body flags (general, not
-        alias-specific)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create --title "git branch -D a" --body "git push --force b"'
-        )
 
     # ---- SECURITY NEGATIVES / revert-proving (the highest-value tests) ----
 
-    def test_compound_real_op_after_carrier_still_dangerous(self):
-        """SECURITY NEGATIVE: a real destructive op after `&&` survives the
-        strip and stays caught. TWO independent layers protect the tail —
-        the carrier span stops at the `&` separator (so the tail is OUTSIDE
-        the span), AND the inner strip only removes QUOTED flag-VALUES (so an
-        unquoted op is never stripped even if it sits inside the span). The
-        fix is defense-in-depth: each layer blocks the over-strip alone.
-
-        # non-vacuity: a single-layer mutation does NOT flip this (verified:
-        #   broadening the span `[^&|;]*`→`.*` leaves the tail un-stripped
-        #   because the inner strip touches only quoted flag-values; a greedy
-        #   inner-strip leaves it un-stripped because the span still stops at
-        #   `&&`). The faithful regression is the whole-span OVER-STRIP
-        #   ("carrier over-strips and hides a real op", arch §10 risk row 1):
-        #   broaden the span to `.*` AND blank the entire matched span →
-        #   `git branch -D real-branch` is consumed → is_dangerous returns
-        #   False → this assertion FAILS (verified RED). The two compound
-        #   tests + the backgrounded-& test + the unquoted-token test all
-        #   flip together under this over-strip. Expected RED cardinality: {4}.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "notes" && git branch -D real-branch'
-        )
-
-    def test_compound_real_op_after_carrier_single_destructive_not_compound(self):
-        """Honest-mistake ≥2-narrowing: `gh issue create --title "notes" && git branch
-        -D real-branch` has ONE destructive leg (the branch-delete; `gh issue create`
-        is benign) → NOT compound. The SECURITY property is preserved at the
-        is_dangerous layer: the executing `git branch -D` tail survives the carrier
-        strip and is is_dangerous-gated (asserted by the sibling test just above) — so
-        the single destructive op is still caught, it is simply not >=2-compound."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = 'gh issue create --title "notes" && git branch -D real-branch'
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True  # the branch-delete tail is still gated
-
-    def test_backgrounded_carrier_real_op_after_amp_still_dangerous(self):
-        """SECURITY NEGATIVE (CODE-HANDOFF flagged: the single-`&` background
-        case): a single `&` (backgrounding) also terminates the carrier span,
-        so a real op after `gh issue create ... &` is OUTSIDE the span and
-        stays caught. (`[^&|;]*` stops at the first `&`, logical or not.)
-
-        # non-vacuity: the whole-span over-strip (broaden span to `.*` AND
-        #   blank the matched span) consumes the backgrounded tail →
-        #   is_dangerous returns False → this assertion FAILS (verified RED,
-        #   part of the {4}-test cluster). A span-boundary-only broadening
-        #   does NOT flip it (inner strip is quoted-value-scoped). Pins that
-        #   backgrounding does not smuggle a real op past the scan.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "bg" & git branch -D real-branch'
-        )
 
     def test_pr_close_delete_branch_still_dangerous_carveout(self):
         """SECURITY NEGATIVE (the carve-out): `gh pr close --delete-branch` is
@@ -13879,90 +9422,14 @@ class TestD2GhCarrierStrip:
         close_cmd = 'gh pr close 42 --delete-branch --body "git branch -D x"'
         assert '"git branch -D x"' in _strip_non_executable_content(close_cmd)
 
-    def test_command_substitution_in_title_preserved_dangerous(self):
-        """SECURITY NEGATIVE (command-substitution guard): a `$(...)` inside a
-        double-quoted --body EXECUTES, so it is preserved (not stripped) and
-        the command stays dangerous.
-
-        # non-vacuity: remove the `_has_command_substitution` guard in the
-        #   double-quoted arm (always strip) → the `$(git branch -D x)`
-        #   value is stripped → is_dangerous returns False → this assertion
-        #   FAILS. Pins the executes-inside-double-quotes guard.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --body "$(git branch -D x)"'
-        )
-
-    def test_piped_to_shell_carrier_preserved_dangerous(self):
-        """SECURITY NEGATIVE (piped-to-shell guard): when the whole command
-        pipes to a shell, the strip is skipped entirely (the carrier text
-        could be re-fed to a shell), so the command stays dangerous.
-
-        # non-vacuity: remove the outer `if not piped_to_shell and not
-        #   process_sub_to_shell:` guard (always run the carrier strip) →
-        #   `gh issue create --title "git branch -D x" | bash` is stripped
-        #   before the scan → is_dangerous returns False → this assertion
-        #   FAILS. Pins the pipe-to-shell skip.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "git branch -D x" | bash'
-        )
 
     # ---- NEGATIVE: non-carrier gh verbs are NOT exempted ----
 
-    def test_gh_pr_edit_is_now_a_carrier(self):
-        """#1129 R2 (OB1): `gh pr edit` is NOW an INTENTIONAL carrier — its
-        --title/--body value is non-executing API prose (identical in kind to the
-        already-carried `gh issue edit`), so a dangerous literal there is STRIPPED
-        and the command is NOT flagged. The pre-R2 issue-edit/pr-edit asymmetry (an
-        over-conservative over-block = cardinal-sin OB1) is intentionally removed.
-
-        # non-vacuity: reverting the `pr edit` carrier (EDIT 1) leaves the literal
-        #   unstripped → is_dangerous returns True → this assertion FAILS. Pins the
-        #   pr-edit INCLUSION. The "non-carrier gh verb is NOT exempted" guardrail is
-        #   pinned separately by the `gh pr review` sibling in
-        #   test_merge_guard_1037_narrow.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('gh pr edit 5 --title "git branch -D x"')
-
-    def test_gh_pr_merge_is_not_a_carrier(self):
-        """SECURITY NEGATIVE: `gh pr merge` (a real destructive op) is not a
-        carrier verb; a dangerous literal alongside it is not stripped and the
-        command stays dangerous.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('gh pr merge 42 --subject "git branch -D x"')
 
     # ---- NEGATIVE: an unquoted dangerous token inside the span survives ----
 
-    def test_unquoted_danger_token_in_span_survives(self):
-        """SECURITY NEGATIVE: the inner strip touches only QUOTED flag-values.
-        An unquoted dangerous op sitting inside the carrier span (not a flag
-        value) is NOT stripped and stays caught.
-
-        # non-vacuity: an inner strip that removed unquoted tokens (not just
-        #   quoted flag-values) would strip this → is_dangerous returns False
-        #   → FAILS. Pins the quoted-value-only scope of the inner strip.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command('gh issue create --title "safe" git push --force')
 
     # ---- REGRESSION GUARD: existing carrier 5 unchanged ----
-
-    def test_git_commit_message_carrier_still_strips(self):
-        """REGRESSION GUARD: the pre-existing `git commit -m` carrier (carrier
-        5) is unchanged by the additive 7th carrier."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('git commit -m "msg about git branch -D x"')
 
 
 class TestD3LadderPushToMain:
@@ -14090,17 +9557,25 @@ _SPAN_SOURCE_NAME = "_VERB_MSG_BODY"
 
 
 def _all_merge_guard_modules():
-    """The THREE modules that make up the merge-guard implementation.
+    """Every module that makes up the merge-guard implementation: the two hooks, the
+    merge_guard_common façade and the hooks/shell/merge package it re-exports.
 
-    The span is defined in `merge_guard_common`, but a carrier can be built in
-    either hook that imports from it, and one there is exactly as dangerous.
-    Both pins below run over this list rather than over the shared module alone.
+    The span is defined in `shell.merge.strip`, but a carrier can be built in any
+    module that imports from it, and one there is exactly as dangerous. Both pins
+    below run over this list rather than over the defining module alone.
     """
+    import importlib
+    import pkgutil
+
     import merge_guard_post
     import merge_guard_pre
+    import shell.merge
     from shared import merge_guard_common
 
-    return (merge_guard_common, merge_guard_pre, merge_guard_post)
+    package = tuple(importlib.import_module(f"shell.merge.{info.name}")
+                    for info in pkgutil.iter_modules(shell.merge.__path__))
+    assert len(package) >= 10, "the shell.merge package did not enumerate"
+    return (merge_guard_common, merge_guard_pre, merge_guard_post, *package)
 
 
 def _carrier_span_analysis(source=None, module=None):
@@ -14554,45 +10029,6 @@ class TestD2QuoteAwareSpanRemediation:
     #     flips RED. Verified: `[^&|;]*` → 3 of the 4 non-multiline strip-tests
     #     RED (multiline green); `[^&|;\n]*` → all 4 RED.
 
-    def test_internal_semicolon_with_post_sep_danger_strips(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create --title "ok; git branch -D real"'
-        )
-
-    def test_internal_amp_pipe_with_post_sep_danger_strips(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create --title "fix & note | git push --force origin x"'
-        )
-
-    def test_multiline_with_post_newline_danger_strips(self):
-        """The case a naive `[^&|;\\n]*` body would have REGRESSED (over-block):
-        a multi-line title with a dangerous literal on a later line is consumed
-        atomically and strips fully."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create --title "line1\nrepro: git branch -D real\nline3"'
-        )
-
-    def test_danger_literal_before_internal_separator_strips(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create --title "repro: git branch -D x; then run"'
-        )
-
-    def test_two_value_internal_separators_with_danger_strip(self):
-        """Two values, each with an internal separator AND a post-separator
-        dangerous literal — BOTH strip fully (the two-value atomic-span case)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create -t "ok; git branch -D a" -b "ok | git push --force b"'
-        )
 
     # ---- 7.B — UNDER-BLOCK NEGATIVES (INV-D2: a real op after an UNQUOTED
     #            separator MUST stay caught). ----
@@ -14609,60 +10045,6 @@ class TestD2QuoteAwareSpanRemediation:
     #   that mutation. (Plain `.*` leaves it green because the span still stops
     #   at the unquoted `\n`.)
 
-    def test_under_block_amp_amp_tail(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "x" && git branch -D real'
-        )
-
-    def test_under_block_semicolon_tail(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "x" ; git branch -D real'
-        )
-
-    def test_under_block_pipe_tail(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "x" | git branch -D real'
-        )
-
-    def test_under_block_newline_tail(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "x"\ngit branch -D real'
-        )
-
-    def test_under_block_background_amp_tail(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "x" & git branch -D real'
-        )
-
-    def test_under_block_unquoted_op_in_span(self):
-        """An UNQUOTED dangerous op inside the span (not a flag value) is never
-        touched by the inner strip (quoted-value-scoped) → stays caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "safe" git push --force origin x'
-        )
-
-    def test_under_block_single_destructive_after_carrier_not_compound(self):
-        """Honest-mistake ≥2: `gh issue create --title "x" && git branch -D real` has
-        ONE destructive leg (branch-delete) → NOT compound. The branch-delete tail
-        survives the carrier strip and stays is_dangerous-gated (the single-op gate
-        catches it), so it is not under-blocked — it is simply not >=2-compound."""
-        from merge_guard_pre import is_compound_destructive_command, is_dangerous_command
-
-        cmd = 'gh issue create --title "x" && git branch -D real'
-        assert is_compound_destructive_command(cmd) is False
-        assert is_dangerous_command(cmd) is True
 
     # ---- 7.C — DESYNC NEGATIVES (escaped/unbalanced/mismatched quotes MUST
     #            NOT smuggle an op past the span). ----
@@ -14678,76 +10060,9 @@ class TestD2QuoteAwareSpanRemediation:
     #   `[\s\S]*` over-consume to flip (plain `.*` stops at the `\n`) —
     #   verified RED under that mutation.
 
-    def test_desync_unbalanced_dq_then_amp_op(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "open && git branch -D real'
-        )
-
-    def test_desync_unbalanced_dq_then_newline_op(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "open\ngit branch -D real'
-        )
-
-    def test_desync_escaped_quote_then_semicolon_op(self):
-        r"""An escaped `\"` keeps the string open in BOTH the regex
-        (`(?:[^"\\]|\\.)`) and bash, so the `;`-separated op is outside any
-        closed quote and survives."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "a\\" ; git branch -D real'
-        )
-
-    def test_desync_unbalanced_sq_then_amp_op(self):
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            "gh issue create --title 'open && git branch -D real"
-        )
-
-    def test_desync_mixed_quote_then_amp_op(self):
-        """A single quote inside a BALANCED double-quoted value (`"a'b"`) is
-        ordinary content; the following `&&` op is unquoted → caught."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command(
-            'gh issue create --title "a\'b" && git branch -D real'
-        )
-
-    def test_desync_genuinely_quoted_op_is_neutralized(self):
-        """CORRECTNESS pin: an op GENUINELY inside a balanced quoted value (no
-        internal separator) IS neutralized — bash also treats it as inert
-        title text. (NOT a hole.)
-
-        # non-vacuity: this value has NO internal separator, so the UNDER-
-        #   CONSUME `[^&|;]*` span mutation does NOT flip it (it consumes the
-        #   whole value either way) — it stays green there. Its non-vacuity is
-        #   the CARRIER-PRESENCE proof shared with the original suite
-        #   (TestD2GhCarrierStrip.test_issue_create_title_with_danger_literal_
-        #   not_dangerous): revert the entire 7th carrier (remove the strip
-        #   step) → the literal is no longer stripped → is_dangerous flips True
-        #   → FAILS. This pin documents the M2/M3 span did not REGRESS the
-        #   baseline single-value strip; the span-mutation tests above carry
-        #   the M2/M3-specific non-vacuity.
-        """
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command(
-            'gh issue create --title "git branch -D x"'
-        )
 
     # ---- 7.D — Carve-out REGRESSION GUARD (unchanged by the span change). ----
 
-    def test_carveout_pr_close_still_dangerous(self):
-        """Behavioral (robust, but vacuous w.r.t. the carrier — see the
-        mechanism-level pin below)."""
-        from merge_guard_pre import is_dangerous_command
-
-        assert is_dangerous_command("gh pr close 42 --delete-branch")
 
     def test_carveout_pr_close_value_survives_strip(self):
         """Mechanism-level: a quoted value on a `gh pr close` command is NOT
@@ -14764,15 +10079,6 @@ class TestD2QuoteAwareSpanRemediation:
         cmd = 'gh pr close 42 --delete-branch --body "git branch -D x"'
         assert '"git branch -D x"' in _strip_non_executable_content(cmd)
 
-    def test_carveout_pr_edit_is_now_a_carrier(self):
-        # #1129 R2 (OB1): `gh pr edit` is NOW an intentional carrier (joins gh issue
-        # edit as a non-executing --title/--body prose carrier), so a dangerous literal
-        # in its value is STRIPPED and NOT flagged. Reverting EDIT 1 flips this True →
-        # the assert FAILS (non-vacuous). The non-carrier-verb guardrail is pinned by
-        # the `gh pr review` sibling in test_merge_guard_1037_narrow.
-        from merge_guard_pre import is_dangerous_command
-
-        assert not is_dangerous_command('gh pr edit 5 --title "git branch -D x"')
 
     # ---- 7.E — ReDoS: the span's safety is POSITIONAL, not intrinsic. ----
 
@@ -14838,6 +10144,7 @@ class TestD2QuoteAwareSpanRemediation:
         # previously unreachable by this pin.
         carriers, offenders, resolved, unbound = set(), [], 0, 0
         _use_sites = []
+        import ast
         import re as _re
 
         for _mod in _all_merge_guard_modules():
@@ -14860,8 +10167,20 @@ class TestD2QuoteAwareSpanRemediation:
                 )
                 if _m:
                     _aliases.add(_m.group(1))
-            for _ln in _src.splitlines():
-                if _ln.lstrip().startswith("#"):
+            # Lines that NAME the span without using it: a parenthesised import
+            # list (the façade re-exports it, the package modules import it) and
+            # the module docstring's Map line. Found by AST, not by prefix, so a
+            # continuation line of a multi-line import is skipped too.
+            _tree = ast.parse(_src)
+            _named_only = set()
+            for _n in ast.walk(_tree):
+                if isinstance(_n, (ast.Import, ast.ImportFrom)):
+                    _named_only.update(range(_n.lineno, _n.end_lineno + 1))
+            if _tree.body and isinstance(_tree.body[0], ast.Expr) and isinstance(
+                    _tree.body[0].value, ast.Constant):
+                _named_only.update(range(_tree.body[0].lineno, _tree.body[0].end_lineno + 1))
+            for _no, _ln in enumerate(_src.splitlines(), 1):
+                if _ln.lstrip().startswith("#") or _no in _named_only:
                     continue
                 if not any(_a in _ln for _a in _aliases):
                     continue

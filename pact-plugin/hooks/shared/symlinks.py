@@ -28,6 +28,10 @@ from .paths import get_claude_config_dir
 # free text is what a later reader gets incorrect.
 SYMLINKS_VERIFIED_MESSAGE = "PACT symlinks verified"
 
+# A local agent file carrying this exact line is a deliberate override, and is
+# not reported as shadowing the plugin's agent.
+USER_OVERRIDE_MARKER = "<!-- pact-user-override -->"
+
 # Suffix of the temporary link that the atomic swap builds beside its target.
 # It does NOT end in ".md", so a sweep of the destination directory for
 # "pact-*.md" does not meet it.
@@ -73,7 +77,26 @@ def _repoint_symlink(dst_file: Path, target: Path) -> None:
         raise
 
 
-def setup_plugin_symlinks() -> str | None:
+def _is_shadowing_copy(local: Path, plugin_file: Path) -> bool:
+    """True iff ``local`` is a regular file whose bytes differ from the plugin's
+    agent and that does not carry the override marker on a line of its own.
+
+    Advisory only: a read failure answers False, so the check can never turn
+    into a reported link failure.
+    """
+    try:
+        if not local.is_file():
+            return False
+        local_bytes = local.read_bytes()
+        if local_bytes == plugin_file.read_bytes():
+            return False
+        lines = local_bytes.decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    return USER_OVERRIDE_MARKER not in (line.strip() for line in lines)
+
+
+def setup_plugin_symlinks(report_shadowed: bool = True) -> str | None:
     """
     Create symlinks for plugin resources to ~/.claude/.
 
@@ -82,6 +105,14 @@ def setup_plugin_symlinks() -> str | None:
        (enables @~/.claude/protocols/pact-plugin/... references in CLAUDE.md)
     2. ~/.claude/agents/pact-*.md -> plugin/agents/pact-*.md
        (enables non-prefixed agent names like "pact-secretary")
+
+    A real file at an agent's destination is never replaced (it may be a
+    deliberate override), but when its bytes differ from the plugin's agent it
+    silently shadows it: the platform resolves the bare name to the local
+    copy. With ``report_shadowed`` those files are named in a "shadowed"
+    fragment, unless the file carries USER_OVERRIDE_MARKER on a line of its
+    own. The caller passes False on a context reset so the notice is not
+    repeated mid-session.
 
     Returns:
         Status message or None if successful
@@ -152,6 +183,7 @@ def setup_plugin_symlinks() -> str | None:
         agents_updated = 0
         agents_created = 0
         agents_failed = 0
+        shadowed = []
         for agent_file in agents_src.glob("pact-*.md"):
             dst_file = agents_dst / agent_file.name
             try:
@@ -164,7 +196,9 @@ def setup_plugin_symlinks() -> str | None:
                 elif not dst_file.exists():
                     dst_file.symlink_to(agent_file)
                     agents_created += 1
-                # Skip if real file exists (user override)
+                elif report_shadowed and _is_shadowing_copy(dst_file, agent_file):
+                    # A real file is never replaced, but a differing one is named.
+                    shadowed.append(agent_file.name)
             except OSError:
                 # COUNT the file, then CONTINUE. One bad file must not stop the
                 # loop, and the protocols loop above reports its own failures.
@@ -182,6 +216,14 @@ def setup_plugin_symlinks() -> str | None:
             # The word "failed" is a CONTRACT with the caller, which routes on
             # `"failed" in result.lower()`. Do not reword it away.
             messages.append(f"{agents_failed} agents failed")
+        if shadowed:
+            # "shadowed" is a routing token too: session_init sends it to the
+            # user. Basenames only, never a path.
+            messages.append(
+                f"{len(shadowed)} agents shadowed by local copies that differ "
+                f"from the plugin: {', '.join(sorted(shadowed))} (delete them, "
+                f"or add {USER_OVERRIDE_MARKER} to keep one)"
+            )
 
     if not messages:
         return SYMLINKS_VERIFIED_MESSAGE

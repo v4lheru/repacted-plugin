@@ -77,7 +77,7 @@ from unittest.mock import patch
 
 import pytest
 
-from shared import BOOTSTRAP_MARKER_NAME  # noqa: E402
+from shared.constants import BOOTSTRAP_MARKER_NAME  # noqa: E402
 
 
 # ── Real-shaped ids + the two divergent dir-naming schemes ────────────────────

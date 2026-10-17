@@ -2311,8 +2311,9 @@ class TestSessionInitMigrationIntegration:
 
     def test_session_init_calls_migration(self):
         """session_init.py must contain a call to migrate_to_managed_structure."""
+        # Steps 1-4c moved to the common frame module (A4b).
         session_init_path = (
-            Path(__file__).parent.parent / "hooks" / "session_init.py"
+            Path(__file__).parent.parent / "hooks" / "shared" / "session_init_common.py"
         )
         source = session_init_path.read_text(encoding="utf-8")
         assert "migrate_to_managed_structure()" in source
@@ -2321,8 +2322,9 @@ class TestSessionInitMigrationIntegration:
         """session_init routes 'failed'/'skipped' migration messages to
         system_messages, not context_parts.
         """
+        # Steps 1-4c moved to the common frame module (A4b).
         session_init_path = (
-            Path(__file__).parent.parent / "hooks" / "session_init.py"
+            Path(__file__).parent.parent / "hooks" / "shared" / "session_init_common.py"
         )
         source = session_init_path.read_text(encoding="utf-8")
         # The routing logic checks for "failed" or "skipped" in the message

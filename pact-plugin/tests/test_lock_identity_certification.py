@@ -429,13 +429,13 @@ class TestExistingDriftGatesUnmodified:
             "TestAtomicWriteTwinCopyDrift",
         ],
     )
-    def test_named_drift_gate_still_exists_in_test_staleness(self, gate):
+    def test_named_drift_gate_still_exists_in_the_twin_drift_suite(self, gate):
         """Pins that the three gates the design relies on are still present and
         named as the design names them. If one is renamed or removed, the
         parity argument this suite leans on has quietly lost a leg."""
-        src = (_TESTS / "test_staleness.py").read_text(encoding="utf-8")
+        src = (_TESTS / "test_working_memory_twin_drift.py").read_text(encoding="utf-8")
         assert re.search(rf"\b{re.escape(gate)}\b", src), (
-            f"{gate} is no longer present in test_staleness.py -- the "
+            f"{gate} is no longer present in test_working_memory_twin_drift.py -- the "
             f"twin-parity argument depends on it"
         )
 

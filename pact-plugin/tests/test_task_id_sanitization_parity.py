@@ -24,7 +24,7 @@ import task_lifecycle_gate as tlg
 from fixtures.emitter import VALID_HANDOFF, _run_main
 
 TEAM = "pact-test"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 
 # Path traversal + separator + C0 control in one input. Its sanitized form
 # is stable under repeated application, so single-pass (b1/b2 intake, the
@@ -138,7 +138,7 @@ class TestTaskIdSanitizationParity:
             "tool_name": "TaskUpdate",
             "tool_input": {
                 "taskId": seam_b_raw,
-                "metadata": {"r2_verification": {"verified": True}},
+                "metadata": {"handoff_rejection": {"reason": "redo"}},
             },
             "tool_response": {},
             "agent_type": LEAD,

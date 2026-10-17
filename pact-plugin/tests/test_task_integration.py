@@ -288,10 +288,10 @@ class TestFindFeatureTask:
         """Test returns None when no suitable feature task exists."""
         from shared.task_utils import find_feature_task
 
-        # Only blocked tasks
+        # Only agent work and a task not started
         tasks = [
-            make_task("task-1", "Agent work", "in_progress", blocked_by=["task-0"]),
-            make_task("task-2", "More work", "pending", blocked_by=["task-1"]),
+            make_task("task-1", "backend-coder: agent work", "in_progress", blocked_by=["task-0"]),
+            make_task("task-2", "More work", "pending"),
         ]
 
         result = find_feature_task(tasks)
@@ -459,7 +459,6 @@ class TestFindActiveAgents:
             "frontend-coder:",
             "database-engineer:",
             "devops-engineer:",
-            "n8n:",
             "test-engineer:",
             "security-engineer:",
             "qa-engineer:",
@@ -655,7 +654,7 @@ class TestBuildPostCompactionCheckpoint:
 
         result = build_post_compaction_checkpoint(None, phase, agents, [])
 
-        assert "Unable to identify feature task" in result
+        assert "cannot tell which task is the feature" in result
 
     def test_handles_missing_phase(self, make_task):
         """Test handles None phase task gracefully."""

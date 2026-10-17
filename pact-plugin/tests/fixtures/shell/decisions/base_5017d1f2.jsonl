@@ -1,0 +1,57 @@
+{"base": "5017d1f2", "blob_id": "c00c377defa538a7c967c7bd910b183da125be17", "captured_from": "3f27b2c6", "rows": 56, "sha256": "58ffa128bcdf7fd80eac7de4db0f066d84fa8eaba1efc700a0229a14399b6860"}
+{"attr": "_extract_close_target", "callable": true}
+{"attr": "_extract_force_push_target_ref", "callable": true}
+{"attr": "extract_command_context", "callable": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["_extract_close_target", ["gh pr close --repo o/r feature -d"], {}], "result": "branch:feature"}
+{"call": ["_extract_close_target", ["gh pr close 5 -d"], {}], "result": "5"}
+{"call": ["_extract_close_target", ["gh pr close feature -d"], {}], "result": "branch:feature"}
+{"call": ["_extract_close_target", ["gh pr close https://github.com/o/r/pull/9 -d"], {}], "result": "url:github.com/o/r#9"}
+{"call": ["_extract_force_push_target_ref", ["git push --force origin +main"], {}], "result": "+main"}
+{"call": ["_extract_force_push_target_ref", ["git push --force origin HEAD:main"], {}], "result": "main"}
+{"call": ["_extract_force_push_target_ref", ["git push --force origin main"], {}], "result": "main"}
+{"call": ["_extract_force_push_target_ref", ["git push -f origin main"], {}], "result": "main"}
+{"call": ["extract_command_context", ["cd . && git push --force"], {}], "result": {"bound_flags": [], "operation_type": "force-push"}}
+{"call": ["extract_command_context", ["gh api -X PUT repos/o/r/pulls/5/merge"], {}], "result": {"bound_flags": [], "operation_type": "merge", "pr_number": "5"}}
+{"call": ["extract_command_context", ["gh pr merge --admin"], {}], "result": {"bound_flags": ["--admin"], "operation_type": "merge"}}
+{"call": ["extract_command_context", ["gh pr merge --squash"], {}], "result": {"bound_flags": [], "operation_type": "merge"}}
+{"call": ["extract_command_context", ["gh pr merge 42"], {}], "result": {"bound_flags": [], "operation_type": "merge", "pr_number": "42"}}
+{"call": ["extract_command_context", ["gh pr merge"], {}], "result": {"bound_flags": [], "operation_type": "merge"}}
+{"call": ["extract_command_context", ["git -c user.name=x push --force"], {}], "result": {"bound_flags": [], "operation_type": "force-push"}}
+{"call": ["extract_command_context", ["git push --force origin +main"], {}], "result": {"bound_flags": [], "operation_type": "force-push", "target_ref": "+main"}}
+{"call": ["extract_command_context", ["git push --force origin HEAD:main"], {}], "result": {"bound_flags": [], "operation_type": "force-push", "target_ref": "main"}}
+{"call": ["extract_command_context", ["git push --force origin main"], {}], "result": {"bound_flags": [], "operation_type": "force-push", "target_ref": "main"}}
+{"call": ["extract_command_context", ["git push --force origin"], {}], "result": {"bound_flags": [], "operation_type": "force-push"}}
+{"call": ["extract_command_context", ["git push --force"], {}], "result": {"bound_flags": [], "operation_type": "force-push"}}
+{"call": ["extract_command_context", ["git push -f origin main"], {}], "result": {"bound_flags": [], "operation_type": "force-push", "target_ref": "main"}}
+{"call": ["extract_command_context", ["git push -f origin"], {}], "result": {"bound_flags": [], "operation_type": "force-push"}}
+{"call": ["extract_command_context", ["git push -f"], {}], "result": {"bound_flags": [], "operation_type": "force-push"}}
+{"call": ["is_dangerous_command", ["cd . && git push --force"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh help pr merge"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close -d --help"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge --help"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge --squash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge -h"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 42"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git --git-dir --help push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git --git-dir help push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git --namespace -h branch -D feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git --namespace help push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git --work-tree -h push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git --work-tree help push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C -h push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C help branch -D feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C help push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C help push origin --delete feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c user.name=x push --force"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force --help"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin +main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -f origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -f origin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -f"], {}], "result": true}

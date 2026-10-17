@@ -179,6 +179,9 @@ def test_token_dir_b2_is_ssot_derived_not_rehardcoded():
     # Path.home()/".claude" (re-hardcode would re-open the drift the SSOT closes).
     # Structural check — runtime equality can't distinguish the two when the env
     # is unset (both yield home/.claude), so we assert on the source idiom.
-    src = (Path(__file__).parent.parent / "hooks" / "shared" / "merge_guard_common.py").read_text(encoding="utf-8")
-    assert "TOKEN_DIR = get_claude_config_dir()" in src
+    # The token lifecycle lives in hooks/shell/merge/tokens.py since the carve; it reads the
+    # SSOT by file (shared/paths.py) so that importing it never runs shared/__init__.
+    src = (Path(__file__).parent.parent / "hooks" / "shell" / "merge" / "tokens.py").read_text(encoding="utf-8")
+    assert "TOKEN_DIR = _config_dir_reader()()" in src
+    assert '"shared" / "paths.py"' in src and "module.get_claude_config_dir" in src
     assert 'TOKEN_DIR = Path.home()' not in src

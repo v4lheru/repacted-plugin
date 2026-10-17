@@ -158,7 +158,7 @@ def _gate_completion_frame(task_id: str, *, subject="design X",
     return {
         "hook_event_name": "PostToolUse",
         "session_id": SID,
-        "agent_type": "PACT:pact-orchestrator",
+        "agent_type": "repacted:pact-orchestrator",
         "tool_name": "TaskUpdate",
         "tool_input": {"taskId": task_id, "status": "completed"},
         "tool_response": {"task": {
@@ -171,7 +171,7 @@ def _gate_completion_frame(task_id: str, *, subject="design X",
 
 
 def _gate_open_write_frame(task_id: str, metadata: dict, *,
-                           agent_type="PACT:pact-orchestrator",
+                           agent_type="repacted:pact-orchestrator",
                            session_id=SID) -> dict:
     """A metadata-only PostToolUse TaskUpdate (no status key) — the
     per-write mirror leg's fire surface."""
@@ -464,7 +464,7 @@ class TestPerWriteSubprocess:
 
         result = _run_hook(
             "task_lifecycle_gate.py",
-            _gate_open_write_frame("80", {"scope_contract": self.SCOPE}),
+            _gate_open_write_frame("80", {"handoff_rejection": self.SCOPE}),
             home,
         )
 
@@ -478,7 +478,7 @@ class TestPerWriteSubprocess:
             "open-task targeted write; got %d" % len(snapshots)
         )
         assert snapshots[0]["task_id"] == "80"
-        assert snapshots[0]["metadata"]["scope_contract"] == self.SCOPE
+        assert snapshots[0]["metadata"]["handoff_rejection"] == self.SCOPE
         assert snapshots[0]["metadata"]["note"] == "existing"
 
     def test_open_task_untargeted_write_no_snapshot(self, tmp_path):
@@ -572,7 +572,7 @@ class TestPerWriteSubprocess:
         _write_task(tasks_dir, "83", status="in_progress", metadata={})
         assert _run_hook(
             "task_lifecycle_gate.py",
-            _gate_open_write_frame("83", {"scope_contract": self.SCOPE}),
+            _gate_open_write_frame("83", {"handoff_rejection": self.SCOPE}),
             home,
         ).returncode == 0
 
@@ -582,4 +582,4 @@ class TestPerWriteSubprocess:
         recovered = _cli_read_snapshots(session_dir, home)
         assert len(recovered) == 1
         assert recovered[0]["task_id"] == "83"
-        assert recovered[0]["metadata"]["scope_contract"] == self.SCOPE
+        assert recovered[0]["metadata"]["handoff_rejection"] == self.SCOPE

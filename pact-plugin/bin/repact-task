@@ -1,0 +1,631 @@
+#!/usr/bin/env python3
+"""repact-task: the project's task graph, kept in the repo and closed only on evidence (D10).
+
+Location: pact-plugin/bin/repact-task. Design: the design notes.
+The log is `.repacted/tasks.jsonl` in the MAIN checkout (a worktree writes there too); `init`
+creates it. Refs are `T-` plus 8 hex; any unique prefix of 4 or more hex characters works.
+Every write is locked, validated and appended; nothing is ever rewritten.
+
+Exit codes: 0 ok, 64 usage, 65 refused (nothing written), 66 no log (run init), 74 unreadable log;
+`sync --check` exits 1 when a lead-attributed acceptance is missing from the log.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+import _repact_common as common  # noqa: E402
+from _tasks import atlas as A  # noqa: E402
+from _tasks import importers as I  # noqa: E402
+from _tasks import registry as R  # noqa: E402
+from _tasks import views as V  # noqa: E402
+from shared.task_log import write as W  # noqa: E402
+
+PT = W.PT
+EXAMPLES = (
+    ("init", "repact-task init --status", "create the log (records 'accepted'); --status reads the offer's answer, --decline records 'no'"),
+    ("add", 'repact-task add "Merge D3 before D5" --priority P1 --owner lead --tag gate', "a new task"),
+    ("set", "repact-task set T-1a2b --status active --rank 2", "change fields (status done is refused)"),
+    ("dep", "repact-task dep T-1a2b --on T-3c4d", "add (or --remove) a dependency; cycles are refused"),
+    ("link", "repact-task link T-1a2b --output doc:docs/plan.md", "add (or --remove) a typed link"),
+    ("start", "repact-task start T-1a2b --ptask session-5a318e14/173", "mark active, linking a platform task"),
+    ("done", "repact-task done T-1a2b --evidence commit:<sha>",
+     "close on verified evidence; --remaining \"<title>\" carries the part not done into a new task"),
+    ("reopen", 'repact-task reopen T-1a2b --note "the fix regressed"', "done back to active, dropped back to planned"),
+    ("drop", "repact-task drop T-1a2b [--with-children]", "drop a task (on the user's word only); a parent with open children needs --with-children"),
+    ("next", "repact-task next --all", "ready tasks in order, then the active count, the stale count (open, no change in "
+                                       "14 days) and the open tasks whose platform task is completed (never recommended)"),
+    ("blocked", "repact-task blocked", "waiting, stuck and blocked tasks with their blockers"),
+    ("tree", "repact-task tree T-1a2b", "what a task needs and what needs it"),
+    ("show", "repact-task show T-1a2b", "every field, link, evidence item and flag"),
+    ("fsck", "repact-task fsck", "corrupt lines, conflicts, concurrent edits, evidence that no longer verifies and "
+                                 "open tasks whose platform task is completed"),
+    ("summary", "repact-task summary --refresh", "the session-start line"),
+    ("sync", "repact-task sync --check", "record missed lead acceptances and rejections (--check writes nothing)"),
+    ("render", "repact-task render --configure", "write the configured views (backlog, progress, release gates)"),
+    ("commit", "repact-task commit", "commit ONLY the log and its views, with one sentence"),
+    ("project", 'repact-task project --what "One line" --stack python,git --decision D27',
+     "edit .repacted/project.json (--status, --slug, --name, --atlas on|off, --drop-decision)"),
+    ("atlas", "repact-task atlas --dry-run",
+     "the vault page and Projects/_index.md (--forget SLUG drops a row; --restore SLUG recreates a deleted page)"),
+    ("import-md", "repact-task import-md docs/backlog.md --team session-1",
+     "propose tasks from markdown (dry run; --json, then --apply [--proposal FILE])"),
+    ("import-gates", "repact-task import-gates docs/release-gates.json --team session-1",
+     "propose release and gate tasks (dry run; --apply writes)"),
+    ("import-pact-backlog", "repact-task import-pact-backlog",
+     "propose tasks from the legacy ~/.claude/pact-backlog file (dry run; --apply writes)"),
+)
+# Commands that read the state: each runs the bridge's quiet sync first (design section 5.4), so it
+# sees the lead's acceptances. render and commit are reads too (commit: sync -> render -> commit);
+# a write-free mode (an importer's dry run, `sync --check`) is not here and never syncs.
+READ_COMMANDS = ("next", "blocked", "tree", "show", "fsck", "summary", "render", "commit")
+NEXT_DEFAULT = 5
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        raise W.Usage(f"{self.prog}: {message}")
+
+
+def _parser() -> argparse.ArgumentParser:
+    epilog = "commands:\n" + "\n".join(f"  {example}\n      {what}" for _, example, what in EXAMPLES)
+    epilog += ("\n\nexit codes: 0 ok, 64 usage, 65 refused, 66 no log (run init), 74 unreadable log;"
+               "\n  sync --check exits 1 when a lead-attributed acceptance is missing from the log")
+    parser = _Parser(prog="repact-task", description="The project's task graph, closed on evidence.",
+                     epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--repo", metavar="DIR",
+                        help="the git checkout to use, before the command (default: the cwd's)")
+    sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
+    init = sub.add_parser("init")
+    offer = init.add_mutually_exclusive_group()
+    offer.add_argument("--status", action="store_true",
+                       help="say whether the init offer was answered here; writes nothing")
+    offer.add_argument("--decline", action="store_true",
+                       help="record 'declined' for this project so it is never offered again")
+    add = sub.add_parser("add")
+    add.add_argument("title")
+    add.add_argument("--priority", choices=PT.PRIORITIES,
+                     help="required: a chosen priority, never a default (the log's growth guard)")
+    add.add_argument("--rank", type=int)
+    add.add_argument("--owner")
+    add.add_argument("--tag", action="append", default=[])
+    add.add_argument("--parent")
+    add.add_argument("--depends", action="append", default=[])
+    add.add_argument("--note")
+    add.add_argument("--force", action="store_true",
+                     help="add even when an open task already has this title")
+    setp = sub.add_parser("set")
+    setp.add_argument("ref")
+    setp.add_argument("--status", choices=PT.STATUSES)
+    setp.add_argument("--priority", choices=PT.PRIORITIES)
+    setp.add_argument("--rank", type=int)
+    setp.add_argument("--owner")
+    setp.add_argument("--tag", action="append")
+    setp.add_argument("--title")
+    setp.add_argument("--note")
+    setp.add_argument("--parent")
+    dep = sub.add_parser("dep")
+    dep.add_argument("ref")
+    dep.add_argument("--on", required=True)
+    dep.add_argument("--remove", action="store_true")
+    link = sub.add_parser("link")
+    link.add_argument("ref")
+    kinds = link.add_mutually_exclusive_group(required=True)
+    for kind in PT.LINK_KINDS:
+        kinds.add_argument(f"--{kind}", metavar="TARGET")
+    link.add_argument("--remove", action="store_true")
+    start = sub.add_parser("start")
+    start.add_argument("ref")
+    start.add_argument("--ptask", metavar="TEAM/ID")
+    done = sub.add_parser("done")
+    done.add_argument("ref")
+    done.add_argument("--evidence", action="append", required=True)
+    done.add_argument("--remaining", metavar="TITLE",
+                      help="the part not done, as the title of a new planned task linked back to this one")
+    reopen = sub.add_parser("reopen")
+    reopen.add_argument("ref")
+    reopen.add_argument("--note")
+    for name in ("tree", "show"):
+        sub.add_parser(name).add_argument("ref")
+    drop = sub.add_parser("drop")
+    drop.add_argument("ref")
+    drop.add_argument("--with-children", action="store_true",
+                      help="also drop the open tasks under it (a parent with open children is refused without it)")
+    nxt = sub.add_parser("next")
+    nxt.add_argument("--all", action="store_true")
+    sub.add_parser("blocked")
+    sub.add_parser("fsck")
+    summary = sub.add_parser("summary")
+    summary.add_argument("--refresh", action="store_true")
+    sync = sub.add_parser("sync")
+    sync.add_argument("--check", action="store_true")
+    render = sub.add_parser("render")
+    render.add_argument("views", nargs="*", metavar="VIEW")
+    render.add_argument("--configure", action="store_true")
+    sub.add_parser("commit")
+    project = sub.add_parser("project")
+    project.add_argument("--what")
+    project.add_argument("--stack", metavar="A,B")
+    project.add_argument("--status", choices=A.PROJECT_STATUSES)
+    project.add_argument("--decision", action="append", default=[])
+    project.add_argument("--drop-decision", action="append", default=[])
+    project.add_argument("--slug")
+    project.add_argument("--name")
+    project.add_argument("--atlas", choices=("on", "off"))
+    atlas = sub.add_parser("atlas")
+    atlas.add_argument("--dry-run", action="store_true")
+    atlas.add_argument("--forget", metavar="SLUG")
+    atlas.add_argument("--restore", metavar="SLUG", help="recreate a page the user deleted (a slug, or _index)")
+    md = sub.add_parser("import-md")
+    md.add_argument("file", nargs="?")
+    md.add_argument("--archive-as", metavar="PATH")
+    md.add_argument("--team")
+    gates = sub.add_parser("import-gates")
+    gates.add_argument("file", nargs="?", default="docs/release-gates.json")
+    gates.add_argument("--team")
+    legacy = sub.add_parser("import-pact-backlog")
+    legacy.add_argument("file", nargs="?")
+    for importer in (md, gates, legacy):
+        importer.add_argument("--json", action="store_true")
+        importer.add_argument("--apply", action="store_true")
+        importer.add_argument("--proposal", metavar="FILE")
+    return parser
+
+
+def resolve(state, text: str) -> str:
+    """A full ref from `T-1a2b`, `1a2b` or a whole ref; usage error when none or several match."""
+    body = text[2:] if text.startswith("T-") else text
+    if not re.fullmatch(r"[0-9a-f]{4,8}", body):
+        raise W.Usage(f"not a task ref: {text!r} (T- plus 4 to 8 hex characters)")
+    matches = [ref for ref in state.tasks if ref[2:].startswith(body)]
+    if len(matches) != 1:
+        raise W.Usage(f"{'no task matches' if not matches else 'ambiguous ref'} {text}")
+    return matches[0]
+
+
+def _line(store, ref: str) -> str:
+    state = store.state()
+    return PT.render_line(state, state.tasks[ref])
+
+
+def _tree(state, ref: str, key, depth: int, seen: set, out: list) -> None:
+    for other in key(ref):
+        if other not in state.tasks:
+            out.append("  " * depth + f"{other}  (unknown)")
+            continue
+        out.append("  " * depth + PT.render_line(state, state.tasks[other]))
+        if other not in seen:
+            seen.add(other)
+            _tree(state, other, key, depth + 1, seen, out)
+
+
+def _ptask_status(ptask: str) -> Optional[str]:
+    """The platform task's status when its file is readable, else None (a missing file is no claim)."""
+    team, _, task_id = ptask.partition("/")
+    from shared import evidence as ev
+    task = ev.load_task(ev.task_path(team, task_id)) if team and task_id else None
+    status = task.get("status") if isinstance(task, dict) else None
+    return status if isinstance(status, str) else None
+
+
+def _show(state, ref: str, completion: Optional[dict] = None) -> list:
+    task = state.tasks[ref]
+    out = [PT.render_line(state, task)]
+    for key in ("title", "status", "priority", "rank", "owner", "tags", "parent", "depends_on",
+                "batch_with", "exclusive_with", "note", "created", "updated"):
+        value = task[key]
+        if value not in (None, [], ""):
+            out.append(f"  {key}: {', '.join(value) if isinstance(value, list) else value}")
+    out.append(f"  state: {PT.classify(state, ref)}")
+    for item in task["links"]:
+        status = _ptask_status(item["target"][len("ptask:"):]) if item["target"].startswith("ptask:") else None
+        out.append(f"  link {item['kind']}: {item['target']}" + (f" ({status})" if status else ""))
+    for item in task["evidence"]:
+        detail = "verified" if item["verified"] else "unverified"
+        if item.get("sha256"):
+            detail += ", digest recorded"
+        out.append(f"  evidence: {item['target']} ({detail})")
+    for item in task["accepts"]:
+        out.append(f"  accepted: {item['ptask']} rev {item['rev']} "
+                   f"({'verified' if item['verified'] else 'without evidence'})")
+    for item in task["rejects"]:
+        out.append(f"  rejected: {item['ptask']} rev {item['rev']}")
+    for flag in PT.drift_flags(state) + completion_flags(completion or {}):
+        if flag.startswith(ref + ":"):
+            out.append(f"  flag: {flag.split(': ', 1)[1]}")
+    return out
+
+
+def _completion(start) -> dict:
+    """bridge.completion_view, or an empty view when the platform tasks cannot be read: the
+    log's own report never fails on the platform's files."""
+    try:
+        return _bridge().completion_view(start)
+    except Exception:   # noqa: BLE001 - platform task files are a hint to the log, never its truth
+        return {"linked": {}, "mentioned": {}}
+
+
+def completion_flags(completion: dict) -> list:
+    """One line per open task whose platform task is completed (the work is done or dropped and
+    the log did not hear it), and one per task a completed platform task names without
+    carrying it."""
+    flags = []
+    for ref, rows in sorted(completion.get("linked", {}).items()):
+        detail = ", ".join(f"#{ptask.rsplit('/', 1)[-1]}" + (f" ({disposition})" if disposition else "")
+                           for ptask, disposition in rows)
+        flags.append(f"{ref}: open, but its platform task is completed: {detail}")
+    for ref, ptasks in sorted(completion.get("mentioned", {}).items()):
+        flags.append(f"{ref}: named by completed platform task(s) "
+                     + ", ".join(f"#{ptask.rsplit('/', 1)[-1]}" for ptask in ptasks) + " (not linked)")
+    return flags
+
+
+def stale_open(state, now=None) -> dict:
+    """{ref: days since the last change} for every open task unchanged for more than STALE_DAYS
+    (exactly 14 days is not stale); a deliberate `set` re-decides a task and clears it. `next`
+    marks them and counts them; it never hides or drops one."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    ages = {ref: PT._age_days(task["updated"] or task["created"], now) for ref, task in state.tasks.items()
+            if task["status"] not in PT.SETTLED}
+    return {ref: age for ref, age in ages.items() if age > PT.STALE_DAYS}
+
+
+def _init(args) -> list:
+    """init, and bootstrap's one-time offer: --status reads the answer, --decline records it.
+    The answer lives in P6's machine registry (_tasks/registry.py): a row with project_id means
+    init ran here (accepted), else its bootstrap answer; a log with no row is `present`."""
+    main = PT.find_main_checkout(Path.cwd())
+    if args.status:
+        if main is None:
+            return ["init: no-repo"]
+        try:
+            row = R.entry(main) or {}
+        except R.RegistryError as err:
+            raise W.Unreadable(str(err)) from err
+        if row.get("project_id") or row.get("init_at"):
+            answer = "accepted"
+        else:
+            answer = (row.get("bootstrap") or {}).get("answer")
+        if answer is None and PT.log_path(main).exists():
+            answer = "present"
+        return [f"init: {answer or 'unanswered'}"]
+    if args.decline:
+        if main is None:
+            raise W.NoLog("not inside a git checkout with a working tree; nothing recorded")
+        try:
+            R.record_bootstrap(main, "declined")
+        except R.RegistryError as err:
+            raise W.Unreadable(str(err)) from err
+        return [f"init: declined for {main}; it will not be offered again"]
+    store = W.init(Path.cwd())
+    project, created = A.ensure_project(store.main)
+    try:
+        R.record_init(store.main, project["id"], project["slug"])
+    except R.RegistryError as err:
+        raise W.Unreadable(str(err)) from err
+    return [f"task log ready: {store.log}",
+            f"project {project['slug']}: {'created' if created else 'kept'} {store.main / A.PROJECT_RELPATH}"]
+
+
+def _bridge():
+    from shared.task_log import bridge
+    return bridge
+
+
+EXIT_MISSED = 1                  # `sync --check` only: a lead-attributed acceptance is missing
+
+
+class Missed(Exception):
+    """`sync --check` found lead-attributed acceptances missing from the log: print, exit 1."""
+
+    def __init__(self, lines):
+        super().__init__("missed")
+        self.lines = lines
+
+
+def _sync(check: bool):
+    """(the lines to print, how many lead-attributed writes are missing)."""
+    report = _bridge().sync(Path.cwd(), check=check)
+    done = report["missed"] if check else report["written"]
+    lines = [f"{'missed' if check else 'written'}: {len(done)}"] + [f"  {item}" for item in done]
+    lines += [f"not attributable (close with repact-task done --evidence): {ptask}"
+              for ptask in report["not_attributable"]]
+    lines += [f"excluded (teachback-exempt owner or signal task): {ptask}" for ptask in report["excluded"]]
+    lines += [f"refused: {item}" for item in report["refused"]]
+    return lines, len(report["missed"])
+def _checkout_root(start: Path) -> Path:
+    for folder in (start, *start.parents):
+        if (folder / ".git").exists():
+            return folder
+    return start
+
+
+def _inside_repo(store, path: str, *extra_roots: Path) -> Path:
+    """A source file for an importer: it must sit inside this checkout or the main one (D26), or
+    in one of `extra_roots`. It is checked by realpath BEFORE anything is read from it."""
+    resolved = Path(path).expanduser().resolve()
+    roots = {store.main.resolve(), _checkout_root(Path.cwd().resolve())} | {r.resolve() for r in extra_roots}
+    if not any(common.is_within(resolved, root) for root in roots):
+        where = " or ~/.claude/pact-backlog" if extra_roots else ""
+        raise W.Refused(f"{path} is outside the repo{where}; the importers read nothing outside it (D26)")
+    if not resolved.is_file():
+        raise W.Usage(f"no such file: {path}")
+    return resolved
+
+
+def _proposal(args, store) -> dict:
+    if args.proposal:
+        try:
+            proposal = json.loads(Path(args.proposal).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as err:
+            raise W.Usage(f"cannot read the proposal {args.proposal}: {err}") from err
+        want = {"import-md": "md", "import-gates": "gates", "import-pact-backlog": "pact-backlog"}[args.command]
+        if not isinstance(proposal, dict) or proposal.get("kind") != want:
+            raise W.Usage(f"{args.proposal} is not an {args.command} proposal")
+        return proposal
+    team = getattr(args, "team", None)
+    if team is not None and not I.TEAM_RE.match(team):
+        raise W.Usage("--team is a team name like session-5a318e14")
+    if args.command == "import-pact-backlog":
+        source = _inside_repo(store, args.file, Path.home() / I.LEGACY_DIR) if args.file \
+            else I.find_legacy(store.main)
+        try:
+            doc = json.loads(source.read_bytes())
+        except (OSError, ValueError) as err:
+            raise W.Unreadable(f"cannot read the legacy backlog {source}: {err}") from err
+        return I.parse_pact_backlog(doc, store.main, source=source.name)
+    if not args.file:
+        raise W.Usage(f"{args.command} needs a file (or --proposal FILE)")
+    source = _inside_repo(store, args.file)
+    text = source.read_text(encoding="utf-8")
+    if args.command == "import-gates":
+        return I.parse_gates(text, store.main, team=team, source=source.name)
+    archive = args.archive_as or f"{I.ARCHIVE_DIR}/{source.name}"
+    if not W._evidence.safe_relpath(archive):
+        raise W.Refused(f"--archive-as {archive}: must be a path inside the repo (D26)")
+    W.check_target(store.main, f"doc:{archive}")
+    return I.parse_md(text, archive, team=team, source=source.name)
+
+
+def _import(args, store) -> list:
+    proposal = _proposal(args, store)
+    if args.apply:
+        return I.apply(store, proposal)
+    if args.json:
+        return [json.dumps(proposal, indent=2, ensure_ascii=False)]
+    return I.table(proposal)
+
+
+def _rerender(store) -> list:
+    """After a write: re-render the configured views. A render problem never undoes the write."""
+    try:
+        V.render_if_configured(store.main)
+    except (W.TaskError, OSError) as err:
+        print(f"repact-task: the write succeeded, but the views were not re-rendered: {err}",
+              file=sys.stderr)
+    return []
+
+
+def _drift(main) -> list:
+    """One line when a generated view differs from a render of the log: after a merge the
+    markdown views are a union of both sides and the gates file is one side (.gitattributes)."""
+    try:
+        names = V.drifted(main)
+    except (W.TaskError, OSError):
+        return []
+    return [f"{V.DRIFT_LINE} ({', '.join(names)}); run `repact-task render`"] if names else []
+
+
+def _capped_refs(refs, shown: int = 10) -> str:
+    refs = sorted(refs)
+    return ", ".join(refs[:shown]) + (f" and {len(refs) - shown} more" if len(refs) > shown else "")
+
+
+def _project_command(args) -> list:
+    main = PT.find_main_checkout(Path.cwd())
+    if args.command == "atlas":
+        if args.forget is not None:
+            A.check_slug(args.forget)
+        if main is not None and not args.dry_run and PT.log_path(main).exists():
+            _bridge().sync_quietly(Path.cwd())      # the page shows the lead's acceptances too
+        return A.run(Path.cwd(), dry_run=args.dry_run, forget=args.forget, restore=args.restore)
+    if main is None:
+        raise W.NoLog("not inside a git checkout with a working tree; nothing written")
+    fields = (args.what, args.stack, args.status, args.slug, args.name, args.atlas)
+    if all(value is None for value in fields) and not args.decision and not args.drop_decision:
+        project = A.read_project(main)
+        if project is None:
+            raise W.NoLog(f"no {A.PROJECT_RELPATH} in {main}; run `repact-task init`")
+        return A.describe(project)
+    return A.describe(A.edit_project(
+        main, what=args.what, stack=args.stack, status=args.status, add_decisions=args.decision,
+        drop_decisions=args.drop_decision, slug=args.slug, name=args.name,
+        atlas=None if args.atlas is None else args.atlas == "on"))
+
+
+def run(args) -> list:
+    if args.command == "init":
+        return _init(args)
+    if args.command in ("project", "atlas"):
+        return _project_command(args)
+    store = W.Store.locate(Path.cwd())
+    if args.command == "sync":
+        lines, missed = _sync(args.check)
+        if missed:                    # a lead-attributed write was lost: a defect, not a to-do (amend_5)
+            raise Missed(lines)
+        return lines
+    if args.command in READ_COMMANDS:              # design section 5.4: reads see the lead's acceptances
+        _bridge().sync_quietly(Path.cwd())
+    if args.command == "render":
+        wrote = V.configure(store.main) if args.configure else False
+        results = V.render(store.main, args.views or None)
+        return ([f"wrote {V.CONFIG_RELPATH}"] if wrote else []) + \
+            [f"{name}: {path} ({'written' if changed else 'unchanged'})" for name, path, changed in results]
+    if args.command == "commit":
+        return [V.commit(store.main)] + A.after_commit(store.main)
+    if args.command.startswith("import-"):
+        out = _import(args, store)
+        if args.apply:
+            _rerender(store)
+        return out
+    state = store.state()
+    if args.command == "add":
+        if args.priority is None:
+            raise W.Usage(f"add needs --priority, one of {' '.join(PT.PRIORITIES)}")
+        parent = resolve(state, args.parent) if args.parent else None
+        depends = [resolve(state, dep) for dep in args.depends]
+        ref = store.add(args.title, priority=args.priority, rank=args.rank, owner=args.owner,
+                        tags=args.tag, parent=parent, depends=depends, note=args.note,
+                        force=args.force)
+        _rerender(store)
+        return [_line(store, ref)]
+    if args.command == "next":
+        completion = _completion(Path.cwd())
+        finished = completion["linked"]                     # never recommended: the work is over
+        queue = [task for task in PT.ready(state) if task["ref"] not in finished]
+        shown = queue if args.all else queue[:NEXT_DEFAULT]
+        stale = stale_open(state)
+        out = []
+        for task in shown:
+            marks = [f"stale {int(stale[task['ref']])}d"] if task["ref"] in stale else []
+            if task["ref"] in completion["mentioned"]:
+                marks.append("named by completed " + ", ".join(
+                    f"#{ptask.rsplit('/', 1)[-1]}" for ptask in completion["mentioned"][task["ref"]]))
+            out.append(PT.render_line(state, task) + "".join(f"  [{mark}]" for mark in marks))
+        out.append(f"active: {len(PT.active(state))}")
+        if stale:
+            out.append(f"{len(stale)} stale (no change in {PT.STALE_DAYS} days): close, drop, or re-decide with set")
+        if finished:
+            out.append(f"{len(finished)} open with a completed platform task (not recommended): close with "
+                       "`done <ref> --evidence <target> [--remaining \"<title>\"]`, or reopen/drop")
+            out += [f"  {PT.render_line(state, state.tasks[ref])}  " + ", ".join(
+                f"#{ptask.rsplit('/', 1)[-1]}" + (f" ({disposition})" if disposition else "")
+                for ptask, disposition in rows) for ref, rows in sorted(finished.items())]
+        return out + _drift(store.main)
+    if args.command == "blocked":
+        return [f"{PT.render_line(state, task)}  {kind}" + (f": {', '.join(who)}" if who else "")
+                for task, kind, who in PT.blocked(state)]
+    if args.command == "fsck":
+        findings = [f"line {line}: corrupt ({reason})" for line, reason in state.corrupt]
+        findings += [f"eid {item['eid']}: {item['count']} different contents" for item in state.eid_conflicts]
+        findings += [f"{item['ref']}: concurrent edit: {item['field']} "
+                     + " vs ".join(json.dumps(v) for v in item["values"]) for item in state.concurrent]
+        findings += [f"eid {item['eid']}: event for unknown task {item['ref']}" for item in state.unknown]
+        findings += [f"{item['ref']}: second create {item['eid']} ignored (the ref collides)"
+                     for item in state.ref_conflicts]
+        for ref, task in sorted(state.tasks.items()):       # merges or raw lines can still make one
+            parent = state.tasks.get(task["parent"] or "")
+            if parent and parent["status"] in PT.SETTLED and task["status"] not in PT.SETTLED:
+                findings.append(f"{ref}: open child of settled parent {parent['ref']} ({parent['status']})")
+        unverifiable = set()
+        for ref, task in sorted(state.tasks.items()):       # every verified claim, re-verified with git
+            for item in task["evidence"] + task["prior_evidence"]:
+                if item["verified"]:
+                    holds, reason = W._evidence.verify_item(store.main, item)
+                    if not holds:
+                        findings.append(f"{ref}: evidence {item['target']} no longer verifies ({reason})")
+                    elif reason == W._evidence.UNVERIFIABLE:
+                        unverifiable.add(ref)
+        findings += completion_flags(_completion(Path.cwd()))
+        notes = [f"note: run evidence of {len(unverifiable)} task(s) is {W._evidence.UNVERIFIABLE}: "
+                 + _capped_refs(unverifiable)] if unverifiable else []
+        return (findings or ["fsck: clean"]) + notes + _drift(store.main)
+    if args.command == "summary":
+        line = store.refresh_cache() if args.refresh else \
+            (PT.cached_summary(store.main) or PT.summary_line(state))
+        return [line] if line else []
+    ref = resolve(state, args.ref)
+    if args.command == "tree":
+        out = [PT.render_line(state, state.tasks[ref]), "  needs:"]
+        _tree(state, ref, lambda r: state.tasks[r]["depends_on"], 2, {ref}, out)
+        out.append("  needed by:")
+        _tree(state, ref, lambda r: sorted(o for o, t in state.tasks.items() if r in t["depends_on"]),
+              2, {ref}, out)
+        return out
+    if args.command == "show":
+        return _show(state, ref, _completion(Path.cwd()))
+    if args.command == "set":
+        changes = [(name, getattr(args, name)) for name in ("status", "priority", "rank", "owner",
+                                                            "title", "note")
+                   if getattr(args, name) is not None]
+        if args.tag is not None:
+            changes.append(("tags", args.tag))
+        if args.parent is not None:
+            changes.append(("parent", resolve(state, args.parent)))
+        if not changes:
+            raise W.Usage("set needs at least one of --status --priority --rank --owner --tag "
+                          "--title --note --parent")
+        for name, value in changes:
+            store.set(ref, name, value)
+    elif args.command == "dep":
+        store.dep(ref, resolve(state, args.on), remove=args.remove)
+    elif args.command == "link":
+        kind = next(k for k in PT.LINK_KINDS if getattr(args, k) is not None)
+        store.link(ref, kind, getattr(args, kind), remove=args.remove)
+    elif args.command == "start":
+        store.start(ref, ptask=args.ptask)
+    elif args.command == "done":
+        remainder = store.done(ref, args.evidence, remaining=args.remaining)
+        if remainder:
+            _rerender(store)
+            return [_line(store, ref), _line(store, remainder)]
+    elif args.command == "reopen":
+        store.reopen(ref, note=args.note)
+    elif args.command == "drop":
+        for child in store.drop(ref, with_children=args.with_children):
+            print(_line(store, child))
+    _rerender(store)
+    return [_line(store, ref)]
+
+
+def _enter_repo(repo) -> None:
+    """Run in `--repo`, else in the cwd's checkout. A cwd outside any checkout (a session started
+    in the repo's parent folder) uses its one child checkout; several are refused, not guessed."""
+    if repo is not None:
+        if PT.find_main_checkout(repo) is None:
+            raise W.NoLog(f"--repo {repo} is not a git checkout with a working tree")
+        os.chdir(repo)
+        return
+    cwd = Path.cwd()
+    if PT.find_main_checkout(cwd) is not None:
+        return
+    try:
+        children = sorted(child for child in cwd.iterdir()
+                          if child.is_dir() and not child.name.startswith(".") and (child / ".git").exists())
+    except OSError:
+        return
+    if len(children) == 1:
+        print(f"repact-task: no repo here; using {children[0]}", file=sys.stderr)
+        os.chdir(children[0])
+    elif children:
+        names = ", ".join(child.name for child in children)
+        raise W.Usage(f"no repo here and several below ({names}); pass --repo DIR before the command")
+
+
+def main(argv) -> int:
+    try:
+        args = _parser().parse_args(argv)
+        _enter_repo(args.repo)
+        for line in run(args):
+            print(line)
+        return 0
+    except Missed as missed:
+        for line in missed.lines:
+            print(line)
+        return EXIT_MISSED
+    except W.TaskError as err:
+        print(f"repact-task: {err}", file=sys.stderr)
+        return err.code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

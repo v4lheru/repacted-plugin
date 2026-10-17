@@ -20,9 +20,10 @@ Atomic-write contract (P0 — architect §8.2):
 Pre-condition gating — verify-and-refuse (P0 — architect §8.3):
 8. Team config absent → no marker written, exit 0
 9. Team config exists, members[] empty → no marker written, exit 0
-10. Team config exists, members[] has members but NO secretary → no
-    marker written, exit 0  (LOAD-BEARING name lookup)
-11. Team config exists, secretary in members[] → marker written
+10. Team config exists, members[] has members but NO secretary → marker
+    written (the marker is keyed on the team; the secretary spawns on demand)
+11. Team config exists with only the lead member → marker written
+11b. Config-less substrate: teams/<team>/inboxes/ exists → marker written
 12. Marker already present and valid → no-op fast path (byte unchanged)
 13. Teammate session (resolve_agent_name returns non-empty) → no-op
 
@@ -60,8 +61,9 @@ from unittest.mock import patch
 
 import pytest
 
-from shared import BOOTSTRAP_MARKER_NAME
+from shared.constants import BOOTSTRAP_MARKER_NAME
 from shared.marker_schema import MARKER_SCHEMA_VERSION
+from helpers import effective_hooks_config  # noqa: E402
 
 _SUPPRESS_EXPECTED = {
     "suppressOutput": True,
@@ -343,12 +345,12 @@ class TestVerifyAndRefuse:
         assert out == _SUPPRESS_EXPECTED
         assert not (session_dir / BOOTSTRAP_MARKER_NAME).exists()
 
-    def test_marker_not_written_when_secretary_missing_from_members(
+    def test_marker_written_when_secretary_missing_from_members(
         self, monkeypatch, tmp_path, capsys,
     ):
-        """LOAD-BEARING: members[] has multiple agents but no entry with
-        name == 'secretary'. Lookup must positively find a member
-        named 'secretary', not just non-empty members."""
+        """LOAD-BEARING: the marker is keyed on the TEAM. The
+        secretary spawns on demand, so a session that never uses memory has
+        no secretary member and must still bootstrap."""
         members = [
             {"id": "a-1", "name": "preparer"},
             {"id": "a-2", "name": "architect"},
@@ -359,7 +361,31 @@ class TestVerifyAndRefuse:
         code, out = _run_main(_make_input(), capsys)
         assert code == 0
         assert out == _SUPPRESS_EXPECTED
-        assert not (session_dir / BOOTSTRAP_MARKER_NAME).exists()
+        assert (session_dir / BOOTSTRAP_MARKER_NAME).exists()
+
+    def test_marker_written_when_only_the_lead_is_a_member(
+        self, monkeypatch, tmp_path, capsys,
+    ):
+        """The platform provisions the team with the lead as its one member:
+        that is an identified team, before any teammate has spawned."""
+        session_dir, _ = _setup_session(
+            monkeypatch, tmp_path, with_team_config=True,
+            members=[{"agentId": "team-lead@t", "name": "team-lead"}])
+        code, out = _run_main(_make_input(), capsys)
+        assert code == 0
+        assert out == _SUPPRESS_EXPECTED
+        assert (session_dir / BOOTSTRAP_MARKER_NAME).exists()
+
+    def test_marker_written_on_the_config_less_substrate(
+        self, monkeypatch, tmp_path, capsys,
+    ):
+        """No config.json, but teams/<team>/inboxes/ exists (Desktop / print)."""
+        session_dir, _ = _setup_session(monkeypatch, tmp_path)
+        (tmp_path / ".claude" / "teams" / _TEAM_NAME / "inboxes").mkdir(parents=True)
+        code, out = _run_main(_make_input(), capsys)
+        assert code == 0
+        assert out == _SUPPRESS_EXPECTED
+        assert (session_dir / BOOTSTRAP_MARKER_NAME).exists()
 
     def test_marker_written_when_secretary_present(
         self, monkeypatch, tmp_path, capsys,
@@ -1681,7 +1707,7 @@ class TestConcurrentTwoHealerRace:
         gate_json = json.loads(gate_out.strip())
         gate_hso = gate_json["hookSpecificOutput"]
         assert gate_hso["hookEventName"] == "UserPromptSubmit"
-        assert "PACT:bootstrap" in gate_hso["additionalContext"], (
+        assert "repacted:bootstrap" in gate_hso["additionalContext"], (
             "healed lead session without marker must inject, not suppress"
         )
         assert gate_rc == 0, f"gate stderr={gate_err!r}"
@@ -1700,9 +1726,11 @@ class TestConcurrentTwoHealerRace:
         assert content["plugin_root"] == str(plugin_root)
         assert content["started_at"]
 
-        # No leftover mkstemp temp files (atomic-rename hygiene).
+        # No leftover mkstemp temp files (atomic-rename hygiene). The healed context
+        # carries a team, so the prompt gate also claims its once-per-session advisory
+        # sentinel (#245); that file is state, not a temp file.
         stray = [p for p in session_dir.iterdir()
-                 if p.name != "pact-session-context.json"]
+                 if p.name not in ("pact-session-context.json", "bootstrap-advised")]
         assert stray == [], f"unexpected files after race: {stray}"
 
         # Heal != forged bootstrap on EVERY schedule: marker pre-conditions
@@ -1743,15 +1771,16 @@ class TestPostToolUseFailSafeNotFailOpen:
     A failing or missing version of this test is a release blocker (design
     §8 Risk-gate locus #1, §12 risk #2)."""
 
-    def test_secretary_absent_from_members_refuses_no_marker(
+    def test_team_observed_on_disk_stamps_without_a_secretary(
         self, monkeypatch, tmp_path, capsys,
     ):
-        """members[] populated but WITHOUT a secretary entry → refuse.
+        """members[] populated WITHOUT a secretary entry → stamp.
 
-        This is the worst-case PostToolUse(Agent) fire: the platform ran the
-        Agent tool, but the entry it wrote is NOT the secretary (or the
-        secretary has not landed yet). The writer must NOT mistake the
-        Agent-spawn fact for bootstrap completion."""
+        The marker is keyed on the team observed on disk, and the secretary
+        spawns on demand. The invariant that survives is "observe, never
+        infer": the stamp re-derives from a named member in members[] on
+        disk, never from the Agent-spawn fact (see the empty-members and
+        absent-config refusals below)."""
         members = [
             {"id": "a-1", "name": "preparer"},
             {"id": "a-2", "name": "backend-coder"},
@@ -1767,12 +1796,7 @@ class TestPostToolUseFailSafeNotFailOpen:
             "suppressOutput": True,
             "hookSpecificOutput": {"hookEventName": "PostToolUse"},
         }
-        assert not (session_dir / BOOTSTRAP_MARKER_NAME).exists(), (
-            "SACROSANCT fail-safe: a PostToolUse(Agent) fire with no secretary "
-            "in members[] must NOT stamp the marker. Stamping here would forge "
-            "bootstrap completion off the bare spawn fact (fail-OPEN), the "
-            "exact failure mode #975's verify-and-refuse design forbids."
-        )
+        assert (session_dir / BOOTSTRAP_MARKER_NAME).exists()
 
     def test_empty_members_refuses_no_marker(
         self, monkeypatch, tmp_path, capsys,
@@ -1864,9 +1888,6 @@ class TestPostToolUseFailSafeEquivalence:
          json.dumps({"members": [{"name": 12345}, {"name": ["secretary"]}]})),
         ("members_key_absent", json.dumps({"name": _TEAM_NAME})),
         ("members_empty", json.dumps({"members": []})),
-        ("members_no_secretary",
-         json.dumps({"members": [{"id": "a-1", "name": "preparer"},
-                                 {"id": "a-2", "name": "backend-coder"}]})),
     ]
 
     @pytest.mark.parametrize(
@@ -2118,13 +2139,13 @@ class TestPostToolUseGotchas:
             "decision keys on agent_type via is_lead, never agent_id (§10.6)."
         )
 
-    def test_empty_agent_id_does_not_force_a_stamp_without_secretary(
+    def test_empty_agent_id_does_not_force_a_stamp_without_a_team(
         self, monkeypatch, tmp_path, capsys,
     ):
         """The empty-string agent_id is NOT itself treated as a signal: with
-        the secretary ABSENT, an empty agent_id still refuses. (Guards against
-        a future reader mistaking agent_id=='' for a lead/bootstrap signal.)"""
-        members = [{"id": "a-1", "name": "preparer"}]
+        no named member on disk, an empty agent_id still refuses. (Guards
+        against a future reader mistaking agent_id=='' for a bootstrap signal.)"""
+        members = []
         session_dir, _ = _setup_session(
             monkeypatch, tmp_path, with_team_config=True, members=members,
         )
@@ -2134,17 +2155,16 @@ class TestPostToolUseGotchas:
         assert code == 0
         assert not (session_dir / BOOTSTRAP_MARKER_NAME).exists()
 
-    def test_non_secretary_agent_spawn_does_not_stamp(
+    def test_agent_spawn_does_not_stamp_before_the_team_is_on_disk(
         self, monkeypatch, tmp_path, capsys,
     ):
-        """A PostToolUse(Agent) fire for a NON-secretary spawn while the
-        secretary is not yet present → no stamp. The tool_input names a
-        non-secretary subagent; the writer ignores tool_input entirely and
-        re-derives from members[], which lacks a secretary → refuse.
+        """A PostToolUse(Agent) fire while members[] holds no named member →
+        no stamp. The tool_input names a subagent; the writer ignores
+        tool_input entirely and re-derives from members[] on disk → refuse.
 
-        This pins that the writer does not infer 'a secretary spawn happened'
-        from the Agent call's arguments — it only observes members[] on disk."""
-        members = [{"id": "a-1", "name": "preparer"}]
+        This pins that the writer does not infer 'a spawn happened' from the
+        Agent call's arguments — it only observes members[] on disk."""
+        members = [{"id": "a-1"}]
         session_dir, _ = _setup_session(
             monkeypatch, tmp_path, with_team_config=True, members=members,
         )
@@ -2171,7 +2191,7 @@ class TestPostToolUseGotchas:
             monkeypatch, tmp_path, with_team_config=True, members=members,
         )
         frame = _make_posttooluse_agent_input()
-        frame["agent_type"] = ["PACT:pact-orchestrator"]  # unhashable / non-str
+        frame["agent_type"] = ["repacted:pact-orchestrator"]  # unhashable / non-str
         code, out = _run_main(frame, capsys)
         assert code == 0
         assert out == {
@@ -2354,7 +2374,7 @@ class TestHooksJsonDualRegistration:
     HOOKS_JSON = Path(__file__).parent.parent / "hooks" / "hooks.json"
 
     def _load(self):
-        return json.loads(self.HOOKS_JSON.read_text(encoding="utf-8"))
+        return effective_hooks_config()
 
     def test_writer_registered_under_posttooluse_agent(self):
         config = self._load()

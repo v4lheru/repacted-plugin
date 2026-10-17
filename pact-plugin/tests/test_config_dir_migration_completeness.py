@@ -40,6 +40,9 @@ HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
 # (basename, exact unparsed construction) pairs that are legitimate residuals.
 ALLOWLIST = {
     ("symlinks.py", "Path.home() / '.claude'"),
+    # the secretary rework: the hook briefing mirrors the pact-memory CLI's store path, which is a
+    # deliberate default-root pin (skills/pact-memory/scripts/config.py, "do not migrate").
+    ("session_resume.py", "Path.home() / '.claude' / 'pact-memory'"),
 }
 
 

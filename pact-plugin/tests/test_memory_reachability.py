@@ -115,8 +115,8 @@ def test_a_directory_with_no_index_is_not_applicable(tmp_path):
 
 def test_utf16_units_are_not_code_points(tmp_path):
     """`len()` undercounts an astral character by exactly one per occurrence."""
-    assert mr.utf16_units("\U0001F511") == 2
-    assert len("\U0001F511") == 1
+    assert mr.utf16_units("\N{KEY}") == 2
+    assert len("\N{KEY}") == 1
 
 
 def test_the_emitted_anchor_is_a_byte_exact_slice_of_the_raw_index(tmp_path):

@@ -92,8 +92,16 @@ _RE_PR_ISSUE = re.compile(r"(?<!&)#\d{2,4}(?![\w-])")
 # SHA-looking: 7-12 hex chars, must contain BOTH at least one letter AND
 # at least one digit. Skips pure-digit runs (phone numbers, timestamps,
 # message IDs) and pure-letter runs (English words).
+#
+# ONE CARVE-OUT, AS NARROW AS IT CAN BE: an opaque name hash written as the
+# whole token `sha8:` followed by EXACTLY 8 lowercase hex characters. That is
+# how the user-layer skills anonymise a person-named source file, so it names
+# no commit and is not a planning artifact. Anything else still flags: a bare
+# 8-hex run, `sha8:` with 7 or 9-12 hex, `sha8:` glued to a preceding word,
+# and a real SHA elsewhere on the same line.
 _RE_SHA_LOOKING = re.compile(
-    r"\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,12}\b"
+    r"\b(?!(?<=\bsha8:)[0-9a-f]{8}\b)"
+    r"(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,12}\b"
 )
 
 # Version markers: literal vX.Y.Z with word boundary.
@@ -546,7 +554,7 @@ class TestScannerSelfDiscipline:
         after the digit run excludes it."""
         md = self._write_md(
             tmp_path,
-            "[Authority Protocol §12](pact-completion-authority.md#12-completion-authority)\n",
+            "[Authority Protocol §12](completion.md#12-completion-authority)\n",
         )
         violations = [v for v in _scan_file(md) if v.pattern_name == "pr_or_issue_ref"]
         assert violations == [], (
@@ -570,6 +578,26 @@ class TestScannerSelfDiscipline:
             v.pattern_name == "sha_looking" and v.match_text == "bef7f24"
             for v in violations
         ), f"expected sha_looking hit, got: {violations}"
+
+    def test_sha_looking_skips_an_opaque_sha8_name_hash(self, tmp_path):
+        """`sha8:` + exactly 8 lowercase hex is an anonymised file stem."""
+        md = self._write_md(tmp_path, "- sha8:9e5846b7 (orphan note, name hashed)\n")
+        violations = [v for v in _scan_file(md) if v.pattern_name == "sha_looking"]
+        assert violations == [], f"sha8 name hash flagged: {violations}"
+
+    @pytest.mark.parametrize("line, expected", [
+        ("From commit 9e5846b7 onward.\n", ["9e5846b7"]),
+        ("- sha8:9e5846b (seven)\n", ["9e5846b"]),
+        ("- sha8:9e5846b7a (nine)\n", ["9e5846b7a"]),
+        ("- sha8:9e5846b7a1b2 (twelve)\n", ["9e5846b7a1b2"]),
+        ("- xsha8:9e5846b7 (glued to a word)\n", ["9e5846b7"]),
+        ("- sha8:9e5846b7, committed as ac134a2\n", ["ac134a2"]),
+    ], ids=["bare-8-hex", "sha8-7-hex", "sha8-9-hex", "sha8-12-hex",
+            "not-a-whole-token", "real-sha-on-the-same-line"])
+    def test_the_sha8_carve_out_admits_nothing_else(self, tmp_path, line, expected):
+        md = self._write_md(tmp_path, line)
+        hits = [v.match_text for v in _scan_file(md) if v.pattern_name == "sha_looking"]
+        assert hits == expected, f"carve-out too wide or too narrow: {hits}"
 
     def test_sha_looking_skips_pure_digits(self, tmp_path):
         """Phone numbers, timestamps, message IDs are pure-digit and exempt

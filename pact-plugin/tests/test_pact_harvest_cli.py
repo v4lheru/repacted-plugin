@@ -38,7 +38,7 @@ goes RED). The B1 parity test's raw-join-differs companion is its in-suite
 non-vacuity guard.
 
 Run on the 3.13.7 interpreter (default python3 has no pytest):
-    /Users/mj/.pyenv/versions/3.13.7/bin/python3 -m pytest \
+    /Users/alice/.pyenv/versions/3.13.7/bin/python3 -m pytest \
         pact-plugin/tests/test_pact_harvest_cli.py -rA
 """
 
@@ -54,9 +54,9 @@ import pytest
 _HOOKS_DIR = Path(__file__).parent.parent / "hooks"
 
 import shared.pact_context as pact_context  # noqa: E402
+from shared.journal_reader import normalize_trailing_z as _normalize_trailing_z  # noqa: E402
 from shared.pact_harvest import _resolve_session_dir  # noqa: E402
 from shared.session_journal import (  # noqa: E402
-    _normalize_trailing_z,
     _parse_ts,
     append_event,
     make_event,
@@ -64,7 +64,7 @@ from shared.session_journal import (  # noqa: E402
 )
 
 _CLI = _HOOKS_DIR / "shared" / "pact_harvest.py"
-_PY = "/Users/mj/.pyenv/versions/3.13.7/bin/python3"
+_PY = "/Users/alice/.pyenv/versions/3.13.7/bin/python3"
 
 # Exit-code contract (must match pact_harvest.py).
 _EXIT_OK = 0
@@ -280,7 +280,7 @@ class TestResolveSessionDirSubprocess:
         # the child must inherit CLAUDE_CONFIG_DIR to resolve the SAME tmp
         # root as the parent oracle (pact_context.reconstruct_session_dir).
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
-        project_dir = "/Users/x/my.project dir"   # dot AND space in the basename
+        project_dir = "/Users/alice/my.project dir"   # dot AND space in the basename
         session_id = "abc.def 123"                  # dot AND space (non-allowlist)
         ctx = self._write_ctx(tmp_path, project_dir, session_id)
         r = _run_cli("resolve-session-dir", "--context-file", str(ctx))
@@ -611,7 +611,7 @@ class TestSessionDirContainment:
 
     def test_legit_contained_session_dir_passes(
         self, tmp_path, monkeypatch, pact_context):
-        """A session dir UNDER <config>/pact-sessions/ resolves normally
+        """A session dir UNDER <config>/pact-sessions/ resolves usually
         (exit 0) — containment must NOT over-reject the canonical layout. Guards
         the false-rejection direction: a too-strict predicate would flip this to
         exit 2."""

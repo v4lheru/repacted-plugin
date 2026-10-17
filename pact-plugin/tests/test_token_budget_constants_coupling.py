@@ -1607,9 +1607,9 @@ class TestCompressedSummaryCapIsReferencedNotSpelled:
 
     THE SCOPE IS ONE FUNCTION AND THAT IS A MEASURED CHOICE, NOT A
     PREFERENCE. A module-wide ban on the bare literal is NOT available here:
-    `OVERRIDE_RATIONALE_MAX` holds the SAME value 120 for an unrelated
-    purpose, so a module-wide rule would go red on a legitimate use of the
-    other constant. THE AXIS THIS ARM CANNOT SEE follows from that: a sixth
+    `OVERRIDE_RATIONALE_MAX` held the SAME value 120 for an unrelated
+    purpose until the 1.5.0 pin-gate cut, so a module-wide rule would have
+    gone red on a legitimate use of the other constant. THE AXIS THIS ARM CANNOT SEE follows from that: a sixth
     site added OUTSIDE this function is outside the population, and the
     collision on the value is why the population cannot simply be widened.
     """

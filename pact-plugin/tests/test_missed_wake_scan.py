@@ -48,7 +48,7 @@ from fixtures.role_frames import (  # noqa: E402
     captured_teammate_sessionstart,
 )
 
-LEAD_AGENT_TYPE = "PACT:pact-orchestrator"
+LEAD_AGENT_TYPE = "repacted:pact-orchestrator"
 TEAMMATE_AGENT_TYPE = "pact-test-engineer"
 FIXED_NOW = datetime(2026, 6, 7, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -199,6 +199,9 @@ class TestBuildSurface:
         assert out is not None
         assert "missed-wake" in out.lower()
         assert "wake-SendMessage" in out, "must name the corrective action"
+        # CH-8: cause (1) names the one-line wake; no value travels in a message.
+        assert "the directive is on disk and the wake did not arrive" in out
+        assert "paired wake" not in out
         assert "#7" in out and "architect" in out and "design X" in out
         assert "~45min" in out, "age computed from the injected now (deterministic)"
         assert "awaiting_lead_completion" in out

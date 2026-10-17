@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""pact-which-team: which PACT team is live, and which one does the context name?
+
+Read-only. Lists the team dirs under <config>/teams by the freshness of their
+task store, marks the team that pact-session-context.json names, and says
+whether that team exists. It prints only dir names, ages, existence flags and
+counts; it never prints a value from any file it reads.
+
+This is the discriminating check of the pact-field-notes resume runbook
+(references/resume-and-team-identity.md). The verdict line names the branch:
+
+  OK        the context team exists and holds the freshest task store
+  PHANTOM   the context team dir is absent
+  STALE     the context team exists but another team's task store is newer
+
+and, for PHANTOM/STALE, whether some team config identity-matches this
+session (branch 2: the resolver overrides the context, so editing team_name
+reverts) or none does (branch 1: editing team_name in the context file holds).
+
+Config dir: $CLAUDE_CONFIG_DIR, else ~/.claude.
+Session: --session ID, else $CLAUDE_CODE_SESSION_ID, else the most recently
+written pact-session-context.json.
+
+Exit codes: 0 always after a successful read (this is a report, not a gate);
+2 on a usage error.
+"""
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+
+def config_dir() -> Path:
+    env = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(env).expanduser() if env else Path.home() / ".claude"
+
+
+def read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def mtime(path: Path):
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def age(ts, now):
+    if ts is None:
+        return "-"
+    secs = max(0, int(now - ts))
+    if secs < 120:
+        return f"{secs}s"
+    if secs < 7200:
+        return f"{secs // 60}m"
+    if secs < 172800:
+        return f"{secs // 3600}h"
+    return f"{secs // 86400}d"
+
+
+def find_context(root: Path, session: str):
+    """Return (context_path, how_chosen) or (None, reason)."""
+    sessions = root / "pact-sessions"
+    if session:
+        hits = sorted(sessions.glob(f"*/{session}/pact-session-context.json"))
+        if hits:
+            return hits[0], "session id"
+        return None, f"no pact-session-context.json for session {session}"
+    files = list(sessions.glob("*/*/pact-session-context.json"))
+    if not files:
+        return None, "no pact-session-context.json under pact-sessions/"
+    files.sort(key=lambda p: mtime(p) or 0, reverse=True)
+    return files[0], "newest context file"
+
+
+def census(root: Path, session: str):
+    teams_root = root / "teams"
+    tasks_root = root / "tasks"
+    rows = []
+    try:
+        entries = [e for e in teams_root.iterdir() if e.is_dir()]
+    except OSError:
+        entries = []
+    for entry in entries:
+        cfg = read_json(entry / "config.json")
+        tasks_dir = tasks_root / entry.name
+        task_files = list(tasks_dir.glob("*.json")) if tasks_dir.is_dir() else []
+        lead_sid = cfg.get("leadSessionId") if isinstance(cfg, dict) else None
+        rows.append({
+            "team": entry.name,
+            "team_mtime": mtime(entry),
+            "has_config": isinstance(cfg, dict),
+            "tasks_mtime": mtime(tasks_dir) if tasks_dir.is_dir() else None,
+            "task_files": len(task_files),
+            "claims_session": bool(session) and lead_sid == session,
+        })
+    rows.sort(key=lambda r: (r["tasks_mtime"] or 0, r["team_mtime"] or 0),
+              reverse=True)
+    return rows
+
+
+def verdict(named, rows):
+    if not named:
+        return "UNKNOWN", "no team_name in the context file"
+    by_name = {r["team"]: r for r in rows}
+    claimers = [r["team"] for r in rows if r["claims_session"]]
+    newest = rows[0]["team"] if rows else None
+    if named not in by_name:
+        state = "PHANTOM"
+        detail = f"context names {named} (dir ABSENT)"
+    elif by_name[named]["claims_session"]:
+        return "OK", (f"context team {named} exists and its config identity-matches "
+                      "this session (a newer store elsewhere is another session)")
+    elif newest and newest != named and (rows[0]["tasks_mtime"] or 0) > (
+            by_name[named]["tasks_mtime"] or 0):
+        state = "STALE"
+        detail = (f"context names {named} (exists, config does not claim this session), "
+                  f"but {newest} has a newer task store; confirm by creating a task "
+                  "and seeing which tasks/ dir it lands in")
+    else:
+        return "OK", f"context team {named} exists and holds the freshest task store"
+    if newest:
+        detail += f"; newest team {newest}"
+    foreign = [c for c in claimers if c != named]
+    if foreign:
+        detail += (f"; branch 2: {', '.join(foreign)} identity-matches this session, "
+                   "so an edit of team_name reverts (see the runbook)")
+    else:
+        detail += ("; branch 1: no team config claims this session, "
+                   "so editing team_name in the context file holds (back it up first)")
+    return state, detail
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="pact-which-team",
+        description="Show which PACT team is live and which one the session context names (read-only).")
+    ap.add_argument("--session", default="",
+                    help="session id whose context to read (default: $CLAUDE_CODE_SESSION_ID, else the newest context)")
+    ap.add_argument("--limit", type=int, default=8, help="team rows to print (default 8)")
+    ap.add_argument("--json", action="store_true", help="print one JSON object instead of a table")
+    args = ap.parse_args(argv)
+
+    root = config_dir()
+    now = time.time()
+    if args.session:
+        ctx_path, how = find_context(root, args.session)
+    else:
+        env_sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        ctx_path, how = find_context(root, env_sid) if env_sid else (None, "")
+        if ctx_path is None:
+            ctx_path, how = find_context(root, "")
+    ctx = read_json(ctx_path) if ctx_path else None
+    named = ctx.get("team_name", "") if isinstance(ctx, dict) else ""
+    named = named if isinstance(named, str) else ""
+    session = ctx_path.parent.name if ctx_path else args.session
+    rows = census(root, session)
+    state, detail = verdict(named, rows)
+
+    if args.json:
+        out = {
+            "config_dir": str(root),
+            "context_file": str(ctx_path) if ctx_path else None,
+            "context_chosen_by": how,
+            "session": session,
+            "context_team": named,
+            "context_team_exists": bool(named) and (root / "teams" / named).is_dir(),
+            "verdict": state,
+            "detail": detail,
+            "teams": [dict(r, team_age=age(r["team_mtime"], now),
+                           tasks_age=age(r["tasks_mtime"], now))
+                      for r in rows[: args.limit]],
+        }
+        print(json.dumps(out, indent=1))
+        return 0
+
+    print(f"config: {root}")
+    print(f"context: {ctx_path if ctx_path else '-'} ({how})")
+    print(f"session: {session or '-'}   context team: {named or '-'}")
+    print(f"{'team':<40} {'tasks age':>9} {'tasks':>5} {'config':>6}  mark")
+    for r in rows[: args.limit]:
+        marks = []
+        if r["team"] == named:
+            marks.append("<- context")
+        if r["claims_session"]:
+            marks.append("claims session")
+        print(f"{r['team']:<40} {age(r['tasks_mtime'], now):>9} {r['task_files']:>5} "
+              f"{'yes' if r['has_config'] else 'no':>6}  {' '.join(marks)}")
+    if len(rows) > args.limit:
+        print(f"... {len(rows) - args.limit} more team dirs")
+    print(f"{state}: {detail}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

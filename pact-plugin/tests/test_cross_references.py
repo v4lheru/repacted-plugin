@@ -24,18 +24,20 @@ COMMANDS_DIR = Path(__file__).parent.parent / "commands"
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
-WORKFLOWS_PATH = PROTOCOLS_DIR / "pact-workflows.md"
+# the protocol consolidation, rows about protocols/* only: the workflow, stall and algedonic content moved to
+# the plan §5 targets; the SSOT pact-protocols.md is deleted.
+WORKFLOWS_PATH = PROTOCOLS_DIR / "workflows.md"
 ORCHESTRATE_PATH = COMMANDS_DIR / "orchestrate.md"
 COMPACT_PATH = COMMANDS_DIR / "comPACT.md"
-REPACT_PATH = COMMANDS_DIR / "rePACT.md"
+REPACT_PATH = COMMANDS_DIR.parent / "reference" / "rePACT" / "nested-cycle.md"  # COMMANDS m8b: rePACT.md is a stub; its procedure lives here
 PEER_REVIEW_PATH = COMMANDS_DIR / "peer-review.md"
-AGENT_STALL_PATH = PROTOCOLS_DIR / "pact-agent-stall.md"
-AGENT_TEAMS_SKILL_PATH = SKILLS_DIR / "pact-agent-teams" / "SKILL.md"
+AGENT_STALL_PATH = PROTOCOLS_DIR / "coordination.md"
+# TEAMMATE (m6): the four teammate skills merged into skills/teammate.
+AGENT_TEAMS_SKILL_PATH = SKILLS_DIR / "teammate" / "SKILL.md"
 HARVEST_SKILL_PATH = SKILLS_DIR / "pact-handoff-harvest" / "SKILL.md"
 SECRETARY_PATH = AGENTS_DIR / "pact-secretary.md"
 ORCHESTRATION_SKILL_PATH = SKILLS_DIR / "orchestration" / "SKILL.md"
 ALGEDONIC_PATH = PROTOCOLS_DIR / "algedonic.md"
-PACT_PROTOCOLS_PATH = PROTOCOLS_DIR / "pact-protocols.md"
 COMM_CHARTER_PATH = PROTOCOLS_DIR / "pact-communication-charter.md"
 
 
@@ -130,7 +132,7 @@ class TestWorktreeScopeWarnings:
         ("comPACT.md", COMPACT_PATH),
         ("rePACT.md", REPACT_PATH),
         ("peer-review.md", PEER_REVIEW_PATH),
-        ("pact-agent-teams/SKILL.md", AGENT_TEAMS_SKILL_PATH),
+        ("teammate/SKILL.md", AGENT_TEAMS_SKILL_PATH),
     ]
 
     @pytest.mark.parametrize(
@@ -188,10 +190,12 @@ class TestCustomStartFlowsCrossReference:
             "silently satisfy it."
         )
 
-    def test_secretary_has_after_briefing_section(self, secretary_content):
-        assert "After Session Briefing" in secretary_content, (
-            "pact-secretary.md missing 'After Session Briefing' section "
-            "referenced by SKILL.md custom start flows note"
+    def test_secretary_re_enters_the_standard_lifecycle(self, secretary_content):
+        # the secretary rework: no session briefing at spawn any more; the custom start flow is
+        # "do the task you were spawned for, then re-enter the standard lifecycle".
+        assert "re-enter the standard lifecycle" in secretary_content, (
+            "pact-secretary.md missing the re-entry instruction the SKILL.md "
+            "custom start flows note relies on"
         )
 
 
@@ -276,9 +280,9 @@ class TestDeadReferencesToMovedOrchestratorCore:
 class TestLeadSideHaltFanOutSlugStability:
     """L10: Stability of the `lead-side-halt-fan-out` slug.
 
-    The canonical `### Lead-Side HALT Fan-Out` heading lives in
-    protocols/algedonic.md (post-v4.0.0 migration) and is referenced from
-    4 consumer files via the GitHub-rendered slug `lead-side-halt-fan-out`.
+    The canonical `## Lead-Side HALT Fan-Out` heading lives in
+    protocols/algedonic.md (an H2 since the protocol consolidation and is referenced via the
+    GitHub-rendered slug `lead-side-halt-fan-out`.
     Renaming the heading silently breaks every cross-reference (link still
     resolves to the file, just lands at the page top instead of the
     section). This test pins the slug by asserting:
@@ -287,16 +291,15 @@ class TestLeadSideHaltFanOutSlugStability:
     - each of the consumer files contains the exact slug fragment.
     """
 
-    CANONICAL_HEADING = "### Lead-Side HALT Fan-Out"
+    CANONICAL_HEADING = "## Lead-Side HALT Fan-Out"   # H2 since the protocol consolidation; the slug is unchanged
     SLUG = "lead-side-halt-fan-out"
 
-    # algedonic.md hosts the canonical heading AND 2 inline self-anchors;
-    # 3 other consumer files each carry one external xref.
+    # algedonic.md hosts the canonical heading AND a self-anchor; the other
+    # consumer files each carry one external xref.
     CROSS_REF_FILES = [
         ("protocols/algedonic.md", ALGEDONIC_PATH),
         ("commands/orchestrate.md", ORCHESTRATE_PATH),
-        ("protocols/pact-protocols.md", PACT_PROTOCOLS_PATH),
-        ("protocols/pact-communication-charter.md", COMM_CHARTER_PATH),
+        ("protocols/lead-reference.md", PROTOCOLS_DIR / "lead-reference.md"),  # CLEANUP-A: charter Part I moved here
     ]
 
     def test_canonical_heading_present_in_algedonic(self):

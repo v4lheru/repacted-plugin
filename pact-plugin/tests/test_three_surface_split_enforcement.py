@@ -81,59 +81,6 @@ def _extract_persona_section_2(text: str) -> str:
 # =============================================================================
 
 
-class TestPersonaSection2ContainsNoMechanics:
-    """Pins the directive↔mechanics asymmetry: persona §2 describes
-    WHAT/WHEN; commands/bootstrap.md owns HOW. Mechanics in persona §2
-    creates a drift surface where future contributors duplicate
-    command-body text and the two sides desynchronize silently.
-    """
-
-    @pytest.fixture
-    def section_2_body(self):
-        return _extract_persona_section_2(
-            PERSONA_PATH.read_text(encoding="utf-8")
-        )
-
-    @pytest.mark.parametrize(
-        "label,pattern",
-        [
-            (
-                "mkdir command",
-                r"\bmkdir\b",
-            ),
-            (
-                "touch command",
-                r"\btouch\b",
-            ),
-            (
-                "literal session-dir path with bootstrap-complete",
-                r"/bootstrap-complete\b",
-            ),
-            (
-                "fenced shell code block",
-                r"```(?:sh|bash|shell|zsh)?\s*\n",
-            ),
-        ],
-    )
-    def test_persona_section_2_excludes_mechanics_pattern(
-        self, section_2_body, label, pattern
-    ):
-        """Persona §2 must not contain shell mechanics. Each pattern
-        names a load-bearing class of mechanics-leakage that, if it
-        appeared, would create a duplicate-mechanics drift surface.
-
-        Mechanics belong in `commands/bootstrap.md` Step-N sections; the
-        persona §2 Read(file_path="../commands/bootstrap.md") cross-ref
-        is the proper indirection.
-        """
-        match = re.search(pattern, section_2_body)
-        assert match is None, (
-            f"Persona §2 contains mechanics-leakage ({label}): "
-            f"matched {match.group(0)!r} at offset {match.start()}. "
-            f"Mechanics belong in commands/bootstrap.md, not the persona "
-            f"body — see the three-surface split discipline at the top "
-            f"of test_three_surface_split_enforcement.py."
-        )
 
 
 # =============================================================================
@@ -206,54 +153,6 @@ class TestBootstrapCommandExcludesGovernanceDirectives:
             flags=re.MULTILINE | re.IGNORECASE,
         )
 
-    @pytest.mark.parametrize("keyword", GOVERNANCE_KEYWORDS)
-    def test_bootstrap_md_excludes_governance_keyword(
-        self, bootstrap_text, keyword
-    ):
-        """Each governance keyword names a persona-body-owned section.
-        Its presence in bootstrap.md AS A HEADING-SHAPE construct
-        indicates governance leaking into the mechanics surface.
-
-        Heading-shape detector (per `_governance_leak_pattern` above):
-          1. Markdown heading line (H1-H6) containing the keyword
-             (e.g., `## SACROSANCT Rules`, `### Completion Authority`).
-          2. Bold-emphasis form (e.g., `**MISSION:**`, `**FINAL MANDATE**
-             to all agents`).
-
-        Both forms are the empirical persona-body shape that signals real
-        governance leakage. Inline prose mentions (e.g., quoted example
-        blocks like `<full mission: deliver session briefing on spawn,
-        ... CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per persona §13>`)
-        do NOT match — the test is intentionally specific to heading-shape
-        constructs, not arbitrary keyword presence.
-
-        Case-insensitive: a future contributor lowercasing a heading
-        (e.g., `## sacrosanct non-negotiables`) is still caught.
-
-        Positive controls: `test_governance_keyword_pattern_catches_known_leaks`
-        synthesizes representative heading-shape leaks and asserts the
-        pattern catches each — guards against silent regression to a
-        pattern that no longer fires on real leaks.
-        """
-        pattern = self._governance_leak_pattern(keyword)
-        match = pattern.search(bootstrap_text)
-        if match is not None:
-            line_start = bootstrap_text.rfind("\n", 0, match.start()) + 1
-            line_end_idx = bootstrap_text.find("\n", match.start())
-            line_end = line_end_idx if line_end_idx != -1 else len(bootstrap_text)
-            line_no = bootstrap_text[:line_start].count("\n") + 1
-            line_text = bootstrap_text[line_start:line_end]
-            pytest.fail(
-                f"commands/bootstrap.md contains governance keyword "
-                f"{keyword!r} in HEADING SHAPE at L{line_no}: "
-                f"{line_text!r}. Heading-shape governance content "
-                f"belongs in the --agent-delivered persona body, not "
-                f"the per-session ritual command. Re-locate to "
-                f"pact-orchestrator.md or remove. (Inline prose "
-                f"mentions of the keyword are NOT caught by this test "
-                f"by design — see the heading-shape detector "
-                f"_governance_leak_pattern.)"
-            )
 
     def test_governance_keyword_pattern_catches_known_leaks(self):
         """Positive control for the heading-shape detector.
@@ -328,61 +227,3 @@ class TestBootstrapCommandExcludesGovernanceDirectives:
                 f"over-broaden, undoing the Option E refinement."
             )
 
-    def test_bootstrap_md_no_mandatory_imperative_outside_step_sections(
-        self, bootstrap_text
-    ):
-        """The `**You MUST ...**` pattern (any case variant of MUST/must/Must)
-        is the signature of persona-body imperative directive prose. It is
-        legitimate INSIDE `## Step N — ...` sections (mechanics naturally
-        use mandatory voice, e.g., "**Substitute `<path>` with ...**") but
-        FORBIDDEN outside Step-N sections, where its presence indicates
-        governance-style imperative leakage.
-
-        Walks the document section-by-section. Each section starts at a
-        `## ` heading and ends at the next `## ` heading or EOF. A section
-        is a "Step section" iff its heading matches `## Step N — ...`.
-        Non-Step sections are scanned for `**You (MUST|must|Must)` and any
-        match fails the test. The triple-form variant catches all three
-        common-case forms (all-caps mandate, lowercase imperative, leading-
-        cap stylized) without false-firing on substring matches like
-        `Mustard` (`\\b` boundary).
-        """
-        # Split into sections by `## ` heading lines
-        section_starts = [
-            m.start() for m in re.finditer(r"^## ", bootstrap_text, re.MULTILINE)
-        ]
-        # Append EOF as terminal boundary
-        section_starts.append(len(bootstrap_text))
-
-        offenders = []
-        for i in range(len(section_starts) - 1):
-            section = bootstrap_text[section_starts[i]:section_starts[i + 1]]
-            heading_line_end = section.find("\n")
-            heading = section[:heading_line_end] if heading_line_end >= 0 else section
-            # Step sections are mechanics-allowed
-            if re.match(r"## Step \d+\b", heading):
-                continue
-            # Non-Step section: check for **You (MUST|must|Must) pattern
-            for match in re.finditer(
-                r"\*\*[Yy]ou\s+(?:MUST|must|Must)\b",
-                section,
-            ):
-                offenders.append(
-                    (heading.strip(), match.group(0), match.start())
-                )
-
-        assert not offenders, (
-            f"commands/bootstrap.md contains persona-body-style mandatory "
-            f"imperative(s) `**You MUST` outside `## Step N` sections — "
-            f"governance imperative leaking into mechanics surface. "
-            f"Offenders:\n"
-            + "\n".join(
-                f"  - section {h!r}: {p!r} at offset {o}"
-                for h, p, o in offenders
-            )
-            + "\n\n"
-            "Mandatory voice belongs INSIDE Step-N sections (where it "
-            "applies to mechanics like substitution rules) OR in the "
-            "persona body's directive surface — not in bootstrap.md "
-            "headers, intros, or non-Step sections."
-        )

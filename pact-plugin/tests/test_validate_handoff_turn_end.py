@@ -29,6 +29,7 @@ from test_stop_background_gate import (
     probe_env,
     valid_wait,
 )
+from helpers import effective_hooks_config  # noqa: E402
 
 HOOK = HOOKS_DIR / "validate_handoff.py"
 MATE_AGENT_ID = "amate-0123456789abcdef"
@@ -218,7 +219,7 @@ def test_one_turn_end_prints_exactly_one_decision(tmp_path):
 
 
 def test_subagentstop_has_exactly_one_registration():
-    config = json.loads((HOOKS_DIR / "hooks.json").read_text(encoding="utf-8"))
+    config = effective_hooks_config()
     commands = [
         hook["command"]
         for entry in config["hooks"].get("SubagentStop", [])
@@ -313,9 +314,9 @@ def test_a_non_teammate_pact_subagent_is_still_refused_without_a_handoff(tmp_pat
 def test_validate_handoff_refuses_a_namespaced_pact_subagent_without_a_handoff(tmp_path):
     """The Agent tool accepts the namespaced spelling, and its subagent is refused alike."""
     world = World(tmp_path)
-    transcript = write_metadata(world, SUBAGENT_ID, {"agentType": "PACT:pact-preparer"})
+    transcript = write_metadata(world, SUBAGENT_ID, {"agentType": "repacted:pact-preparer"})
     frame = subagent_frame(
-        "PACT:pact-preparer", SUBAGENT_ID, transcript, last_assistant_message=POOR_CLOSING
+        "repacted:pact-preparer", SUBAGENT_ID, transcript, last_assistant_message=POOR_CLOSING
     )
 
     out = only_decision(run(world, frame))

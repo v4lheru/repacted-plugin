@@ -25,7 +25,7 @@ import pytest
 import handoff_ordering_gate as gate  # noqa: E402
 
 TEAM = "test-team"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
 HANDOFF = {"decisions": ["x"], "produced": ["f.py"]}
 
@@ -281,9 +281,11 @@ class TestMainContract:
         assert "additionalContext" in hso
         assert "permissionDecision" not in hso, "a WARN gate must NEVER emit a deny"
 
-    def test_passthrough_path_suppresses_and_exits_zero(
+    def test_handoff_present_states_disk_rev_without_the_nudge(
         self, tmp_path, monkeypatch, pact_context, capsys
     ):
+        """Handoff already on disk: the #956 nudge stays silent and the only
+        output is the disk-state line (HANDOFF carries no rev key here)."""
         _ctx(pact_context, monkeypatch, tmp_path)
         _seed_task(
             tmp_path, TEAM, "42",
@@ -291,6 +293,23 @@ class TestMainContract:
             status="completed", metadata={"handoff": HANDOFF},  # already present → no warn
         )
         code, out = self._run_main(monkeypatch, capsys, _complete_update("42"))
+        assert code == 0
+        context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        assert "HANDOFF on disk: rev missing" in context
+        assert "no metadata.handoff yet" not in context
+
+    def test_passthrough_path_suppresses_and_exits_zero(
+        self, tmp_path, monkeypatch, pact_context, capsys
+    ):
+        _ctx(pact_context, monkeypatch, tmp_path)
+        _seed_task(
+            tmp_path, TEAM, "42",
+            subject="devops: CODE the thing", owner="devops",
+            status="in_progress", metadata={"handoff": HANDOFF},
+        )
+        frame = {"tool_name": "TaskUpdate", "agent_type": LEAD,
+                 "tool_input": {"taskId": "42", "metadata": {"note": "x"}}}
+        code, out = self._run_main(monkeypatch, capsys, frame)
         assert code == 0
         assert json.loads(out) == {"suppressOutput": True}
 
@@ -377,7 +396,8 @@ class TestMainRealContextResolution:
             "(team_name recovered from the written pact-session-context.json); a "
             "missing advisory means the resolution chain or the warn branch broke"
         )
-        assert "42" in hso["additionalContext"] and "devops" in hso["additionalContext"]
+        # The one line the lead gets for a missing HANDOFF is the disk-state line.
+        assert "NO HANDOFF ON DISK for #42" in hso["additionalContext"]
         assert "permissionDecision" not in hso, "a WARN gate must NEVER emit a deny"
 
 

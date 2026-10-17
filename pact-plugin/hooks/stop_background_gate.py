@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Location: pact-plugin/hooks/stop_background_gate.py
-Summary: Stop hook. Refuses a turn end, once per job, while background work
-         the ending session is responsible for is still running with nothing
-         scheduled or flagged to follow it up.
+Summary: Stop hook. Refuses a teammate's turn end, once per job, while
+         background work it is responsible for is still running with nothing
+         scheduled or flagged to follow it up. The lead is never refused: its
+         stop over its own running job is journaled with the job ids.
 Used by: hooks.json Stop (synchronous). The decision is shared with
          validate_handoff.py (SubagentStop) through shared/turn_end_gate.py.
 
@@ -45,7 +46,7 @@ def _job_filter():
 def main() -> None:
     try:
         input_data = json.load(sys.stdin)
-    except (ValueError, OSError):
+    except Exception:  # unreadable stdin of any kind (deep nesting raises RecursionError)
         return
     if not isinstance(input_data, dict) or input_data.get("hook_event_name") != "Stop":
         return

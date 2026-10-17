@@ -779,6 +779,46 @@ class TestCliGetCommand:
         assert output["ok"] is True
         assert output["result"]["id"] == "abc123"
 
+    @pytest.mark.parametrize("flags, expected", [
+        ([], {"id": "abc123", "created_at": "2026-10-02T10:00:00", "context": "First line.\nSecond.",
+              "goal": "g" * 400, "decisions": [{"decision": "d"}]}),
+        (["--brief"], {"id": "abc123", "date": "2026-10-02T10:00:00", "context": "First line.",
+                       "goal": "g" * 99 + "…"}),
+        (["--fields", "goal, id,goal"], {"goal": "g" * 400, "id": "abc123"}),
+    ], ids=["default-unchanged", "brief", "fields"])
+    def test_get_brief_and_fields_shape_the_record(self, mock_pact_memory, capsys, flags, expected):
+        """REGRESSION (1.3.6 field report, section G): two `get` calls returned 39 KB."""
+        mock_obj = MagicMock()
+        mock_obj.to_dict.return_value = {
+            "id": "abc123", "created_at": "2026-10-02T10:00:00",
+            "context": "First line.\nSecond.", "goal": "g" * 400, "decisions": [{"decision": "d"}],
+        }
+        mock_pact_memory.get.return_value = mock_obj
+        args = build_parser().parse_args(["get", "abc123", *flags])
+
+        with patch("scripts.cli.PACTMemory", return_value=mock_pact_memory):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_get(args)
+        assert exc_info.value.code == 0
+        result = json.loads(capsys.readouterr().out)["result"]
+        assert result == expected and list(result) == list(expected)
+
+    @pytest.mark.parametrize("fields", ["nope", "id,nope", ","])
+    def test_get_fields_refuses_a_name_that_is_not_a_field(self, mock_pact_memory, capsys, fields):
+        mock_obj = MagicMock()
+        mock_obj.to_dict.return_value = {"id": "abc123", "goal": "g"}
+        mock_pact_memory.get.return_value = mock_obj
+        args = build_parser().parse_args(["get", "abc123", "--fields", fields])
+
+        with patch("scripts.cli.PACTMemory", return_value=mock_pact_memory):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_get(args)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        envelope = json.loads(captured.err)
+        assert (envelope["error"], envelope["allowed_fields"]) == ("UNKNOWN_FIELD", ["goal", "id"])
+        assert captured.out == ""
+
     def test_get_not_found(self, mock_pact_memory, capsys):
         mock_pact_memory.get.return_value = None
         parser = build_parser()
@@ -2012,7 +2052,7 @@ class TestCliSubprocess:
         #      match the full home and "~/Sites/..." never appears. A short
         #      home keeps "Note about <home>/Sites/secret-project/file.py"
         #      (52 chars) inside the 60-char window (same shape as the original
-        #      /Users/mj assumption). This test writes via --db-path (never
+        #      /Users/alice assumption). This test writes via --db-path (never
         #      under ~/.claude), so a controlled fake home re-opens no #1186
         #      leak. See conftest _isolate_config_root_to_tmp "WHY NOT ALSO SET
         #      HOME ENV".
@@ -3385,7 +3425,7 @@ class TestTheExitStatusSurvivesAReaderLessPipe:
     def test_a_broken_stderr_keeps_the_refusal_code_distinct(self, cli_script_path, tmp_path):
         """RED BEFORE THE FIX: exit 120, which erases the refusal code.
 
-        THE CONSUMER IS REAL. This refusal exits 2, and `/PACT:prune-memory`
+        THE CONSUMER IS REAL. This refusal exits 2, and `/repacted:prune-memory`
         reads that code to choose between refuse and proceed. Exit 120 is the
         finalization status of the interpreter and carries no exit code of ours,
         so a caller cannot separate a REFUSAL from a generic failure.
@@ -3793,6 +3833,41 @@ class TestCliSyncSubprocess:
         assert result["memory_ids"] == [memory_id]
         text = (project / "CLAUDE.md").read_text(encoding="utf-8")
         assert "corrected text" in text and "wrong text" not in text
+
+    # FIX-MEM (f4), ruling amend_1 (2): the Working Memory block is rebuilt only
+    # at a propagation boundary, so a plain `update` stays quiet; `--sync` opts in
+    # and runs the `sync` path itself.
+
+    def test_update_is_quiet_by_default(self, cli_script_path, cli_db, project):
+        memory_id = self._save(cli_script_path, project, cli_db, "wrong text",
+                               "2026-09-01 08:00:00")
+        self._sync(cli_script_path, project, cli_db)
+        before = (project / "CLAUDE.md").read_bytes()
+
+        result = self._run(cli_script_path, project, "update", memory_id,
+                           json.dumps({"context": "corrected text"}), "--db-path", str(cli_db))
+
+        assert "sync_status" not in result, result
+        assert (project / "CLAUDE.md").read_bytes() == before
+
+    def test_update_with_sync_rebuilds_the_block(self, cli_script_path, cli_db, project):
+        memory_id = self._save(cli_script_path, project, cli_db, "wrong text",
+                               "2026-09-01 08:00:00")
+        self._sync(cli_script_path, project, cli_db)
+
+        result = self._run(cli_script_path, project, "update", memory_id,
+                           json.dumps({"context": "corrected text"}), "--sync",
+                           "--claude-md-root", str(project), "--db-path", str(cli_db))
+
+        assert result["sync_status"] == "wrote", result
+        assert result["memory_ids"] == [memory_id]
+        text = (project / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "corrected text" in text and "wrong text" not in text
+        # The same bytes a boundary `sync` would write: one path, not a twin.
+        after_update = (project / "CLAUDE.md").read_bytes()
+        again = self._sync(cli_script_path, project, cli_db)
+        assert again["memory_ids"] == result["memory_ids"]
+        assert (project / "CLAUDE.md").read_bytes() == after_update
 
 
 class TestApiSync:

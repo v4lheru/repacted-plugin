@@ -134,7 +134,7 @@ def get_db_path() -> Path:
     #
     # `setup` KEEPS CREATING A CALLER PATH, and that asymmetry is deliberate.
     # Bringing a store into existence at a named location is what `setup` is
-    # for, so the create IS its operation. `save`, `get` and `archive_pin`
+    # for, so the create IS its operation. `save` and `get`
     # open a store that should be there, so an absent path is a typo, and the
     # correct answer to a typo is to fail. That leg runs through
     # `setup_memory.ensure_directories` and does not reach this line.
@@ -577,6 +577,13 @@ DICT_LIST_FIELDS = frozenset({
 
 LIST_FIELDS = STRING_LIST_FIELDS | DICT_LIST_FIELDS
 
+# The field that names a dict-list item. On an additive update, an incoming item
+# REPLACES every existing item with the same key (in the first one's slot) instead
+# of landing beside it: a corrected entity, a task whose status moved or a revised
+# rationale supersedes the stale copy rather than being served next to it.
+# replace=True and the string lists are unaffected.
+IDENTITY_KEYS = {"entities": "name", "active_tasks": "task", "decisions": "decision"}
+
 # All columns update_memory may write to the DB (updated_at is server-owned
 # and stamped inside update_memory; it stays in the set because the UPDATE
 # statement sets it).
@@ -877,6 +884,54 @@ def _merge_with_dedup(
         out.append(_materialize(item))
 
     return out
+
+
+def _identity(field: str, item: Any, strict: bool) -> Optional[str]:
+    """The item's identity-key value (NFC, stripped), or None when it has none."""
+    try:
+        value = _canonicalize_dict_item(field, item, strict=strict).get(IDENTITY_KEYS[field])
+    except (ValueError, TypeError):
+        if strict:
+            raise
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return unicodedata.normalize("NFC", value.strip())
+
+
+def _supersede_keyed(field: str, existing: List[Any], incoming: List[Any]) -> tuple:
+    """Put each keyed incoming item in the slot of its first same-key existing
+    item and drop that key's other existing items. Returns (existing', incoming')
+    where incoming' holds the items still to append. The last incoming item for a
+    key wins. Incoming items are validated strictly first, so a refused item
+    writes nothing."""
+    if field not in IDENTITY_KEYS:
+        return existing, incoming
+    latest: Dict[str, Any] = {}
+    for item in incoming:
+        key = _identity(field, item, strict=True)
+        if key is not None:
+            latest[key] = item
+    if not latest:
+        return existing, incoming
+    placed: Set[str] = set()
+    out: List[Any] = []
+    for item in existing:
+        key = _identity(field, item, strict=False)
+        if key is None or key not in latest:
+            out.append(item)
+        elif key not in placed:
+            out.append(latest[key])
+            placed.add(key)
+    rest: List[Any] = []
+    for item in incoming:
+        key = _identity(field, item, strict=True)
+        if key is None:
+            rest.append(item)
+        elif key not in placed:
+            rest.append(latest[key])
+            placed.add(key)
+    return out, rest
 
 
 def _normalize_list_field(field: str, value: Any) -> List[Any]:
@@ -1320,7 +1375,8 @@ def update_memory(
                         existing = []
                 if not isinstance(existing, list):
                     existing = []
-                merged = _merge_with_dedup(key, existing, normalized[key])
+                kept, to_append = _supersede_keyed(key, existing, normalized[key])
+                merged = _merge_with_dedup(key, kept, to_append)
                 normalized[key] = merged
                 if merged != existing:
                     changed_lists.add(key)

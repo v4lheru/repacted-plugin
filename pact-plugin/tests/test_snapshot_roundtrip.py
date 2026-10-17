@@ -19,7 +19,7 @@ import shared.session_journal as session_journal  # noqa: E402
 import task_lifecycle_gate as tlg  # noqa: E402
 
 TEAM = "pact-test"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 
 LOAD_BEARING = {
     "teachback_submit": {
@@ -174,8 +174,9 @@ class TestAcceptanceRoundTrip:
                 "11", subject, "backend-coder", dict(LOAD_BEARING)
             )
         )
-        # Late verification write on the already-completed task (backstop).
-        amended = {**LOAD_BEARING, "r2_verification": {"verified": False}}
+        # Late rejection on the already-completed task (backstop; it fires on
+        # targeted keys only).
+        amended = {**LOAD_BEARING, "handoff_rejection": {"reason": "late"}}
         _seed_task(
             tmp_path,
             TEAM,
@@ -190,7 +191,7 @@ class TestAcceptanceRoundTrip:
                 "tool_name": "TaskUpdate",
                 "tool_input": {
                     "taskId": "11",
-                    "metadata": {"r2_verification": {"verified": False}},
+                    "metadata": {"handoff_rejection": {"reason": "late"}},
                 },
                 "tool_response": {},
                 "agent_type": LEAD,
@@ -208,6 +209,6 @@ class TestAcceptanceRoundTrip:
         # resolve_latest_artifacts supersede). sorted() is stable, so the
         # last element is the latest-ts, last-written event.
         latest = sorted(ours, key=lambda e: e["ts"])[-1]
-        assert latest["metadata"]["r2_verification"] == {"verified": False}
+        assert latest["metadata"]["handoff_rejection"] == {"reason": "late"}
         # Both events carry the same occupant — the reader's join key.
         assert ours[0]["occupant"] == ours[1]["occupant"]

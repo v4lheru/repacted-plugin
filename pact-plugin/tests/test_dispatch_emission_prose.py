@@ -5,9 +5,8 @@ Every dispatch path that stamps `metadata.variety` on a Task B also writes a
 dimension scores and the total, with the TOP-LEVEL `"scope": "dispatch"`
 discriminator present. The FEATURE-level assessment event carries NO `scope`
 field, and journal readers key on that difference (session_state latest-ts
-feature-level derivation and variety_divergence arc_start exclude dispatch-marked
-events; the wrap-up Q5 join consumes them as an as-dispatched fallback
-source). A hand-written emission that omits the field degrades to
+feature-level derivation and the wrap-up arc start exclude dispatch-marked
+events). A hand-written emission that omits the field degrades to
 feature-level — the legacy behavior — so the discriminator's presence on
 every per-dispatch site is load-bearing and pinned here at the block level.
 
@@ -38,12 +37,17 @@ COMMANDS = PLUGIN_ROOT / "commands"
 # The per-file census: (file name, per-dispatch site count, feature-level
 # site count). orchestrate's feature-level emission predates this change and
 # is pinned UNCHANGED — its block must carry no discriminator.
+#
+# COMMANDS (m8b) moved counts deliberately: where the EVENTS hook (m8a) now
+# emits variety_assessed from the Task B stamp, the hand-written block was
+# deleted and its row drops to 0. A 0 row is an ABSENCE rule: a hand-written
+# block reappearing beside the hook would journal the event twice.
 SITES = [
-    ("orchestrate.md", 4, 1),
-    ("comPACT.md", 2, 1),
-    ("peer-review.md", 1, 0),
-    ("plan-mode.md", 1, 0),
-    ("rePACT.md", 1, 1),
+    ("orchestrate.md", 0, 0),
+    ("comPACT.md", 0, 0),
+    ("peer-review.md", 0, 0),
+    ("plan-mode.md", 0, 0),
+    ("rePACT.md", 0, 0),  # a stub; the nested cycle lives in reference/rePACT/
 ]
 
 DISCRIMINATOR = '"scope": "dispatch"'
@@ -85,78 +89,22 @@ class TestEmissionSiteCensus:
             f"variety_assessed blocks, found {len(unmarked)}"
         )
 
-    def test_every_block_names_its_file_in_the_trap(self, name, dispatch_count,
-                                                    feature_count):
-        """Each emission block's ERR trap names its own file, so a failed
-        write is attributable to the site that failed. Pinned per block,
-        because a trap label borrowed from a sibling file misroutes the
-        failure while a file-wide count stays green."""
-        for block in _variety_blocks(name):
-            assert f"{TRAP_PREFIX}{name}" in block, (
-                f"{name}: a variety_assessed block's trap does not name "
-                f"its own file"
-            )
-
-    def test_dispatch_blocks_mirror_the_stamp_shape(self, name,
-                                                     dispatch_count,
-                                                     feature_count):
-        """Every dispatch-marked block carries the stamp mirror's JSON body
-        shape: the dispatch task id key, the discriminator, and the five
-        score keys (four dimensions plus total, rationales omitted)."""
-        for block in _variety_blocks(name):
-            if DISCRIMINATOR not in block:
-                continue
-            assert '"task_id": "{taskId}"' in block
-            assert '"variety": {"novelty": N, "scope": N, ' \
-                   '"uncertainty": N, "risk": N, "total": N}' in block
-
-    def test_feature_blocks_carry_no_top_level_discriminator(
-        self, name, dispatch_count, feature_count,
-    ):
-        """A feature-level block keeps the legacy shape: no top-level
-        `scope` key in its JSON body. The polarity readers key on is
-        ABSENT-means-feature-level, so a discriminator leaking into a
-        feature block would silently exclude the arc's own assessment
-        from arc_start and feature derivation."""
-        for block in _variety_blocks(name):
-            if DISCRIMINATOR in block:
-                continue
-            body = next(
-                line for line in block.splitlines()
-                if line.lstrip("> ").lstrip().startswith('{"task_id"')
-            )
-            # The check is the DISCRIMINATOR LITERAL, not the bare key: the
-            # nested variety dict legitimately carries a "scope" DIMENSION
-            # (`"scope": N`, unquoted). A top-level discriminator would be
-            # the quoted value — and it is exactly that degradation (a
-            # feature block accidentally marked dispatch) this arm rejects.
-            assert DISCRIMINATOR not in body, (
-                f"{name}: a feature-level variety_assessed body carries "
-                f"the top-level dispatch discriminator: {body.strip()}"
-            )
+    # COMMANDS (m8b) RETIRED three per-block arms here (trap label, stamp-mirror
+    # shape, no discriminator on a feature block). Every row above is now 0, so
+    # they iterated over no blocks and passed on empty input, which is a false
+    # all-clear rather than a check. Their subject moved: the hook
+    # (hooks/journal_emitter.py) now writes these events, and
+    # tests/test_journal_emitter.py pins the rows it writes against m0's own.
 
 
-class TestWrapUpQ5Consumption:
-    """The reader-side plumbing pins: the Q5 prose filters the arc-scoped
-    variety_assessed re-read on the discriminator and passes the subset as
-    the join's third argument."""
-
-    @pytest.fixture()
-    def wrap_up(self) -> str:
-        return (COMMANDS / "wrap-up.md").read_text()
-
-    def test_q5_filters_on_the_discriminator(self, wrap_up):
-        assert 'e.get("scope") == "dispatch"' in wrap_up
-
-    def test_q5_passes_the_third_argument(self, wrap_up):
-        assert "extract_final_dispatch_coverage(events, snapshot_events, " \
-               "dispatch_assessed)" in wrap_up
-
-    def test_q5_rereads_the_stream_arc_scoped(self, wrap_up):
-        """The per-dispatch events must be arc-scoped before they join —
-        the platform reuses task ids across arcs, so the third read carries
-        the same --since value as the other two streams."""
-        assert "--type variety_assessed --since '{arc_start}'" in wrap_up
+def test_no_command_hand_writes_variety_assessed():
+    """Tree-wide absence, since the hook emits the event: a hand-written block
+    in ANY command file, not only the five the census names, would journal it
+    twice. Non-vacuous: the glob must reach the command files."""
+    files = sorted(COMMANDS.glob("*.md"))
+    assert len(files) >= 10, f"the command glob reached {len(files)} files"
+    offenders = [p.name for p in files if _variety_blocks(p.name)]
+    assert offenders == [], f"hand-written variety_assessed blocks in {offenders}"
 
 
 class TestRecoveryReadLastUsesTheFilteredForm:

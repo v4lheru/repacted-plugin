@@ -78,10 +78,9 @@ one whose MESSAGE accuses the wrong direction.
 
 THIS DOCSTRING IS THE SSOT FOR THE PACKAGING PREMISE
 ----------------------------------------------------
-The same premise is stated in three places: the pull-request body that
-introduced the relocation, ``dev/README.md``, and here. Only this copy has
-executable assertions attached, so this copy is the source of truth. If the
-premise changes, move all three together.
+Upstream stated the same premise in its relocation pull request and in
+``dev/README.md``; in rePACTed only this copy remains, and it has executable
+assertions attached, so it is the source of truth.
 
 WHAT THIS DELIBERATELY DOES NOT CLAIM
 -------------------------------------
@@ -90,22 +89,13 @@ self-purge, so a machine that installed an earlier version still holds both
 installers until version rotation removes those directories. Nothing in this
 repository changes that, and no assertion here should be read as claiming it.
 
-ABSENCE ALONE WOULD BE A DELETION GUARD, NOT A RELOCATION GUARD
----------------------------------------------------------------
-"Nothing under pact-plugin/ matches the installer name shape" is satisfied by
-every history in which the files are not there — including one where a
-contributor deletes both outright. It pins a necessary condition of relocation
-and no sufficient one. The relocation invariant is the CONJUNCTION of absence
-under the packaged tree with presence under ``dev/``; neither leg means much
-alone, so both are asserted.
-
-The presence leg also checks each script is non-empty, carries an executable
-bit, and starts with a shebang. Bare existence would pin only that a file with
-that name exists — a contributor could truncate either script to an empty stub
-and a name-only check would stay green. The relocation commit's rename-
-similarity certification is content evidence that expires at the next commit;
-these three cheap checks are what stays durable afterwards. They stop short of
-pinning content, which would fire on legitimate edits.
+ABSENCE ONLY: THE INSTALLERS WERE DELETED IN REPACTED (M0b)
+-----------------------------------------------------------
+Upstream PACT asserted a relocation: absence under the packaged tree AND
+presence under ``dev/``. rePACTed deleted both installers at milestone M0b, so
+the presence leg was retired with them. What remains is deliberately a
+deletion guard: neither installer name, nor any installer-shaped name, may
+appear in the packaged tree.
 
 WHY EVERY ENUMERATION CARRIES ITS OWN POSITIVE CONTROL
 ------------------------------------------------------
@@ -140,9 +130,8 @@ WHY THIS MODULE SKIPS OUTSIDE A SOURCE CHECKOUT
 This module ships. ``pact-plugin/tests/`` is inside the packaged tree, so a
 copy lands in every consumer's plugin cache — where the repo root it needs does
 not exist, ``dev/`` is absent by design, and ``pact-plugin/`` is absent because
-the cache IS the mirrored subtree. Run blindly there, the presence leg would
-fail and the absence leg would pass over an empty scan: both wrong, in opposite
-directions.
+the cache IS the mirrored subtree. Run blindly there, the absence guard would
+pass over an empty scan: a pass that proves nothing.
 
 The root is therefore located by walking up for
 ``.claude-plugin/marketplace.json``, which exists only in a source checkout and
@@ -162,7 +151,7 @@ measured against this tree and is not shippable. Scanning every tracked file
 under ``pact-plugin/`` for references to each repo-root sibling outside the
 packaged tree: the ``dev/`` token produced 70 raw hits, 16 after filtering
 ``/dev/null``-family device paths, and every one of those 16 was either prose
-using "dev" as a word ("dev/staging/prod", "dev/test") or a ``/Users/dev/...``
+using "dev" as a word ("dev/staging/prod", "dev/test") or a ``/Users/alice/dev/...``
 fixture path — zero actionable findings. ``testing/``, ``.github/`` and
 ``pyproject.toml`` yielded 8 hits between them, all generic documentation
 examples about a consumer's own project rather than references to this repo.
@@ -172,7 +161,7 @@ examples about a consumer's own project rather than references to this repo.
 The narrower instance form — "no shipped file contains ``dev/install_``" — is
 worse than noisy: it is RED against this tree right now. Its one hit is the
 deliberate, reviewed reference in the fork-session-context runbook under
-``tests/runbooks/``, which names the relocated script AND tells a cache reader
+``tests/runbooks/``, which names the (upstream) relocated script AND tells a cache reader
 that ``dev/`` is absent by design. That reference is the correct handling of
 the very defect the class was meant to catch, so an assertion forbidding it
 would fire on the fix. Both forms were dropped for these reasons, not
@@ -198,8 +187,8 @@ _THIS_FILE = Path(__file__).resolve()
 # cheap assertion closes that gap.
 _INSTALLER_NAME = re.compile(r"^install.*shim.*\.(sh|bash|zsh|py)$", re.IGNORECASE)
 
-# The two scripts the relocation moved. Absence under the packaged tree AND
-# presence under dev/ is the relocation invariant; see the module docstring.
+# The two capture-shim installers upstream relocated to dev/. rePACTed deleted
+# them (M0b); they must never reappear in the packaged tree.
 _RELOCATED_INSTALLERS = (
     "install_session_start_logging_shim.sh",
     "install_taskcompleted_logging_shim.sh",
@@ -402,10 +391,10 @@ def test_guard_is_active_in_a_source_checkout():
     )
 
 
-# ---------- the relocation invariant: absence AND presence ----------
+# ---------- the deletion guard: the installers never ship ----------
 
 def test_no_capture_shim_installer_ships_in_the_packaged_tree():
-    """Absence leg. Alone this is only a deletion guard — see the presence leg."""
+    """The deleted installers, and anything shaped like one, stay out of the packaged tree."""
     root = _require_source_checkout()
     tree = _packaged_tree(root)
     files = _packaged_files(tree)
@@ -414,16 +403,16 @@ def test_no_capture_shim_installer_ships_in_the_packaged_tree():
     # exact name also matches the shape pattern, so checking shape first would
     # make this assertion unreachable — it could never be the one to fire, and
     # a mutation could never prove it works. In this order each leg has inputs
-    # only it catches: the two relocated names here, any other installer-shaped
+    # only it catches: the two deleted names here, any other installer-shaped
     # name below.
     by_exact_name = sorted(
         str(p.relative_to(root)) for p in files if p.name in _RELOCATED_INSTALLERS
     )
     assert not by_exact_name, (
-        "the relocated capture-shim installer(s) are back inside the packaged "
+        "the deleted capture-shim installer(s) are back inside the packaged "
         f"tree: {by_exact_name}. That tree is mirrored wholesale into every "
         "consumer's plugin cache, and these instruments patch a consumer's live "
-        "hook configuration. They belong at repo-root dev/."
+        "hook configuration."
     )
 
     by_shape = sorted(
@@ -433,37 +422,6 @@ def test_no_capture_shim_installer_ships_in_the_packaged_tree():
         "file(s) shaped like a capture-shim installer are present inside the "
         f"packaged tree and would ship to every consumer: {by_shape}"
     )
-
-
-def test_relocated_installers_are_present_and_runnable_under_dev():
-    """Presence leg. The conjunction with absence is what pins RELOCATION.
-
-    Existence alone would leave an empty stub passing, so this also requires
-    each script to be non-empty, executable, and shebang-led.
-    """
-    root = _require_source_checkout()
-    dev = root / "dev"
-    assert dev.is_dir(), (
-        f"{dev} is missing — the capture-shim installers have nowhere to live "
-        "outside the packaged tree, so absence under pact-plugin/ would mean "
-        "they were deleted rather than relocated"
-    )
-
-    for name in _RELOCATED_INSTALLERS:
-        script = dev / name
-        assert script.is_file(), (
-            f"{script} is missing. Absence under the packaged tree plus this "
-            "absence means the installer was DELETED, not relocated"
-        )
-        stat = script.stat()
-        assert stat.st_size > 0, f"{script} is empty — a hollow stub, not a script"
-        assert stat.st_mode & 0o111, (
-            f"{script} has lost its executable bit (mode {stat.st_mode & 0o777:o})"
-        )
-        assert script.read_bytes().startswith(b"#!"), (
-            f"{script} does not begin with a shebang — it is no longer a "
-            "directly runnable script"
-        )
 
 
 # ---------- the premise the proxy rests on ----------

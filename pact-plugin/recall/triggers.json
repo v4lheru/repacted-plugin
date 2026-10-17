@@ -1,0 +1,145 @@
+{
+ "version": 1,
+ "about": "T1 recall triggers (repacted-wave-d.md D9.2, D9.6): per skill, the command regexes, URL-host regexes and file globs its own SKILL.md names. Patterns only, never prose. Written from the skills' text on 2026-09-27 BEFORE any D9a moment was replayed. `commands` match a Bash command; `hosts` match the host of any URL in a Bash command or a WebFetch; `globs` match an Edit/Write/Read file path. `why` is the pointer's reason, taken from the skill's description.",
+ "skills": {
+  "postgres-supabase": {
+   "why": "you are touching Postgres or Supabase: catalog checks over grep, grant and anon traps, proving a policy fires",
+   "commands": [
+    "\\bpsql\\b",
+    "\\bpg_dump\\b",
+    "\\bsupabase\\s+(db|migration|gen|link|functions|projects)\\b",
+    "\\bdrizzle-kit\\b"
+   ],
+   "hosts": [
+    "\\.supabase\\.co$",
+    "^api\\.supabase\\.com$"
+   ],
+   "globs": [
+    "**/supabase/migrations/*.sql",
+    "**/migrations/*.sql"
+   ]
+  },
+  "google-workspace": {
+   "why": "you are working with Apps Script or Google Drive/Docs/Sheets APIs: clasp deploy re-pinning, shared drives, quotas",
+   "commands": [
+    "\\bclasp\\b"
+   ],
+   "hosts": [
+    "^script\\.google\\.com$",
+    "^(www|docs|sheets|drive|gmail)\\.googleapis\\.com$"
+   ],
+   "globs": [
+    "**/.clasp.json",
+    "**/appsscript.json",
+    "**/*.gs"
+   ]
+  },
+  "safe-ops": {
+   "why": "you are touching secrets or doing something destructive: env-get instead of source, ignore files, delete by recorded id",
+   "commands": [
+    "\\b(source|cat|grep)\\s+\\S*\\.env\\b",
+    "\\bgit\\s+init\\b",
+    "\\brm\\s+-[a-zA-Z]*r[a-zA-Z]*f",
+    "\\benv-get\\b",
+    "\\brailway\\s+up\\b"
+   ],
+   "hosts": [],
+   "globs": [
+    "**/.env",
+    "**/.env.*",
+    "**/*.pem",
+    "**/.dockerignore",
+    "**/.railwayignore"
+   ]
+  },
+  "shell-tooling-traps": {
+   "why": "shell output may be rewritten or truncated here: rtk, tcount for test counts, macOS tool differences, long jobs",
+   "commands": [
+    "\\brtk\\b",
+    "\\btcount\\b",
+    "\\brtk-probe\\b",
+    "\\bgit\\s+(log|diff|show)\\b",
+    "\\bxattr\\b",
+    "\\bpmset\\b",
+    "\\bnohup\\b"
+   ],
+   "hosts": [],
+   "globs": []
+  },
+  "concurrent-agent-git": {
+   "why": "you are changing git state in a tree other agents may share: commit by pathspec, never stash, verify the committed tree",
+   "commands": [
+    "\\bgit\\s+(stash|checkout|reset|rebase|commit|add|worktree|cherry-pick)\\b"
+   ],
+   "hosts": [],
+   "globs": []
+  },
+  "vendor-gotchas": {
+   "why": "you are calling a third-party API with known traps: work trackers, Slack, Jira, Telegram, Apify, ad, affiliate and CRM APIs, Railway",
+   "commands": [
+    "\\brailway\\s+(logs|status|variables|link|run|deploy)\\b"
+   ],
+   "hosts": [
+    "^api\\.monday\\.com$",
+    "(^|\\.)slack\\.com$",
+    "\\.atlassian\\.net$",
+    "^api\\.telegram\\.org$",
+    "^api\\.apify\\.com$",
+    "\\.up\\.railway\\.app$"
+   ],
+   "globs": []
+  },
+  "frontend-verification": {
+   "why": "you are building or checking UI: build-only breaks, tokens and theming, layout, and proving the rendered state",
+   "commands": [
+    "\\bnext\\s+build\\b",
+    "\\bplaywright\\b",
+    "\\bastro\\s+(build|dev|check)\\b"
+   ],
+   "hosts": [],
+   "globs": [
+    "**/*.tsx",
+    "**/*.jsx",
+    "**/*.astro",
+    "**/*.css",
+    "**/tailwind.config.*"
+   ]
+  },
+  "stack-traps": {
+   "why": "Node/TypeScript or Python tooling may misbehave here: module resolution, typegen gaps, venvs, vitest mocks",
+   "commands": [
+    "\\bnpm\\s+ls\\b",
+    "\\bpip3?\\s+show\\b",
+    "\\btsc\\s+-b\\b",
+    "\\bvitest\\b",
+    "\\bpython3?\\s+-m\\s+venv\\b"
+   ],
+   "hosts": [],
+   "globs": [
+    "**/tsconfig*.json",
+    "**/pyproject.toml"
+   ]
+  },
+  "llm-pipeline-patterns": {
+   "why": "an LLM API is a stage here: structured output, caching, provider traps, output validation",
+   "commands": [],
+   "hosts": [
+    "^api\\.anthropic\\.com$",
+    "^api\\.openai\\.com$",
+    "^generativelanguage\\.googleapis\\.com$"
+   ],
+   "globs": []
+  },
+  "memory-hygiene": {
+   "why": "you are writing agent memory: heads and the inbox, correcting a claim in every carrier, index budgets",
+   "commands": [
+    "\\bcheck-index\\b",
+    "\\bdistill-inbox\\b"
+   ],
+   "hosts": [],
+   "globs": [
+    "**/agent-memory/**/MEMORY*.md"
+   ]
+  }
+ }
+}

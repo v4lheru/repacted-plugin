@@ -90,7 +90,7 @@ class TestAppendRecordFormat:
         append_failure(
             classification="missing_session_id",
             error="raw_id was None",
-            cwd="/home/test/project",
+            cwd="/home/alice/project",
             source="startup",
         )
 
@@ -102,7 +102,7 @@ class TestAppendRecordFormat:
         assert "ts" in entry
         assert entry["classification"] == "missing_session_id"
         assert entry["error"] == "raw_id was None"
-        assert entry["cwd"] == "/home/test/project"
+        assert entry["cwd"] == "/home/alice/project"
         assert entry["source"] == "startup"
 
         # ts format: ISO 8601 UTC with trailing Z (matches session_journal)
@@ -148,7 +148,7 @@ class TestAppendRecordFormat:
     def test_truncates_source_to_200_chars(self, failure_log_home):
         """A source longer than 200 chars is truncated to exactly 200 (#366 R5 L1).
 
-        Source is normally a short literal ("startup", "resume", "compact")
+        Source is usually a short literal ("startup", "resume", "compact")
         but the field is Optional[str] and Claude Code may pass through
         arbitrary user/agent-supplied content in the future. Bound it.
         """
@@ -568,7 +568,7 @@ class TestSymlinkGuard:
         assert log.is_symlink()
 
     def test_regular_file_still_writes_normally(self, failure_log_home):
-        """Sanity check: with no symlink, append_failure writes normally."""
+        """Sanity check: with no symlink, append_failure writes usually."""
         log = failure_log_home
         assert not log.exists()
 

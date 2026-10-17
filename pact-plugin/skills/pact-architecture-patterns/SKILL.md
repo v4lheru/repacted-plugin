@@ -1,13 +1,6 @@
 ---
 name: pact-architecture-patterns
-description: |
-  Architectural design patterns, C4 diagram templates, component design guidelines,
-  and anti-patterns for PACT Architect phase.
-  Use when: designing system components, creating architecture diagrams,
-  defining component boundaries, planning API contracts, selecting design patterns,
-  or reviewing architectural decisions.
-  Triggers on: architecture design, C4 diagrams, component design, system design,
-  microservices, monolith, API design, interface contracts, architect phase.
+description: "Use when designing in the ARCHITECT phase or reviewing architecture: C4 diagrams, component design and boundaries, API contracts and interfaces, design patterns, microservices vs monolith, anti-patterns."
 ---
 
 # PACT Architecture Patterns

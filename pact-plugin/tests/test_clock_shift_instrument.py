@@ -12,6 +12,7 @@ day a sweep puts on this process's own clock.
 """
 import ast
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -274,7 +275,8 @@ def _run_child(tmp_path, source, shift=TEN_YEARS, shim_on_path=True):
     env["CLOCK_LOW"], env["CLOCK_HIGH"] = str(expected - SLACK), str(expected + SLACK)
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-         "-o", "pythonpath=%s" % SHIM_DIR, "test_synthetic.py"],
+         # pytest shlex-splits an ini `paths` value, so a path with a space must be quoted.
+         "-o", "pythonpath=%s" % shlex.quote(str(SHIM_DIR)), "test_synthetic.py"],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=180,
     )
     return result.returncode, result.stdout + result.stderr

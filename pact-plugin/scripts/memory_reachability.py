@@ -428,7 +428,7 @@ def as_dict(result: Scan) -> dict:
 
 # A malformed command line is not a REFUSAL. argparse exits 2 by default and
 # this script already returns 2 for "REFUSED", so the two were indistinguishable
-# to a caller. 64 is EX_USAGE from sysexits.h; it matches backlog.py's split and
+# to a caller. 64 is EX_USAGE from sysexits.h; it
 # sits below the 126-255 range shells reserve.
 _EXIT_USAGE = 64
 

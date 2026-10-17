@@ -1,12 +1,12 @@
 """
 plugin.json structural invariants for the PACT plugin.
 
-Pins the 13-entry alphabetized `agents` array (12 teammates + orchestrator)
+Pins the 12-entry alphabetized `agents` array (11 teammates + orchestrator)
 and the absence of the removed `teammate-bootstrap.md` command (replaced by
 teammate frontmatter delivery). The session-start ritual command
 `bootstrap.md` IS registered: it is the per-session ritual surface invoked
 by the orchestrator persona's §2 Session-Start Ritual via
-`Skill("PACT:bootstrap")`. Cross-file version-consistency is owned by
+`Skill("repacted:bootstrap")`. Cross-file version-consistency is owned by
 sibling test_plugin_version_bump.py.
 """
 import json
@@ -26,7 +26,6 @@ EXPECTED_AGENTS = {
     "./agents/pact-database-engineer.md",
     "./agents/pact-devops-engineer.md",
     "./agents/pact-frontend-coder.md",
-    "./agents/pact-n8n.md",
     "./agents/pact-orchestrator.md",
     "./agents/pact-preparer.md",
     "./agents/pact-qa-engineer.md",
@@ -47,8 +46,8 @@ def plugin_json():
 
 def test_plugin_json_has_13_agents(plugin_json):
     agents = plugin_json.get("agents", [])
-    assert len(agents) == 13, (
-        f"plugin.json `agents` must have 13 entries (12 teammates + orchestrator), "
+    assert len(agents) == 12, (
+        f"plugin.json `agents` must have 12 entries (11 teammates + orchestrator), "
         f"got {len(agents)}"
     )
 
@@ -69,7 +68,7 @@ def test_plugin_json_agents_match_expected_set(plugin_json):
 
 
 def test_plugin_json_agents_alphabetized(plugin_json):
-    """13-entry alphabetized list: stable order eases diff review under future bumps."""
+    """12-entry alphabetized list: stable order eases diff review under future bumps."""
     agents = plugin_json.get("agents", [])
     assert agents == sorted(agents), (
         "plugin.json `agents` array must be alphabetized; "
@@ -90,7 +89,7 @@ def test_plugin_json_drops_removed_commands(plugin_json):
 
 def test_plugin_json_registers_bootstrap_command(plugin_json):
     """The session-start ritual command must be registered so the orchestrator
-    persona's `Skill("PACT:bootstrap")` invocation resolves."""
+    persona's `Skill("repacted:bootstrap")` invocation resolves."""
     commands = set(plugin_json.get("commands", []))
     assert "./commands/bootstrap.md" in commands, (
         "plugin.json must register ./commands/bootstrap.md in `commands` array"

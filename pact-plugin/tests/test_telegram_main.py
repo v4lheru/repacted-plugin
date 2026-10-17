@@ -73,7 +73,7 @@ class TestMainMissingDeps:
             main()
 
         captured = capsys.readouterr()
-        assert "/PACT:telegram-setup" in captured.err
+        assert "/repacted:telegram-setup" in captured.err
         assert "pip install" in captured.err
 
     def test_prints_all_missing_packages(self, capsys):

@@ -83,7 +83,7 @@ import task_lifecycle_gate as tlg  # noqa: E402
 
 HOOKS_DIR = Path(__file__).parent.parent / "hooks"
 
-LEAD_AGENT_TYPE = "PACT:pact-orchestrator"
+LEAD_AGENT_TYPE = "repacted:pact-orchestrator"
 TEAMMATE_AGENT_TYPE = "pact-devops-engineer"
 SESSION_ID = "sess-canonical-frame-0001"
 OTHER_SESSION_ID = "sess-tmux-teammate-0002"

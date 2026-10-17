@@ -1,87 +1,18 @@
-"""
-Location: pact-plugin/hooks/shared/background_work.py
-Summary: Team-scoped registry of outstanding background Bash launches (a frame
-         carrying the harness `run_in_background` flag, or a command ending in
-         a bare `&`), plus the unflagged-background fire predicate. Rows are
-         written for a TEAMMATE's launch, and for a launch made inside an
-         Agent-tool SUBAGENT — the latter marked with `owner_role` and carrying
-         no task ids, because that launch lands in the lead's own job list with
-         no owner and would otherwise be charged to the lead.
-         Pure helpers and fail-open loaders — no hook I/O, no registration.
-Used by: track_files.py (Layer 1 writer), teammate_idle.py (Layer 2
-         advisory), missed_wake_scan.py (Layer 3 lead surface),
-         wait_filler_gate.py (who receives the launch advisory),
-         task_lifecycle_gate.py (adds a claimed task to its owner's records).
+"""Team-scoped registry of outstanding background Bash launches, plus the unflagged-wait fire predicate.
 
-A teammate who backgrounds Bash and ends the turn with no valid
-intentional_wait is recorded here. Detection requires a registry row PLUS
-in_progress PLUS validate_wait false — mid-arc in_progress with no row
-must not fire.
+Records only shell launches with the harness background flag or a trailing bare `&`;
+other background work (monitors, subagents, MCP tasks, other `&` shapes) is invisible,
+so an absent advisory is not an all-clear. Rows: teammate, subagent and lead launches.
+Readers match rows by `harness_task_id`, `agent_name` or `task_ids`; a new row shape must
+be checked against all three, and name-keyed readers must skip `owner_role` rows.
+Never raises; state goes through `state_file`; 24h TTL at read.
 
-SCOPE — A SUBSET OF SHELL-SHAPED WORK, AND BOTH LIMITS ARE STRUCTURAL
-RATHER THAN OVERSIGHTS. The launch is observed from a PostToolUse `Bash`
-frame, so the only background work this registry can ever hold is a shell
-command. The
-platform tracks several other kinds — a monitor, an Agent-tool subagent, an
-MCP task, a workflow, a scheduled wakeup — and none of them raises a `Bash`
-tool event, so none is recorded and no layer fires for one. A teammate can
-therefore hold genuinely outstanding work that this mechanism cannot see.
-That is the OUTER limit. There is an inner one: within shell work this
-records two shapes and no others — a frame carrying the harness background
-flag, or a command ENDING in a bare `&`. A shell launch backgrounded any
-other way (`( cmd & )`, `cmd & echo started`, `… & disown`) is as invisible
-as a subagent; `background_launch.is_shell_backgrounded_bash` carries the
-measured list.
-DO NOT DESCRIBE THIS AS ENFORCING THE WAIT RULE GENERALLY, AND DO NOT
-DESCRIBE IT AS COVERING SHELL WORK GENERALLY EITHER. The instruction to
-agents is unconditional — flag every self-started wait — but what is
-DETECTED here is a subset of a subset, and conflating any of the three is
-what makes an absent advisory read as an all-clear.
-
-Contract: never raise on missing/corrupt files, an unusable team directory,
-empty team name, or malformed records. Every state-file read and write goes
-through `state_file` (read_text / locked_update / write_text): writes hold a
-sidecar lock and swap in a complete temp file, no symlink at the file is
-followed, files are created 0o600, undecodable bytes read as empty and are
-rewritten on the next change, and a no-op update creates no file. Read-time
-24h TTL drops stale rows. Team path uses
-pact_context.get_team_name() after init() — the same identity-aligned
-resolver teammate_idle and get_task_list use. The launch path resolves the
-team through `frame_team_and_name`, which also finds a separate-process
-teammate's team, since that teammate has no session context of its own.
-
-HOW READERS MATCH A ROW, AND WHY A NEW ROW SHAPE MUST BE CHECKED AGAINST ALL
-THREE. Every consumer of this registry selects rows by one of three keys: the
-job id (`harness_task_id`), the owner's name (`agent_name`), or the tasks the
-row covers (`task_ids`). An argument that a new row shape is safe for one key
-says NOTHING about the other two — a row carrying no task ids is unreachable
-by every task-keyed reader and still perfectly reachable by a name-keyed one.
-The name-keyed readers are the MINORITY and the easiest to miss, which is what
-makes the mistake worth naming here: an argument built while reading the
-task-keyed majority feels complete and is not. `turn_end_gate`'s SubagentStop
-branch and `extend_records_for_claim` are two of them.
-
-THE SAME CLAIM FROM THE READER'S SIDE, because the paragraph above instructs
-whoever adds a ROW and the person who needs it most is whoever adds a READER: a
-new name-keyed reader must EXCLUDE rows that are not a member's — both of those
-do it with `not record.get("owner_role")` — because matching a name says
-nothing about whether the row belongs to a member at all.
-
-MEASURED FROM SOURCE, NOT COPIED FROM A LIST. Which consumers exist is a
-DECISION to re-derive rather than an inventory to trust: sweep `hooks/**/*.py`
-and `scripts/**/*.py` for the three key names above and for the loaders that
-hand out rows. A roll-call written here would be correct the day it was
-written and quietly wrong the first time a reader was added, so the taxonomy is
-the durable part and the set is not.
-
-TWO team-scoped state files, and they must stay separate. The registry
-(background_work.json) holds outstanding launches. The idle counter
-(unflagged_background_idle.json) backs Layer 2's three-consecutive-idles
-threshold. DO NOT collapse the counter into the existing idle_counts.json:
-that file's writer pops a teammate's key whenever the task is not
-`completed`, and Layer 2's whole population is a teammate idling on an
-`in_progress` task — the exact branch that pops. Sharing the file resets
-the counter every tick and Layer 2 can never reach three.
+Map, in file order: clocks, wait classification and anchors, registry paths and record
+sanitizing, load/save/append, task predicates, outstanding_unflagged (the surfacing read),
+discharge and claim extension, unflagged_fire, Layer 3 clocks, idle counters, identity
+resolution (frame_team_and_name, teammate_launch_name, bind_launcher_identity), and
+record_background_launch (Layer 1 writer).
+Rationale: the design notes
 """
 
 from __future__ import annotations
@@ -108,51 +39,28 @@ UNFLAGGED_IDLE_FILENAME = "unflagged_background_idle.json"
 RECORD_TTL_SECONDS = 24 * 3600
 LEAD_STALE_MINUTES = 10
 
-# Layer 3 falls back to registered_at when idled_at is absent, so that a
-# missed TeammateIdle cannot disable the lead surface. registered_at is NOT
-# evidence of idling — only that time has passed since a launch — so it
-# carries the longer window. 30 minutes matches this project's existing
-# intentional-wait staleness threshold rather than introducing a second
-# number; it is a judgement, not a measurement, and is a named constant so
-# a later measurement can move it.
+# Layer 3 window when only registered_at is known (not evidence of idling); a judgement, not a measurement.
 LEAD_UNIDLED_STALE_MINUTES = 30
 
 UNFLAGGED_IDLE_THRESHOLD = 3
 
-# The owner role a row carries when its launcher is an Agent-tool subagent
-# rather than a teammate. Written only on those rows: a row without it is a
-# teammate row, which is also what every row written before this field existed
-# is, so absence defaulting to "teammate" is correct rather than merely
-# convenient.
-#
-# WHY A SUBAGENT ROW EXISTS AT ALL. A shell launched inside a subagent appears
-# in the LEAD's background_tasks with no owner and outlives the subagent, and
-# the lead's candidate set is every running shell MINUS the recorded launches.
-# Unrecorded, it is charged to the lead, which is refused a turn end over a job
-# it did not start and cannot flag. The row is what marks it as someone else's.
-#
-# WHY THE ROW CARRIES NO TASK IDS. A subagent holds no task by construction, so
-# there is no anchor task to list. The task-keyed readers of this store —
-# matching_outstanding, any_listed_task_flagged, has_live_listed_task,
-# discharge_acknowledged_for_owner and missed_wake_scan.find_unanchored_waits —
-# skip a row they cannot match a task to, except that has_live_listed_task
-# passes any row whose anchor_completed is True, whatever its task list. So the
-# empty list keeps a subagent row out of every TEAMMATE surface as
-# record_background_launch writes it, with anchor_completed False. This marker
-# is what AUTHORISES that empty list past _sanitize_record, and what states the
-# role rather than leaving the next reader to infer it from an empty field.
+# Row owner role for an Agent-tool subagent launch (absence means a teammate row).
+# The shell lands in the lead's job list with no owner; the row carries no task ids,
+# which keeps it out of every task-keyed teammate surface.
 OWNER_ROLE_SUBAGENT = "subagent"
+
+# Row owner role for the lead's own launch: the lead's turn-end gate counts only these rows.
+OWNER_ROLE_LEAD = "lead"
+
+# The roles whose rows may carry no task ids. A role outside this set does not
+# survive `_sanitize_record`.
+_TASKLESS_OWNER_ROLES = (OWNER_ROLE_SUBAGENT, OWNER_ROLE_LEAD)
 
 WAIT_CLASS_MISSING = "missing"
 WAIT_CLASS_NULL = "null"
 WAIT_CLASS_MALFORMED = "malformed"
 
-# The wait key holding the SCOPING ANCHOR, as distinct from `since`, which is
-# the freshness clock. Absent and malformed are kept apart because they have
-# different causes and different remedies: absent means written before this
-# field existed, or dropped by an agent on a re-SET; malformed means an agent
-# wrote something unparseable and has a bug. Both fall back to `since` and
-# both are surfaced, so neither is collapsed into a pass or a fail.
+# Scoping anchor key, distinct from the `since` freshness clock; absent and malformed are both surfaced.
 WAIT_ANCHOR_KEY = "covers_since"
 ANCHOR_CLASS_ABSENT = "absent"
 ANCHOR_CLASS_MALFORMED = "malformed"
@@ -182,11 +90,7 @@ def iso_now(now: datetime | None = None) -> str:
 
 
 def classify_wait(task: Any) -> str | None:
-    """Return the wait-absence class, or None if validate_wait succeeds.
-
-    Classes: missing (no intentional_wait key), null (value is None),
-    malformed (present but not well-formed). Never raises on plain dicts.
-    """
+    """Return the wait-absence class, or None if validate_wait succeeds."""
     if not isinstance(task, dict):
         return WAIT_CLASS_MISSING
     metadata = task.get("metadata")
@@ -205,34 +109,9 @@ def classify_wait(task: Any) -> str | None:
 def wait_scope_anchor(wait: Any) -> "tuple[datetime | None, str | None]":
     """The timestamp scoping what a wait covers, plus its anchor class.
 
-    Returns (anchor, None) when `covers_since` is present and parseable, and
-    (fallback, ANCHOR_CLASS_ABSENT|ANCHOR_CLASS_MALFORMED) otherwise, where
-    the fallback is `since`. A non-None class means the scope is resting on
-    the freshness clock, which is exactly the thing that moves.
-
-    WHY `since` CANNOT DO BOTH JOBS. `since` is the freshness clock and
-    agents are INSTRUCTED to re-SET it so a long wait does not read as stale.
-    Scoping on it means every re-stamp widens the wait FORWARD to cover
-    launches made after it was raised — a rolling amnesty, and precisely the
-    blanket the `>= registered_at` comparison exists to prevent. So the
-    clock re-stamps and the anchor does not.
-
-    THE ANCHOR IS WRITTEN ONCE BY CONVENTION AND NOTHING ENFORCES THAT.
-    It is agent-written, in the same TaskUpdate that re-stamps `since`, so an
-    agent that drops it on a re-SET silently returns to the old behaviour via
-    the fallback below. Calling it immutable would claim a guarantee this
-    mechanism does not provide. It is strictly better than scoping on a
-    re-stamped clock and it is not robust, and those are different claims.
-
-    THE FALLBACK IS DELIBERATE AND IS NOT A FAIL-OPEN. An absent anchor is a
-    third state beside covered and uncovered, and collapsing it into either
-    is the overloaded-null failure: scoping it closed would refuse to cover
-    anything for every wait written before this field existed, which today is
-    all of them. So coverage falls back to `since` — behaviour identical to
-    before — and the missing anchor is SURFACED to the lead instead, where it
-    is visible rather than silently resolved in either direction.
-
-    Pure: reads a wait dict, writes nothing.
+    Returns (covers_since, None) when present and parseable, else (since, ABSENT|MALFORMED).
+    Scope on the anchor, not `since`: `since` is re-stamped and would widen the wait forward.
+    The fallback keeps old waits working and the missing anchor is surfaced. Pure.
     """
     if not isinstance(wait, dict):
         return None, ANCHOR_CLASS_ABSENT
@@ -246,12 +125,7 @@ def wait_scope_anchor(wait: Any) -> "tuple[datetime | None, str | None]":
 
 
 def wait_anchor_class(task: Any) -> str | None:
-    """Anchor class for a task's VALID wait, or None when it is anchored.
-
-    Returns None for a task carrying no valid wait at all — the anchor is a
-    property of a wait, so a task without one has no anchor defect to report.
-    Callers wanting the absence of a wait itself use classify_wait.
-    """
+    """Anchor class for a task's VALID wait, or None when it is anchored."""
     if classify_wait(task) is not None:
         return None
     metadata = task.get("metadata") if isinstance(task, dict) else None
@@ -272,8 +146,7 @@ def registry_path(team_name: str | None = None) -> Path | None:
 
 
 def unflagged_idle_path(team_name: str | None = None) -> Path | None:
-    """Path of Layer 2's own idle counter. See the module docstring for why
-    this is not idle_counts.json."""
+    """Path of Layer 2's own idle counter (see the module docstring)."""
     return _team_file(UNFLAGGED_IDLE_FILENAME, team_name)
 
 
@@ -285,13 +158,7 @@ def _record_expired(record: dict, now: datetime) -> bool:
 
 
 def _clean_task_ids(raw: Any) -> list[str] | None:
-    """Normalize the task_ids field, or None when it is unusable.
-
-    A bare string is REJECTED rather than coerced into a one-element list.
-    Records are ephemeral team state with a 24h TTL and are never read
-    across a version boundary, so a scalar here is a malformed write rather
-    than an older schema, and dropping it is safer than reinterpreting it.
-    """
+    """Normalize the task_ids field, or None when unusable (a bare string is rejected, not coerced)."""
     if not isinstance(raw, list):
         return None
     out: list[str] = []
@@ -309,26 +176,15 @@ def _sanitize_record(raw: Any) -> dict | None:
     session_id = raw.get("session_id")
     task_ids = _clean_task_ids(raw.get("task_ids"))
     registered_at = raw.get("registered_at")
-    # A subagent owner holds no task, so its row is the one shape allowed to
-    # carry no task ids. See OWNER_ROLE_SUBAGENT for why that is safe against
-    # every task-keyed reader, and why the marker rather than the empty list is
-    # what carries the role.
-    #
-    # THE MARKER GRANTS NOTHING THAT WRITE ACCESS TO THIS FILE DOES NOT ALREADY
-    # GRANT. Only the exact value "subagent" survives this function. Any other
-    # value is not kept: a row carrying task ids is then read as a teammate's,
-    # and a row without them is dropped whole. Past this function
-    # the marker is read only by the two readers that match on a member's name,
-    # and each skips a marked row, which is what deleting the row would do.
-    # Deletion is the STRONGER power, not an equal one: it also removes the row
-    # from every reader keyed on the job id or the task ids, which still read a
-    # marked row. Anyone able to write the marker can already delete the row.
-    subagent_owned = raw.get("owner_role") == OWNER_ROLE_SUBAGENT
+    # Only "subagent" and "lead" survive; only such a row may carry no task ids. The marker
+    # grants nothing write access to this file does not already grant.
+    owner_role = raw.get("owner_role")
+    taskless_owner = isinstance(owner_role, str) and owner_role in _TASKLESS_OWNER_ROLES
     if not isinstance(agent_name, str) or not agent_name:
         return None
     if not isinstance(session_id, str) or not session_id:
         return None
-    if task_ids is None and not subagent_owned:
+    if task_ids is None and not taskless_owner:
         return None
     if parse_iso(registered_at) is None:
         return None
@@ -338,8 +194,8 @@ def _sanitize_record(raw: Any) -> dict | None:
         "task_ids": task_ids or [],
         "registered_at": registered_at,
     }
-    if subagent_owned:
-        out["owner_role"] = OWNER_ROLE_SUBAGENT
+    if taskless_owner:
+        out["owner_role"] = owner_role
     harness = raw.get("harness_task_id")
     if isinstance(harness, str) and harness:
         out["harness_task_id"] = harness
@@ -349,10 +205,7 @@ def _sanitize_record(raw: Any) -> dict | None:
     idled_at = raw.get("idled_at")
     if parse_iso(idled_at) is not None:
         out["idled_at"] = idled_at
-    # Preserved only when TRUE. A row without it is a teammate row, which is
-    # also what every row written before this field existed is — and those
-    # SHOULD expire on completion, so absence defaulting to False is correct
-    # rather than merely convenient.
+    # Kept only when True; absence means a teammate row that expires on completion.
     if raw.get("anchor_completed") is True:
         out["anchor_completed"] = True
     return out
@@ -384,11 +237,7 @@ def _load_records(
     team_name: str | None = None,
     now: datetime | None = None,
 ) -> list[dict]:
-    """Load outstanding (non-expired) records. Fail-open to [].
-
-    Expiry here is the 24h TTL alone. See `unflagged_fire` for why no
-    task-status predicate belongs here.
-    """
+    """Load non-expired records (24h TTL only). Fail-open to []."""
     path = registry_path(team_name)
     if path is None:
         return []
@@ -450,14 +299,7 @@ def append_record(
     team_name: str | None = None,
     now: datetime | None = None,
 ) -> bool:
-    """Append one sanitized record. Fail-open.
-
-    `now` reaches the EXPIRY PRUNE, which runs on the read inside this write:
-    _atomic_update_records -> _parse_records_text -> _record_expired. Past the
-    TTL and without it, two successive appends silently drop the first record
-    and still return True. This is the module's only clock on this path; the
-    stamp lives in record_background_launch, which threads its own.
-    """
+    """Append one sanitized record. Fail-open. `now` drives the expiry prune inside the write."""
     clean = _sanitize_record(record)
     if clean is None:
         return False
@@ -501,34 +343,10 @@ def any_listed_task_flagged(
     record: Any,
     tasks: Any = None,
 ) -> bool:
-    """True iff SOME in_progress task listed on the record carries a valid wait.
+    """True iff some task listed on the record carries a valid wait (no status filter).
 
-    This is the R5 fire predicate's silencing half, and it generalises in
-    the SAFE direction deliberately: a teammate holding two tasks who
-    flagged the wait on EITHER has flagged it, so the advisory stays
-    silent. Under the old exactly-one-task rule that teammate got no record
-    at all, so this strictly adds coverage without adding a
-    false-positive route.
-
-    `tasks` is the team's task list. When it is None the caller has no
-    task set to check and only the task in hand can be judged, so this
-    returns False and the caller's own classify_wait decides.
-
-    NO STATUS FILTER, DELIBERATELY. This used to require `in_progress`, which
-    silently excluded consultants: a consultant's carrier is its most recently
-    COMPLETED task, so its wait sat on a task this loop skipped and could never
-    silence anything. Metadata writes to a completed task land, so that wait is
-    real and readable. Listing is what scopes this — the record names the task
-    ids it covers — and the status adds nothing to that.
-
-    A RECORD WRITTEN WITH `anchor_completed` IS SILENCED ONLY BY A WAIT THAT
-    COVERS ITS LAUNCH (`wait_covers_record`). Its anchor task was already
-    completed when the launch happened, and a completed task routinely still
-    carries a wait raised BEFORE that launch — the completion flow leaves one
-    behind. Accepting any valid wait there would let that older wait hide
-    every later launch the consultant makes. Records anchored on in_progress
-    tasks keep the unscoped rule above: any valid wait on a listed task
-    silences.
+    With `tasks` None, returns False. A record with `anchor_completed` is silenced only by
+    a wait that covers its launch (`wait_covers_record`), not by an older leftover wait.
     """
     if not isinstance(tasks, list):
         return False
@@ -553,26 +371,10 @@ def load_records_for_discharge(
     team_name: str | None = None,
     now: datetime | None = None,
 ) -> list[dict]:
-    """The UNGATED read. TTL only — no expiry gate, no suppression gate.
+    """The UNGATED read (TTL only), for paths that must see flagged records.
 
-    THE NAME IS THE ENFORCEMENT. The raw loader is private (`_load_records`)
-    so that a future consumer cannot reach an ungated read by accident; to get
-    one it has to type the word `discharge`, which is a decision rather than a
-    default. The previous arrangement — a public raw loader plus a docstring
-    asking callers to remember two gates — did not hold for the second
-    consumer, and would not have held for a third.
-
-    USE IT ONLY WHERE THE READ MUST SEE FLAGGED RECORDS. There are two such
-    production consumers. The discharge path exists to retire a flagged
-    record, so a gated read would hide every record it is looking for and kill
-    the mechanism while every gate test still passed. The lead-side
-    `find_unanchored_waits` (missed_wake_scan) surfaces a wait that is
-    acquitting a record on its fallback anchor, which is by definition a
-    record the flagged-wait gate hides. Tests asserting raw on-disk state are
-    the only other legitimate caller.
-
-    Anything that surfaces a record AS OUTSTANDING — telling a human or an
-    agent that work is unflagged — must call `outstanding_unflagged` instead.
+    Discharge and missed_wake_scan.find_unanchored_waits need it. Anything that surfaces a
+    record as outstanding must call `outstanding_unflagged` instead.
     """
     return _load_records(team_name, now=now)
 
@@ -580,25 +382,8 @@ def load_records_for_discharge(
 def owner_anchor_tasks(tasks: Any, owner: Any) -> "tuple[list[str], bool]":
     """This owner's anchor task ids, and whether the anchor is already completed.
 
-    Returns (ids, anchor_completed): EVERY `in_progress` task owned by `owner`
-    when there is at least one, otherwise the single most-recently-completed
-    one. Empty list when the owner has no task at all.
-
-    LIFTED FROM teammate_idle.find_teammate_task, WHICH ALREADY HAD THIS RIGHT.
-    That resolver returns `in_progress or most-recently-completed`, and the
-    shared module used to disagree with it by filtering on `in_progress`
-    everywhere. The disagreement is what made a CONSULTANT invisible: a
-    consultant owns no `in_progress` task BY DEFINITION — that is what being
-    one means — so it matched zero tasks, nothing was recorded, and every
-    layer was off for it. One resolver, used by both, is the fix.
-
-    It generalises the lifted version in one direction only: ALL in_progress
-    tasks rather than one, because a teammate may hold several and the
-    framework's own instructions permit it. Most-recent-completed stays
-    single — "most recent" has no plural.
-
-    Recency is by integer task id. Ids are numeric strings, so a string
-    compare would rank "3" above "20".
+    Every in_progress task the owner holds, else its most recently completed one (a
+    consultant); empty when it has none. Recency by integer id.
     """
     in_progress: list[str] = []
     completed_id: int | None = None
@@ -629,37 +414,14 @@ def owner_anchor_tasks(tasks: Any, owner: Any) -> "tuple[list[str], bool]":
 
 
 def task_is_live(task: Any) -> bool:
-    """True iff this task is still `in_progress`. The liveness SSOT.
-
-    Named rather than inlined so the per-task consumer (`unflagged_fire`) and
-    the per-record consumer (`has_live_listed_task`) share ONE implementation.
-    Two copies of the same predicate is how they drift apart.
-    """
+    """True iff this task is still `in_progress` (the one liveness predicate)."""
     return isinstance(task, dict) and task.get("status") == "in_progress"
 
 
 def has_live_listed_task(record: Any, tasks: Any) -> bool:
-    """True iff some task this record covers is still live.
+    """True iff some task this record covers is still live, or the record is anchor_completed.
 
-    🔴 CONSULTANT RECORDS HAVE NO STRUCTURAL EXPIRY, AND THAT IS A WEAKER
-    GUARANTEE THAN A TEAMMATE'S — STATED HERE RATHER THAN LEFT TO BE FOUND.
-    For a teammate, task-completion IS the expiry signal: the record dies when
-    no listed task is `in_progress` any more. A consultant's anchor task is
-    ALREADY completed at the moment the record is written, so that signal is
-    spent before it can ever fire. Expiring on it would kill the record on
-    arrival, which is why such records are exempt here — and the price is that
-    nothing retires them except the 24h TTL upstream in `_load_records`.
-
-    Coverage yes, expiry parity NO. Do not describe consultant coverage as
-    equal to teammate coverage; an undocumented weaker guarantee reads as an
-    equal one, and this is the sentence that stops that.
-
-    The exemption keys on a flag written at RECORD time, not on the task's
-    status now, because those differ: a teammate whose task has since
-    completed must still expire, and only the write-time fact separates the
-    two. `task_is_live` stays the unqualified liveness SSOT — the exemption
-    belongs here, where the record is in hand, rather than inside a predicate
-    whose whole job is to answer "is this task in_progress".
+    Consultant records have no completion expiry, only the 24h TTL (a weaker guarantee).
     """
     if not isinstance(tasks, list):
         return False
@@ -677,55 +439,20 @@ def outstanding_unflagged(
 ) -> list[dict]:
     """THE ONLY SANCTIONED READ PATH FOR SURFACING A RECORD TO A HUMAN OR AGENT.
 
-    Applies BOTH gates, so a caller cannot surface a record by forgetting one:
-      - TASK-STATUS: at least one listed task is still `in_progress`.
-      - FLAGGED-WAIT: no listed `in_progress` task carries a valid wait.
-    (The 24h TTL is applied upstream by `_load_records`.)
-
-    WHY THIS EXISTS AS A NAMED SELECTOR RATHER THAN A CONVENTION. Layer 2
-    reached records through `unflagged_fire`, which applies both gates; Layer 3
-    went straight to `_load_records`, which applies neither. MEASURED on one
-    40-minute-old record: the lead-side path surfaced it while the teammate-side
-    path refused it, both because the task was `completed` AND because a valid
-    wait was flagged. The lead-facing text asserts "outstanding launches and no
-    flagged wait" — on the ungated path nothing evaluated the second clause, so
-    the surface claimed a property the code never checked. A docstring asking
-    the next consumer to remember two gates is exactly what produced that; a
-    selector makes the next consumer INHERIT them.
-
-    THE TWO GATES ARE DIFFERENT KINDS OF PREDICATE, and that is why only one
-    of them could ever have moved into the loader:
-
-      GATE A — task status — is EXPIRY. A record none of whose listed tasks
-      is still `in_progress` is dead PERMANENTLY. That is a property of the
-      record alone given the task store, so no consumer should be able to opt
-      out of it, and it does not interact with the discharge: a discharged
-      record is removed, a record on a dead task is removed, no conflict.
-
-      GATE B — flagged wait — is SUPPRESSION. The record is still LIVE and
-      still meaningful; we are declining to surface it RIGHT NOW because the
-      teammate has flagged. That is a property of the MOMENT, not of the
-      record. Move it into any read the discharge uses and
-      `discharge_acknowledged_for_owner` never sees a flagged record to retire — the
-      mechanism dies silently, green, because every gate test still passes.
-
-    So expiry filters the READ and suppression filters the SURFACE. Do not
-    "simplify" them together: they differ in lifetime, not just in placement.
+    Gate A, expiry: a listed task is still in_progress. Gate B, suppression: no listed
+    task carries a valid wait. Keep B out of any read the discharge uses, or the
+    discharge never sees a flagged record to retire.
     """
     rows = records if records is not None else _load_records(team_name, now=now)
     if not isinstance(tasks, list):
-        # No task set means neither gate can be evaluated. Surface NOTHING
-        # rather than fall back to the ungated list — this function's whole
-        # purpose is that an unevaluable gate never reads as a passed gate.
+        # No task set: surface nothing (an unevaluable gate is not a passed gate).
         return []
     out = []
     for record in rows:
         # GATE A — EXPIRY. No live task means the record is dead permanently.
         if not has_live_listed_task(record, tasks):
             continue
-        # GATE B — SUPPRESSION. The record is LIVE; we decline to surface it
-        # right now because the teammate has flagged. See the note above on
-        # why this one cannot move into a read the discharge uses.
+        # Gate B, suppression (must stay out of the discharge read).
         if any_listed_task_flagged(record, tasks):
             continue
         out.append(record)
@@ -733,29 +460,10 @@ def outstanding_unflagged(
 
 
 def wait_covers_record(task: Any, record: Any) -> bool:
-    """True iff this task's VALID wait acknowledges this record's launch.
+    """True iff this task's VALID wait acknowledges this record's launch (anchor >= registered_at).
 
-    THE ACKNOWLEDGMENT SIGNAL IS THE FLAG, NOT THE JOB'S COMPLETION. The
-    advisory exists to catch a teammate who backgrounded work and never said
-    so. Once it has flagged a wait covering that launch, it has demonstrably
-    associated the two, and the record has done its job — whether or not the
-    job itself has finished. Nothing needs to observe the shell.
-
-    `anchor >= registered_at` IS LOAD-BEARING AND MUST NOT BE SIMPLIFIED AWAY.
-    It is what makes this precise rather than a blanket amnesty: a wait
-    flagged for job 1 does NOT acquit a job 2 launched afterwards, because
-    job 2's `registered_at` is later than that wait's anchor.
-
-    SCOPE ON THE ANCHOR, NEVER ON `since`. `since` is the freshness clock and
-    agents are instructed to re-SET it; comparing against it would let every
-    re-stamp widen the wait forward over launches it never acknowledged,
-    which annuls the comparison above. wait_scope_anchor reads the anchor and
-    falls back to `since` only when there is none, so an unanchored wait
-    behaves exactly as it did before rather than breaking — and the lead-side
-    scan reports the missing anchor instead of this returning a quiet verdict
-    on it. Callers needing that class use wait_anchor_class.
-
-    Pure: reads a task dict and a record dict, writes nothing.
+    The flag, not the job's completion, is the acknowledgment. The `>=` keeps a wait for
+    job 1 from acquitting a later job 2. Scope on the anchor, never on `since`. Pure.
     """
     if not isinstance(task, dict) or not isinstance(record, dict):
         return False
@@ -776,20 +484,9 @@ def discharge_acknowledged_for_owner(
     team_name: str | None = None,
     now: datetime | None = None,
 ) -> int:
-    """Drop every record that a valid wait on one of `owner`'s tasks acknowledges.
-    Returns the count.
+    """Drop every record that a valid wait on one of `owner`'s tasks acknowledges; return the count.
 
-    A record is dropped iff some task owned by `owner` is listed on it and that
-    task's wait covers the record's launch (`wait_covers_record`). The whole
-    pass is ONE registry update, however many tasks the owner holds.
-
-    RESIDUAL, AND IT IS NOT EMPTY. Discharge needs a TeammateIdle between the
-    flag and the clear, because this runs on that event. A teammate that
-    flags and clears inside ONE turn, never idling, keeps its record and can
-    still draw a stale advisory later. That population correlates with
-    UNNECESSARY flagging rather than with diligence — flagging exists because
-    you are about to end a turn, and ending a turn is an idle — but it is
-    real and is pinned by a test rather than claimed away.
+    Runs on TeammateIdle, so a flag-and-clear within one turn keeps its record (pinned by a test).
     """
     if not isinstance(tasks, list) or not owner:
         return 0
@@ -827,17 +524,9 @@ def extend_records_for_claim(
     team_name: str | None = None,
     now: datetime | None = None,
 ) -> int:
-    """Add a task its owner just claimed to every live record that owner launched.
-    Returns the number of records extended.
+    """Add a task its owner just claimed to every live record that owner launched; return the count.
 
-    A record lists the tasks its launcher held at LAUNCH. A task claimed later
-    is not on it, so a wait flagged on that task could neither silence the
-    record nor discharge it. Listing the task lets it do both.
-
-    `registered_at` and `anchor_completed` stay as written, so a wait still
-    clears only launches older than its anchor (`wait_covers_record`). Expired
-    records are pruned by the read inside the update, so only live records
-    gain the task. An absent registry creates no file.
+    registered_at and anchor_completed stay as written. An absent registry creates no file.
     """
     if not isinstance(owner, str) or not owner or task_id is None:
         return 0
@@ -853,12 +542,7 @@ def extend_records_for_claim(
         out = []
         for record in records:
             listed = record_task_ids(record)
-            # `owner_role` EXCLUDES A NON-TEAMMATE ROW, for the same semantic
-            # reason as the other name-keyed read (turn_end_gate's SubagentStop
-            # branch): a subagent's row is not a member's row, so a member's
-            # claimed task must not be appended to it — whatever that member is
-            # named. Truthiness rather than equality with one role, so a role
-            # added later is excluded by default and must opt in.
+            # Exclude non-teammate rows (any truthy owner_role): a member's task never joins a subagent's row.
             if (
                 record.get("agent_name") == owner
                 and not record.get("owner_role")
@@ -881,35 +565,11 @@ def unflagged_fire(
     team_name: str | None = None,
     tasks: list | None = None,
 ) -> tuple[bool, str | None, dict | None]:
-    """Fire when in_progress + outstanding record + no listed task flagged.
-
-    Returns (fire, wait_class, record). wait_class is set only on fire.
-    Pass `tasks` (the team task list) so the R5 silencing check can see the
-    record's other tasks; without it only `task` is judged.
-    """
+    """Fire when in_progress + outstanding record + no listed task flagged."""
     if not isinstance(task, dict):
         return False, None, None
-    # THIS GATE COVERS THIS FUNCTION'S CALLERS ONLY — Layer 2. IT IS NOT A
-    # PROPERTY OF THE MODULE.
-    #
-    # An earlier version of this comment claimed "every consumer reaches a
-    # record through this function" and named `_load_records` as a REJECTED
-    # place for the predicate on that basis. MEASURED FALSE: Layer 3's
-    # lead-side selector read `_load_records` directly and applied neither the
-    # status gate nor the flagged-wait gate, so it surfaced records this line
-    # refuses. The comment did not merely fail to prevent that — it argued
-    # against the check the other consumer needed, and warned the next reader
-    # off "cleaning up the duplication". A false scope claim in a comment is
-    # worse than no comment, because it stops the reader looking.
-    #
-    # The gates now live in `outstanding_unflagged` for any read path that
-    # surfaces a record. This line stays because Layer 2 is per-task and
-    # reaches records through here.
-    #
-    # It also does NOT resolve the sticky-row defect, which is a different
-    # case: a job finishing WITHIN one still-`in_progress` task leaves the
-    # record live and the task status unchanged, so no status check of any
-    # kind reaches it. That is what the acknowledgment discharge is for.
+    # Layer 2's per-task status gate; surfacing reads use outstanding_unflagged. A job ending
+    # within one live task is retired by the discharge, not here.
     if not task_is_live(task):
         return False, None, None
     record = matching_outstanding(task, records=records, now=now, team_name=team_name)
@@ -952,14 +612,10 @@ def stamp_idled_at(
 
 
 def effective_since(record: Any) -> tuple[datetime | None, int]:
-    """The clock Layer 3 measures against, and the window that applies to it.
+    """The clock Layer 3 measures against and its window: (since, threshold_minutes).
 
-    Returns (since, threshold_minutes). `idled_at` is preferred; when it is
-    absent we fall back to `registered_at` with the longer window, so that a
-    missed TeammateIdle cannot disable the lead surface. Before this
-    fallback existed, `stamp_idled_at`'s single production call site was the
-    only writer of `idled_at`, which made Layer 3 a consumer of Layer 2
-    rather than a backstop for it.
+    `idled_at` when present, else `registered_at` with the longer window, so a missed
+    TeammateIdle cannot disable the lead surface.
     """
     if not isinstance(record, dict):
         return None, LEAD_STALE_MINUTES
@@ -967,6 +623,24 @@ def effective_since(record: Any) -> tuple[datetime | None, int]:
     if idled is not None:
         return idled, LEAD_STALE_MINUTES
     return parse_iso(record.get("registered_at")), LEAD_UNIDLED_STALE_MINUTES
+
+
+def teammate_working(
+    lead_transcript: str | None, agent_name: Any, now: datetime | None = None
+) -> bool:
+    """True only when the teammate's own transcript shows it working (shared/transcript_activity.py).
+
+    Every other outcome is False, so the alarm fails toward firing.
+    """
+    try:
+        from shared.transcript_activity import teammate_transcript, transcript_active
+
+        path = teammate_transcript(lead_transcript, agent_name)
+        if path is None:
+            return False
+        return transcript_active(path, now or utc_now()) is True
+    except Exception:
+        return False
 
 
 def lead_stale(
@@ -1019,15 +693,7 @@ def update_unflagged_idle_counts(mutator, team_name: str | None = None) -> dict:
         if path is None:
             return {}
         return state_file.locked_update(path, _apply, _teams_root())
-    # TypeError / ValueError are here to keep the module's stated contract —
-    # "never raise on missing/corrupt files, empty team name, or MALFORMED
-    # RECORDS". A counter entry whose `count` is a non-int is a malformed
-    # record, and a mutator coercing it raises ValueError from inside this
-    # call. MEASURED before this was added: a `{"count": "not-an-int"}` entry
-    # raised straight out of here, so the docstring was false.
-    # The caller's own coercion is total as well (see teammate_idle), so this
-    # is the contract backstop rather than the primary defence — a mutator
-    # should not depend on it to be careless.
+    # TypeError/ValueError: a malformed counter entry must not raise (module contract).
     except (OSError, TypeError, ValueError):
         return {}
 
@@ -1045,27 +711,14 @@ def save_unflagged_idle_counts(counts: dict, team_name: str | None = None) -> bo
 
 
 # --------------------------------------------------------------------------
-# Layer 1 — the write path.
-#
-# This lives here rather than in the host hook deliberately. track_files.py
-# hosts the call because it is already registered on PostToolUse
-# `Edit|Write|Bash`, so folding into it costs no new subprocess — but the
-# host is meant to gain a gate and a call, nothing more. Identity resolution
-# inside the host would be a second resolver sitting in a file whose job is
-# file tracking, which is exactly the coupling the fold was supposed to
-# avoid.
+# Layer 1, the write path (hosted by track_files.py on PostToolUse; identity stays here).
 # --------------------------------------------------------------------------
 
 
-# The launch predicate (the flag, or a command ending in a bare `&`) lives in
-# `background_launch`, shared with the PreToolUse advisory. Its names are
-# re-exported at the top of this module.
+# The launch predicate lives in `background_launch` (re-exported above).
 
 
-# Platform-supplied agent types that are NOT this plugin's agents. Hard-coded
-# because they come from the harness rather than from a file we can enumerate.
-# This list going stale is a real exposure — see the residual note on
-# `agent_type_names_a_member`.
+# Harness agent types, not this plugin's; a stale list is a known exposure.
 _PLATFORM_AGENT_TYPES = frozenset(
     {"general-purpose", "Explore", "Plan", "statusline-setup"}
 )
@@ -1075,13 +728,7 @@ _SUBAGENT_ID = re.compile(r"a[0-9a-f]{16}")
 
 
 def _known_agent_types() -> frozenset:
-    """Agent-type stems this plugin ships, DERIVED AT RUNTIME from agents/.
-
-    Derived rather than listed so that adding an agent file cannot silently
-    open a collision with a teammate name. A hard-coded copy would go stale
-    the day someone adds one, and the failure would be a mis-bind rather than
-    an error.
-    """
+    """Agent-type stems this plugin ships, derived at runtime from agents/ (never a stale copy)."""
     try:
         agents_dir = Path(__file__).resolve().parents[2] / "agents"
         return frozenset(p.stem for p in agents_dir.glob("*.md"))
@@ -1092,46 +739,12 @@ def _known_agent_types() -> frozenset:
 def agent_type_names_a_member(
     agent_type: Any, team_name: str, *, agent_id: Any = None
 ) -> bool:
-    """True iff the frame's `agent_type` is an IDENTITY rather than a TYPE.
+    """True iff the frame's `agent_type` is an IDENTITY (a team member's name) rather than a TYPE.
 
-    MEASURED 2026-09-11 on a live in-process Agent-Teams teammate PostToolUse
-    Bash frame: `agent_type` carried the teammate's own NAME, not the
-    `pact-`-prefixed agentType its team config records. `agent_name` was
-    absent and `agent_id` carried no `@`, so no other route resolves. See
-    `tests/fixtures/role_frames.py` ::
-    captured_posttooluse_teammate_inprocess_bash_background.
-
-    The test is MEMBERSHIP in the team config the platform wrote at spawn —
-    a lookup in authoritative local state, not string surgery. Step 4 already
-    strips this field today; this validates the value before trusting it.
-
-    THE FRAME'S `agent_id` SHAPE IS READ FIRST. An in-process teammate's frame
-    carries "a" + `agent_type` + "-" + 16 lowercase hex, and an Agent-tool
-    subagent's carries "a" + 16 lowercase hex. A subagent-shaped id is never a
-    member, whatever its type. A teammate-shaped id is built from `agent_type`
-    and compared whole, never parsed, and goes to membership without the deny
-    set, so a member named after an agent type is not refused on its own
-    frame. Any other id, or none, takes the type checks below.
-
-    RESIDUAL, STATED RATHER THAN CLAIMED AWAY, on a frame without a recognized
-    `agent_id`. `classify_session_role` treats any `agent_type` outside
-    `LEAD_AGENT_TYPES` as a teammate, so a generic Agent-tool subagent reaches
-    this code. The deny set below reduces the collision to perverse naming — a
-    member would have to be NAMED after a real agent type, and such a member is
-    refused on that frame — but an UNKNOWN FUTURE PLATFORM TYPE colliding with
-    a member name remains possible, and that case fails toward MIS-BIND rather
-    than silence, which is the worse direction: a launch would be attributed
-    to a teammate who did not make it. This is an accepted exposure, not an
-    eliminated one.
-
-    TMUX IS UNTESTED, NOT COVERED. Under tmux the frame reportedly carries the
-    real type and no `agent_id`, so this returns False and the caller falls through to the
-    registry, which works there because the in-process self-guard does not
-    fire. That rests on one captured PreToolUse frame and NO Bash PostToolUse
-    frame. It was UNEXERCISED during development because the development
-    machine had no tmux teams — which bounds the VERIFICATION, not the
-    behaviour. This plugin ships to consumers who may run tmux teams, so do
-    not read "no teams to test against" as "a path nobody takes".
+    In-process teammate frames carry the member's name in `agent_type` (fixture:
+    tests/fixtures/role_frames.py). The `agent_id` shape is read first: a subagent-shaped id
+    is never a member; a teammate-shaped id is compared whole. Known residuals (an unknown
+    platform type equal to a member name; tmux unverified): see the doc file.
     """
     if not isinstance(agent_type, str) or not agent_type:
         return False
@@ -1167,25 +780,10 @@ def _names_a_member(name: Any, team: str) -> bool:
 
 
 def frame_team_and_name(input_data: Any) -> "tuple[str, str]":
-    """(team, member name) for the frame's own session, "" for each part unresolved.
+    """(team, member name) for the frame's own session, "" for each part unresolved. Never raises.
 
-    Never raises.
-
-    The team comes from the first route that resolves:
-      1. `get_team_name()`, when the session has a PACT context: the lead, and
-         in-process teammates, which share the lead's session.
-      2. The frame's own `team_name` and `teammate_name`, when that name is a
-         member of that team. A TeammateIdle frame carries both, and a
-         separate-process teammate's own process has no PACT context, so this
-         is how its idle hook finds its team.
-      3. The session registry entry for the frame's `session_id`.
-         `session_registry.resolve` has already checked the name against that
-         team's members. A separate-process teammate has no session context of
-         its own, so this is the route its other hooks use.
-      4. An `agent_id` of the form `name@team` whose name is a member of that
-         team.
-    The name comes from routes 2 to 4. Route 1 returns "": a context names the
-    session's team, not which member is acting in it.
+    Routes: get_team_name(); the frame's team_name + teammate_name; the session registry;
+    an `agent_id` of the form name@team. Route 1 yields no name.
     """
     try:
         if not isinstance(input_data, dict):
@@ -1219,17 +817,8 @@ def frame_team_and_name(input_data: Any) -> "tuple[str, str]":
 def teammate_is_separate_process(team_name: Any, member_name: Any) -> bool:
     """True iff `member_name`'s `backendType` in `team_name`'s config is exactly "tmux".
 
-    A separate-process teammate is the main session of its own process, so its
-    own background completion starts its next turn; an in-process teammate's
-    does not. The stall layers (the launch advisory, Layer 2 and Layer 3's
-    unflagged surface) exist for a teammate that is not woken, and skip a
-    teammate this returns True for.
-
-    FALSE IS THE SAFE ANSWER, and every doubt returns it: "in-process",
-    "iterm2", any other value or spelling, a missing key, a missing member, or
-    an unreadable config. A wrong False sends a woken teammate one extra
-    advisory; a wrong True silences the layers for a teammate that stalls.
-    "iterm2" stays False until its wake behaviour is measured.
+    A separate-process teammate is woken by its own job completion, so the stall layers
+    skip it. Every doubt returns False (one extra advisory beats a silenced stall).
     """
     if not isinstance(team_name, str) or not isinstance(member_name, str) or not member_name:
         return False
@@ -1247,23 +836,9 @@ def teammate_is_separate_process(team_name: Any, member_name: Any) -> bool:
 def teammate_launch_name(input_data: Any, team_name: str) -> str:
     """The member name of the teammate of `team_name` acting in this frame, or "".
 
-    "" means the frame is not a teammate: the lead, an Agent-tool subagent, or
-    a plain frame. The launch advisory and Layer 1 both decide through this
-    (Layer 1 via `is_teammate_launch_frame`), so the advisory and the registry
-    cover the same population. In order:
-      1. No `agent_type`, or a lead spelling: not a teammate.
-      2. `agent_type` names a member: an in-process teammate, whose frame
-         carries its own name in that field. Returns that name (a
-         subagent-shaped `agent_id` is refused here even then).
-      3. An `agent_id` is present. `name@<this team>` returns `name`. Any other
-         id, such as a bare hex id, is an Agent-tool subagent, because an
-         in-process teammate already matched at step 2. No captured frame has
-         the `name@team` shape: a measured separate-process teammate frame
-         carries no `agent_id` and resolves at step 4.
-      4. No `agent_id`, a `session_id` that is not the lead's, and a session
-         registry entry for this team: a separate-process teammate. Returns
-         the registry's name.
-    Anything else is not a teammate.
+    The launch advisory and Layer 1 both decide through this. Order: no agent_type or a
+    lead spelling with an agent_id is not a teammate; agent_type naming a member; an
+    agent_id name@team; else a non-lead session_id found in the session registry.
     """
     if not isinstance(input_data, dict) or not isinstance(team_name, str) or not team_name:
         return ""
@@ -1271,14 +846,17 @@ def teammate_launch_name(input_data: Any, team_name: str) -> str:
     from .session_registry import resolve as registry_resolve
 
     agent_type = input_data.get("agent_type")
-    if not isinstance(agent_type, str) or not agent_type or agent_type in LEAD_AGENT_TYPES:
+    if not isinstance(agent_type, str) or not agent_type:
         return ""
-    if agent_type_names_a_member(
-        agent_type, team_name, agent_id=input_data.get("agent_id")
-    ):
-        return agent_type
     agent_id = input_data.get("agent_id")
-    if agent_id:
+    if agent_type in LEAD_AGENT_TYPES:
+        # A lead spelling with no agent_id is the lead in the lead's session, and a
+        # teammate spawned with the orchestrator type in any other (step 4 names it).
+        if agent_id:
+            return ""
+    elif agent_type_names_a_member(agent_type, team_name, agent_id=input_data.get("agent_id")):
+        return agent_type
+    elif agent_id:
         if not isinstance(agent_id, str):
             return ""
         name, _, id_team = agent_id.partition("@")
@@ -1301,55 +879,11 @@ def is_teammate_launch_frame(input_data: Any, team_name: str) -> bool:
 def bind_launcher_identity(
     input_data: Any, team_name: str
 ) -> "tuple[str, str, list[str], bool] | None":
-    """Return (agent_name, session_id, task_ids, anchor_completed), or None.
+    """Return (agent_name, session_id, task_ids, anchor_completed), or None when identity is absent.
 
-    None means identity is absent. `anchor_completed` is True when the owner
-    held no `in_progress` task and the ids are its most recently completed one
-    — the consultant case — and it is APPENDED to the tuple rather than
-    inserted, so positional readers of the first three elements are unaffected.
-
-    Steps 1-3.5 of resolve_agent_name only. `agent_type` is deliberately NOT
-    type-stripped as the owner.
-
-    THE FIELD IS POLYMORPHIC BY ROLE, NOT RANDOMLY UNRELIABLE, and the
-    distinction decides when the membership match can be trusted. MEASURED:
-    on TEAMMATE frames it carried the member's NAME every time — three
-    teammates, two independent instruments, two operators — and on LEAD
-    frames it carries the agent-type spelling (`PACT:pact-orchestrator` in
-    the team whose file-edits rows were the original evidence). So it is
-    consistently a name for teammates and consistently a type for the lead.
-    Reading it as "sometimes one, sometimes the other, per frame" would be
-    wrong and would undersell a mechanism that is deterministic per role.
-    Stripping it unconditionally would therefore attribute a launch to
-    whatever string happens to be there, which is why the value is VALIDATED
-    against the team config instead of trusted for its shape.
-
-    A hex agent_id is an in-process discriminator, not a teammate name.
-    Refusing to guess means the registry stays silent rather than wrong.
-
-    STEP 1 IS INERT IN EVERY TOPOLOGY MEASURED SO FAR AND STAYS ANYWAY.
-    `agent_name` is absent from the in-process frame's 15 keys, and the SSOT
-    records it absent under tmux too, so it may be dead everywhere — nobody
-    has established that. The branch costs one dict lookup on a fail-open
-    ordering, so keeping it is a cheap option on a future harness that does
-    carry the field, not dead weight. Do not delete it as unreachable
-    without measuring the topology you are deleting it for.
-
-    ALL matching in_progress tasks are returned, not one. Requiring exactly
-    one silently recorded nothing for a teammate holding two — and holding two
-    is behaviour the pact-teachback skill explicitly permits, so the mechanism
-    switched itself off for teammates following the framework's own
-    instruction.
-
-    ZERO in_progress TASKS FALLS BACK TO THE MOST RECENTLY COMPLETED ONE. This
-    previously stayed a no-write, on the stated reason that "a teammate with no
-    in_progress task is not inside a dispatch, so there is no task context for
-    an advisory to reference". THAT REASON IS FALSE and the no-write it
-    justified was the whole consultant hole: a CONSULTANT owns no in_progress
-    task by definition, is a supported state, does real work, and can carry a
-    wait on its completed anchor because metadata writes to a completed task
-    land. So there IS a task context; the old predicate just refused to look at
-    it. Only an owner with no task at all is a no-write now.
+    `agent_type` is a member's name on teammate frames and a type on lead frames, so it
+    is validated against the team config, never type-stripped. All in_progress tasks are
+    returned; with none, the most recently completed (consultant). Silent beats wrong.
     """
     # Function-level: the whole module is imported only once a Bash frame
     # arrives, and these imports are needed only once identity is being bound.
@@ -1374,22 +908,8 @@ def bind_launcher_identity(
         input_data.get("agent_type"), team_name, agent_id=input_data.get("agent_id")
     )
     registry_name = None
-    # THIS EARLY RETURN IS THE COLLAPSE PROTECTION. With no name on the frame,
-    # no `@`-bearing id, and no validated membership match, the only remaining
-    # route would be an UNVALIDATED type-strip of `agent_type` — which would
-    # attribute a launch to whatever string that field happens to hold and
-    # collapse same-type siblings onto one name. Refusing here is what makes
-    # the registry silent rather than wrong, and silence is the acceptable
-    # direction: a mis-bind names a teammate who did not launch the work.
-    #
-    # A second guard further down used to restate this. It was DEAD — reaching
-    # it with every flag in the condition below false implies
-    # `registry_name is not None`, because that exact combination already
-    # returned here, so its conjunction
-    # was unsatisfiable. Deleting it proved zero kills across the full suite.
-    # Do not reintroduce one: a redundant predicate implies this line does not
-    # already hold the property, which invites the next reader to delete the
-    # wrong one of the two.
+    # Collapse protection: without a name, an @-id or a validated membership match, refuse
+    # rather than type-strip agent_type (a mis-bind names a teammate who did not launch).
     if not named_by_name and not named_by_id_split and not named_by_membership:
         resolved = registry_resolve(session_id)
         if resolved and "@" in resolved:
@@ -1397,26 +917,8 @@ def bind_launcher_identity(
         else:
             return None
 
-    # THE VALUE THAT PASSED VALIDATION IS THE VALUE THAT GETS RECORDED.
-    # `agent_type_names_a_member` validates the RAW `agent_type`; routing that
-    # case back through `resolve_agent_name` would re-derive a DIFFERENT
-    # string, because its Step 4 strips a `pact-` prefix. MEASURED before this
-    # was fixed: a member named `pact-reviewer` validated, then bound to its
-    # sibling `reviewer` and to that sibling's task — a launch attributed to a
-    # teammate who did not make it, which is the unacceptable direction.
-    #
-    # THE RAW VALUE IS USED ON THE MEMBERSHIP ROUTE AND NOWHERE ELSE. On the
-    # registry route and the `agent_name` / `@`-bearing `agent_id` routes the
-    # resolved value is the correct one and `agent_type` may hold a genuine
-    # type there, so letting the raw value reach those branches would move the
-    # mis-bind rather than close it.
-    #
-    # Precedence is preserved: Steps 1 and 2 still win over the validated
-    # Step-4 route, which is why they are tested before it rather than after.
-    # The final branch needs no `named_by_membership` test — reaching it means
-    # `registry_name` is None and neither earlier flag is set, and that
-    # combination already returned at the early return above unless membership
-    # matched.
+    # Record the value that passed validation: on the membership route use raw agent_type,
+    # since resolve_agent_name would strip `pact-` and bind a sibling. Steps 1 and 2 still win.
     if registry_name:
         agent_name = registry_name
     elif named_by_name or named_by_id_split:
@@ -1435,20 +937,9 @@ def bind_launcher_identity(
 
 
 def subagent_launcher_id(input_data: Any) -> str:
-    """The Agent-tool subagent's own `agent_id` on this frame, or "".
+    """The Agent-tool subagent's own `agent_id` ("a" + 16 hex) on this frame, or "".
 
-    A subagent's id is "a" followed by 16 lowercase hex [LIVE] — the same shape
-    `agent_type_names_a_member` refuses a membership match for.
-
-    AN ABSENT `agent_id` NAMES NO LAUNCHER HERE, AND THAT IS THE WHOLE
-    CONSERVATISM OF THIS PATH. Absence has been measured as the LEAD's own
-    signature on the lead's own frames, but it is only INFERRED for an
-    in-process teammate's spawn, which nobody has captured. Were that inference
-    wrong, reading absence as "the lead" would record a TEAMMATE's launch as
-    the lead's and refuse the lead a turn end it had every right to end — the
-    same cardinal defect this recorder exists to close, arriving from the other
-    side. So absence records NOTHING, which is an under-block and the
-    acceptable direction.
+    An absent agent_id records nothing (absence is only inferred to mean the lead).
     """
     agent_id = input_data.get("agent_id") if isinstance(input_data, dict) else None
     if not isinstance(agent_id, str):
@@ -1456,121 +947,94 @@ def subagent_launcher_id(input_data: Any) -> str:
     return agent_id if _SUBAGENT_ID.fullmatch(agent_id) else ""
 
 
-def record_background_launch(input_data: Any, now: datetime | None = None) -> bool:
-    """Write one registry row for a recordable teammate or subagent launch.
+def is_lead_launch_frame(input_data: Any) -> bool:
+    """True iff the frame is the lead's own tool call: a lead `agent_type` AND no `agent_id`.
 
-    Fail-open on every path — the host calls this for its side effect only and
-    must not be disturbed by anything that happens here.
+    A session_id that is not the team's leadSessionId is not the lead's, when it resolves.
     """
-    if not is_background_launch(input_data):
+    from .pact_context import _read_lead_session_id, is_lead
+
+    if not (isinstance(input_data, dict) and is_lead(input_data)
+            and not input_data.get("agent_id")):
+        return False
+    # A teammate spawned with the orchestrator type carries a lead spelling too. Its
+    # own session is not the lead's: such a frame is that teammate's, not the lead's.
+    team, _name = frame_team_and_name(input_data)
+    lead_session = _read_lead_session_id(team) if team else ""
+    return not lead_session or input_data.get("session_id") == lead_session
+
+
+def is_lead_call_moved_to_background(input_data: Any) -> bool:
+    """True iff the lead's own Bash frame names a background job id in its tool_response.
+
+    A foreground call moved to the background on timeout has no flag or `&`; this adds its row.
+    """
+    if not isinstance(input_data, dict) or input_data.get("tool_name") != "Bash":
+        return False
+    tool_response = input_data.get("tool_response")
+    job_id = tool_response.get("backgroundTaskId") if isinstance(tool_response, dict) else None
+    return isinstance(job_id, str) and bool(job_id) and is_lead_launch_frame(input_data)
+
+
+def record_background_launch(input_data: Any, now: datetime | None = None) -> bool:
+    """Write one registry row for a recordable teammate, subagent or lead launch."""
+    if not is_background_launch(input_data) and not is_lead_call_moved_to_background(input_data):
         return False
     team_name, _name = frame_team_and_name(input_data)
     if not team_name:
         return False
-    # TWO launcher populations, resolved differently and for different reasons.
-    #
-    # A TEAMMATE is decided by one predicate shared with the launch advisory,
-    # so the two cover the same population. That predicate refuses the lead and
-    # an Agent-tool subagent: a subagent would otherwise reach the session
-    # registry on the LEAD's session id and be recorded against whichever
-    # member that id names.
-    #
-    # A SUBAGENT is admitted here on its own EXPLICIT `agent_id`, and only
-    # that. The shell it launches lands in the lead's background_tasks with no
-    # owner and outlives the subagent, so unrecorded it is charged to the lead.
-    # It is recorded UNDER THAT ID and never resolved to a member name, because
-    # a subagent is not a member and guessing one would mis-bind the launch.
-    #
-    # THE SUBAGENT CHECK RUNS FIRST, AND THAT ORDER DEPENDS ON THE ID FORMAT. It
-    # acts at two points: a frame with a subagent-shaped id never reaches the
-    # teammate predicate on the next line, and its row is built as a subagent
-    # row further down rather than bound to a member. That is safe only while
-    # the two id shapes cannot overlap. A subagent's id is "a" + 16 hex; an
-    # in-process teammate's is "a" + its name + "-" + 16 hex, and the hyphen
-    # means it can never fullmatch the subagent pattern. That format is the
-    # platform's, and nothing here checks that it holds. If a teammate's frame
-    # ever carried a bare "a" + 16 hex id, its launch would be filed as a
-    # subagent row, and that teammate's turn-end gate would skip it on two
-    # grounds at once — the row names the id rather than the member, and it
-    # carries the subagent marker — with nothing reporting the miss. That would
-    # not be a regression: before subagent rows existed, the teammate predicate
-    # already refused a subagent-shaped id, so the same frame was not recorded
-    # at all.
+    # Three launcher populations. The subagent check runs first; that is safe only while a
+    # subagent id ("a" + 16 hex) cannot match a teammate id ("a" + name + "-" + 16 hex).
     subagent_id = subagent_launcher_id(input_data)
-    if not subagent_id and not is_teammate_launch_frame(input_data, team_name):
+    # THE LEAD is the third population. Its row is what the lead's turn-end
+    # gate counts, so it is written only for a frame positively the lead's.
+    lead_launch = not subagent_id and is_lead_launch_frame(input_data)
+    if not subagent_id and not lead_launch and not is_teammate_launch_frame(input_data, team_name):
         return False
     command = command_from_frame(input_data)
-    # NO DURABILITY FILTER HERE, DELIBERATELY. A predicate over command text
-    # DOES now run in the gate above, so be exact about what this forbids.
-    #
-    # What was deleted was a FILTER: it inferred program BEHAVIOUR ("will this
-    # run a long time") from a word, and it SUBTRACTED from the population.
-    # It caught the intended population (`npm run dev`) and also silently
-    # dropped ordinary one-shot work whose text merely contains a token
-    # (`pytest -k start`), and those two are indistinguishable to any matcher
-    # — so the over-fire was drawn FROM the target population rather than
-    # being a tunable miss rate. Both directions were measured and neither
-    # was fixable by patching the pattern.
-    #
-    # The gate's trailing-`&` check differs on both axes: it reads shell
-    # GRAMMAR, which the string does answer, and it ADDS rows. An over-fire
-    # there costs one extra record, which is visible and can be discharged;
-    # an over-fire in a filter costs a record nobody knows is missing. So the
-    # standing rule is not "no text matching" — it is that nothing here may
-    # REMOVE a launch from the registry.
-    #
-    # The durability question IS answerable, just not here: `intentional_wait`
-    # carries it later, when the agent says what it is waiting for.
+    # No durability filter: nothing here may REMOVE a launch from the registry (a text filter
+    # dropped real work); the `&` check reads grammar and only adds rows.
     if subagent_id:
-        # No identity resolution and no task lookup: a subagent is not a member
-        # and holds no task, so the id IS the identity and the row carries no
-        # task ids. OWNER_ROLE_SUBAGENT holds why that is safe at every reader.
-        #
-        # THIS ROW LIVES UNTIL THE TTL, BY CHOICE. Only the TTL retires it: the
-        # one path that drops rows before they expire, the discharge pass,
-        # matches them through their task ids, and this row has none. Until
-        # RECORD_TTL_SECONDS have passed since it was written, its job id stays
-        # subtracted from the lead's turn-end candidates, even after the
-        # subagent and its shell are gone, so a later job reusing that id is not
-        # charged to the lead. That is lead-permissive.
+        # A subagent's id is its identity; no task ids, so only the TTL retires this row.
         session_id = input_data.get("session_id")
         if not isinstance(session_id, str) or not session_id:
             return False
         agent_name, task_ids, anchor_completed = subagent_id, [], False
+        owner_role = OWNER_ROLE_SUBAGENT
+    elif lead_launch:
+        # Taskless and TTL-retired like a subagent's row. The role stands in
+        # for a name: every name-keyed reader skips a row carrying a role.
+        session_id = input_data.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return False
+        agent_name, task_ids, anchor_completed = OWNER_ROLE_LEAD, [], False
+        owner_role = OWNER_ROLE_LEAD
     else:
         bound = bind_launcher_identity(input_data, team_name)
         if bound is None:
             return False
         agent_name, session_id, task_ids, anchor_completed = bound
-    # The harness's own id for this job, which lets the turn-end gate match a
-    # running job to the teammate that launched it. Every tool_response key is
-    # optional: a shell `&` launch carries none, and `_sanitize_record` keeps
-    # the field only when it is a non-empty string.
+        owner_role = None
+    # The harness job id lets the turn-end gate match a running job to its launcher.
     tool_response = input_data.get("tool_response")
     harness_task_id = (
         tool_response.get("backgroundTaskId") if isinstance(tool_response, dict) else None
     )
+    if lead_launch and not (isinstance(harness_task_id, str) and harness_task_id):
+        # The job id is the only key a lead row is ever matched on.
+        return False
     return append_record(
         {
             "agent_name": agent_name,
             "session_id": session_id,
             "task_ids": task_ids,
-            # Write-time fact, not a status to be re-read later: it records
-            # that this owner had no in_progress task when the launch
-            # happened, which is what exempts the row from completion-expiry
-            # in has_live_listed_task. A teammate whose task completes AFTER
-            # this point must still expire, and only the write-time value
-            # separates those two.
+            # Write-time fact: exempts the row from completion expiry in has_live_listed_task.
             "anchor_completed": anchor_completed,
-            # Present only on a subagent's row; absence is a teammate row.
-            "owner_role": OWNER_ROLE_SUBAGENT if subagent_id else None,
+            # Present only on a subagent's or the lead's row; absence is a teammate row.
+            "owner_role": owner_role,
             "command": command,
             "harness_task_id": harness_task_id,
-            # Every clock on this path takes `now`. A bare iso_now() here
-            # falls through to canonical_since(), which reads datetime.now
-            # DIRECTLY and is not reachable from this module's utc_now — so an
-            # injected clock would prune at `now` while stamping at real-now,
-            # manufacturing a divergence the system clock cannot produce.
+            # Pass `now`: a bare iso_now() reads the real clock and would diverge from the prune.
             "registered_at": iso_now(now),
         },
         team_name=team_name,

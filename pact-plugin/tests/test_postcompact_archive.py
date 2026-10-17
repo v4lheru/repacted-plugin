@@ -350,7 +350,7 @@ class TestPostcompactLeadGate:
             assert exc_info.value.code == 0
         return calls
 
-    @pytest.mark.parametrize("agent_type", ["PACT:pact-orchestrator", "pact-orchestrator"],
+    @pytest.mark.parametrize("agent_type", ["repacted:pact-orchestrator", "pact-orchestrator"],
                              ids=["qualified", "unqualified"])
     def test_lead_settles_then_stages_into_the_resolved_session_dir(self, tmp_path, agent_type):
         from fixtures.role_frames import postcompact_frame
@@ -364,7 +364,7 @@ class TestPostcompactLeadGate:
         from shared.constants import get_compact_summary_path
         root = get_compact_summary_path()
         calls = self._run_main_with(
-            postcompact_frame("PACT:pact-orchestrator", compact_summary="x"), tmp_path, destination=root,
+            postcompact_frame("repacted:pact-orchestrator", compact_summary="x"), tmp_path, destination=root,
         )
         assert calls == [("write", ("x", str(root.parent)), {})]
 
@@ -441,7 +441,7 @@ class TestPostcompactLeadGateRealDisk:
         from fixtures.role_frames import postcompact_frame
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/test/project")
         summary_path = self._run_main_realdisk(
-            postcompact_frame("PACT:pact-orchestrator",
+            postcompact_frame("repacted:pact-orchestrator",
                               compact_summary="NEW LEAD SUMMARY",
                               session_id=self._SID)
         )
@@ -519,7 +519,7 @@ class TestPostcompactRunHookConfigRootIsolation:
         from fixtures.role_frames import postcompact_frame
 
         lead_frame = postcompact_frame(
-            "PACT:pact-orchestrator", compact_summary="LEAD COUNTER-TEST SUMMARY"
+            "repacted:pact-orchestrator", compact_summary="LEAD COUNTER-TEST SUMMARY"
         )
         result = run_hook(json.dumps(lead_frame), env_root=str(tmp_path))
         assert result.returncode == 0, (
@@ -554,7 +554,7 @@ class TestPostcompactRunHookConfigRootIsolation:
 
         sid = "aabb1122-0000-0000-0000-00000000cafe"
         lead_frame = postcompact_frame(
-            "PACT:pact-orchestrator", compact_summary="SCOPED LEAD SUMMARY",
+            "repacted:pact-orchestrator", compact_summary="SCOPED LEAD SUMMARY",
             session_id=sid,
         )
         result = run_hook(
@@ -597,7 +597,7 @@ class TestSummaryStagingSeat:
 
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/scratch/cmp-lead")
         frame = {
-            "hook_event_name": "PostCompact", "agent_type": "PACT:pact-orchestrator",
+            "hook_event_name": "PostCompact", "agent_type": "repacted:pact-orchestrator",
             "session_id": self.SID, "transcript_path": "<transcript_path>",
             "compact_summary": "THE NEW SUMMARY", "trigger": "auto", **frame_overrides,
         }

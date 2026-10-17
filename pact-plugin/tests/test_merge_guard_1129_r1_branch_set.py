@@ -1,5 +1,7 @@
 """
 Location: pact-plugin/tests/test_merge_guard_1129_r1_branch_set.py
+Folded 2026-10-04 (refactor shell lane): its row tests are decision-table rows now
+         (tests/fixtures/shell/decisions/fold_manifest.json); the mechanism tests stay.
 Summary: Verification tests for #1129 R1 — the additive multi-branch FORCE-delete
          mint widening. A faithful `git branch -D A B C` (>=2 positionals) was
          gated-on-read but UNMINTABLE (#1064 class): detect classifies it
@@ -26,8 +28,8 @@ import json
 import pytest  # noqa: E402
 
 from shared.merge_guard_common import (  # noqa: E402
-    is_dangerous_command,
-    detect_command_operation_type,
+    approval_binding,
+    command_repo_binding,
     extract_command_context,
     _extract_branch_delete_set,
     _canonical_join,
@@ -46,7 +48,10 @@ def _cmd(flags: str, names: list[str]) -> str:
 def _token_for(cmd: str) -> dict:
     """A minted token carrying the shared-SSOT context for `cmd`, JSON-round-tripped
     exactly as a real persisted token is (tuple<->list drift would surface here)."""
-    return json.loads(json.dumps({"context": extract_command_context(cmd)}))
+    ctx = extract_command_context(cmd)
+    ctx = command_repo_binding(ctx, cmd) or ctx       # bound to this checkout (1.4.1 U13)
+    ctx = {**ctx, **approval_binding(cmd)}            # and to the command as typed
+    return json.loads(json.dumps({"context": ctx}))
 
 
 def _matches(token_cmd: str, exec_cmd: str) -> bool:
@@ -70,20 +75,13 @@ def test_multi_branch_force_delete_mints_branch_set_and_self_matches(flags):
     assert _matches(cmd, cmd) is True
 
 
-@pytest.mark.parametrize("flags", [_D, "-Df", "--delete --force"])
-def test_single_branch_scalar_path_unchanged(flags):
-    cmd = _cmd(flags, ["feature"])
-    ctx = extract_command_context(cmd)
-    # Scalar path byte-identical: `branch` set, `branch_set` never populated.
-    assert ctx.get("branch") == "feature"
-    assert "branch_set" not in ctx
-    assert _matches(cmd, cmd) is True
-
-
 def test_set_equality_reorder_matches_but_cardinality_mismatch_refuses():
     tok = _cmd(_D, ["A", "B"])
-    # Reorder MATCHES (order-independent canonical identity).
-    assert _matches(tok, _cmd(_D, ["B", "A"])) is True
+    # The context identity is order-independent, but the approval covers the git command
+    # word for word: the reordered command is another command.
+    assert extract_command_context(tok)["branch_set"] == extract_command_context(
+        _cmd(_D, ["B", "A"]))["branch_set"]
+    assert _matches(tok, _cmd(_D, ["B", "A"])) is False
     # Superset / subset / disjoint all REFUSE (the #1032 under-block closed).
     assert _matches(tok, _cmd(_D, ["A", "B", "C"])) is False
     assert _matches(tok, _cmd(_D, ["A"])) is False
@@ -98,24 +96,17 @@ def test_scalar_token_does_not_authorize_a_set_command_and_vice_versa():
 
 
 def test_duplicate_names_dedup_to_same_set():
-    # Deleting {A, A, B} is the set {A, B}; a {A,B} token authorizes it.
-    assert _matches(_cmd(_D, ["A", "B"]), _cmd(_D, ["A", "A", "B"])) is True
+    # Deleting {A, A, B} is the set {A, B}, but the command with the name twice is another
+    # command than the one approved.
+    assert extract_command_context(_cmd(_D, ["A", "A", "B"]))["branch_set"] == extract_command_context(
+        _cmd(_D, ["A", "B"]))["branch_set"]
+    assert _matches(_cmd(_D, ["A", "B"]), _cmd(_D, ["A", "A", "B"])) is False
 
 
 def test_slashed_branch_names_mint_and_match():
     cmd = _cmd(_D, ["feature/x", "feature/y"])
     assert extract_command_context(cmd).get("branch_set") == _canonical_join(["feature/x", "feature/y"])
     assert _matches(cmd, cmd) is True
-
-
-@pytest.mark.parametrize("flags", ["-d", "--delete"])
-def test_lowercase_delete_stays_ungated(flags):
-    # Non-force merged-branch delete is NOT gated at HEAD and must stay so —
-    # R1 must not start gating/minting it.
-    cmd = _cmd(flags, ["A", "B", "C"])
-    assert is_dangerous_command(cmd) is False
-    assert detect_command_operation_type(cmd) is None
-    assert "branch_set" not in extract_command_context(cmd)
 
 
 def test_branch_set_is_order_independent_canonical_string():

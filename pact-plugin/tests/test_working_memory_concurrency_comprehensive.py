@@ -475,7 +475,7 @@ class TestDriftTestIsNotVacuous:
         import inspect
         from shared.claude_md_manager import file_lock as canonical
         from scripts.working_memory import file_lock as twin
-        from test_staleness import TestFileLockTwinCopyDrift
+        from test_working_memory_twin_drift import TestFileLockTwinCopyDrift
 
         extract = TestFileLockTwinCopyDrift._extract_body
         canonical_body = extract(inspect.getsource(canonical))

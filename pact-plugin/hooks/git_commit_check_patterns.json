@@ -1,0 +1,45 @@
+{
+ "_about": "Pattern lists of hooks/git_commit_check.py, read once by its patterns() on the commit path. log_scan_extensions/env_log_patterns: code files whose added lines must not log the environment itself (check_security). secret_scan_extensions/commit_only_patterns: code files scanned for the secret shapes the shared detector (shared/scrub.secret_kind) does not cover, as [regex, description] pairs, matched case-insensitively (check_hardcoded_secrets).",
+ "log_scan_extensions": [
+  ".js",
+  ".ts",
+  ".jsx",
+  ".tsx",
+  ".py",
+  ".mjs",
+  ".cjs"
+ ],
+ "env_log_patterns": [
+  "console\\.log\\s*\\(.*process\\.env",
+  "print\\s*\\(.*os\\.environ"
+ ],
+ "secret_scan_extensions": [
+  ".js",
+  ".ts",
+  ".jsx",
+  ".tsx",
+  ".py",
+  ".java",
+  ".go",
+  ".rs",
+  ".rb"
+ ],
+ "commit_only_patterns": [
+  [
+   "[\"\\']sk_test_[a-zA-Z0-9]{20,}[\"\\']",
+   "Stripe test key"
+  ],
+  [
+   "[\"\\']AC[a-f0-9]{32}[\"\\']",
+   "Twilio Account SID"
+  ],
+  [
+   "\"type\"\\s*:\\s*\"service_account\"",
+   "Google Cloud service account key"
+  ],
+  [
+   "DefaultEndpointsProtocol=https?;AccountName=[^;]+;AccountKey=[^;]+",
+   "Azure Storage connection string"
+  ]
+ ]
+}

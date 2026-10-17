@@ -1140,11 +1140,13 @@ class TestBug1AdditiveListMerge:
 
     # --- Dict list fields -------------------------------------------------
 
-    def test_append_dict_list_preserves_nested_updates(self, db_conn):
+    def test_a_nested_update_replaces_its_same_name_entity(self, db_conn):
         """
-        Rationale (architect §2): dedup by `name` alone would collapse
-        legitimate nested-field updates. Entity{name:"X",notes:"old"} and
-        Entity{name:"X",notes:"new"} are DIFFERENT entries; both preserved.
+        FIX-MEM (f4) supersedes architect §2 here. §2 kept both
+        Entity{name:"X",notes:"old"} and Entity{name:"X",notes:"new"} so that
+        first-wins dedup by `name` would not LOSE the new notes. Keeping both
+        served the stale note beside its correction (M12). The new notes now
+        replace the old ones in place, so the nested update is still kept.
         """
         from scripts.database import create_memory, update_memory, get_memory
         mem_id = create_memory(db_conn, {
@@ -1153,10 +1155,7 @@ class TestBug1AdditiveListMerge:
         update_memory(db_conn, mem_id, {
             "entities": [{"name": "Redis", "notes": "new"}],
         })
-        ents = get_memory(db_conn, mem_id)["entities"]
-        assert len(ents) == 2
-        assert {"name": "Redis", "notes": "old"} in ents
-        assert {"name": "Redis", "notes": "new"} in ents
+        assert get_memory(db_conn, mem_id)["entities"] == [{"name": "Redis", "notes": "new"}]
 
     def test_dedup_dict_list_exact_duplicate(self, db_conn):
         from scripts.database import create_memory, update_memory, get_memory

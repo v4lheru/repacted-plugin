@@ -1,174 +1,42 @@
 ---
-description: Triage after hitting blocker (Is help and/or a redo needed?)
+description: Use when stuck, to decide whether to get help or redo work
 argument-hint: [e.g., similar errors keep occurring despite attempts to fix]
 ---
 You hit a blocker: $ARGUMENTS
 
----
+imPACT is S3 operational triage, not S5 escalation: a viability threat (security, data, ethics) is an algedonic HALT/ALERT instead ([algedonic.md](../protocols/algedonic.md)). Detail (algedonic contrast, output examples, failure taxonomy, re-entry lifecycle): [reference/imPACT/triage-detail.md](../reference/imPACT/triage-detail.md), load it when shaping a re-dispatch or redoing a phase.
 
 ## Task Operations
 
-imPACT operates on blocker Tasks reported by agents.
+1. Read the blocker task (agents report "BLOCKER: …" via `SendMessage`; you create the blocker task and `addBlockedBy` the agent's task).
+2. Triage (below).
+3. Task-log boundary write: you witnessed the work stop, so set its task (Task B's `metadata.project_task`) to blocked WITHOUT asking, via the command; report what you wrote:
+     python3 "{plugin_root}/bin/repact-task" set <ref> --status blocked
+4. Delegate the resolution (`TaskCreate`), or self-resolve.
+5. On resolution: `TaskUpdate(blocker_id, status="completed")`.
+6. Task-log boundary write: set the same task back with `--status active`; report it.
 
-These are orchestrator-side operations (agents report blockers via `SendMessage` to the team-lead; the orchestrator manages Tasks):
+**Diagnose, don't fix.** Knowing the fix ≠ permission to implement it: name what broke, who fixes it, and what they need.
 
-```
-1. `TaskGet(blocker_id)` — understand the blocker context
-2. Triage: redo prior phase? need specialist? need user?
-3. Backlog boundary write: you witnessed the work stop, so set this item's status
-   to blocked WITHOUT asking. Run the backlog command, never a hand-built document
-   — the command loads through load_or_create, which is what stashes the
-   compare-and-swap baseline, and any other route writes with no lost-update
-   protection. Report what you wrote:
-     python3 "{plugin_root}/hooks/shared/backlog.py" set <item-id> --status blocked
-   This is the ONLY site that writes blocked; without it the status is unreachable.
-4. On resolution path chosen:
-   - If delegating: `TaskCreate` resolution agent task
-   - If self-resolving: proceed directly
-5. On resolution complete: `TaskUpdate(blocker_id, status="completed")`
-6. Backlog boundary write: the clear is witnessed too, so set the same item back to
-   active, same command with --status active. Report what you wrote.
-7. Blocked agent task is now unblocked
-```
-
-**Note**: Agents report blockers via `SendMessage` to the team-lead ("BLOCKER: {description}"). The orchestrator creates blocker Tasks and uses `addBlockedBy` to block the agent's task. When the blocker is resolved (marked completed), the agent's task becomes unblocked.
-
----
-
-## Core Principle: Diagnose, Don't Fix
-
-**Your role is triage, not implementation.** Even if you know exactly what's wrong and how to fix it:
-
-1. **Diagnose** — Identify what went wrong (upstream issue? scope mismatch? missing context?)
-2. **Determine** — Who should fix it (which specialist?)
-3. **Delegate** — What do they need (additional context, parallel support?)
-
-> **Knowing the fix ≠ permission to implement it.**
-
-Common traps to avoid:
-- "I can see exactly what's wrong" — Great diagnosis. Now delegate the fix.
-- "Re-delegating seems wasteful" — Role boundaries matter more than perceived efficiency.
-- "It's just a small change" — Small changes are still application code. Delegate.
-
----
-
-## VSM Context: S3 Operational Triage
-
-imPACT is **S3-level triage**—operational problem-solving within normal workflow. It is NOT S5 algedonic escalation (emergency bypass to user).
-
-**imPACT handles**: Blockers that can be resolved by redoing a phase or adding agents.
-
-**Algedonic escalation handles**: Viability threats (security, data, ethics violations). See [algedonic.md](../protocols/algedonic.md).
-
-**Escalation indicator**: If you run 3+ consecutive imPACT cycles without resolution, this may indicate a systemic issue requiring user intervention (proto-algedonic signal).
-
-**Persist `impact_cycle_count`**: On each imPACT entry, read the feature task file's `metadata.impact_cycle_count` (default 0; `TaskGet` does NOT surface metadata), increment via `TaskUpdate`, check if >= 3 → ALERT (META-BLOCK). Reset to 0 when blocker resolves.
-
-### imPACT vs Algedonic
-
-| Aspect | imPACT | Algedonic |
-|--------|--------|-----------|
-| **Level** | S3 (operational) | S5 (policy/viability) |
-| **Who decides** | Orchestrator triages | User decides |
-| **Question** | "How do we proceed?" | "Should we proceed at all?" |
-| **Examples** | Missing info, wrong approach, need help | Security breach, data risk, ethics issue |
-
-**When imPACT becomes Algedonic** (uses persisted `impact_cycle_count` from feature task metadata):
-- `impact_cycle_count >= 3` without resolution → Emit ALERT (META-BLOCK)
-- During imPACT triage, discover viability threat → Emit appropriate HALT/ALERT instead
-
-imPACT is for operational problem-solving. If you're questioning whether the work should continue at all, emit an algedonic signal instead. See [algedonic.md](../protocols/algedonic.md) for trigger conditions and signal format.
-
----
-
-## Output Conciseness
-
-See also: [Communication Charter](../protocols/pact-communication-charter.md) for full plain English, anti-sycophancy, and constructive challenge norms.
-
-**Default: Concise output.** User sees triage outcome, not diagnostic process.
-
-| Internal (don't show) | External (show) |
-|----------------------|-----------------|
-| Question-by-question analysis | `imPACT: Redo ARCHITECT — interface mismatch` |
-| Full diagnostic reasoning | `imPACT: Augmenting with parallel backend coder` |
-| Context-gathering details | `imPACT: Not blocked — clarifying guidance to agent` |
-
-**User can always ask** for triage details (e.g., "Why redo that phase?" or "What was the diagnosis?").
-
-| Verbose (avoid) | Concise (prefer) |
-|-----------------|------------------|
-| "Let me assess whether this is an upstream issue..." | (just do it, report outcome) |
-| "The first question is whether we need to redo..." | `imPACT: [outcome] — [reason]` |
-
----
-
-## Gather Context
-
-Before triaging, quickly check for existing context:
-- **Plan**: Check `docs/plans/` for related plan (broader feature context)
-- **Prior phase outputs**: Check `docs/preparation/`, `docs/architecture/` for relevant artifacts
-- **Progress signals**: If progress monitoring was requested for this agent, review the signal history — was the agent converging, exploring, or stuck before the blocker? This informs the Conversation Failure Taxonomy diagnosis.
-
-This context informs whether the blocker is isolated or systemic.
+**`impact_cycle_count`**: on each entry read it from the feature task file (`TaskGet` does not surface metadata), increment via `TaskUpdate`; at ≥ 3 emit ALERT (META-BLOCK). Reset to 0 on resolution.
 
 ## Triage
 
-Answer three questions:
+1. **Redo prior phase?** Is the issue upstream in P→A→C→T?
+2. **Additional agents needed?**
+3. **Is the agent recoverable?**
 
-1. **Redo prior phase?** — Is the issue upstream in P→A→C→T?
-2. **Additional agents needed?** — Do we need help beyond the blocked agent's scope/specialty?
-3. **Is the agent recoverable?** — Can the blocked agent be resumed or helped, or is it unrecoverable (looping, stalled, context exhausted)?
+| Outcome | Action |
+|---|---|
+| **Redo prior phase** | Re-delegate the prior phase (see re-entry below) |
+| **Augment present phase** | Re-invoke the agent with context, plus parallel agents |
+| **Nested cycle** | A sub-task needs its own P→A→C→T: [nested-cycle.md](../reference/rePACT/nested-cycle.md) |
+| **Terminate agent** | Last resort: `TaskStop("{agent-name}")` (force-stop; no `shutdown_request` first) + `TaskUpdate(taskId, status="completed", metadata={"terminated": true, "reason": "..."})`, then a fresh agent from the partial HANDOFF. This is the completion carve-out ([completion.md](../protocols/completion.md#carve-outs)) |
+| **Not truly blocked** | Continue with clarified guidance |
+| **Escalate to user** | 3+ cycles unresolved |
 
-## Outcomes
-
-| Outcome | When | Action |
-|---------|------|--------|
-| **Redo prior phase** | Issue is upstream in P→A→C→T | Re-delegate to relevant agent(s) to redo the prior phase |
-| **Augment present phase** | Need help in current phase | Re-invoke blocked agent with additional context + parallel agents |
-| **Invoke rePACT** | Sub-task needs own P→A→C→T cycle | Use `/PACT:rePACT` for nested cycle |
-| **Terminate agent** | Agent unrecoverable (infinite loop, context exhaustion, stall after resume) | `TaskStop("{agent-name}")` (force-stop: terminates immediately, non-cooperative) + `TaskUpdate(taskId, status="completed", metadata={"terminated": true, "reason": "..."})` |
-| **Not truly blocked** | Neither question is "Yes" | Instruct agent to continue with clarified guidance |
-| **Escalate to user** | 3+ imPACT cycles without resolution | Proto-algedonic signal—systemic issue needs user input |
-
-**When to consider rePACT**:
-If the blocker reveals that a sub-task is more complex than expected and needs its own research/design phase, use `/PACT:rePACT` instead of just augmenting:
-```
-/PACT:rePACT backend "implement the OAuth2 token refresh that's blocking us"
-```
-
-**When to terminate**: Last resort — agent resumed once and stalled again, looping on same error 3+ times, context exhausted, or TeammateIdle stall unresolved by resume. `TaskStop` is a force-stop (immediate, non-cooperative) and the termination primitive; use it directly, and do NOT send a `shutdown_request` first. "Last resort" scopes the decision to terminate an unrecoverable agent mid-workflow — not the `TaskStop` primitive itself, which is also the routine call in graceful shutdown flows. After termination, spawn a fresh agent with partial HANDOFF from the terminated agent's task metadata.
-
-> **Force-termination is a carve-out** to the team-lead-only-completion rule. The `metadata.terminated == true` marker on the team-lead-driven `TaskUpdate(status="completed")` distinguishes this path from the standard cooperative acceptance flow. The terminated teammate is not idling on `awaiting_lead_completion`; the team-lead is force-completing an unrecoverable agent's task out-of-band. See [Completion Authority](../protocols/pact-completion-authority.md#completion-authority) for the carve-out table.
-
-**Re-dispatch after imPACT-driven redo**: When imPACT decides to redo a phase, the new dispatch follows the standard [Teachback-Gated Dispatch](orchestrate.md#teachback-gated-dispatch) — Task A TEACHBACK + Task B work, blockedBy edge. The original (failed) phase task is marked `completed` with `metadata={"redo_reason": "..."}` (team-lead-driven; this is a team-lead-completion, not teammate-completion).
-
-### Conversation Failure Taxonomy
-
-Use this diagnostic lens **after** identifying an outcome to understand **why** the conversation broke down. Type-specific diagnosis improves the quality of re-dispatch and prevents recurring failures.
-
-| Breakdown Type | Symptoms | Likely Outcome | Recovery Guidance |
-|---------------|----------|----------------|-------------------|
-| **Misunderstanding** | Wrong output, no errors — agent built the wrong thing | Augment present phase | Teachback correction: clarify what was misunderstood, re-dispatch with corrected context |
-| **Derailment** | Loops on same error/approach, unable to make progress | Terminate agent | Fresh agent with different framing — restructure the conversation, don't just retry |
-| **Discontinuity** | Lost context, outdated understanding, stale assumptions | Augment present phase | Reconstruct from memory + task files, re-dispatch with restored context |
-| **Absence** | Started without sufficient upstream conversation | Redo prior phase | Have the missing conversation first — the upstream phase output was insufficient |
-
-**Usage**: After the three triage questions identify an outcome, check which breakdown type matches. This informs the dispatch prompt for the next agent — e.g., "Prior agent misunderstood the interface contract; the correct contract is X" is more useful than "redo this."
-
----
+Report one line: `imPACT: [outcome] — [reason]`.
 
 ## Phase Re-Entry Task Protocol
 
-**Context**: Invoked from [orchestrate.md](orchestrate.md) when redoing a prior phase. Complete original blocker first ([Task Operations](#task-operations) step 5). Retry failure triggers 3+ cycle escalation (ALERT: META-BLOCK).
-
-**Worktree context**: Phase re-entry operates within the current worktree. The re-entered phase inherits the same worktree path -- no new worktree is created.
-
-When imPACT decides to redo a prior phase (e.g., "redo ARCHITECT because the design was wrong"), follow this Task lifecycle:
-
-1. **Do NOT reopen the old phase task** — it was completed and is historical record
-2. **Create a new retry phase task**: `TaskCreate("ARCHITECT (retry): {feature-slug}")`
-3. **Set retry task to `in_progress`**
-4. **Block the current phase** (the one that hit the blocker): `TaskUpdate(currentPhaseId, addBlockedBy=[retryPhaseId])`
-5. **Dispatch agent(s)** for the retry phase
-6. **On retry completion**: `TaskUpdate(retryPhaseId, status="completed")` — unblocks the current phase
-7. **Retry the current phase** with a new agent task using the updated outputs (re-dispatched agents will teachback their understanding before starting)
+Never reopen the completed phase task; mark it `completed` with `metadata={"redo_reason": "..."}`. `TaskCreate("<PHASE> (retry): {feature-slug}")`, set it `in_progress`, `addBlockedBy` it on the current phase, dispatch per [Teachback-Gated Dispatch](orchestrate.md#teachback-gated-dispatch), complete it, then retry the current phase with a new agent task. Same worktree.

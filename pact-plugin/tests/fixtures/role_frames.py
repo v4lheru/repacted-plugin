@@ -63,8 +63,8 @@ def _frame(agent_type, **extra):
 
 
 def lead_frame_qualified(**extra):
-    """Lead launched as ``--agent PACT:pact-orchestrator`` (qualified)."""
-    return _frame("PACT:pact-orchestrator", **extra)
+    """Lead launched as ``--agent repacted:pact-orchestrator`` (qualified)."""
+    return _frame("repacted:pact-orchestrator", **extra)
 
 
 def lead_frame_unqualified(**extra):
@@ -167,7 +167,7 @@ _CAPTURED_FRAMES_JSON = r'''
       "is_917_diagnostic": true,
       "note": "#917 b2 side: lead PostToolUse(TaskUpdate,status=completed); tool_response has NO 'task' key so the gate disk-fallback is always taken; is_lead True",
       "quick_summary": {
-        "AGENT_TYPE_top_level": "PACT:pact-orchestrator",
+        "AGENT_TYPE_top_level": "repacted:pact-orchestrator",
         "agent_id_top_level": null,
         "hook_event_name": "PostToolUse",
         "taskupdate_status": "completed",
@@ -177,7 +177,7 @@ _CAPTURED_FRAMES_JSON = r'''
         "tool_response_has_task": false
       }
     },
-    "agent_type": "PACT:pact-orchestrator",
+    "agent_type": "repacted:pact-orchestrator",
     "cwd": "<cwd>",
     "duration_ms": 173,
     "effort": {
@@ -208,9 +208,9 @@ _CAPTURED_FRAMES_JSON = r'''
   "lead_sessionstart_qualified": {
     "_meta": {
       "capture_method": "headless-subprocess-additive-settings-dumper (Claude Code 2.1.167, 2026-06-06)",
-      "note": "--agent PACT:pact-orchestrator (qualified lead spelling) -> is_lead True"
+      "note": "--agent repacted:pact-orchestrator (qualified lead spelling) -> is_lead True"
     },
-    "agent_type": "PACT:pact-orchestrator",
+    "agent_type": "repacted:pact-orchestrator",
     "cwd": "<cwd>",
     "hook_event_name": "SessionStart",
     "session_id": "fa92f1e3-756a-4c46-9704-26ae90fecda0",
@@ -235,7 +235,7 @@ _CAPTURED_FRAMES_JSON = r'''
       "is_917_diagnostic": true,
       "note": "#917 lead side: lead TaskCompleted has NO stdin team_name (cannot claim the marker from this frame; the lead's b2 PostToolUse path is the writable emitter)",
       "quick_summary": {
-        "AGENT_TYPE_top_level": "PACT:pact-orchestrator",
+        "AGENT_TYPE_top_level": "repacted:pact-orchestrator",
         "agent_id_top_level": null,
         "hook_event_name": "TaskCompleted",
         "taskupdate_status": null,
@@ -245,7 +245,7 @@ _CAPTURED_FRAMES_JSON = r'''
         "tool_response_has_task": false
       }
     },
-    "agent_type": "PACT:pact-orchestrator",
+    "agent_type": "repacted:pact-orchestrator",
     "cwd": "<cwd>",
     "hook_event_name": "TaskCompleted",
     "session_id": "e5e2be7d-84fb-4eb8-a932-1ca4557b4a43",
@@ -259,7 +259,7 @@ _CAPTURED_FRAMES_JSON = r'''
       "capture_method": "headless-subprocess-additive-settings-dumper (Claude Code 2.1.167, 2026-06-06)",
       "note": "qualified lead UserPromptSubmit; no 'source' field on UserPromptSubmit"
     },
-    "agent_type": "PACT:pact-orchestrator",
+    "agent_type": "repacted:pact-orchestrator",
     "cwd": "<cwd>",
     "hook_event_name": "UserPromptSubmit",
     "permission_mode": "acceptEdits",
@@ -314,9 +314,9 @@ _CAPTURED_FRAMES_JSON = r'''
   "pretooluse_lead_inprocess": {
     "_meta": {
       "capture_method": "live-session additive-settings PreToolUse dumper (Claude Code 2.1.177, cycle-2 spike)",
-      "note": "lead PreToolUse: agent_type PRESENT (PACT:pact-orchestrator, qualified lead spelling -> is_lead True); session_id is the leadSessionId shared by the in-process subagent below (the collapse); NO top-level agent_id."
+      "note": "lead PreToolUse: agent_type PRESENT (repacted:pact-orchestrator, qualified lead spelling -> is_lead True); session_id is the leadSessionId shared by the in-process subagent below (the collapse); NO top-level agent_id."
     },
-    "agent_type": "PACT:pact-orchestrator",
+    "agent_type": "repacted:pact-orchestrator",
     "cwd": "<cwd>",
     "effort": {
       "level": "xhigh"
@@ -398,9 +398,9 @@ _CAPTURED_FRAMES_JSON = r'''
     "_meta": {
       "capture_method": "live-session-append-only-hook-dump (PACT 4.6.44 dogfood, in-process lead session, 2026-08-26)",
       "is_1504_step0": true,
-      "note": "#1504 step 0: FIRST captured PostCompact frame — a lead (PACT:pact-orchestrator) manual /compact in an in-process session. session_id IS present (closes the dagger the session-scoped writer resolution rests on); compact_summary PRESENT and non-empty; trigger and prompt_id are real fields the synthesized-from-matrix builder never carried.",
+      "note": "#1504 step 0: FIRST captured PostCompact frame — a lead (repacted:pact-orchestrator) manual /compact in an in-process session. session_id IS present (closes the dagger the session-scoped writer resolution rests on); compact_summary PRESENT and non-empty; trigger and prompt_id are real fields the synthesized-from-matrix builder never carried.",
       "quick_summary": {
-        "AGENT_TYPE_top_level": "PACT:pact-orchestrator",
+        "AGENT_TYPE_top_level": "repacted:pact-orchestrator",
         "compact_summary_present": true,
         "hook_event_name": "PostCompact",
         "prompt_id_present": true,
@@ -408,7 +408,7 @@ _CAPTURED_FRAMES_JSON = r'''
         "trigger": "manual"
       }
     },
-    "agent_type": "PACT:pact-orchestrator",
+    "agent_type": "repacted:pact-orchestrator",
     "compact_summary": "<elided for fixture - 21801 chars of session summary at capture; non-empty truthy string is the load-bearing shape>",
     "cwd": "<cwd>",
     "hook_event_name": "PostCompact",
@@ -417,12 +417,12 @@ _CAPTURED_FRAMES_JSON = r'''
     "transcript_path": "<transcript_path>",
     "trigger": "manual"
   },
-  "compaction_teammate_precompact": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent PACT:pact-orchestrator, in-process teammates, 2026-09-14", "note": "An in-process haiku teammate auto-compacted. Its frames are lead-shaped: the lead agent_type, session_id and transcript_path, and no agent_id, agent_name or agent_transcript_path. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "PACT:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "custom_instructions": null, "hook_event_name": "PreCompact", "trigger": "auto"},
-  "compaction_teammate_sessionstart": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent PACT:pact-orchestrator, in-process teammates, 2026-09-14", "note": "An in-process haiku teammate auto-compacted. Its frames are lead-shaped: the lead agent_type, session_id and transcript_path, and no agent_id, agent_name or agent_transcript_path. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "PACT:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "hook_event_name": "SessionStart", "model": "claude-haiku-4-5-20251001", "source": "compact"},
-  "compaction_teammate_postcompact": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent PACT:pact-orchestrator, in-process teammates, 2026-09-14", "note": "An in-process haiku teammate auto-compacted. Its frames are lead-shaped: the lead agent_type, session_id and transcript_path, and no agent_id, agent_name or agent_transcript_path. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "PACT:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "compact_summary": "<analysis>\nThe conversation so far: a file-reading task.\n</analysis>\n\n<summary>\n1. Primary Request and Intent: the teammate was asked to read three short text files in a scratch project and report their line counts to the team-lead.\n2. Key Technical Concepts: reading files, counting lines, reporting through SendMessage.\n3. Current Work: the three counts were gathered and sent.\n4. Pending Tasks: none.\n</summary>", "hook_event_name": "PostCompact", "trigger": "auto"},
-  "compaction_lead_precompact": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent PACT:pact-orchestrator, in-process teammates, 2026-09-14", "note": "The capture lead ran /compact. Its frames carry the same key set as the teammate compaction frames. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "PACT:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "custom_instructions": null, "hook_event_name": "PreCompact", "trigger": "manual"},
-  "compaction_lead_sessionstart": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent PACT:pact-orchestrator, in-process teammates, 2026-09-14", "note": "The capture lead ran /compact. Its frames carry the same key set as the teammate compaction frames. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "PACT:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "hook_event_name": "SessionStart", "model": "claude-opus-5[1m]", "source": "compact"},
-  "compaction_lead_postcompact": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent PACT:pact-orchestrator, in-process teammates, 2026-09-14", "note": "The capture lead ran /compact. Its frames carry the same key set as the teammate compaction frames. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "PACT:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "compact_summary": "<analysis>\nThe conversation so far: coordinating one teammate.\n</analysis>\n\n<summary>\n1. Primary Request and Intent: the orchestrator spawned one teammate to read three short text files in a scratch project and waited for its report.\n2. Key Technical Concepts: teammate dispatch, task tracking, compaction.\n3. Current Work: the report arrived and the task was completed.\n4. Pending Tasks: none.\n</summary>", "hook_event_name": "PostCompact", "trigger": "manual"}
+  "compaction_teammate_precompact": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent repacted:pact-orchestrator, in-process teammates, 2026-09-14", "note": "An in-process haiku teammate auto-compacted. Its frames are lead-shaped: the lead agent_type, session_id and transcript_path, and no agent_id, agent_name or agent_transcript_path. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "repacted:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "custom_instructions": null, "hook_event_name": "PreCompact", "trigger": "auto"},
+  "compaction_teammate_sessionstart": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent repacted:pact-orchestrator, in-process teammates, 2026-09-14", "note": "An in-process haiku teammate auto-compacted. Its frames are lead-shaped: the lead agent_type, session_id and transcript_path, and no agent_id, agent_name or agent_transcript_path. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "repacted:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "hook_event_name": "SessionStart", "model": "claude-haiku-4-5-20251001", "source": "compact"},
+  "compaction_teammate_postcompact": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent repacted:pact-orchestrator, in-process teammates, 2026-09-14", "note": "An in-process haiku teammate auto-compacted. Its frames are lead-shaped: the lead agent_type, session_id and transcript_path, and no agent_id, agent_name or agent_transcript_path. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "repacted:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "compact_summary": "<analysis>\nThe conversation so far: a file-reading task.\n</analysis>\n\n<summary>\n1. Primary Request and Intent: the teammate was asked to read three short text files in a scratch project and report their line counts to the team-lead.\n2. Key Technical Concepts: reading files, counting lines, reporting through SendMessage.\n3. Current Work: the three counts were gathered and sent.\n4. Pending Tasks: none.\n</summary>", "hook_event_name": "PostCompact", "trigger": "auto"},
+  "compaction_lead_precompact": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent repacted:pact-orchestrator, in-process teammates, 2026-09-14", "note": "The capture lead ran /compact. Its frames carry the same key set as the teammate compaction frames. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "repacted:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "custom_instructions": null, "hook_event_name": "PreCompact", "trigger": "manual"},
+  "compaction_lead_sessionstart": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent repacted:pact-orchestrator, in-process teammates, 2026-09-14", "note": "The capture lead ran /compact. Its frames carry the same key set as the teammate compaction frames. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "repacted:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "hook_event_name": "SessionStart", "model": "claude-opus-5[1m]", "source": "compact"},
+  "compaction_lead_postcompact": {"_meta": {"capture_method": "live hook heartbeat, capture lead started with --agent repacted:pact-orchestrator, in-process teammates, 2026-09-14", "note": "The capture lead ran /compact. Its frames carry the same key set as the teammate compaction frames. Paths and prompt_id are placeholders; compact_summary is a synthetic stand-in of the same shape, not the captured text."}, "agent_type": "repacted:pact-orchestrator", "cwd": "<cwd>", "prompt_id": "<prompt_id>", "scratchpad_dir": "<scratchpad_dir>", "session_id": "4ec31948-bbe5-4ef4-841c-631d1ef31e61", "transcript_path": "<transcript_path>", "compact_summary": "<analysis>\nThe conversation so far: coordinating one teammate.\n</analysis>\n\n<summary>\n1. Primary Request and Intent: the orchestrator spawned one teammate to read three short text files in a scratch project and waited for its report.\n2. Key Technical Concepts: teammate dispatch, task tracking, compaction.\n3. Current Work: the report arrived and the task was completed.\n4. Pending Tasks: none.\n</summary>", "hook_event_name": "PostCompact", "trigger": "manual"}
 }
 '''
 
@@ -460,7 +460,7 @@ def captured_lead_sessionstart_unqualified():
 
 
 def captured_lead_sessionstart_qualified():
-    """Real --agent PACT:pact-orchestrator SessionStart (qualified lead spelling)."""
+    """Real --agent repacted:pact-orchestrator SessionStart (qualified lead spelling)."""
     return captured_frame("lead_sessionstart_qualified")
 
 
@@ -574,7 +574,7 @@ def captured_posttooluse_teammate_inprocess_bash_background():
     `agent_type` IS POLYMORPHIC BY ROLE, NOT RANDOMLY UNRELIABLE. MEASURED:
     teammate frames carried the NAME every time — three teammates, two
     independent instruments, two operators — while lead frames carry the
-    agent-type spelling (`PACT:pact-orchestrator`). It is consistently a name
+    agent-type spelling (`repacted:pact-orchestrator`). It is consistently a name
     for teammates and consistently a type for the lead, so a reader must not
     take "unreliable" to mean it varies per frame: it does not, and a consumer
     that validates the value against the team config's `members[]` can rely on

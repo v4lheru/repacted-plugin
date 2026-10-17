@@ -1,24 +1,11 @@
-"""Emit-skip accounting: the journal-emit seam and the count over what it
-records.
+"""Emit-skip accounting: the journal-emit seam.
 
-Two surfaces, one mechanism:
-
-1. `append_event_checked` — promoted from a PRIVATE helper in
-   task_lifecycle_gate to shared, so dispatch_gate can reach it. It had only
-   INCIDENTAL coverage through its callers, which vanishes silently when
-   those callers change; these are its first direct tests. It is what turns a
-   lost emit into a `journal_emit_skipped` record instead of silence.
-2. `count_emit_skips` — the consumer-side count over those records, read by
-   the wrap-up retrospective's Q5.
-
-WHAT THIS PAIR DOES AND DOES NOT COVER, because the boundary is the whole
-reason the pair exists. A skipped `dispatch_site` emit is a dispatch that
-happened and left no sample, so the reported mean is over fewer dispatches
-than occurred; these two surfaces are what let the consumer SAY SO instead of
-reporting a quietly-thinned figure. But they see only emit loss that
-successfully RECORDS a skip. An emit lost without leaving a
-`journal_emit_skipped` event is invisible here too — smaller than the gap it
-closes, and not zero.
+`append_event_checked` was promoted from a PRIVATE helper in
+task_lifecycle_gate to shared, so dispatch_gate can reach it. It had only
+INCIDENTAL coverage through its callers, which vanishes silently when those
+callers change; these are its direct tests. It is what turns a lost emit into
+a `journal_emit_skipped` record instead of silence. An emit lost without
+leaving that record is invisible here too.
 """
 import sys
 
@@ -29,7 +16,6 @@ from shared.session_journal import (  # noqa: E402
     SKIP_CAUSE_RETURNED_FALSE,
     append_event_checked,
 )
-from shared.variety_divergence import count_emit_skips  # noqa: E402
 
 
 def skip(skipped_type, cause=SKIP_CAUSE_RETURNED_FALSE):
@@ -121,32 +107,3 @@ class TestPromotedSeam:
 
         monkeypatch.setattr(sys, "stderr", Dead())
         assert append_event_checked({"v": 1, "type": "x", "_fail": True}, "x") is False
-
-
-# =============================================================================
-# count_emit_skips — consumer-side counting
-# =============================================================================
-class TestCountEmitSkips:
-    def test_counts_by_type_and_cause(self):
-        r = count_emit_skips([
-            skip("dispatch_site"),
-            skip("dispatch_site", SKIP_CAUSE_RAISED),
-            skip("dispatch_decision"),
-        ])
-        assert r["total"] == 3
-        assert r["by_type"] == {"dispatch_site": 2, "dispatch_decision": 1}
-        assert r["by_cause"] == {SKIP_CAUSE_RETURNED_FALSE: 2, SKIP_CAUSE_RAISED: 1}
-
-    def test_causes_stay_separate(self):
-        """Collapsing RAISED into RETURNED-FALSE would rebuild one layer up
-        the ambiguity the capture removed."""
-        r = count_emit_skips([skip("dispatch_site", SKIP_CAUSE_RAISED)])
-        assert list(r["by_cause"]) == [SKIP_CAUSE_RAISED]
-
-    @pytest.mark.parametrize("bad", [None, "", 0, {"a": 1}, [None, 7, "x"]])
-    def test_malformed_input_is_total_and_never_raises(self, bad):
-        r = count_emit_skips(bad if isinstance(bad, list) else bad)
-        assert r["total"] == 0
-
-    def test_empty_is_zero_not_an_error(self):
-        assert count_emit_skips([])["total"] == 0

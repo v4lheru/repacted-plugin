@@ -1,0 +1,23 @@
+{"base": "c5e9b324", "blob_id": "57eee4410e0a6ef2dae3e9021bdbb32bb7ce7d69", "captured_from": "3f27b2c6", "rows": 22, "sha256": "88f8b5ec54923a3e0713576315cb995e7a582cd27755736049bdac9565bee1a7"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "_split_into_legs", "callable": true}
+{"attr": "detect_command_operation_type", "callable": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["_split_into_legs", ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], {}], "result": ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" ", " gh api \"x/y\" -X POST -f a='STRIPPED'"]}
+{"call": ["detect_command_operation_type", ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], {}], "result": null}
+{"call": ["is_dangerous_command", ["gh api --hostname=merge.example.com -f q=x repos/o/r/pulls/1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api -f q=x --preview=merge-info repos/o/r/pulls/1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api graphql -f query='mutation{ mergePullRequest(input:{}) { number } }'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api graphql -f query=x --jq=.mergeable"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api graphql -f query=x -q.mergeable"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api graphql -f query=x -q=.mergeable"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/git/refs/heads/x -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/merges --input b.json -q .a+\" \"+.b && gh api \"repos/o/r\" -X GET"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/merges --input b.json -q x\"y z\" && gh api \"repos/o/r\" -X GET"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/merges --input b.json -t {{.n}}\" \"{{.t}} && gh api \"repos/o/r\" -X GET"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/merges -f k=x\"y z\" && gh api \"o/r\" -X GET"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/pulls/1 -f q=x --header=X-merge:1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/pulls/1 -f q=x --template=.mergeable"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/pulls/1 -f q=x -q a\"b"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api repos/o/r/pulls/5/merge -X GET -q p\"q r\" && gh api \"x/y\" -X POST -f a=b"], {}], "result": false}

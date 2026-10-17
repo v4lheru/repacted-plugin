@@ -1,0 +1,24 @@
+{"base": "a542e21b", "blob_id": "0d4be274af969a69f7053d343b8a81813115920a", "captured_from": "3f27b2c6", "rows": 23, "sha256": "3c3146e9b9f31bd1e637f5c89537aa7e3069a7b77ce391eaf1ab791ab915594a"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["curl -H \"X-Note: git branch -D victim\" http://example.com/api"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo 'a' 'note git branch -D victim'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo 'a' \"note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo 'git branch -D victim' | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"a\" 'note git branch -D victim'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"a\" \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"a\" \"b\" \"drop git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"a\" \"git branch -D victim\" | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"first arg\" \"note $(date) git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"first arg\" \"note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"first\" \"ran `hostname`, then git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git branch -D victim\" > >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git branch -D victim\" | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"x\" && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"x\" ; git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["printf \"%s\" \"note $(date) git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["printf \"%s\" \"note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["printf \"%s\\n\" \"note $(date) git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["printf \"%s\\n\" \"note git branch -D victim\""], {}], "result": true}

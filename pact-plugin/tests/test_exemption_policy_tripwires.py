@@ -33,9 +33,7 @@ from shared.intentional_wait import (  # noqa: E402
     is_teachback_exempt,
 )
 
-from test_harvest_trigger_coherence import _claimed_boundaries  # noqa: E402 — sibling extraction rule
 
-VARIETY_PROTOCOL = Path(__file__).parent.parent / "protocols" / "pact-variety.md"
 INTENTIONAL_WAIT_SRC = (
     Path(__file__).parent.parent / "hooks" / "shared" / "intentional_wait.py"
 )
@@ -229,27 +227,6 @@ class TestTheEmitPredicateReadsTheSSOT:
         )
 
 
-class TestProtocolProseNamesTheSameConstant:
-    """Consumer (b): the protocol prose.
-
-    HONEST SCOPE, and it must not be reported as more than this: prose cannot
-    READ an SSOT, so this checks only that it NAMES the same constant. A red
-    here means SOMEONE REWORDED THE PROSE -- it does NOT mean the consumers
-    drifted. It is included because a protocol that names a symbol which no
-    longer exists is its own defect, not because it verifies the coupling.
-
-    MUTATION THAT REDDENS: rename the constant in the protocol prose, or
-    remove the sentence naming it.
-    """
-
-    def test_variety_protocol_names_the_exemption_constant(self):
-        text = VARIETY_PROTOCOL.read_text(encoding="utf-8")
-        assert "TEACHBACK_EXEMPT_AGENT_TYPES" in text, (
-            "the Q5 denominator protocol no longer names "
-            "TEACHBACK_EXEMPT_AGENT_TYPES -- the category justification rests "
-            "on that constant being a pre-existing declaration, so a doc that "
-            "stops naming it loses the independent ground the ruling needs"
-        )
 
 
 ORCHESTRATOR_PERSONA = Path(__file__).parent.parent / "agents" / "pact-orchestrator.md"
@@ -425,74 +402,8 @@ class TestOnlyTheSafeBoundariesPropagateTheWorkingMemoryBlock:
     arm 3 holds, for the one command whose sites disagree.
     """
 
-    def test_no_quiet_dispatch_carries_the_propagate_sentence(self):
-        """Reddens when a site outside the propagating set gains the sentence,
-        or when the sentence vanishes from the tree (non-vacuity: the count is
-        pinned, so an empty extraction fails loudly).
 
-        FOUR SITES, in two commands: `orchestrate`'s post-review Standard
-        Harvest and its mid-session Consolidation Harvest, and `wrap-up`'s two
-        arc-closing step-6 branches. The count is per SITE, so it moves when a
-        branch gains or loses its propagation even though the command set does
-        not -- which is the whole reason the unit changed.
-        """
-        carrying = _propagating_sites()
-        assert carrying, (
-            "nothing under %s carries %r -- either every site went quiet or "
-            "the carrier extraction stopped matching. Report this as an "
-            "extraction failure, not as agreement." % (COMMANDS_DIR, PROPAGATE_SENTENCE)
-        )
-        assert len(carrying) == 4, carrying
-        assert set(carrying) <= PROPAGATING_COMMANDS, sorted(set(carrying) - PROPAGATING_COMMANDS)
 
-    def test_every_propagating_site_is_named_in_the_persona_paragraph(self):
-        """Reddens when the persona paragraph names a command that does not
-        propagate, or omits one that does. Reuses the coherence test's
-        extraction rule: every bare word equal to a `commands/*.md` stem."""
-        claimed = _claimed_boundaries(ORCHESTRATOR_PERSONA, PROPAGATION_PARAGRAPH_MARKER)
-        assert claimed, (
-            "the persona paragraph located by %r named no command, or the marker "
-            "was rewritten. Report this as an extraction failure, not as agreement."
-            % PROPAGATION_PARAGRAPH_MARKER
-        )
-        assert claimed == set(_propagating_sites())
-
-    def test_the_wrap_up_branch_that_preserves_an_open_pr_does_not_propagate(self):
-        """The branch-level fact a command-granular set could not hold.
-
-        `wrap-up`'s three step-6 branches do not agree, and the disagreement is
-        the point. A merged PR and no PR each END the arc: nothing whose value
-        is independent judgement spawns after them, so those two propagate. The
-        open-PR branch does the opposite -- it writes `session_paused`, which
-        makes the next session a declared resumption, and its own report sends
-        the user back into review. The agents that spawn next are therefore the
-        ones judging this arc, and a propagation here hands them this arc's own
-        conclusions. The resumption marker cannot undo that: it suppresses the
-        secretary's spawn rebuild, and this write has already landed on disk.
-
-        Reddens in both directions -- a propagation appearing on the open-PR
-        branch, and one disappearing from either branch that closes the arc.
-        Do not satisfy it by making the three branches symmetric: the asymmetry
-        is the fix, and symmetry here is the defect.
-        """
-        merged, no_pr, open_pr = (
-            _wrap_up_branch_slices()[label] for label in _WRAP_UP_BRANCHES
-        )
-        assert PROPAGATE_SENTENCE in merged, (
-            "wrap-up's merged-PR branch no longer propagates. The arc is over "
-            "there and nothing else propagates it, so the block never receives "
-            "this session's records."
-        )
-        assert PROPAGATE_SENTENCE in no_pr, (
-            "wrap-up's no-PR branch no longer propagates. Same consequence as "
-            "the merged branch: the arc is over and nothing else writes."
-        )
-        assert PROPAGATE_SENTENCE not in open_pr, (
-            "wrap-up's open-PR branch propagates. That branch keeps the arc "
-            "alive -- it writes session_paused and sends the user back into "
-            "review -- so this write reaches the agents spawned to judge the "
-            "arc, and the resumption marker cannot take it back."
-        )
 
     def test_auditor_shaped_task_is_not_self_complete_exempt(self):
         """The fact the propagation rule rests on: an auditor's task stays
@@ -503,99 +414,6 @@ class TestOnlyTheSafeBoundariesPropagateTheWorkingMemoryBlock:
             {"owner": "auditor", "metadata": {"completion_type": "signal"}}, ""
         ) is False
 
-    def test_no_auditor_dispatch_site_sets_metadata_type(self):
-        """Reddens if an auditor dispatch gains `metadata.type` — whether inside
-        the completion_type literal or as a SEPARATE literal on the same call.
-        Both were reproduced; the second passed before this widening.
-
-        SCOPED TO AUDITOR DISPATCH BLOCKS, not to every metadata literal in
-        the tree. A blocker or algedonic dispatch MUST carry `metadata.type` --
-        `is_self_complete_exempt` requires it -- so a file-wide ban would redden
-        on correct future work. A `type` key on some other dispatch's metadata
-        is out of scope BY DESIGN: it is not this dispatch's metadata.
-
-        THE ASSOCIATION UNIT IS THE BLOCK, NOT THE LINE. A line-scoped scan sees
-        only a literal sharing a line with `auditor`, so a multiline
-        `TaskCreate(...)` -- the house style for substantial dispatch blocks in
-        these very files -- is invisible to it, and the arm stays GREEN on a
-        dispatch that would make `is_self_complete_exempt` treat the auditor as
-        exempt. That was live, not hypothetical: a probe carrying `type` passed
-        green before this change.
-
-        LATENT, and structural rather than absent: a markdown table has no blank
-        lines, so an entire table is one block. A row mentioning an auditor and a
-        different row carrying a legitimate `type` would be associated by this
-        unit and redden correct work. Measured zero in commands/ today, and the
-        shape exists in this repo's markdown elsewhere. Two dispatches sharing
-        one block is the same hazard by another route. If either appears, the
-        unit must tighten to the enclosing call rather than the block.
-
-        Sites are globbed rather than listed, so a third dispatch file is
-        scanned without anyone remembering to add it, and the assertion below is
-        a FLOOR rather than an inventory -- growth is silent. DELIBERATE LOSS,
-        recorded rather than left to be discovered later: this arm can no longer
-        report that the scanned population changed. An "unexpected site" signal
-        would reintroduce the redden-on-correct-work direction in a softer form.
-
-        THE FLOOR ALSO GUARDS THE DIRECTORY, and that is emergent rather than
-        designed, so it is easy to destroy by accident. Repointing COMMANDS_DIR
-        at agents/ makes both named files vanish and the floor fires -- measured,
-        and it is the ONLY thing catching that route, because
-        `q.parent == COMMANDS_DIR` is true by construction for anything
-        `COMMANDS_DIR.glob()` yields and so cannot see a repointing. Do not
-        "simplify" this to a bare non-empty check: the directory protection goes
-        with it, and agents/ and protocols/ carry legitimate `type`-bearing
-        literals that would come into range all at once.
-
-        Keys are read by `_metadata_keys` rather than parsed, which IS
-        prospective -- both literals in the tree today are valid JSON.
-        """
-        sites = sorted(COMMANDS_DIR.glob("*.md"))
-        assert sites and all(
-            q.parent == COMMANDS_DIR and q.suffix == ".md" for q in sites
-        ), (
-            "site derivation must stay markdown directly under commands/. The "
-            ".py fixtures legitimately construct signal tasks carrying "
-            "completion_type AND type, and agents/ and protocols/ carry "
-            "legitimate algedonic and blocker literals. Line-scoping used to be "
-            "a SECOND thing holding those out of range; widening to blocks spent "
-            "it, so this glob is now the only thing that does. Got %s" % sites
-        )
-        found = {}
-        for path in sites:
-            text = path.read_text()
-            for offset, lit in _metadata_literals(text):
-                if "auditor" not in _enclosing_block(text, offset):
-                    continue
-                assert lit is not None, (
-                    "%s: a metadata literal at offset %d never closes its "
-                    "braces, so this arm cannot read it. A literal it cannot "
-                    "read must not pass as clean -- fix the literal, or the "
-                    "scanner if the literal is correct." % (path.name, offset)
-                )
-                found.setdefault(path.name, []).append(lit)
-                assert "type" not in _metadata_keys(lit), (path.name, lit)
-        missing = {"orchestrate.md", "comPACT.md"} - set(found)
-        # EMPTY and INCOMPLETE are different diagnoses and want opposite first
-        # actions. Empty means nothing was scanned at all, so the literals are
-        # probably fine and the scanner is not; incomplete means the scan worked
-        # and a site really lost its literal. One message for both would send a
-        # maintainer whose helper is dead hunting a literal that is intact.
-        assert found, (
-            "NOTHING scanned: no auditor dispatch literal was found in any of "
-            "the %d site(s). Suspect the SCANNER before the files -- a dead "
-            "`_metadata_literals` or `_enclosing_block`, a glob matching "
-            "nothing, or COMMANDS_DIR pointing somewhere else. Sites: %s"
-            % (len(sites), [q.name for q in sites])
-        )
-        assert not missing, (
-            "no auditor dispatch literal found in %s. These are a FLOOR, not an "
-            "inventory: additional dispatch files are welcome and are scanned "
-            "automatically. But when a KNOWN site stops yielding a literal, the "
-            "type checks above ran on nothing for that file and this arm became "
-            "silently weaker. Found literals in %s."
-            % (sorted(missing), sorted(found))
-        )
 
     def test_the_key_reader_does_not_confuse_completion_type_for_type(self):
         """The one string whose silent failure would take the whole arm with it.

@@ -43,7 +43,7 @@ from shared.pact_context import (  # noqa: E402  # requires the sys.path bootstr
     project_slug,
 )
 from shared.project_scope import _session_record_on_disk  # noqa: E402  # requires the sys.path bootstrap above
-# Re-exported, never wrapped: the working-memory guard and archive_pin must hold one reader.
+# Re-exported, never wrapped: the working-memory guard holds the one reader.
 from shared.project_scope import get_worktree_identity_from_session_record  # noqa: E402, F401  # re-export
 
 
@@ -216,9 +216,9 @@ class ProjectScopeDisagreementError(RuntimeError):
     """A WRITE was refused because CLAUDE_PROJECT_DIR and the session record
     name different project directories.
 
-    Raised on write paths only (backlog set, memory save, working-memory
-    sync). READS follow the env value: deliberate per-command cross-scope
-    inspection is legitimate, but a write under a disagreed scope is the
+    Raised on write paths only (memory save, working-memory sync). READS
+    follow the env value: deliberate per-command cross-scope inspection is
+    legitimate, but a write under a disagreed scope is the
     silent mis-scope this family of issues pays for. The message carries BOTH
     values and the remedy.
     """

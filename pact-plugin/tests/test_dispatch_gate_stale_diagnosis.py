@@ -124,7 +124,7 @@ def test_stale_markers_are_live_and_ascii():
 # =============================================================================
 # The REMEDY the hint names — the measured manual repoint, not a pointer at
 # the bootstrap ritual. Completing bootstrap does NOT rewrite the persisted
-# team records, so the earlier pointer ("Completing /PACT:bootstrap also
+# team records, so the earlier pointer ("Completing /repacted:bootstrap also
 # rewrites those records.") sent the operator to a ritual that changed
 # nothing for this denial; the measured working recovery is a manual edit.
 # =============================================================================

@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""tcount: run a test command outside rtk and report a verifiable COUNT (repacted:shell-tooling-traps).
+
+Location: pact-plugin/bin/tcount (on the Bash PATH while the plugin is enabled).
+Any agent reporting a test result runs it through here. The runner is exec'd directly,
+so an rtk Bash hook, if installed, never rewrites the inner command, and the real exit code survives.
+
+Contract
+  tcount [--] <cmd> [args...]
+
+  - Runs <cmd> as a child process (no shell), streaming its combined stdout/stderr to
+    ${CLAUDE_PLUGIN_DATA}/runs/<ts>-<slug>.log (mode 600). TCOUNT_LOG_DIR, when set, is the
+    directory for that log instead: run-tests gives its suites a scratch data dir and sets this
+    to the session's own runs/ directory, so the log sits beside the ledger that names it. The
+    variable is not passed on to <cmd>.
+  - Parses the runner summary (pytest, vitest, jest, go test, playwright, cargo,
+    node --test, mocha, dotnet test; see hooks/shared/runcounts.py) and prints at most 25 lines: one
+    counts line, up to 20 failing test ids, the real exit code and the log path.
+  - A `dotnet test` run over several projects prints ONE counts line, the sum of the
+    per-project summaries, and a GRAND TOTAL line naming how many it summed.
+  - A wrapper prefix (`nice -n 19`, `env VAR=x`, `time -p`) is seen through: the run is
+    named and parsed as the runner behind it, and the wrapper's own flags are not worker flags.
+  - Appends one record (source "tcount", real exit code, log path, duration_s: start to end of
+    the run, in seconds) to the run ledger
+    through _repact_common.ledger_append, the writer the run-ledger hook also uses.
+  - Caps a known runner at 2 workers when the command sets no worker count of its own:
+    vitest and jest get `--maxWorkers=2`, `dotnet test` and `dotnet build` get `-m:2`
+    (in front of a `--`, else last). pytest is changed only when it carries pytest-xdist's
+    `-n` / `--numprocesses` with `auto` or a number above 2, which becomes 2. A command
+    with its own worker flag, a runner tcount does not know and anything that is not one
+    plain command (a shell operator, `bash -c "..."`) run as typed. One stderr line says
+    what was changed. The ledger's `cmd` stays the command as typed; a changed command is
+    also recorded as run, in `cmd_executed`, and is the first line of the log.
+  - Runs the command at niceness 19 (what `nice -n 19` sets) unless it is already under
+    `nice`. TCOUNT_NICE=1 puts a literal `nice -n 19` in front of the command, as before.
+  - REPACT_TCOUNT_NO_CAP=1 turns both off: no flag is added or lowered, no niceness is set.
+  - A bare `npx <tool>` with no ./node_modules/.bin/<tool> runs as `npx --no-install <tool>`,
+    so it fails instead of fetching from the public registry; one stderr line says so, and the
+    ledger records it in `cmd_executed`. An npx flag of the caller's own runs as typed.
+  - More than 2 parallel workers in the command that runs (-n/--numprocesses/--workers/
+    --maxWorkers/-j/--jobs/--test-concurrency) draws a warning on stderr: heavy local
+    compute is capped at 2 workers.
+  - A leading `rtk` or `rtk proxy` in <cmd> is dropped: tcount exists to bypass rtk.
+  - A dotnet run gets DOTNET_CLI_UI_LANGUAGE=en unless the caller already set it, so a
+    localised CLI still prints the summary the parser reads.
+
+Exit codes
+  0  a count was parsed, at least one test ran, nothing failed, and the runner exited 0
+  1  a count was parsed with failures or errors, zero tests ran, or the runner exited non-zero
+  3  NO TEST COUNT: no runner summary could be parsed (includes a spawn failure).
+     Treat the run as NOT RUN, never as passed.
+  64 usage error (no command given)
+
+Examples
+  tcount pytest -q tests/user_layer
+  tcount npx vitest run
+  tcount python3 -m pytest -n 2 tests/
+  tcount nice -n 19 dotnet test Acme.sln --no-build
+  REPACT_TCOUNT_NO_CAP=1 tcount npx vitest run
+"""
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+from _repact_common import (  # noqa: E402  shared harness
+    DATA_DIR_MODE, data_subdir, git_context, ledger_append, utc_now_iso,
+)
+from shared.runcounts import (  # noqa: E402
+    MAX_FAILING_IDS, MAX_WORKERS, cap_workers, command_name, core_argv, format_tcount_line, parse_counts,
+    runner_from_argv, runs_under_nice,
+)
+
+EXIT_OK, EXIT_FAILED, EXIT_NO_COUNT, EXIT_USAGE = 0, 1, 3, 64
+MAX_PARALLEL_WORKERS = MAX_WORKERS
+NICE_LEVEL = 19
+NO_CAP_ENV = "REPACT_TCOUNT_NO_CAP"
+LOG_MODE = 0o600
+DOTNET_RUNNER, DOTNET_LANGUAGE_ENV = "dotnet", "DOTNET_CLI_UI_LANGUAGE"
+LOG_DIR_ENV = "TCOUNT_LOG_DIR"
+_WORKER_FLAGS = re.compile(
+    r"^(?:-n|--numprocesses|--workers|--maxWorkers|--max-workers|-j|--jobs|--test-concurrency)(?:=(.*))?$")
+USAGE = "usage: tcount [--] <cmd> [args...]\n\nExample:\n  tcount pytest -q tests/user_layer"
+
+
+def strip_rtk(argv: list[str]) -> list[str]:
+    """Drop a leading `rtk` / `rtk proxy`: the point of tcount is to run the runner raw."""
+    if argv and argv[0] == "rtk":
+        argv = argv[1:]
+        if argv and argv[0] == "proxy":
+            argv = argv[1:]
+    return argv
+
+
+def no_fetch(argv: list[str], cwd: Path | None = None) -> tuple[list[str], str | None]:
+    """(argv to run, what changed). A bare `npx <tool>` whose tool is not in ./node_modules/.bin
+    fetches it from the public npm registry (a fresh worktree has no node_modules), so
+    it runs as `npx --no-install <tool>`, which fails instead. An npx flag of the caller's own
+    (`--yes`, `--no`, `-p`) is a choice and runs as typed."""
+    core = core_argv(argv)                      # strips a bare `npx` as a wrapper, not one by path
+    at = len(argv) - len(core) - 1              # where a stripped npx sits
+    if core and os.path.basename(core[0]) == "npx":
+        at, core = at + 1, core[1:]
+    if (at < 0 or os.path.basename(argv[at]) != "npx" or argv[at + 1:] != core
+            or not core or core[0].startswith("-")):
+        return argv, None
+    tool = core[0]
+    if ((cwd or Path.cwd()) / "node_modules" / ".bin" / tool).exists():
+        return argv, None
+    return [*argv[:at + 1], "--no-install", *argv[at + 1:]], f"added --no-install (no ./node_modules/.bin/{tool})"
+
+
+def worker_count(argv: list[str]) -> str | None:
+    """The value of a parallel-worker flag in argv, or None when absent."""
+    for index, arg in enumerate(argv):
+        match = _WORKER_FLAGS.match(arg)
+        if match:
+            if match.group(1) is not None:
+                return match.group(1)
+            if index + 1 < len(argv):
+                return argv[index + 1]
+    return None
+
+
+def too_many_workers(value: str | None) -> bool:
+    if value is None:
+        return False
+    if value.isdigit():
+        return int(value) > MAX_PARALLEL_WORKERS
+    return value.lower() in ("auto", "logical", "max")   # auto sizes to the CPU count
+
+
+def log_path_for(runner: str | None) -> Path:
+    stamp = utc_now_iso().replace(":", "").replace("+0000", "Z")
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", runner or "run")[:32]
+    return log_dir() / f"{stamp}-{os.getpid()}-{slug}.log"
+
+
+def log_dir() -> Path:
+    """$TCOUNT_LOG_DIR (created, mode 700) when it is set and usable, else the data dir's runs/."""
+    given = os.environ.get(LOG_DIR_ENV)
+    if given:
+        try:
+            path = Path(given).expanduser()
+            path.mkdir(parents=True, exist_ok=True, mode=DATA_DIR_MODE)
+            return path
+        except OSError:
+            pass
+    return data_subdir("runs")
+
+
+def child_env(runner: str | None) -> dict[str, str] | None:
+    """The child's environment: None (inherit) except for a dotnet run with no
+    DOTNET_CLI_UI_LANGUAGE set, which gets "en" (a localised CLI prints a summary the parser
+    cannot read; a value the caller set, in the environment or an `env` prefix, is kept), and
+    without TCOUNT_LOG_DIR: a tcount that <cmd> runs (a test of tcount) logs to its own data dir."""
+    needs_language = runner == DOTNET_RUNNER and DOTNET_LANGUAGE_ENV not in os.environ
+    if not needs_language and LOG_DIR_ENV not in os.environ:
+        return None
+    env = {key: value for key, value in os.environ.items() if key != LOG_DIR_ENV}
+    if needs_language:
+        env[DOTNET_LANGUAGE_ENV] = "en"
+    return env
+
+
+def renice() -> None:
+    """In the child, before the command starts: niceness NICE_LEVEL, as `nice -n 19` sets it.
+    Set here and not by a `nice` in front of argv, so the command that runs is the command as
+    typed and one that cannot start is still a spawn failure, not nice's exit 127."""
+    try:
+        os.nice(max(0, NICE_LEVEL - os.getpriority(os.PRIO_PROCESS, 0)))
+    except OSError:
+        pass
+
+
+def run_to_log(argv: list[str], log_path: Path, env: dict[str, str] | None = None,
+               niced: bool = False) -> tuple[int | None, str]:
+    """Run argv, streaming combined output to log_path. Returns (exit code, full text).
+
+    A spawn failure returns (None, <reason>) and is written to the log too. niced: run the
+    child at niceness NICE_LEVEL (renice).
+    """
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, LOG_MODE)
+    with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as log:
+        log.write(f"$ {' '.join(argv)}\n")
+        try:
+            process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       stdin=subprocess.DEVNULL, env=env,
+                                       preexec_fn=renice if niced else None)
+        except OSError as exc:
+            reason = f"tcount: cannot start {argv[0]!r}: {exc.strerror or exc.__class__.__name__}"
+            log.write(reason + "\n")
+            return None, reason
+        chunks: list[str] = []
+        assert process.stdout is not None
+        for raw in iter(process.stdout.readline, b""):
+            text = raw.decode("utf-8", "replace")
+            chunks.append(text)
+            log.write(text)
+        return process.wait(), "".join(chunks)
+
+
+def render(runner: str, counts, exit_code: int | None, log_path: Path) -> list[str]:
+    """The printed report (at most 25 lines)."""
+    shown_exit = "spawn-failed" if exit_code is None else str(exit_code)
+    if counts is None:
+        lines = [f"NO TEST COUNT: treat as not run ({runner}, exit {shown_exit})"]
+    else:
+        lines = [format_tcount_line(counts, shown_exit)]
+        if (counts.projects or 0) > 1:
+            parts = "test projects" if counts.runner == "dotnet" else "test summaries"
+            lines.append(f"GRAND TOTAL of {counts.projects} {parts} (the line above is their sum)")
+        if counts.collected == 0:
+            lines.append("ZERO TESTS RAN: not a pass")
+        lines += [f"FAILED {test_id}" for test_id in counts.failing_ids[:MAX_FAILING_IDS]]
+        missing = counts.failed + counts.errors - len(counts.failing_ids)
+        if counts.failing_ids and missing > 0:
+            lines.append(f"(+{missing} more failures: see the log)")
+    lines.append(f"log: {log_path}")
+    return lines
+
+
+def verdict(counts, exit_code: int | None) -> int:
+    if counts is None:
+        return EXIT_NO_COUNT
+    if counts.failed or counts.errors or counts.collected == 0 or exit_code != 0:
+        return EXIT_FAILED
+    return EXIT_OK
+
+
+def record_run(argv: list[str], runner: str, counts, exit_code: int | None, log_path: Path,
+               executed: list[str] | None = None, duration_s: float | None = None) -> None:
+    """Append this run to the ledger. Attribution by name is the hook's job (see run_ledger.py).
+
+    cmd is argv, the command as typed: the evidence check tells one command's runs from
+    another's by it. executed: the argv that ran, given only when the worker cap changed it.
+    """
+    cwd = os.getcwd()
+    git_head, git_branch = git_context(cwd)
+    fields = counts.as_ledger_fields() if counts else {"runner": runner}
+    if executed is not None:
+        fields = {**fields, "cmd_executed": " ".join(executed)}
+    ledger_append({
+        **fields,
+        "session_id": os.environ.get("CLAUDE_CODE_SESSION_ID"),
+        "cwd": cwd, "git_head": git_head, "git_branch": git_branch,
+        "cmd": " ".join(argv), "exit_code": exit_code,
+        "count_parsed": counts is not None, "source": "tcount", "log_path": str(log_path),
+        "duration_s": duration_s,
+    })
+
+
+def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--":
+        argv = argv[1:]
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__ if argv else USAGE, file=sys.stdout if argv else sys.stderr)
+        return EXIT_OK if argv else EXIT_USAGE
+    argv = strip_rtk(argv)
+    if not argv:
+        print(USAGE, file=sys.stderr)
+        return EXIT_USAGE
+    runner = runner_from_argv(argv) or command_name(argv)
+    capping = os.environ.get(NO_CAP_ENV) != "1"
+    executed, change = cap_workers(argv) if capping else (argv, None)
+    if change:
+        print(f"tcount: capped at {MAX_PARALLEL_WORKERS} workers: {change} "
+              f"({NO_CAP_ENV}=1 runs the command as typed)", file=sys.stderr)
+    executed, fetch = no_fetch(executed)
+    if fetch:
+        print(f"tcount: npx would fetch from the npm registry: {fetch}. Install the project's "
+              "packages first, or type `npx --yes` to fetch knowingly", file=sys.stderr)
+        change = change or fetch
+    workers = worker_count(core_argv(executed))  # `nice -n 19` is a priority, not 19 workers
+    if too_many_workers(workers):
+        print(f"tcount: WARNING {workers} workers requested; heavy local compute is capped at "
+              f"{MAX_PARALLEL_WORKERS} workers and nice -n 19", file=sys.stderr)
+    if os.environ.get("TCOUNT_NICE") == "1":
+        argv, executed = ["nice", "-n", "19", *argv], ["nice", "-n", "19", *executed]
+    log_path = log_path_for(runner)
+    started = time.monotonic()
+    exit_code, output = run_to_log(executed, log_path, child_env(runner),
+                                   niced=capping and not runs_under_nice(executed))
+    duration_s = round(time.monotonic() - started, 3)
+    counts = parse_counts(output, runner_hint=runner)
+    for line in render(runner, counts, exit_code, log_path):
+        print(line)
+    record_run(argv, runner, counts, exit_code, log_path, executed if change else None, duration_s)
+    return verdict(counts, exit_code)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

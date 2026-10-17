@@ -13,9 +13,9 @@ filter — any of which would pass the unit tests — is caught here.
 Coverage:
 
 T23 regression (session 9097e100 scenario):
- 1. /PACT:wrap-up after PR merged mid-session → no warning
- 2. /PACT:pause with consolidation → no warning (pause-path symmetry)
- 3. Multiple /PACT:wrap-up runs in one session (idempotent, N events) → no warning
+ 1. /repacted:wrap-up after PR merged mid-session → no warning
+ 2. /repacted:pause with consolidation → no warning (pause-path symmetry)
+ 3. Multiple /repacted:wrap-up runs in one session (idempotent, N events) → no warning
 
 Adversarial D5 ordering invariants:
  4. Stale session_consolidated (ts < review_dispatch ts) still short-circuits
@@ -119,7 +119,7 @@ class TestSessionConsolidatedRegression:
     """End-to-end pins for the canonical #453 false-positive scenarios.
 
     Session 9097e100 (2026-04-17) was the originating case for #453:
-    PR #447 was merged mid-session, /PACT:wrap-up ran, SessionEnd still
+    PR #447 was merged mid-session, /repacted:wrap-up ran, SessionEnd still
     surfaced the "PR is open but pause-mode was not run" warning. These
     tests reproduce the event sequence with real journal writes.
     """
@@ -152,7 +152,7 @@ class TestSessionConsolidatedRegression:
         )
 
     def test_pause_with_consolidation(self, session_dir):
-        """Pause-path symmetry: /PACT:pause with consolidation → no warning.
+        """Pause-path symmetry: /repacted:pause with consolidation → no warning.
 
         Pins that Fix B covers the pause path as well as the wrap-up
         path — a session that paused after consolidating must not warn
@@ -184,7 +184,7 @@ class TestSessionConsolidatedRegression:
     def test_multiple_wrap_up_runs_in_one_session(self, session_dir):
         """Multiple session_consolidated events (N-run wrap-up) → no warning.
 
-        A session that ran /PACT:wrap-up more than once (e.g. user
+        A session that ran /repacted:wrap-up more than once (e.g. user
         cancelled the first attempt, ran it again after fixing a
         blocker) will have N session_consolidated events in the
         journal. The detector's `if read_events(...)` falsy-check is
@@ -839,7 +839,7 @@ class TestWrapUpBashConditionalEmission:
 
     Review cycle-3 L1: wrap-up.md was previously emitting
     session_consolidated unconditionally on the assumption that
-    /PACT:wrap-up had just run Pass 2. But step 1's prose explicitly
+    /repacted:wrap-up had just run Pass 2. But step 1's prose explicitly
     permits skipping consolidation for trivial sessions, so the
     unconditional emission could surface a false-positive consolidated
     signal on skip. Mirroring pause.md's cycle-2 clamp closes that gap.
@@ -1061,7 +1061,9 @@ class TestPauseBashTemplateShapeDriftGuard:
         the whole file, so other bash examples (if any are added
         elsewhere) can't mask a regression.
         """
-        pause_md = Path(__file__).parent.parent / "commands" / "pause.md"
+        # COMMANDS (m8b) moved step 5's template verbatim, heading included, into the
+        # reference pause.md loads at step 5 (re-homed owner-pending node P-0104).
+        pause_md = Path(__file__).parent.parent / "reference" / "pause" / "paused-state.md"
         content = pause_md.read_text(encoding="utf-8")
 
         # Slice from the step-5 heading to either the step-6 heading or

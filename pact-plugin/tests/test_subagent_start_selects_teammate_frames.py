@@ -30,11 +30,11 @@ THE SEPARATING PROPERTY, stated for each arm below: given a spawn frame whose
 that question and reddens on the wording that shipped. A2 holds the other
 half, so a repair cannot buy A1 by dropping the Agent-tool spawn shape.
 """
-import json
 import re
 from pathlib import Path
 
 import pytest
+from helpers import effective_hooks_config  # noqa: E402
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 HOOKS_JSON = PLUGIN_ROOT / "hooks" / "hooks.json"
@@ -47,7 +47,7 @@ AGENT_TOOL_FRAME_AGENT_TYPES = ("pact-backend-coder", "pact-secretary")
 
 def _subagent_start_entries_registering(hook_filename: str) -> list[dict]:
     """Every SubagentStart registration block whose command names the hook."""
-    data = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
+    data = effective_hooks_config()
     out = []
     for entry in data.get("hooks", {}).get("SubagentStart", []):
         for hook in entry.get("hooks", []):

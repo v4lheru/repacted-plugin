@@ -12,7 +12,7 @@ Registry invariants:
 2. Registry is a non-empty frozenset of strings (shape pin — exact
    membership is deliberately NOT pinned so a registry extension stays a
    one-string source diff).
-3. The seven ruled keys are a MINIMUM SUBSET of the registry — deletion of
+3. The five ruled keys are a MINIMUM SUBSET of the registry — deletion of
    a ruled key goes red while extensions stay one-string diffs (the
    deletion-protection complement of the no-exact-membership choice).
 
@@ -69,14 +69,22 @@ class TestPerWriteMirrorKeysRegistry:
         that no seam test uses as its fire trigger would ship green —
         un-mirroring that key class with zero test signal."""
         assert frozenset({
-            "scope_contract",
-            "nesting_depth",
-            "worktree_path",
             "teachback_submit",
             "teachback_rejection",
+            "handoff_rejection",
             "audit_summary",
             "audit_summary_authored",
         }) <= PER_WRITE_MIRROR_KEYS
+
+    def test_journal_diet_keys_are_not_targeted(self):
+        """Journal diet: a write of variety, scope_contract, nesting_depth or
+        worktree_path is not a snapshot trigger. Those keys ride the overlay
+        of the next targeted write and of the completion seams; mirroring
+        each of their writes was most of the snapshot rows."""
+        assert not PER_WRITE_MIRROR_KEYS & frozenset({
+            "variety", "scope_contract", "nesting_depth", "worktree_path",
+            "intentional_wait", "memory_saved",
+        })
 
 
 @pytest.fixture
@@ -166,7 +174,7 @@ class TestIsCanonicalJournalFrame:
             {"agent_type": "pact-orchestrator"}
         )
         assert ctx_module.is_canonical_journal_frame(
-            {"agent_type": "PACT:pact-orchestrator"}
+            {"agent_type": "repacted:pact-orchestrator"}
         )
 
     def test_in_process_teammate_frame_true(self, teams_root, pact_context):

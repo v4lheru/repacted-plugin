@@ -49,7 +49,7 @@ import agent_handoff_emitter as b1  # noqa: E402
 import task_lifecycle_gate as tlg  # noqa: E402
 
 TEAM = "pact-test"
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TASK_ID = "917"
 OWNER = "devops"
 SUBJECT = "devops: ship the gate"

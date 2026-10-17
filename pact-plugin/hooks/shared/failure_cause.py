@@ -4,13 +4,13 @@ Summary: Render a caught exception as a CLOSED-VOCABULARY cause token that
          cannot carry a filesystem path.
 Used by: every producer whose return value session_init routes into
          system_messages on a substring test -- shared/session_resume.py,
-         shared/claude_md_manager.py, shared/symlinks.py and staleness.py.
+         shared/claude_md_manager.py and shared/symlinks.py.
 
-WHY THIS IS ITS OWN MODULE. The six routed status producers live in four
-files at three levels of the import graph. `session_resume` and `staleness`
-import `claude_md_manager`, so `claude_md_manager` cannot import back from
-them, and `symlinks` imports neither. A single definition therefore needs a
-module BELOW all four. Duplicating the predicate instead would give each
+WHY THIS IS ITS OWN MODULE. The routed status producers live in three
+files at two levels of the import graph. `session_resume` imports
+`claude_md_manager`, so `claude_md_manager` cannot import back from it, and
+`symlinks` imports neither. A single definition therefore needs a module
+BELOW all three. Duplicating the predicate instead would give each
 copy its own drift.
 """
 

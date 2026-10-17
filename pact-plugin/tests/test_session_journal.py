@@ -524,7 +524,7 @@ class TestAppendEvent:
 
         If a fake `os.write` returns 0 (no progress, no exception), the loop
         must return False rather than spin forever. Real filesystems do not
-        normally return 0 from a blocking write, but guarding the loop is
+        usually return 0 from a blocking write, but guarding the loop is
         cheap insurance against FUSE filesystems, test doubles, or a future
         refactor that accidentally configures a non-blocking fd.
         """
@@ -2295,7 +2295,7 @@ class TestCheckJournalPausedState:
                 pr_number=42,
                 pr_url="https://github.com/owner/repo/pull/42",
                 branch="feat/my-feature",
-                worktree_path="/Users/dev/project/.worktrees/feat/my-feature",
+                worktree_path="/Users/alice/project/.worktrees/feat/my-feature",
                 consolidation_completed=True,
             ),
         )
@@ -2833,14 +2833,13 @@ class TestSessionInitJournalWrite:
         }
 
         with patch("sys.stdin", io.StringIO(json.dumps(input_data))), \
-             patch("session_init.setup_plugin_symlinks", return_value=None), \
-             patch("session_init.ensure_project_memory_md", return_value=None), \
-             patch("session_init.check_pinned_staleness", return_value=None), \
+             patch("shared.session_init_common.setup_plugin_symlinks", return_value=None), \
+             patch("shared.session_init_common.ensure_project_memory_md", return_value=None), \
              patch("session_init.get_task_list", return_value=[]), \
-             patch("session_init.persist_context"), \
-             patch("session_init.check_resumption_context", return_value=None), \
-             patch("session_init.restore_last_session", return_value=None), \
-             patch("session_init.check_resume_state", return_value=None):
+             patch("shared.session_init_lead.persist_context"), \
+             patch("shared.session_init_lead.check_resumption_context", return_value=None), \
+             patch("shared.session_init_lead.restore_last_session", return_value=None), \
+             patch("shared.session_init_lead.check_resume_state", return_value=None):
 
             with pytest.raises(SystemExit) as exc:
                 from session_init import main
@@ -3607,6 +3606,15 @@ class TestValidateEventSchemaPerType:
             "task_id": "1",
             "since": "2026-01-01T00:00:00+00:00",
         },
+        "prompt_kind": {
+            "kind": "idle_notification",
+            "chars": 120,
+        },
+        "idle_on_finished_run": {
+            "agent": "devops",
+            "task_id": "1",
+            "log_name": "2026-01-01T000000Z-42-pytest.log",
+        },
         "unflagged_background_wait": {
             "agent": "devops",
             "registered_at": "2026-01-01T00:00:00+00:00",
@@ -3621,6 +3629,14 @@ class TestValidateEventSchemaPerType:
             "role": "lead",
             "verdict": "block",
             "running": 1,
+        },
+        # The D10 bridge's lead-acceptance record (required fields only; `main`
+        # is optional, see TestValidateOptionalFieldTypes).
+        "project_task_acceptance": {
+            "ptask": "session-x/7",
+            "op": "accept",
+            "rev": 1,
+            "t": "T-1a2b3c4d",
         },
         "s2_state_seeded": {
             "worktree": "/tmp/wt",
@@ -3644,9 +3660,9 @@ class TestValidateEventSchemaPerType:
             "pr_url": "https://github.com/o/r/pull/42",
             "commits": 7,
         },
+        # Required fields only: pr_number and pr_url are optional (a pause
+        # with no PR is valid).
         "session_paused": {
-            "pr_number": 42,
-            "pr_url": "https://github.com/o/r/pull/42",
             "branch": "feat/x",
             "worktree_path": "/tmp/wt",
             "consolidation_completed": True,
@@ -3676,20 +3692,17 @@ class TestValidateEventSchemaPerType:
             "feature": "handoff-artifact-durability",
             "paths": ["/tmp/wt/docs/preparation/handoff-artifact-durability.md"],
         },
-        # Required fields only — `reason` is optional (not obtainable on a
-        # bare Cancel), so it must NOT appear here: the missing-field test
-        # strips each sample key and expects rejection, which holds only for
-        # required ones.
-        "pin_prune_skipped": {
-            "outcome": "archive_refused",
-            "pin_count": 12,
-            "age_distribution": {"oldest": 60, "newest": 4, "median": 21},
+        "gate_refusal": {"hook": "unattended_gate", "verdict": "deny", "rule": "act_named"},
+        "unattended_mode": {"state": "on", "cause": "command"},
+        "unattended_default": {
+            "ref": "0123456789ab",
+            "question": "Which layout",
+            "chose": "Two columns (Recommended)",
+            "why": "matches the plan",
         },
-        "pin_pruned": {
-            "heading": "Coupling-via-substring-count",
-            "memory_id": "396c1c8bfd013ecab3bc1608ed813627",
-            "pin_count": 12,
-        },
+        "unattended_halt": {"task_id": "35", "question": "Merge the branch"},
+        "metadata_write": {"task_id": "93", "key": "handoff", "bytes": 1840},
+        "task_store_absent": {"team": "session-ab12", "task_id": "8", "misses": 2},
     }
 
     def test_samples_mirror_required_fields_dict(self):
@@ -3914,7 +3927,6 @@ class TestValidateEventSchemaPerType:
         ("review_dispatch", "pr_number", "42", "int", "str"),
         ("remediation", "cycle", "1", "int", "str"),
         ("pr_ready", "commits", "7", "int", "str"),
-        ("session_paused", "pr_number", "42", "int", "str"),
         # dict fields fed a list
         ("variety_assessed", "variety", [1, 2], "dict", "list"),
         ("agent_handoff", "handoff", [1, 2], "dict", "list"),
@@ -3930,6 +3942,12 @@ class TestValidateEventSchemaPerType:
         ("session_refreshed", "halt_active", "yes", "bool", "str"),
         # str field fed an int (the consumption claim id must be a ts string)
         ("session_refresh_consumed", "refresh_ts", 42, "str", "int"),
+        # the D10 bridge's lead-acceptance record: the revision is an int, the rest str
+        ("project_task_acceptance", "ptask", 7, "str", "int"),
+        ("project_task_acceptance", "op", 1, "str", "int"),
+        ("project_task_acceptance", "rev", "1", "int", "str"),
+        ("project_task_acceptance", "rev", True, "int", "bool"),
+        ("project_task_acceptance", "t", 1, "str", "int"),
     ]
 
     @pytest.mark.parametrize(
@@ -4144,6 +4162,31 @@ class TestValidateOptionalFieldTypes:
 
         assert _OPTIONAL_FIELDS_BY_TYPE.get("session_start") == {"source": str}
 
+    @pytest.mark.parametrize("pr_fields, ok", [
+        ({"pr_number": None, "pr_url": None}, True),
+        ({}, True),
+        ({"pr_number": 42, "pr_url": "https://github.com/o/r/pull/42"}, True),
+        ({"pr_number": None, "pr_url": None, "resume_hint": "rebase onto develop first"}, True),
+        ({"pr_number": "42"}, False),
+        ({"pr_url": ""}, False),
+        ({"resume_hint": 7}, False),
+        ({"pr_number": 0}, False),
+        ({"pr_number": -5}, False),
+        ({"pr_number": False}, False),
+        ({"pr_number": True}, False),
+    ], ids=["null", "absent", "present", "null-with-hint", "number-as-str", "empty-url", "hint-not-str",
+            "number-zero", "number-negative", "number-false", "number-true"])
+    def test_session_paused_pr_fields_are_optional(self, pr_fields, ok):
+        """A pause with no PR is valid: pr_number and pr_url may be null or absent,
+        and resume_hint is optional free text; a present value keeps its type check.
+        A PR number is positive: zero, a negative number and a boolean are refused,
+        so no new event carries a number that reads as no PR."""
+        from shared.session_journal import _validate_event_schema, make_event
+
+        event = make_event("session_paused", branch="feat/x", worktree_path="/tmp/wt",
+                           consolidation_completed=True, **pr_fields)
+        assert _validate_event_schema(event)[0] is ok
+
     def test_compaction_attributed_latency_declared_optional(self):
         """compaction_attributed has `latency_s: float`, the seconds from staging
         a compaction summary to resolving it; present, it must be a float."""
@@ -4174,6 +4217,7 @@ class TestValidateOptionalFieldTypes:
         assert _OPTIONAL_FIELDS_BY_TYPE.get("background_stop_gate") == {
             "ids": list,
             "cause": str,
+            "ended": dict,
         }
         base = {"role": "teammate", "verdict": "allow_flagged", "running": 2}
         ok, _ = _validate_event_schema(
@@ -4188,6 +4232,33 @@ class TestValidateOptionalFieldTypes:
             make_event("background_stop_gate", cause=3, **base)
         )
         assert not bad_cause
+        bad_ended, _ = _validate_event_schema(
+            make_event("background_stop_gate", ended=["b1"], **base)
+        )
+        assert not bad_ended
+
+    def test_project_task_acceptance_main_is_an_optional_string(self):
+        """The D10 bridge's lead-acceptance record may name its main checkout.
+
+        sync uses `main` to ignore a record written for another repo; a
+        wrong-typed value is rejected rather than landing on disk.
+        """
+        from shared.session_journal import (
+            _OPTIONAL_FIELDS_BY_TYPE,
+            _validate_event_schema,
+            make_event,
+        )
+
+        assert _OPTIONAL_FIELDS_BY_TYPE.get("project_task_acceptance") == {"main": str}
+        base = {"ptask": "session-x/7", "op": "accept", "rev": 1, "t": "T-1a2b3c4d"}
+        ok, _ = _validate_event_schema(
+            make_event("project_task_acceptance", main="/tmp/repo", **base)
+        )
+        assert ok
+        bad_main, _ = _validate_event_schema(
+            make_event("project_task_acceptance", main=3, **base)
+        )
+        assert not bad_main
 
     def test_variety_assessed_scope_declared_optional(self):
         """variety_assessed has `scope: str` in _OPTIONAL_FIELDS_BY_TYPE.
@@ -4195,7 +4266,7 @@ class TestValidateOptionalFieldTypes:
         The per-dispatch discriminator: ABSENT means feature-level (every
         legacy event and the orchestrate feature block), `"dispatch"` marks
         a per-dispatch mirror. The position-based consumers (session_state
-        feature derivation, variety_divergence arc_start) filter on this
+        feature derivation, the wrap-up arc start) filter on this
         value, so the type contract lives at the journal boundary.
         """
         from shared.session_journal import _OPTIONAL_FIELDS_BY_TYPE
@@ -4247,130 +4318,11 @@ class TestValidateOptionalFieldTypes:
             "be str, got int"
         )
 
-    def test_pin_pruned_requires_a_memory_id(self):
-        """`memory_id` is what makes the success claim CHECKABLE.
 
-        pin_caps_gate ALLOWS the eviction Edit by construction, so nothing
-        mechanically enforces that the archive ran — detectability is the
-        whole remaining control. An event that asserted "pruned" without an
-        id would be a success report with nothing behind it; with the id an
-        auditor can fetch the record and confirm.
-        """
-        from shared.session_journal import (
-            _REQUIRED_FIELDS_BY_TYPE,
-            _validate_event_schema,
-            make_event,
-        )
 
-        assert _REQUIRED_FIELDS_BY_TYPE["pin_pruned"]["memory_id"] is str
-        ok, reason = _validate_event_schema(
-            make_event("pin_pruned", heading="H", pin_count=12)
-        )
-        assert ok is False
-        assert "memory_id" in reason
 
-    def test_pin_pruned_cannot_be_emitted_for_an_unverified_eviction(self):
-        """A structural property the two schemas give us for free, and the
-        reason the escape-hatch eviction is filed under the SKIP event.
 
-        An UNEVALUABLE archive yields no memory_id, and `str` fields reject
-        empty and whitespace-only values — so there is no way to emit
-        pin_pruned for an eviction that was never archived. The schema
-        enforces the semantic rather than trusting the prose to remember it.
-        """
-        from shared.session_journal import _validate_event_schema, make_event
 
-        for unusable in ("", "   ", None):
-            ok, _ = _validate_event_schema(
-                make_event("pin_pruned", heading="H", memory_id=unusable,
-                           pin_count=12)
-            )
-            assert ok is False, (
-                f"memory_id={unusable!r} must not produce a valid pin_pruned "
-                f"— that would let an unverified eviction masquerade as an "
-                f"archived one"
-            )
-
-    def test_pin_pruned_carries_no_outcome_field(self):
-        """Deliberate asymmetry with pin_prune_skipped.
-
-        Only REQUIRED fields are validated. An `outcome` on pin_pruned would
-        be unvalidated, so it would sit in the audit trail looking
-        authoritative while guaranteed by nothing. The event's existence IS
-        its outcome.
-        """
-        from shared.session_journal import (
-            _OPTIONAL_FIELDS_BY_TYPE,
-            _REQUIRED_FIELDS_BY_TYPE,
-        )
-
-        assert "outcome" not in _REQUIRED_FIELDS_BY_TYPE["pin_pruned"]
-        assert "outcome" not in _OPTIONAL_FIELDS_BY_TYPE.get("pin_pruned", {})
-        assert "outcome" in _REQUIRED_FIELDS_BY_TYPE["pin_prune_skipped"], (
-            "the skip event still needs its outcome — this test pins the "
-            "asymmetry, not the absence of outcomes everywhere"
-        )
-
-    def test_pin_count_is_int_and_rejects_bool_on_both_pin_events(self):
-        """`bool` subclasses `int`, so an unquoted `true` in the --data JSON
-        would satisfy a naive isinstance check and land a nonsense count."""
-        from shared.session_journal import _validate_event_schema, make_event
-
-        ok, _ = _validate_event_schema(
-            make_event("pin_pruned", heading="H", memory_id="a" * 32,
-                       pin_count=True)
-        )
-        assert ok is False
-        ok, _ = _validate_event_schema(
-            make_event("pin_prune_skipped", outcome="cancelled",
-                       pin_count=True, age_distribution={})
-        )
-        assert ok is False
-
-    def test_pin_prune_skipped_reason_declared_optional(self):
-        """`reason` is optional on pin_prune_skipped, and that is a decision
-        rather than an oversight.
-
-        A bare Cancel elicits no reason. Requiring the field would force
-        either an extra prompt on every cancellation or a fabricated value —
-        and emitting a field we cannot populate is a success report with no
-        measurement behind it, the exact defect class this feature exists to
-        remove. Declaring it optional-with-a-type keeps the contract (a
-        non-string reason is still rejected) without demanding a value the
-        flow cannot supply.
-        """
-        from shared.session_journal import (
-            _OPTIONAL_FIELDS_BY_TYPE,
-            _REQUIRED_FIELDS_BY_TYPE,
-        )
-
-        assert _OPTIONAL_FIELDS_BY_TYPE.get("pin_prune_skipped") == {
-            "reason": str
-        }
-        assert "reason" not in _REQUIRED_FIELDS_BY_TYPE["pin_prune_skipped"]
-
-    def test_pin_prune_skipped_accepts_reason_and_rejects_wrong_type(self):
-        """Optional means absent-is-fine, present-must-be-typed."""
-        from shared.session_journal import _validate_event_schema, make_event
-
-        base = {
-            "outcome": "archive_refused",
-            "pin_count": 12,
-            "age_distribution": {"oldest": 60, "newest": 4, "median": 21},
-        }
-        ok, _ = _validate_event_schema(make_event("pin_prune_skipped", **base))
-        assert ok is True, "absent reason must validate"
-
-        ok, _ = _validate_event_schema(
-            make_event("pin_prune_skipped", **base,
-                       reason="archival refused: containment failed")
-        )
-        assert ok is True, "string reason must validate"
-
-        ok, _ = _validate_event_schema(
-            make_event("pin_prune_skipped", **base, reason=["a", "list"])
-        )
-        assert ok is False, "non-string reason must be rejected"
 
     def test_session_refreshed_optionals_declared(self):
         """session_refreshed declares the seven optional mid-flight fields.
@@ -4648,7 +4600,7 @@ class TestValidateOptionalFieldTypes:
         """teachback_ack has `concern: str` in _OPTIONAL_FIELDS_BY_TYPE (#955).
 
         concern is present only when rationale_articulates_this_dispatch is
-        "no"/"concern" (per pact-variety.md); a "yes" ack omits it. The
+        "no"/"concern" (per protocols/workflows.md); a "yes" ack omits it. The
         teachback_ack required-fields registration ACTIVATES this optional
         check (the validator short-circuits on unknown types)."""
         from shared.session_journal import _OPTIONAL_FIELDS_BY_TYPE
@@ -5263,11 +5215,10 @@ class TestArcScopedDenominator:
         """Baseline (the bug): without --since the denominator counts BOTH
         arcs = 9 (the #960 observed value)."""
         from shared.session_journal import read_events_from
-        from shared.variety_divergence import extract_dispatch_coverage
 
         self._resumed_two_arc_journal(journal_file)
         sites = read_events_from(session_dir, event_type="dispatch_site")
-        assert extract_dispatch_coverage(sites)[1] == 9
+        assert len(sites) == 9
 
     def test_arc_scoped_denominator_counts_current_arc_only(
         self, journal_home, session_dir, journal_file
@@ -5276,13 +5227,12 @@ class TestArcScopedDenominator:
         The prior-arc-only auditor/task13 and the prior duplicates of
         8/10/12 are excluded."""
         from shared.session_journal import read_events_from
-        from shared.variety_divergence import extract_dispatch_coverage
 
         self._resumed_two_arc_journal(journal_file)
         sites = read_events_from(
             session_dir, event_type="dispatch_site", since=self.ARC2_START
         )
-        assert extract_dispatch_coverage(sites)[1] == 4
+        assert len(sites) == 4
 
     def test_positive_control_current_arc_events_are_counted(
         self, journal_home, session_dir, journal_file
@@ -5307,7 +5257,6 @@ class TestArcScopedDenominator:
         """No-change guard (963-B): a single-arc fresh session — --since at
         the only arc's start is a no-op; scoped count == unscoped count."""
         from shared.session_journal import read_events_from
-        from shared.variety_divergence import extract_dispatch_coverage
 
         events = [
             make_event(
@@ -5331,8 +5280,8 @@ class TestArcScopedDenominator:
         )
         unscoped = read_events_from(session_dir, event_type="dispatch_site")
         assert (
-            extract_dispatch_coverage(scoped)[1]
-            == extract_dispatch_coverage(unscoped)[1]
+            len(scoped)
+            == len(unscoped)
             == 2
         )
 
@@ -5601,3 +5550,174 @@ class TestJournalTeachExamples:
         assert result.stdout == ""
         assert "error:" in result.stderr
         assert self._EXAMPLES["write"] in result.stderr
+
+# resolve_arc_start: the --since arc-boundary resolver (moved with the divergence module's retirement)
+from shared.session_journal import resolve_arc_start  # noqa: E402
+
+
+class TestResolveArcStart:
+    """resolve_arc_start(variety_assessed_events, feature_task_id): the LATEST
+    variety_assessed.ts matching feature_task_id (the arc-start for --since),
+    parse-not-lexical, fail-open None. Pure function, journal-event inputs."""
+
+    def _va(self, task_id, ts):
+        return make_event(
+            "variety_assessed",
+            task_id=task_id,
+            variety={
+                "novelty": 2,
+                "scope": 2,
+                "uncertainty": 2,
+                "risk": 2,
+                "total": 8,
+            },
+            ts=ts,
+        )
+
+    def test_returns_latest_ts_for_matching_feature_across_arcs(self):
+        """The platform reuses task_ids across arcs, so the feature's id can
+        match a PRIOR arc's variety_assessed too; the LATEST-ts match is the
+        current arc. (Non-vacuity: a latest→earliest mutation returns the
+        prior-arc ts and fails this.)"""
+        events = [
+            self._va("100", "2026-06-13T12:00:00Z"),  # prior arc
+            self._va("100", "2026-06-14T12:00:00Z"),  # current arc
+        ]
+        assert resolve_arc_start(events, "100") == "2026-06-14T12:00:00Z"
+
+    def test_filters_by_feature_task_id_ignoring_other_features(self):
+        """A LATER variety_assessed for a DIFFERENT feature must NOT leak in —
+        returns the matching feature's latest, not the global latest. (Proves
+        the task_id filter is load-bearing.)"""
+        events = [
+            self._va("100", "2026-06-14T12:00:00Z"),
+            self._va("200", "2026-06-15T12:00:00Z"),  # later, different feature
+        ]
+        assert resolve_arc_start(events, "100") == "2026-06-14T12:00:00Z"
+
+    def test_dispatch_marked_event_for_same_id_does_not_move_arc_start(self):
+        """A per-dispatch mirror (TOP-LEVEL scope="dispatch") for the SAME
+        task id, landing AFTER the feature-level event, must NOT push
+        arc_start forward — the scope filter excludes it before the
+        latest-ts selection. This is the belt-and-braces half: the id
+        filter already keeps per-dispatch events out (they carry the
+        dispatch task's id), and this test pins the structural guarantee
+        for the world where an emission mistakenly keys the feature id."""
+        feature = self._va("100", "2026-06-14T12:00:00Z")
+        marked = make_event(
+            "variety_assessed",
+            task_id="100",
+            scope="dispatch",
+            variety={"total": 4},
+            ts="2026-06-15T12:00:00Z",
+        )
+        assert resolve_arc_start([feature, marked], "100") == (
+            "2026-06-14T12:00:00Z"
+        )
+
+    def test_field_absent_event_remains_feature_level(self):
+        """Legacy polarity: an event with NO scope field is feature-level.
+        The latest field-absent match still wins, so a legacy journal
+        renders identically to the pre-discriminator behavior."""
+        events = [
+            self._va("100", "2026-06-13T12:00:00Z"),
+            self._va("100", "2026-06-14T12:00:00Z"),
+        ]
+        assert resolve_arc_start(events, "100") == "2026-06-14T12:00:00Z"
+
+    def test_cross_format_compared_by_instant_returns_original_string(self):
+        """Cross-format (prior arc in +00:00, current in Z) is compared by
+        PARSED instant; the RETURN is the original ts STRING of the max (passed
+        verbatim to --since, which _ts_ge re-parses)."""
+        events = [
+            self._va("100", "2026-06-14T00:00:00+00:00"),  # earlier
+            self._va("100", "2026-06-14T12:00:00Z"),  # later (current)
+        ]
+        assert resolve_arc_start(events, "100") == "2026-06-14T12:00:00Z"
+
+    def test_equal_instant_tie_keeps_the_first_seen_event(self):
+        """Two feature-level events for the SAME feature id at the IDENTICAL
+        parsed instant (a realistic tie: journal ts stamps at second
+        granularity) resolve to the FIRST-SEEN event's original ts string,
+        in either list order — the assertion over BOTH orders is what proves
+        first-seen rather than any string-form preference.
+
+        This pin documents CURRENT behavior, not a designed requirement:
+        the strict `>` keeps the first of two equal instants, the
+        boundary-selection direction (an arc boundary is the earliest edge
+        of a tied cluster), matching the session_state feature selector and
+        the OPPOSITE of the value-selection ties, which take the later
+        element (see `test_equal_instant_tie_break_takes_the_later_element`
+        for the snapshot index; `_latest_dispatch_assessed_by_task` shares
+        that direction). wrap-up Q5 consumes this helper for `arc_start`,
+        so an equal-ts feature pair is deterministic there rather than
+        undefined.
+        """
+        z_form = self._va("100", "2026-06-14T12:00:00Z")
+        offset_form = self._va("100", "2026-06-14T12:00:00+00:00")
+        assert resolve_arc_start([z_form, offset_form], "100") == (
+            "2026-06-14T12:00:00Z"
+        )
+        assert resolve_arc_start([offset_form, z_form], "100") == (
+            "2026-06-14T12:00:00+00:00"
+        )
+
+    def test_returns_none_when_no_matching_feature(self):
+        events = [self._va("200", "2026-06-14T12:00:00Z")]
+        assert resolve_arc_start(events, "100") is None
+
+    def test_returns_none_for_empty_events(self):
+        assert resolve_arc_start([], "100") is None
+
+    def test_skips_matching_event_missing_ts_keeps_valid_match(self):
+        """A matching event with no `ts` is skipped; a remaining valid match
+        wins. (Raw dict — make_event would auto-stamp a ts.)"""
+        events = [
+            self._va("100", "2026-06-14T12:00:00Z"),
+            {"type": "variety_assessed", "task_id": "100", "variety": {"total": 8}},
+        ]
+        assert resolve_arc_start(events, "100") == "2026-06-14T12:00:00Z"
+
+    def test_returns_none_when_only_match_missing_ts(self):
+        events = [
+            {"type": "variety_assessed", "task_id": "100", "variety": {"total": 8}},
+        ]
+        assert resolve_arc_start(events, "100") is None
+
+    def test_returns_none_when_all_matches_unparseable(self):
+        """Fail-open: matching entries whose ts is unparseable are skipped; if
+        no parseable match remains → None (caller omits --since)."""
+        events = [self._va("100", "garbage"), self._va("100", "also-bad")]
+        assert resolve_arc_start(events, "100") is None
+
+    def test_mixed_naive_and_aware_ts_does_not_crash_selects_aware_latest(self):
+        """Regression: a sequence mixing a tz-AWARE ts ('...Z' → +00:00) with a
+        tz-NAIVE-parseable one (a date-only '2026-06-16' → naive datetime via
+        fromisoformat) must NOT raise TypeError ('can't compare offset-naive
+        and offset-aware datetimes'). The `dt > latest_dt` compare lives INSIDE
+        the try/except (mirroring _ts_ge), so the incomparable naive entry is
+        SKIPPED, not fatal, and the latest tz-AWARE ts is returned.
+
+        The date-only entry parses cleanly (it is NOT garbage) but is naive, so
+        comparing it against an already-set AWARE latest is what raised — a
+        parses-OK-but-incompatible probe, distinct from the unparseable case.
+        Note the naive '2026-06-16' is date-wise LATER than both aware entries,
+        so its being SKIPPED (not selected) is load-bearing: a regression that
+        let it through would change the result.
+
+        Structured assert-no-raise (catch → pytest.fail) so a pre-fix revert
+        (compare moved back OUTSIDE the try) yields a deterministic FAILED, not
+        a runtime ERROR that rtk's error-count-dropping summary could hide."""
+        events = [
+            self._va("100", "2026-06-14T12:00:00Z"),  # aware
+            self._va("100", "2026-06-16"),  # naive (date-only) — the crasher
+            self._va("100", "2026-06-15T12:00:00Z"),  # aware, the latest aware
+        ]
+        try:
+            result = resolve_arc_start(events, "100")
+        except TypeError as exc:  # pragma: no cover - the regression we guard
+            pytest.fail(
+                "resolve_arc_start raised on a mixed naive+aware ts sequence "
+                f"(the try-scope regression resurfaced): {exc}"
+            )
+        assert result == "2026-06-15T12:00:00Z"

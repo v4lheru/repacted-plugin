@@ -127,17 +127,23 @@ class TestIsPactAgent:
 
 
 class TestPactNamespacedAgent:
-    """is_pact_agent() accepts exactly the platform's `PACT:` spelling."""
+    """is_pact_agent() accepts the platform's namespaced spelling, current or legacy."""
 
     def test_a_pact_namespaced_agent_is_a_pact_agent(self):
         from validate_handoff import is_pact_agent
 
-        assert is_pact_agent("PACT:pact-preparer") is True
+        assert is_pact_agent("repacted:pact-preparer") is True
 
     def test_only_one_pact_namespace_is_stripped(self):
         from validate_handoff import is_pact_agent
 
-        assert is_pact_agent("PACT:PACT:pact-x") is False
+        assert is_pact_agent("repacted:" "repacted:" "pact-x") is False
+        assert is_pact_agent("PACT:repacted:" "pact-x") is False
+
+    def test_the_legacy_namespace_is_stripped(self):
+        from validate_handoff import is_pact_agent
+
+        assert is_pact_agent("PACT:pact-preparer") is True
 
     def test_the_namespace_is_case_sensitive(self):
         from validate_handoff import is_pact_agent
@@ -152,7 +158,7 @@ class TestPactNamespacedAgent:
     def test_a_namespaced_non_pact_agent_is_not(self):
         from validate_handoff import is_pact_agent
 
-        assert is_pact_agent("PACT:custom-agent") is False
+        assert is_pact_agent("repacted:" "custom-agent") is False
 
     def test_the_bare_namespace_is_not(self):
         from validate_handoff import is_pact_agent
@@ -901,7 +907,7 @@ class TestStopHookActiveLoopGuard:
     a stop-hook block. Refusing again can loop an agent that cannot satisfy
     the check forever, so the hook MUST degrade to a systemMessage warning
     and let the stop land. When the field is absent or false, the refusal
-    fires normally.
+    fires usually.
     """
 
     def test_stop_hook_active_true_degrades_to_warning(self, capsys):

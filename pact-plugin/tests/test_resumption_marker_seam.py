@@ -54,7 +54,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.test_resumption_marker_mirror import AGENT_BODY, HOOK, marker_event_type
+from tests.test_resumption_marker_mirror import HOOK, marker_event_type
 from tests.test_session_init import _with_lead_role
 
 READER = str(Path(__file__).parent.parent / "hooks" / "shared" / "session_journal.py")
@@ -87,12 +87,11 @@ _STDIN = json.dumps(_with_lead_role({
 # The patches every driver shares. `append_event` is NOT among them, and that
 # omission is the point of this module.
 _PATCHED = (
-    ("session_init.setup_plugin_symlinks", None),
-    ("session_init.ensure_project_memory_md", None),
-    ("session_init.check_pinned_staleness", None),
-    ("session_init.update_session_info", None),
+    ("shared.session_init_common.setup_plugin_symlinks", None),
+    ("shared.session_init_common.ensure_project_memory_md", None),
+    ("shared.session_init_lead.update_session_info", None),
     ("session_init.get_task_list", None),
-    ("session_init.restore_last_session", None),
+    ("shared.session_init_lead.restore_last_session", None),
 )
 
 
@@ -113,7 +112,7 @@ def _run_hook(monkeypatch, resume_msg):
         for target, value in _PATCHED:
             stack.enter_context(patch(target, return_value=value))
         stack.enter_context(
-            patch("session_init.check_resume_state", return_value=resume_msg)
+            patch("shared.session_init_lead.check_resume_state", return_value=resume_msg)
         )
         stack.enter_context(patch("sys.stdin", io.StringIO(_STDIN)))
         stack.enter_context(patch("sys.stdout", new_callable=io.StringIO))
@@ -243,56 +242,10 @@ class TestTheMarkerSurvivesTheTripFromHookToReader:
         assert not [t for t, _ in _PATCHED if "append_event" in t]
         assert "append_event" not in inspect.getsource(_run_hook)
 
-    def test_the_agent_body_names_the_verb_and_flags_this_module_runs(self):
-        """Detects: the documented read and this module's read drifting apart.
-
-        The docstring above claims the subprocess runs the verb and flags the
-        agent body names. That was TRUE and pinned by nothing: this module never
-        opened the agent body, so an edit to either side would leave the claim
-        quietly false and the green here would stop meaning what it says. The
-        tokens come from the same constants the subprocess is built from, so the
-        pin cannot drift from what actually runs.
-
-        SCOPED TO THE COMMAND, NOT TO THE STEP, and the difference is not
-        pedantry -- the first draft of this pin searched the whole spawn step
-        and a mutation walked straight through it. The step's prose NAMES the
-        verb ("the journal reader's `read-last` verb") as well as running it, so
-        a body whose command said `read` while its prose still said `read-last`
-        satisfied a step-wide token search. Measured, not reasoned: that mutant
-        passed 5/5 before this was narrowed. A token search answers "does this
-        word appear somewhere near", which is not the question.
-        """
-        body = AGENT_BODY.read_text(encoding="utf-8")
-        start = body.find("1. **Rebuild Working Memory from the store**")
-        assert start != -1, (
-            "the spawn step's opening marker is gone from the agent body -- "
-            "re-anchor this pin, do not delete it."
-        )
-        end = body.find("\n2. **Search pact-memory**", start)
-        assert end != -1, "the spawn step has no terminating numbered line"
-        spawn_step = body[start:end]
-
-        # The invocation itself: from the reader's filename to the end of the
-        # backtick span holding it. Exactly one, or the anchor is ambiguous and
-        # this pin would be reading some other command.
-        anchor = "session_journal.py"
-        assert spawn_step.count(anchor) == 1, (
-            f"expected exactly one {anchor!r} in the spawn step, found "
-            f"{spawn_step.count(anchor)}. Re-anchor this pin on the invocation "
-            "the secretary is told to run; do not widen it back to the step."
-        )
-        at = spawn_step.index(anchor)
-        close = spawn_step.find("`", at)
-        assert close != -1, "the spawn step's read command is not in a backtick span"
-        command = spawn_step[at:close]
-
-        for token in (_VERB, _DIR_FLAG, _TYPE_FLAG):
-            assert token in command, (
-                f"this module runs {token!r} but the command the secretary's "
-                f"spawn step tells it to run does not carry it: {command!r}. "
-                "The seam is then tested with an invocation the secretary was "
-                "never told to make."
-            )
+    # P-0103 RETIRED with the secretary rework: the agent body no longer tells the secretary to
+    # read the marker (session_init holds the rebuild in-process), so there is no documented
+    # read for this module's read to drift from. The round-trip arms above still prove the
+    # marker lands where the journal reader finds it.
 
 
 class TestTheHookStillAnnouncesAFailedWrite:
@@ -315,10 +268,10 @@ class TestTheHookStillAnnouncesAFailedWrite:
             for target, value in _PATCHED:
                 stack.enter_context(patch(target, return_value=value))
             stack.enter_context(patch(
-                "session_init.check_resume_state",
+                "shared.session_init_lead.check_resume_state",
                 return_value="Paused work detected: feat/login.",
             ))
-            stack.enter_context(patch("session_init.append_event", failing))
+            stack.enter_context(patch("shared.session_init_lead.append_event", failing))
             stack.enter_context(patch("sys.stdin", io.StringIO(_STDIN)))
             out = stack.enter_context(
                 patch("sys.stdout", new_callable=io.StringIO)

@@ -1,0 +1,29 @@
+{"base": "a62703f1", "blob_id": "8f67b82deb254e2ceff9532ab639f5012fadcf9f", "captured_from": "3f27b2c6", "rows": 28, "sha256": "fb5ccd3f1eedcd54647c958f2096e5c2ea41f46686f69bf3dc1cff6397182186"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["bash <<< \"$(date) git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<< \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<< \"as of $(date): note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<< \"ok $(date)\" ; git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<< \"pre $(git branch -D victim) post\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["cat <<< \"ran `hostname`: git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["curl --data \"$(date) drop git branch -D victim\" http://example.com/api"], {}], "result": true}
+{"call": ["is_dangerous_command", ["curl -d \"$(git branch -D victim)\" http://example.com/api"], {}], "result": true}
+{"call": ["is_dangerous_command", ["curl -d \"as of $(date): note git branch -D victim\" http://example.com/api"], {}], "result": true}
+{"call": ["is_dangerous_command", ["curl -d \"ok $(date)\" http://example.com/api && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["curl -d \"pre $(git branch -D victim) post\" http://example.com/api"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"$(date) $(whoami): git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"`git branch -D victim`\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"as of $(date): note git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"it's $(date); git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"ok $(date)\" && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"pre $(git branch -D victim) post\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"ran on `hostname`, then git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r --jq \"$(date) git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r --jq \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r -q \"$(git branch -D victim)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r -q \"as of $(date): git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api repos/o/r -q \"ok $(date)\" && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["printf \"as of $(date): note git branch -D victim\""], {}], "result": true}

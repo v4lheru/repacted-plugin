@@ -2,7 +2,7 @@
 Location: pact-plugin/telegram/config.py
 Summary: Configuration loader for pact-telegram using stdlib .env parsing.
 Used by: All other telegram modules (server.py, tools.py, telegram_client.py,
-         voice.py, notify.py) to access bot token, chat ID, and optional settings.
+         voice.py) to access bot token, chat ID, and optional settings.
 
 Reads configuration from ~/.claude/pact-telegram/.env using a pure-stdlib
 parser (no python-dotenv dependency). Validates required fields and provides
@@ -232,13 +232,13 @@ def load_config(
     if not bot_token:
         raise ConfigError(
             "TELEGRAM_BOT_TOKEN is required. "
-            "Run /PACT:telegram-setup to configure."
+            "Run /repacted:telegram-setup to configure."
         )
 
     if not chat_id:
         raise ConfigError(
             "TELEGRAM_CHAT_ID is required. "
-            "Run /PACT:telegram-setup to configure."
+            "Run /repacted:telegram-setup to configure."
         )
 
     # Validate chat_id is numeric

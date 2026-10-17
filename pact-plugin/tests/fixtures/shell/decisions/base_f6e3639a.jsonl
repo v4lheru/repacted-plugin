@@ -1,0 +1,45 @@
+{"base": "f6e3639a", "blob_id": "cb24d0b883f092126e2714865c1b1d8ce89e9572", "captured_from": "3f27b2c6", "rows": 44, "sha256": "96c457d2c961b42071bebf6f4788efa2dd5f038d938ccc80fc7d940e8b07c316"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["git -C /repo commit -m \"msg\" && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C /repo commit -m \"x\";gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C /some/repo commit -m \"fix: describe git branch -D victim in prose\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C \"$(gh pr merge 5 --delete-branch)\" commit -m \"msg\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --message \"fix: describe git branch -D victim in prose\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"run git branch -D victim later\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -Cm HEAD ; gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -Fm file && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -aaaaaaaaaaaaaaaaaaaaaaaam \"x\" && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -am \"msg\" && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -am \"run git branch -D victim\" | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -am \"x\" ; gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m $'don\\'t' && git branch -D victim && git commit -m 'x'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m $'don\\'t' ; gh pr merge 5 --delete-branch ; git commit -m 'x'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m $'don\\'t' | git branch -D real | git commit -m 'x'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m $'fix: describe git branch -D victim in prose'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m $\"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m 'don'\\''t' && git branch -D victim && git commit -m 'x'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m 'don'\\''t' ; gh pr merge 5 --delete-branch ; git commit -m 'x'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m 'don'\\''t' | git branch -D real | git commit -m 'x'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"$(gh pr merge 5 --delete-branch)\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"a && b\" && gh pr close 42 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"a && b\" && git branch -D temp"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"fix: describe git branch -D victim in prose\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m \"msg\" && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"msg\"&&git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"prefix \"\"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"run \"\"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"run git branch -D victim\" > >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"run git branch -D victim\" | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"subj\" -m \"body: run git branch -D victim to clean up\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"x\" ; gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"x\";gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"x\";gh pr merge 5 --delete-branch;git commit -m \"y\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"x\";gh pr merge 5;git tag v1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m\"msg\" && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -am \"x\" v1 && git branch -D real"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -m $'don\\'t' v1 && git branch -D victim && git tag -m 'x' v2"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m $'don\\'t' v1 ; gh pr merge 5 --delete-branch ; git tag -m 'x' v2"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m 'don'\\''t' v1 && git branch -D victim && git tag -m 'x' v2"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m 'don'\\''t' v1 ; gh pr merge 5 --delete-branch ; git tag -m 'x' v2"], {}], "result": false}

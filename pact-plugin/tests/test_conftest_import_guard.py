@@ -179,7 +179,10 @@ def test_the_census_sees_a_known_patch_and_a_known_importer(census):
     assert ("pact_context", "is_lead") in patched  # patched through a hook's attribute
     assert "shared.background_work" in importers
     assert "shared.background_work" in lines
-    assert "shared.pact_context" in loaded  # loaded by the shared package's __init__
+    # shared/__init__.py imports nothing (the layering pass), so a shared module that copies a
+    # patched name is loaded only by its own guard line: prompt_kind copies get_team_name.
+    assert "shared.prompt_kind" in importers and "shared.prompt_kind" in lines
+    assert loaded == lines | {"shared"}
 
 
 def test_every_by_value_importer_of_a_patched_name_is_loaded_by_conftest(census):

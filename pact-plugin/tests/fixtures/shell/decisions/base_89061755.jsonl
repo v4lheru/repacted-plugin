@@ -1,0 +1,74 @@
+{"base": "89061755", "blob_id": "c0ea2ed08980ce3bde81c160bf94d7023b7e5b71", "captured_from": "3f27b2c6", "rows": 73, "sha256": "93ab6ccbeb254bd0f6512550cafccbf4fe75633f2317567201a0a6dd6d1e6f71"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["bash -c \"echo hi\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["bash \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox ash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox awk \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox dash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox env FOO=x bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox git branch -D main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox hush -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox lash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox ls -la"], {}], "result": false}
+{"call": ["is_dangerous_command", ["busybox msh -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox mycmd \"hello world\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["busybox sh -c \"git branch -D victim\" ; echo ok"], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox sh -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox timeout 5 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["busybox xargs bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo ok && busybox mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git status"], {}], "result": false}
+{"call": ["is_dangerous_command", ["hush -c \"git branch -D victim\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["hush \"git branch -D victim\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["ionice -c2 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["ionice -c2 mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["lash -c \"git branch -D victim\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["lash \"git branch -D victim\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["msh -c \"git branch -D victim\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["msh \"git branch -D victim\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["mycmd \"just a note\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["nice -n5 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["nice -n5 echo \"hi\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["nice -n5 mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["nocache -n3 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["nocache -n3 mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["rlwrap -Oregexp bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["rlwrap -Oregexp mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["rlwrap -oc bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["sh \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf --output=L bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf --output=L mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -e0 -oL mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -eL mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -eL sh -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -o 0 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -o 0 mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -o L bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -o L mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -o bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -o0 mycmd \"safe text\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["stdbuf -oL bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -oL busybox sh -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -oL ls -la"], {}], "result": false}
+{"call": ["is_dangerous_command", ["stdbuf -oL mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["stdbuf -obash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["sudo -uroot bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["sudo -uroot mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["sudo bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["taskset -c 0-3 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["timeout -s 9 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["timeout -s9 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["timeout -s9 ls \"note\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["timeout -s9 mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["timeout 5 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["torsocks -d5 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["torsocks -d5 mycmd \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["xargs -n1 bash -c \"git branch -D victim\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["xargs -n1 mycmd \"git branch -D victim\""], {}], "result": true}

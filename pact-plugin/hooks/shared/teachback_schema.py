@@ -3,7 +3,7 @@ Location: pact-plugin/hooks/shared/teachback_schema.py
 Summary: Canonical teachback_submit schema constants and validators. SSOT
          for the 5-field shape (D10), the variety_acknowledgment object
          schema (D10), the reasoning_reconstruction 3-sub-key triangle
-         (L1.5 method gate per pact-ct-teachback.md), and the variety-band
+         (L1.5 method gate per teammate-teachback.md), and the variety-band
          threshold at which reasoning_reconstruction is REQUIRED.
 Used by: hooks/task_lifecycle_gate.py (write-time + completion-time gates),
          hooks/precompact_state_reminder.py (resolve_variety_total for the
@@ -13,7 +13,7 @@ Used by: hooks/task_lifecycle_gate.py (write-time + completion-time gates),
          tests/test_teachback_schema.py (constants + validator).
 
 When the 5-field shape, 3-sub-key triangle, or threshold changes, this is
-the only Python edit site. Prose in skills/pact-teachback/SKILL.md mirrors
+the only Python edit site. Prose in skills/teammate/references/teammate-teachback.md mirrors
 these values via grep-at-edit-time alignment.
 
 Contract: pure module; no I/O, no global state, no platform dependencies.
@@ -30,7 +30,7 @@ Public surface:
   string/object partition: both the schema echo and the lifecycle gate's
   string-field validator derive their carve-out filter from it.
 - TEACHBACK_REQUIRED_SUBKEYS — canonical 3-tuple for reasoning_reconstruction
-  per pact-ct-teachback.md §When to Method-Reconstruct.
+  per teammate-teachback.md §When to Method-Reconstruct.
 - TEACHBACK_VARIETY_ACK_VALID_VALUES — enum tuple for
   variety_acknowledgment.rationale_articulates_this_dispatch.
 - TEACHBACK_REASONING_RECONSTRUCTION_REQUIRED_MIN — variety band threshold
@@ -55,6 +55,8 @@ Public surface:
   variety["score"] → metadata["variety_score"] → sum of the four
   dimension scores. Shared SSOT for the lifecycle gate's read-time band
   resolver and write-time validator (and precompact's render).
+- normalise_teachback(teachback) — the write-side repair handoff_ordering_gate
+  applies before the write lands: (normalised copy, coercions).
 """
 
 from __future__ import annotations
@@ -85,7 +87,7 @@ TEACHBACK_REQUIRED_FIELDS: tuple[str, ...] = (
 # partition is defined once and is rename-proof.
 TEACHBACK_OBJECT_FIELDS: tuple[str, ...] = ("variety_acknowledgment",)
 
-# Canonical 3 sub-keys for reasoning_reconstruction per pact-ct-teachback.md
+# Canonical 3 sub-keys for reasoning_reconstruction per teammate-teachback.md
 # §When to Method-Reconstruct. Each value is a non-empty string at submit time.
 TEACHBACK_REQUIRED_SUBKEYS: tuple[str, ...] = (
     "decision_attribution",
@@ -133,7 +135,7 @@ TEACHBACK_SCHEMA_ECHO: str = (
         if field not in TEACHBACK_OBJECT_FIELDS
     )
     + " (non-empty strings) + variety_acknowledgment (an OBJECT, not a string)."
-    " See the pact-teachback skill for field semantics."
+    " See the teammate skill for field semantics."
 )
 
 
@@ -175,7 +177,7 @@ _VARIETY_DIMENSIONS: tuple[str, ...] = (
 )
 
 # Canonical key set for a per-dispatch variety stamp PROJECTED to the journal
-# (pact-variety.md §Per-Dispatch Variety Stamping: the 4 dimensions + their
+# (protocols/workflows.md §Per-Dispatch Variety Stamping: the 4 dimensions + their
 # total — the rationale strings are NOT mirrored). Derived from _VARIETY_DIMENSIONS so the dimension names are
 # never duplicated: a future dimension rename/add edits ONE list and both the
 # resolve-fallback above and the dispatch_variety projection in
@@ -263,3 +265,35 @@ def resolve_variety_total(variety: object, metadata: object = None) -> int | Non
         return None
     except Exception:  # noqa: BLE001 — never raise out of an every-Task hook
         return None
+
+
+def normalise_teachback(teachback: object) -> tuple[object, list[dict]]:
+    """Return (teachback with the benign drift repaired, one coercion row per
+    repair). The input is never mutated; with nothing to repair the SAME
+    object comes back with an empty list, so normalising twice changes nothing.
+
+    The one repair: variety_acknowledgment written as a string becomes the
+    object. "yes" (any case, outer spaces ignored) -> {"rationale_...": "yes"};
+    other non-empty text -> {"rationale_...": "concern", "concern": <text>},
+    so the lead reads the text the teammate wrote. A bare "no" or "concern"
+    carries no concern text and is left for the validator, as is an empty
+    string. Not repaired, because the journal census (2026-10-03, 1,797
+    teachback rows) found no recurring safe shape: a missing acknowledgment
+    (52), an object without the enum (12), reasoning_reconstruction as a
+    string (8) or with other sub-keys (1 row). A coercion row names the
+    field and the kind of repair, never the value. Pure; never raises.
+    """
+    if not isinstance(teachback, dict):
+        return teachback, []
+    ack = teachback.get("variety_acknowledgment")
+    if not isinstance(ack, str) or not ack.strip():
+        return teachback, []
+    text = ack.strip()
+    word = text.casefold()
+    if word in ("no", "concern"):
+        return teachback, []
+    wrapped = ({"rationale_articulates_this_dispatch": "yes"} if word == "yes"
+               else {"rationale_articulates_this_dispatch": "concern", "concern": text})
+    return ({**teachback, "variety_acknowledgment": wrapped},
+            [{"key": "teachback_submit", "field": "variety_acknowledgment",
+              "coercion": "string_wrapped_as_object"}])

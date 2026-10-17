@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""repact-journal-write: one journal write that reports its own failure.
+
+Location: pact-plugin/bin/repact-journal-write (1.5.0). The command files
+(orchestrate, comPACT, peer-review, plan-mode, wrap-up) used to wrap every journal write in
+`set -e` plus an ERR trap that echoed `[JOURNAL WRITE FAILED] <file> ... exit=<rc>`; seventeen
+copies of a four-line block. This wrapper is that block: it runs
+`hooks/shared/session_journal.py write` with the same flags, passes stdin through for the
+quoted-heredoc `--stdin` contract, and on a non-zero exit prints the same failure line to stderr
+and exits with that code. Nothing else changes: the event schema, the lock and the journal path
+all stay in session_journal.py.
+
+Usage (from a command file, after substitution):
+
+    "{plugin_root}/bin/repact-journal-write" --site orchestrate.md \
+        --type checkpoint --session-dir '{session_dir}' --stdin <<'JSON'
+    {"phase": "CODE"}
+    JSON
+
+`--site` names the command file for the failure line. Every other argument is passed to
+`session_journal.py write` unchanged (`--type`, `--session-dir`, `--stdin` or `--data`).
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+BIN_DIR = Path(__file__).resolve().parent
+SESSION_JOURNAL = BIN_DIR.parent / "hooks" / "shared" / "session_journal.py"
+FAILED = "[JOURNAL WRITE FAILED]"
+
+
+def split_site(argv: list[str]) -> tuple[str, list[str]]:
+    """Pull `--site <name>` out of argv; the rest goes to session_journal.py write."""
+    site, rest = "", []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--site" and i + 1 < len(argv):
+            site = argv[i + 1]
+            i += 2
+            continue
+        if argv[i].startswith("--site="):
+            site = argv[i].split("=", 1)[1]
+            i += 1
+            continue
+        rest.append(argv[i])
+        i += 1
+    return site, rest
+
+
+USAGE = ("usage: repact-journal-write --site <command.md> --type <event> --session-dir <dir> "
+         "[--stdin | --data JSON]")
+
+
+def main(argv: list[str]) -> int:
+    if argv[:1] in (["-h"], ["--help"]):
+        print(USAGE)
+        return 0
+    site, rest = split_site(argv)
+    if not site or not rest:
+        print(USAGE, file=sys.stderr)
+        return 2
+    command = [sys.executable, str(SESSION_JOURNAL), "write", *rest]
+    try:
+        rc = subprocess.run(command, stdin=sys.stdin).returncode   # stdin inherited: the heredoc
+    except OSError as exc:
+        print(f"{FAILED} {site}: \"write {' '.join(rest)}\" {exc}", file=sys.stderr)
+        return 1
+    if rc != 0:
+        print(f"{FAILED} {site}: \"write {' '.join(rest)}\" exit={rc}", file=sys.stderr)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

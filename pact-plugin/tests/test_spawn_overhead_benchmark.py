@@ -4,7 +4,11 @@ Summary: Byte-count regression gate for per-teammate spawn overhead.
 Used by: pytest CI / local test runs.
 
 The per-teammate spawn path delivers ONLY the teammate's agent body plus
-the spawn-time skills: frontmatter preload. This test pins the per-
+the peer_inject prelude. TEAMMATE (m6) removed the skills: frontmatter
+preload (C10: a headless `claude -p` spawn injected every listed body,
+about 105 KB for backend-coder); the prelude and the body now name
+Skill("repacted:teammate"), which the teammate invokes on its first turn
+(pinned below as the FIRST-TURN ceiling). This test pins the per-
 teammate body as a byte-level regression gate: any change that bleeds
 orchestrator-scale content into a teammate body will blow past the
 ceiling.
@@ -90,7 +94,7 @@ class TestSpawnOverheadRegression:
         orchestrator body at teammate spawn.
 
         Under v4.0.0 `agents/pact-orchestrator.md` is delivered via
-        `claude --agent PACT:pact-orchestrator` for the team-lead session
+        `claude --agent repacted:pact-orchestrator` for the team-lead session
         ONLY. If a teammate frontmatter `skills:` list or body cross-
         reference pointed at orchestrator content, every teammate spawn
         would carry the orchestrator's body — the exact cost the v4.0.0
@@ -100,7 +104,7 @@ class TestSpawnOverheadRegression:
         offenders = []
         forbidden_substrings = (
             "pact-orchestrator.md",
-            "PACT:pact-orchestrator",
+            "repacted:pact-orchestrator",
             "../agents/pact-orchestrator",
         )
         for agent_path in sorted(agents_dir.glob("*.md")):
@@ -173,11 +177,42 @@ class TestSpawnOverheadRegression:
             f"on spawn path."
         )
 
+    # TEAMMATE (m6): the first turn adds the one skill every teammate invokes. Measured
+    # 2026-09-27: prelude 1,352 + backend body 5,203 + teammate SKILL.md 7,171 = 13,726 B
+    # (was ~105 KB under the -p preload). Ceiling = the per-part budgets (prelude 1,500,
+    # body 6,000, SKILL.md 8,000) summed, so no part can grow past its budget unseen here.
+    FIRST_TURN_CEILING_BYTES = 15_500
+    # 1.3.8 (S2): SKILL.md now carries the teachback, HANDOFF and wait checklists (12,197 B), and
+    # the three references it sent every task to (59,266 B, read after the first turn and never
+    # counted here) are off the path. Ceiling = the same per-part budgets with the skill's new one.
+    FIRST_TURN_CEILING_BYTES = 1_500 + 6_000 + 12_197
+
+    def test_first_turn_team_protocol_under_ceiling(self, tmp_path):
+        teams_dir = tmp_path / "teams"
+        (teams_dir / "pact-bench").mkdir(parents=True)
+        (teams_dir / "pact-bench" / "config.json").write_text(json.dumps({
+            "members": [{"name": "backend-coder-1", "agentType": "pact-backend-coder"}]
+        }))
+        from peer_inject import get_peer_context  # type: ignore
+
+        prelude = get_peer_context(
+            agent_type="pact-backend-coder", team_name="pact-bench",
+            agent_name="backend-coder-1", teams_dir=str(teams_dir),
+        )
+        body = (_REPO_ROOT / "agents" / SENTINEL_TEAMMATE).read_text(encoding="utf-8")
+        skill = (_REPO_ROOT / "skills" / "teammate" / "SKILL.md").read_text(encoding="utf-8")
+        assert 'Skill("repacted:teammate")' in prelude and 'Skill("repacted:teammate")' in body
+        total = sum(len(t.encode("utf-8")) for t in (prelude, body, skill))
+        assert total < self.FIRST_TURN_CEILING_BYTES, (
+            f"first-turn team protocol is {total} bytes (prelude + body + teammate SKILL.md), "
+            f"over {self.FIRST_TURN_CEILING_BYTES}"
+        )
+
     def test_bootstrap_md_not_in_spawn_path(self):
         """session_init.py and peer_inject.py are the two hooks whose
         output lands in additionalContext at session/teammate spawn. Neither
         may directly reference bootstrap.md content — bootstrap.md must
-        only be reachable via the Skill("PACT:bootstrap") invocation.
+        only be reachable via the Skill("repacted:bootstrap") invocation.
 
         A direct reference (Read or string-embed) would deliver
         bootstrap.md content on every teammate spawn, defeating the
@@ -193,10 +228,10 @@ class TestSpawnOverheadRegression:
         assert "bootstrap.md" not in session_init_src, (
             "session_init.py references bootstrap.md directly — this is a "
             "spawn-path regression. bootstrap.md must only be loaded "
-            "lazily via the Skill(\"PACT:bootstrap\") invocation."
+            "lazily via the Skill(\"repacted:bootstrap\") invocation."
         )
         assert "bootstrap.md" not in peer_inject_src, (
             "peer_inject.py references bootstrap.md directly — this is a "
             "spawn-path regression. bootstrap.md must only be loaded "
-            "lazily via the Skill(\"PACT:bootstrap\") invocation."
+            "lazily via the Skill(\"repacted:bootstrap\") invocation."
         )

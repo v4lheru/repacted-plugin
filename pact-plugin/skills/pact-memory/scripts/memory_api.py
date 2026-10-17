@@ -340,6 +340,25 @@ class PACTMemory:
         )
 
     @staticmethod
+    def _inside_claude_config_dir(path: Path) -> bool:
+        """True when `path` is the Claude config dir or inside it.
+
+        The config dir comes from the hooks' own resolver (shared.paths), so it
+        honours CLAUDE_CONFIG_DIR exactly as they do. If that module cannot be
+        imported the answer is False, which leaves the cwd walk as it was.
+        """
+        try:
+            from shared.paths import get_claude_config_dir
+            config = get_claude_config_dir()
+        except Exception:
+            return False
+        try:
+            config, path = config.resolve(), path.resolve()
+        except (OSError, RuntimeError):
+            return False
+        return path == config or config in path.parents
+
+    @staticmethod
     def _find_project_root(start: Path) -> Path:
         """
         Walk UP from `start` looking for a project marker; return the first
@@ -393,8 +412,7 @@ class PACTMemory:
         a repo-root declared path or a non-git path (where the main anchor
         equals, or cannot be resolved from, the declared path) keeps the
         declared basename — RESOLVED, so a symlinked project dir names its
-        target, which is the path the git branch above and the backlog writer
-        already record. A path that will not resolve keeps its unresolved
+        target, which is the path the git branch above already records. A path that will not resolve keeps its unresolved
         basename.
 
         Args:
@@ -490,12 +508,11 @@ class PACTMemory:
         # two share one derivation of the path exactly as they already share
         # one derivation of the name. Passing no `start` runs git in the cwd,
         # which is this strategy's base.
-        # NOTE: Twin pattern in working_memory.py (_get_claude_md_path) and
-        #       hooks/staleness.py (get_project_claude_md_path) -- keep in sync.
-        #       Those two couple the resolution to a CLAUDE.md existence check
-        #       and return the root only when one is found there, so they need
-        #       restructuring rather than substitution and are deliberately not
-        #       migrated onto this helper.
+        # NOTE: Twin pattern in working_memory.py (_get_claude_md_path) -- keep
+        #       in sync. That one couples the resolution to a CLAUDE.md
+        #       existence check and returns the root only when one is found
+        #       there, so it needs restructuring rather than substitution and
+        #       is deliberately not migrated onto this helper.
         repo_root = main_repo_root()
         if repo_root is not None:
             project_name = repo_root.name
@@ -508,6 +525,12 @@ class PACTMemory:
         # Fixes subdirectory invocation (e.g., running CLI from .claude/ or src/
         # would previously return the subdirectory basename as the project_id).
         try:
+            if PACTMemory._inside_claude_config_dir(Path.cwd()):
+                # The config dir holds the user's own CLAUDE.md, which the walk
+                # would take as a project marker and file records under
+                # ".claude". Nothing under it is a project.
+                logger.debug("cwd is inside the Claude config dir; no project_id")
+                return None, "unresolved"
             cwd_root = PACTMemory._find_project_root(Path.cwd())
             cwd_name = cwd_root.name
             if cwd_name:

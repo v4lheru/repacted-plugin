@@ -51,7 +51,7 @@ import role_frames  # noqa: E402  — committed real-frame fixtures (§12.3 fide
 from clock_shift.clock_shift_env import carry_clock_shift
 
 TEAM = "test-team"
-LEAD_QUALIFIED = "PACT:pact-orchestrator"      # is_lead True (qualified spelling)
+LEAD_QUALIFIED = "repacted:pact-orchestrator"      # is_lead True (qualified spelling)
 LEAD_UNQUALIFIED = "pact-orchestrator"          # is_lead True (unqualified spelling)
 DEVOPS = "pact-devops-engineer"                 # the acting teammate (name == agentType)
 OTHER = "pact-database-engineer"                # a second teammate (not-owned cases)
@@ -1086,11 +1086,13 @@ def test_atomic_claim_write_failure_returns_false_and_cleans_tmp(tmp_path, monke
     def _boom(src, dst):
         raise OSError("simulated disk-full")
 
-    monkeypatch.setattr(gate.os, "replace", _boom)
+    import os
+
+    monkeypatch.setattr(os, "replace", _boom)    # the shared locked writer's replace
     assert gate._atomic_claim("B", TEAM) is False
     assert _read_task(tmp_path, "B")["status"] == "pending"      # not flipped
     tasks_dir = tmp_path / ".claude" / "tasks" / TEAM
-    assert not list(tasks_dir.glob(".*.json.tmp"))              # tmp cleaned up
+    assert not list(tasks_dir.glob(".*.tmp"))                   # tmp cleaned up
 
 
 def test_subprocess_full_evaluate_path_exits_zero_no_traceback(tmp_path):
@@ -1167,7 +1169,7 @@ def test_T12_3_real_pretooluse_frames_platform_fidelity():
     for frame in (tmux, lead, subagent):
         assert isinstance(frame.get("agent_type"), str) and frame["agent_type"]
     assert tmux["agent_type"] == "pact-test-engineer"        # non-lead spelling
-    assert lead["agent_type"] == "PACT:pact-orchestrator"    # qualified lead spelling
+    assert lead["agent_type"] == "repacted:pact-orchestrator"    # qualified lead spelling
     assert subagent["agent_type"] == "general-purpose"
 
     # (2) in-process collapse: subagent session_id == the lead's leadSessionId
@@ -1202,3 +1204,141 @@ def test_generic_nudge_states_the_condition_its_predicate_applies():
     # `_is_unblocked` is NOT "blockedBy empty" — completed blocker ids are
     # retained — so the nudge must not leave a reader checking emptiness.
     assert "`blockedBy`" in nudge and "`completed`" in nudge, nudge
+
+
+# =============================================================================
+# V13 / M12 — the acting teammate, not the whole team. An in-process teammate's
+# frame carries its own member NAME in `agent_type` and an `agent_id` of the
+# shape "a<name>-<16 hex>" (see HOOK_STDIN_DISCRIMINATORS.md). Member names here
+# differ from their agentType, as they do in a live team config.
+# =============================================================================
+
+ACTOR = "tester-a"
+PEER = "coder-b"
+_NAMED_MEMBERS = (
+    {"name": ACTOR, "agentType": "pact-test-engineer"},
+    {"name": PEER, "agentType": "pact-backend-coder"},
+)
+
+
+def _shared_session_registry(monkeypatch):
+    """In-process, every member shares the lead's session_id, so its registry row
+    names whichever member registered it: here the PEER. It supplies the team; it
+    cannot identify the actor."""
+    _mock_registry(monkeypatch, f"{PEER}@{TEAM}")
+
+
+def _member_frame(name, *, session_id=LEAD_SID, tool_name="Edit"):
+    p = _payload(session_id=session_id, agent_type=name, tool_name=tool_name)
+    p["agent_id"] = f"a{name}-0123456789abcdef"
+    return p
+
+
+def _seed_pair(tmp_path, owner, b_status, *, a_id="A1", b_id="B1"):
+    """A completed teachback Task A and its work Task B, both owned by `owner`."""
+    _seed_task(tmp_path, a_id, subject=f"{owner}: TEACHBACK for x", owner=owner,
+               status="completed", blockedBy=[])
+    _seed_task(tmp_path, b_id, subject=f"{owner}: build x", owner=owner,
+               status=b_status, blockedBy=[a_id])
+
+
+@pytest.mark.parametrize("tool_name", ["Edit", "Write", "Bash"])
+def test_V13_in_process_claimed_task_b_stays_silent_while_a_peer_has_one_pending(
+    tmp_path, monkeypatch, tool_name
+):
+    """V13, reproduced live: the actor's Task B is already in_progress, and a PEER
+    owns a pending, unblocked Task B. The team-wide scan used to nudge the actor
+    on every Edit/Write/Bash for the peer's task."""
+    _seed_config(tmp_path, members=_NAMED_MEMBERS)
+    _shared_session_registry(monkeypatch)
+    _seed_pair(tmp_path, ACTOR, "in_progress")
+    _seed_pair(tmp_path, PEER, "pending", a_id="A2", b_id="B2")
+    assert gate._evaluate(_member_frame(ACTOR, tool_name=tool_name)) is None
+    assert _read_task(tmp_path, "B2")["status"] == "pending"
+
+
+@pytest.mark.parametrize("tool_name", ["Edit", "Bash"])
+def test_V13_in_process_own_pending_task_b_still_nudges_and_never_flips(
+    tmp_path, monkeypatch, tool_name
+):
+    """The positive case the fix must keep: the actor's OWN Task B is pending and
+    unblocked, and it runs an implementation tool."""
+    _seed_config(tmp_path, members=_NAMED_MEMBERS)
+    _shared_session_registry(monkeypatch)
+    _seed_pair(tmp_path, ACTOR, "pending")
+    _seed_pair(tmp_path, PEER, "in_progress", a_id="A2", b_id="B2")
+    assert gate._evaluate(_member_frame(ACTOR, tool_name=tool_name)) == gate._GENERIC_CLAIM_NUDGE
+    assert _read_task(tmp_path, "B1")["status"] == "pending"  # in-process never flips
+
+
+def test_V13_in_process_frame_naming_no_member_keeps_the_team_wide_nudge(tmp_path, monkeypatch):
+    """Ruling amend_1: when the frame names no member (here a type-shaped value
+    and no agent_id), the actor is unknown and the nudge stays team-wide."""
+    _seed_config(tmp_path, members=_NAMED_MEMBERS)
+    _shared_session_registry(monkeypatch)
+    _seed_pair(tmp_path, ACTOR, "in_progress")
+    _seed_pair(tmp_path, PEER, "pending", a_id="A2", b_id="B2")
+    frame = _payload(session_id=LEAD_SID, agent_type="pact-test-engineer")
+    assert gate._evaluate(frame) == gate._GENERIC_CLAIM_NUDGE
+
+
+def test_M12_registry_naming_a_different_member_than_the_frame_never_auto_claims(
+    tmp_path, monkeypatch
+):
+    """M12, the misattribution: a stale leadSessionId makes an in-process frame
+    look separate-process, and the shared session's registry row names a PEER.
+    The actor's frame names itself. Identity is in conflict, so it is
+    unconfident: the peer's task must not be flipped, and the actor must not be
+    told it was auto-claimed for them, nor nudged about the peer's task."""
+    _seed_config(tmp_path, lead_session_id="stale-lead-session-9999", members=_NAMED_MEMBERS)
+    _mock_registry(monkeypatch, f"{PEER}@{TEAM}")
+    _seed_pair(tmp_path, ACTOR, "in_progress")
+    _seed_pair(tmp_path, PEER, "pending", a_id="A2", b_id="B2")
+    advisory = gate._evaluate(_member_frame(ACTOR, session_id="current-shared-session-0001"))
+    assert _read_task(tmp_path, "B2")["status"] == "pending"
+    # Unconfident, and the actor's own Task B is claimed: nothing to say either.
+    assert advisory is None
+
+
+@pytest.mark.parametrize("agent_type, agent_id", [
+    ("Explore", "a0123456789abcdef"),          # an Agent-tool subagent inside a teammate
+    ("general-purpose", "a0123456789abcdef"),
+    (None, "a0123456789abcdef"),
+    ("Explore", f"other@{TEAM}"),              # an id that names someone else
+])
+def test_a_subagent_frame_never_auto_claims_a_task(tmp_path, monkeypatch, agent_type, agent_id):
+    """T-d79f0e31: a sub-agent started by a teammate, on a session the registry
+    attributes to a PEER (a stale leadSessionId sends the shared session down the
+    separate-process branch), must not flip the peer's pending task. A
+    separate-process teammate's own frames carry no agent_id."""
+    _seed_config(tmp_path, lead_session_id="stale-lead-session-9999", members=_NAMED_MEMBERS)
+    _mock_registry(monkeypatch, f"{PEER}@{TEAM}")
+    _seed_pair(tmp_path, PEER, "pending", a_id="A2", b_id="B2")
+    frame = {"tool_name": "Bash", "session_id": "current-shared-session-0001",
+             "agent_id": agent_id}
+    if agent_type is not None:
+        frame["agent_type"] = agent_type
+    gate._evaluate(frame)
+    assert _read_task(tmp_path, "B2")["status"] == "pending"
+
+
+def test_M12_registry_and_frame_agreeing_still_auto_claims_the_own_task(tmp_path, monkeypatch):
+    """Control for the M12 bound: the same stale topology, but the registry and
+    the frame name the same member, so the confident auto-claim still happens."""
+    _seed_config(tmp_path, lead_session_id="stale-lead-session-9999", members=_NAMED_MEMBERS)
+    _mock_registry(monkeypatch, f"{ACTOR}@{TEAM}")
+    _seed_pair(tmp_path, ACTOR, "pending")
+    advisory = gate._evaluate(_member_frame(ACTOR, session_id="current-shared-session-0001"))
+    assert "Auto-claimed" in advisory and "#B1" in advisory
+    assert _read_task(tmp_path, "B1")["status"] == "in_progress"
+
+
+def test_a_disputed_completion_does_not_unblock_the_work_task():
+    """A-01: a teammate that self-completes its teachback gets completion_disputed from
+    task_lifecycle_gate; that blocker must not count as completed. A missing blocker stays
+    resolved (by spec)."""
+    work = {"id": "2", "blockedBy": ["1"]}
+    disputed = {"id": "1", "status": "completed", "metadata": {"completion_disputed": True}}
+    assert gate._is_unblocked(work, {"1": disputed}) is False
+    assert gate._is_unblocked(work, {"1": {**disputed, "metadata": {}}}) is True
+    assert gate._is_unblocked(work, {}) is True

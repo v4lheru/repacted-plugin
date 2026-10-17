@@ -21,10 +21,10 @@ Verify the complete worktree lifecycle: setup (branch creation, directory isolat
 ### Step 1: Invoke Worktree Setup
 
 ```
-/PACT:worktree-setup feature/test-worktree
+/repacted:worktree-setup feature/test-worktree
 ```
 
-Or trigger it via `/PACT:orchestrate` or `/PACT:comPACT`, which invoke worktree setup automatically.
+Or trigger it via `/repacted:orchestrate` or `/repacted:comPACT`, which invoke worktree setup automatically.
 
 **What happens**: The worktree-setup skill follows its process:
 1. Checks for existing worktree (`git worktree list`)
@@ -89,7 +89,7 @@ ls {REPO_ROOT}/test-file.txt  # Should fail (file not found)
 Invoke worktree setup again for the same branch.
 
 ```
-/PACT:worktree-setup feature/test-worktree
+/repacted:worktree-setup feature/test-worktree
 ```
 
 **Expected outcome**: The skill detects the existing worktree and reuses it:
@@ -102,7 +102,7 @@ No new worktree is created. The existing worktree (with the test commit) is pres
 ### Step 5: Invoke Worktree Cleanup
 
 ```
-/PACT:worktree-cleanup feature/test-worktree
+/repacted:worktree-cleanup feature/test-worktree
 ```
 
 **What happens**: The worktree-cleanup skill follows its process:
@@ -143,7 +143,7 @@ echo "uncommitted" > {REPO_ROOT}/.worktrees/feature/dirty-test/dirty-file.txt
 
 Then attempt cleanup:
 ```
-/PACT:worktree-cleanup feature/dirty-test
+/repacted:worktree-cleanup feature/dirty-test
 ```
 
 **Expected outcome**: Git refuses removal. The skill presents options to the user:

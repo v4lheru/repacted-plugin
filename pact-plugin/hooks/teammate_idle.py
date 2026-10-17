@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
 """
 Location: pact-plugin/hooks/teammate_idle.py
-Summary: TeammateIdle hook — resource-management for zombie teammates.
-         Tracks consecutive idle events for teammates whose task is
-         completed; at threshold N=3 suggests shutdown, at N=5 advises the
-         team-lead to `TaskStop` the teammate.
+Summary: TeammateIdle hook: the Layer 2 unflagged-background advisory. A
+         teammate that idles three consecutive times on an in_progress task
+         while background work it launched has no covering intentional_wait
+         is told, once, to collect the result or flag the wait.
+         Also the missed-wake line (missed_wake_line: a stored HANDOFF or
+         teachback that has waited on the lead past the staleness threshold;
+         the lead's own scan, missed_wake_scan.py, runs only on a prompt). It
+         is a systemMessage: shown on the user's screen, never in the lead's
+         model. An idle lead makes no tool call, so the user who reads it
+         prompts the lead and the scan then gives the lead the full alarm.
+         And the unread-key re-prompt (unread_lead_keys): a teammate
+         that idles while a task it owns and has in_progress holds an amend_<n>
+         or "<resource>_grant" key it was never handed is sent back to work
+         with those keys (exit 2: the host gives stderr to the teammate and it
+         keeps working). A lead message sent mid-turn can go unread; the task
+         file cannot.
 Used by: hooks.json TeammateIdle hook
 
-# livelock-safe: threshold-escalation, not a nag. Message emissions
-# transition only at the IDLE_SUGGEST_THRESHOLD and IDLE_FORCE_THRESHOLD
-# boundaries — not every idle tick. Above IDLE_FORCE_THRESHOLD the stop
-# advisory is re-emitted per tick until the team-lead processes it and the
-# teammate is stopped (safety is protocol-level, not a structural cap).
-# Exits deterministically on every code path. Does NOT consume
-# intentional_wait.
-
-Idle cleanup: Track consecutive idle events for completed agents. After 3,
-suggest shutdown. After 5, advise the team-lead to `TaskStop` the teammate.
+# livelock-safe: emits once, at the third consecutive unflagged idle, and not
+# again for the same task. Exits deterministically on every code path. Does
+# NOT consume intentional_wait. The missed-wake line is emitted once per
+# (task, wait since) (said_once, <session_dir>/idle-said-once.json); a state
+# that cannot be recorded is not emitted. The unread-key re-prompt is the one exit 2: it
+# fires once per key, recorded in the relay stamp BEFORE it is emitted, and a
+# stamp that cannot be written emits nothing, so it cannot hold a teammate in
+# a loop.
 
 Input: JSON from stdin with teammate_name, team_name
-Output: JSON with systemMessage (shutdown suggestion / stop advisory)
+Output: JSON with systemMessage (the advisory, the missed-wake line) or
+        suppressOutput.
+        Exit 2 with the unread keys on stderr for the re-prompt.
 """
 
 from __future__ import annotations
@@ -33,8 +45,8 @@ if TYPE_CHECKING:
     from datetime import datetime
 
 import json
+import os
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 # Add hooks directory to path for shared package imports
@@ -45,19 +57,14 @@ if str(_hooks_dir) not in sys.path:
 from shared.error_output import hook_error_json
 import shared.pact_context as pact_context
 from shared.background_work import frame_team_and_name
-from shared.paths import get_claude_config_dir
+from shared.session_state import _sanitize_member_name
 from shared.task_utils import iter_team_task_jsons
-from shared import state_file
 
 
 # Suppress false "hook error" display in Claude Code UI on bare exit paths
 _SUPPRESS_OUTPUT = json.dumps({"suppressOutput": True})
 
 IDLE_PREAMBLE = "[System idle notification — no response needed] "
-
-IDLE_SUGGEST_THRESHOLD = 3
-IDLE_FORCE_THRESHOLD = 5
-
 
 def find_teammate_task(
     tasks: list[dict],
@@ -103,173 +110,76 @@ def find_teammate_task(
     return in_progress or completed
 
 
-def _state_root(path: Path, root: Path | None) -> Path:
-    """The directory an idle-count file must stay under.
-
-    None is for callers that own their path (tests); production entry points
-    pass the config root, so containment applies to the path main() builds.
-    """
-    return root if root is not None else path.parent
+MISSED_WAKE_REASON = "awaiting_lead_completion"     # missed_wake_scan._MISSED_WAKE_REASON
+SAID_ONCE_FILENAME = "idle-said-once.json"
+SAID_ONCE_MAX_BYTES = 256 * 1024    # a larger state file is not read: nothing is said
 
 
-def read_idle_counts(idle_counts_path: str, root: Path | None = None) -> dict:
-    """
-    Read the idle counts tracking file.
+def said_once(session_dir: str, key: str, value: str) -> bool:
+    """True the first time `value` is recorded under `key` in the session's
+    idle-said-once.json, False when it is what the key already holds or the state cannot be
+    recorded: no session dir, a state file that is a symlink, no regular file or over
+    SAID_ONCE_MAX_BYTES, a failed write. The bound that keeps the missed-wake line from
+    repeating on every idle (the livelock class this hook must stay out of): fail closed,
+    an unrecorded line is not emitted. The file is disk state: its values are compared,
+    never printed, and text that does not parse to an object records nothing (False)."""
+    import stat
 
-    Args:
-        idle_counts_path: Path to the idle_counts.json file
-        root: Directory the file must stay under (see `_state_root`)
+    from shared import state_file
 
-    Returns:
-        Dict mapping teammate_name to consecutive idle count
-    """
-    path = Path(idle_counts_path)
-    try:
-        return json.loads(state_file.read_text(path, _state_root(path, root)))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def write_idle_counts(
-    idle_counts_path: str, counts: dict, root: Path | None = None
-) -> None:
-    """
-    Replace the idle counts tracking file under its state-file lock.
-
-    Args:
-        idle_counts_path: Path to the idle_counts.json file
-        counts: Dict mapping teammate_name to consecutive idle count
-        root: Directory the file must stay under (see `_state_root`)
-    """
-    path = Path(idle_counts_path)
-    state_file.write_text(path, json.dumps(counts), _state_root(path, root))
-
-
-def _atomic_update_idle_counts(
-    idle_counts_path: str,
-    mutator: Callable[[dict], dict],
-    root: Path | None = None,
-) -> dict:
-    """
-    Atomically read, mutate, and write the idle counts file under a single lock.
-
-    This prevents TOCTOU races where two concurrent TeammateIdle events both
-    read stale state before either writes, causing one update to be lost. The
-    new content is written to a temp file and swapped in, so a failure part-way
-    leaves the previous file intact.
-
-    The mutator may run twice (once on empty input when the file is absent), so
-    it must derive its result from the counts it is given.
-
-    Args:
-        idle_counts_path: Path to the idle_counts.json file
-        mutator: Callable that receives the current counts dict and returns
-                 the updated counts dict to write back
-        root: Directory the file must stay under (see `_state_root`)
-
-    Returns:
-        The updated counts dict after mutation
-    """
-    path = Path(idle_counts_path)
-
-    def _apply(content: str):
+    def _apply(text: str) -> tuple[str, bool, bool]:
         try:
-            counts = json.loads(content) if content.strip() else {}
-        except json.JSONDecodeError:
-            counts = {}
-        counts = mutator(counts)
-        return json.dumps(counts), True, counts
+            said = json.loads(text) if text.strip() else {}
+        except ValueError:
+            return text, False, False
+        if not isinstance(said, dict) or said.get(key) == value:
+            return text, False, False
+        said[key] = value
+        return json.dumps(said), True, True
 
-    return state_file.locked_update(path, _apply, _state_root(path, root))
+    try:
+        if not session_dir or not os.path.isdir(session_dir):
+            return False
+        path = Path(session_dir) / SAID_ONCE_FILENAME
+        try:
+            found = os.lstat(path)
+        except FileNotFoundError:
+            found = None
+        # locked_update never follows a symlink either; this refuses it before the lock
+        # sidecar is opened, and refuses a file too large to be this hook's own.
+        if found is not None and (not stat.S_ISREG(found.st_mode) or found.st_size > SAID_ONCE_MAX_BYTES):
+            return False
+        return state_file.locked_update(path, _apply, Path(session_dir)) is True
+    except (OSError, TypeError, ValueError):
+        return False
 
 
-def check_idle_cleanup(
-    tasks: list[dict],
-    teammate_name: str,
-    idle_counts_path: str,
-    root: Path | None = None,
-) -> tuple[str | None, bool]:
-    """
-    Track idle counts for completed agents and determine cleanup action.
+def missed_wake_line(tasks: list, session_dir: str, now: datetime | None = None) -> str | None:
+    """One line naming each task that holds a well-formed awaiting_lead_completion wait past
+    the staleness threshold (the predicate of missed_wake_scan.find_stale_missed_wakes) and
+    was not named before for that wait (said_once on the task and its `since`), or None.
+    Says what the task has stored, so the lead knows what to accept, reject or wake.
+    Shown on the user's screen only; nothing is written under teams/."""
+    from shared.intentional_wait import validate_wait, wait_stale
 
-    Only counts idles for teammates whose task is completed (not stalled agents,
-    which need triage, not shutdown). Resets count when the teammate's task
-    changes (detected via last_seen_task_id).
-
-    The idle counts file stores per-teammate entries as:
-        {teammate_name: {"count": N, "task_id": "X"}}
-
-    Args:
-        tasks: List of all tasks
-        teammate_name: Name of the idle teammate
-        idle_counts_path: Path to the idle_counts.json file
-        root: Directory the file must stay under (see `_state_root`)
-
-    Returns:
-        Tuple of (message, should_force_shutdown):
-        - message: systemMessage text or None
-        - should_force_shutdown: True if the team-lead should be advised to
-          `TaskStop` this teammate
-    """
-    task = find_teammate_task(tasks, teammate_name)
-
-    # Only track idles for completed tasks
-    if not task or task.get("status") != "completed":
-        # Reset count if agent no longer has a completed task (got new work)
-        def _remove(counts: dict) -> dict:
-            counts.pop(teammate_name, None)
-            return counts
-        _atomic_update_idle_counts(idle_counts_path, _remove, root=root)
-        return None, False
-
-    # Don't count stalled agents for idle cleanup — they need triage
-    metadata = task.get("metadata", {})
-    if metadata.get("stalled") or metadata.get("terminated"):
-        return None, False
-
-    current_task_id = task.get("id", "")
-
-    # Atomically read-modify-write the idle count to prevent TOCTOU races
-    # between concurrent TeammateIdle events for different agents.
-    result = {"count": 0}
-
-    def _increment(counts: dict) -> dict:
-        entry = counts.get(teammate_name, {})
-
-        # Migrate legacy format: plain int -> structured dict
-        if isinstance(entry, int):
-            entry = {"count": entry, "task_id": ""}
-
-        # Reset count if the teammate's task changed (reassigned to new work)
-        last_task_id = entry.get("task_id", "")
-        if last_task_id and last_task_id != current_task_id:
-            entry = {"count": 0, "task_id": current_task_id}
-
-        # Increment idle count
-        entry["count"] = entry.get("count", 0) + 1
-        entry["task_id"] = current_task_id
-        counts[teammate_name] = entry
-
-        # Capture the count for the caller via closure
-        result["count"] = entry["count"]
-        return counts
-
-    _atomic_update_idle_counts(idle_counts_path, _increment, root=root)
-    current = result["count"]
-
-    if current >= IDLE_FORCE_THRESHOLD:
-        return (
-            f"Teammate '{teammate_name}' has been idle for {current} consecutive "
-            f"events with no new work. Recommending shutdown."
-        ), True
-
-    if current >= IDLE_SUGGEST_THRESHOLD:
-        return (
-            f"Teammate '{teammate_name}' has been idle for {current} consecutive "
-            f"events with no new work. Consider shutting down to free resources."
-        ), False
-
-    return None, False
+    found = []
+    for task in tasks:
+        metadata = task.get("metadata") if isinstance(task, dict) else None
+        wait = metadata.get("intentional_wait") if isinstance(metadata, dict) else None
+        if task.get("status") != "in_progress" or not validate_wait(wait) \
+                or wait.get("reason") != MISSED_WAKE_REASON or not wait_stale(wait, _now=now):
+            continue
+        task_id = _sanitize_member_name(str(task.get("id") or ""))
+        if not task_id or not said_once(session_dir, f"wake:{task_id}", str(wait.get("since") or "")):
+            continue
+        stored = ("HANDOFF stored" if isinstance(metadata.get("handoff"), dict)
+                  else "teachback stored" if isinstance(metadata.get("teachback_submit"), dict)
+                  else "nothing stored")
+        found.append(f"#{task_id} ({_sanitize_member_name(str(task.get('owner') or '')) or 'unknown'}, {stored})")
+    if not found:
+        return None
+    return ("Missed wake: " + ", ".join(found) + " waited past the threshold on awaiting_lead_completion "
+            "with no acceptance, rejection or wake on disk. Lead: accept or reject it on the task, then send the wake.")
 
 
 UNFLAGGED_ADVISORY = (
@@ -295,11 +205,7 @@ def check_unflagged_background(
 ) -> str | None:
     """Layer 2 — advise once at three consecutive unflagged idles.
 
-    Uses `unflagged_background_idle.json`, NOT `idle_counts.json`. That file's
-    writer pops the teammate key on every tick where the task is not
-    `completed`, and this counter's entire population is a teammate idling on
-    an `in_progress` task — the exact branch that pops. Sharing the file would
-    reset the counter every tick and this could never reach three.
+    The counter lives in `unflagged_background_idle.json` (background_work).
     """
     from shared.background_work import (
         UNFLAGGED_IDLE_THRESHOLD,
@@ -398,41 +304,62 @@ def check_unflagged_background(
     return UNFLAGGED_ADVISORY if result["emit"] else None
 
 
-def reset_idle_count(
-    teammate_name: str, idle_counts_path: str, root: Path | None = None
-) -> None:
+UNREAD_KEYS_SHOWN = 10     # the keys one re-prompt prints; the rest are counted
+UNREAD_KEYS_PREAMBLE = (
+    "Do not idle yet. Your task file holds keys from the lead that were never handed to "
+    "you; a message about them may not have reached you. Act on each one now:"
+)
+
+
+def unread_lead_keys(
+    tasks: list, teammate_name: str, team_name: str, session_dir: str
+) -> str | None:
+    """The re-prompt for the teammate, or None.
+
+    A key is unread when the teammate owns the task, has it in_progress, the relay stamp
+    (amendment_relay.py) does not list the key and the stored HANDOFF does not dispose of
+    it. The keys are written to the stamp before the text is returned, so each is handed
+    over once by this hook or by the relay, never by both; a stamp that cannot be written
+    raises OSError and the caller emits nothing.
     """
-    Reset a teammate's idle count (e.g., when they receive new work).
+    import amendment_relay as relay_hook
+    from shared import amendments as rules
 
-    Args:
-        teammate_name: Name of the teammate
-        idle_counts_path: Path to the idle_counts.json file
-        root: Directory the file must stay under (see `_state_root`)
-    """
-    def _remove(counts: dict) -> dict:
-        counts.pop(teammate_name, None)
-        return counts
-    _atomic_update_idle_counts(idle_counts_path, _remove, root=root)
-
-
-def _in_teammate_process(input_data: dict, team_name: str) -> bool:
-    """True iff this call runs in a separate-process teammate's own process.
-
-    All three must hold: no PACT context (only the lead's session gets one), a
-    frame `session_id`, and a team-config `leadSessionId` that differs from it.
-    A lead whose context file is missing still matches its own session, so it
-    keeps the idle cleanup, and any value that cannot be read keeps it too.
-    """
-    if pact_context.get_team_name():
-        return False
-    session_id = input_data.get("session_id")
-    lead_session_id = pact_context._read_lead_session_id(team_name)
-    return (
-        isinstance(session_id, str)
-        and bool(session_id)
-        and bool(lead_session_id)
-        and session_id != lead_session_id
-    )
+    if not session_dir or not os.path.isdir(session_dir):
+        return None
+    if not relay_hook._path_part(teammate_name) or not relay_hook._path_part(team_name):
+        return None
+    stamp_path = os.path.join(
+        session_dir, relay_hook.STAMP_DIRNAME, f"{team_name}--{teammate_name}.json")
+    stamp = relay_hook.read_stamp(stamp_path)
+    relayed = stamp.get("relayed") if isinstance(stamp.get("relayed"), dict) else {}
+    lines: list[str] = []
+    for task in tasks:
+        if task.get("owner") != teammate_name or task.get("status") != "in_progress":
+            continue
+        metadata = task.get("metadata")
+        task_id = "".join(ch for ch in str(task.get("id") or "") if ch.isalnum() or ch in "_-")
+        if not isinstance(metadata, dict) or not task_id:
+            continue
+        listed = relayed.get(task_id)
+        already = {key for key in listed if isinstance(key, str)} if isinstance(listed, list) else set()
+        handoff = metadata.get("handoff")
+        disposed = handoff.get("amendments") if isinstance(handoff, dict) else None
+        if isinstance(disposed, dict):
+            already |= {key for key in disposed if isinstance(key, str)}
+        new_lines, seen = rules.unread_lines(metadata, task_id, already)
+        if not new_lines:
+            continue
+        lines.extend(new_lines)
+        relayed[task_id] = sorted(seen)
+    if not lines:
+        return None
+    stamp["relayed"] = relayed
+    relay_hook.write_stamp(stamp_path, stamp)
+    if len(lines) > UNREAD_KEYS_SHOWN:
+        lines = lines[:UNREAD_KEYS_SHOWN] + [
+            f"{len(lines) - UNREAD_KEYS_SHOWN} more keys are not shown: read your task file."]
+    return "\n".join([UNREAD_KEYS_PREAMBLE] + lines)
 
 
 def main():
@@ -459,29 +386,24 @@ def main():
             print(_SUPPRESS_OUTPUT)
             sys.exit(0)
 
-        teams_root = get_claude_config_dir() / "teams"
-        idle_counts_path = str(teams_root / team_name / "idle_counts.json")
-
         messages = []
-        cleanup_msg, should_shutdown = None, False
-        # Idle cleanup addresses the lead ("Consider shutting down", TaskStop).
-        # In a separate-process teammate's own process this hook's output
-        # reaches the teammate itself, so only the teammate-facing Layer 2
-        # check below runs there.
-        if not _in_teammate_process(input_data, team_name):
-            cleanup_msg, should_shutdown = check_idle_cleanup(
-                tasks, teammate_name, idle_counts_path, root=teams_root
-            )
-        if cleanup_msg:
-            messages.append(cleanup_msg)
-
-        # APPENDED, NOT `elif`. The cleanup message and this advisory come
-        # from predicates that are mutually exclusive TODAY — cleanup fires on
-        # `completed` tasks, the advisory requires `in_progress` — so an
-        # `elif` would be equivalent now and silently lossy the moment either
-        # predicate widens. Appending costs nothing and does not depend on
-        # that coincidence holding.
-        # Own try/except: an advisory must never cost the zombie cleanup.
+        session_dir = pact_context.get_session_dir()
+        # The unread-key re-prompt. Its own try/except: an error, or a stamp that
+        # cannot record the keys, re-prompts nobody.
+        reprompt = None
+        try:
+            reprompt = unread_lead_keys(tasks, teammate_name, team_name, session_dir)
+        except Exception:
+            reprompt = None
+        # The missed-wake line, on screen: the user can prompt an idle lead. Not taken on
+        # a re-prompt, whose exit 2 shows no systemMessage: the line keeps for the next idle.
+        try:
+            wake_line = None if reprompt else missed_wake_line(tasks, session_dir)
+            if wake_line:
+                messages.append(wake_line)
+        except Exception:
+            pass
+        # Own try/except: a failed advisory leaves the idle silent.
         try:
             unflagged_msg = check_unflagged_background(
                 tasks, teammate_name, team_name
@@ -491,15 +413,12 @@ def main():
         except Exception:
             pass
 
-        if messages:
-            if should_shutdown:
-                # Hooks cannot call tools directly. Instruct the orchestrator to
-                # stop the teammate via systemMessage.
-                messages.append(
-                    f"ACTION REQUIRED: TaskStop(\"{teammate_name}\") — call it "
-                    f"directly; do NOT send a shutdown_request first."
-                )
+        if reprompt:
+            # Exit 2: the host hands stderr to the teammate, which keeps working.
+            print(reprompt, file=sys.stderr)
+            sys.exit(2)
 
+        if messages:
             output = {"systemMessage": IDLE_PREAMBLE + " | ".join(messages)}
             print(json.dumps(output))
         else:

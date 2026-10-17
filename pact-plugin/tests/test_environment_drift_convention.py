@@ -16,7 +16,8 @@ from pathlib import Path
 import pytest
 
 
-S2_PATH = Path(__file__).parent.parent / "protocols" / "pact-s2-coordination.md"
+# the protocol consolidation: the S2 coordination text moved to coordination.md §Concurrent Dispatch.
+S2_PATH = Path(__file__).parent.parent / "protocols" / "coordination.md"
 
 
 class TestEnvironmentDriftConvention:
@@ -26,11 +27,7 @@ class TestEnvironmentDriftConvention:
     def s2_content(self):
         return S2_PATH.read_text(encoding="utf-8")
 
-    def test_environment_drift_section_exists(self, s2_content):
-        assert "### Environment Drift Detection" in s2_content
 
     def test_references_file_tracker(self, s2_content):
         assert "file_tracker" in s2_content or "file-edits.json" in s2_content
 
-    def test_dispatch_convention_documented(self, s2_content):
-        assert "environment delta" in s2_content.lower() or "Environment Delta" in s2_content

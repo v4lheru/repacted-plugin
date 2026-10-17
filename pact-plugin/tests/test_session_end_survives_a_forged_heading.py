@@ -72,7 +72,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from shared.claude_md_manager import MEMORY_START_MARKER, MEMORY_END_MARKER
-from tests.test_pin_marker_writer import build_claude_md
+from tests.claude_md_builders import build_claude_md
 
 SESSION_END = "<!-- SESSION_END -->"
 

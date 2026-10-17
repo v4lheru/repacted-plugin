@@ -1,9 +1,6 @@
 ---
 name: worktree-cleanup
-description: |
-  Remove a git worktree and its branch after PACT workflow completes.
-  Use when: PR is merged, sub-scope work is consolidated, or manual cleanup is needed.
-  Triggers on: worktree cleanup, remove worktree, delete worktree, branch cleanup.
+description: "Use when a PACT worktree is done (PR merged, sub-scope consolidated, manual cleanup): harvest its docs/ artifacts, then remove the worktree and its branch."
 user_invokable: true
 ---
 
@@ -15,7 +12,7 @@ Remove a git worktree and its associated branch after work is complete. Typicall
 
 - After `peer-review` merges a PR (automatic cleanup)
 - After CONSOLIDATE merges sub-scope branches
-- Manual cleanup of stale worktrees (`/PACT:worktree-cleanup`)
+- Manual cleanup of stale worktrees (`/repacted:worktree-cleanup`)
 - User aborts a workflow and wants to clean up
 
 ## Process
@@ -38,7 +35,7 @@ Present the list and ask: "Which worktree should I remove?"
 
 ### Step 1.5: Harvest docs/ Artifacts Before Teardown
 
-`git worktree remove` deletes the worktree's `docs/` directory **irrecoverably** — that directory is gitignored and worktree-ephemeral, so the phase artifacts it holds (`docs/preparation/`, `docs/architecture/`, `docs/plans/`, `docs/review/`, `docs/decision-logs/`) are gone the instant the worktree is removed. Those artifacts are the **fuller substance** behind each phase's distilled HANDOFF. This step is the single chokepoint that protects them for **all** teardown callers — `peer-review` auto-cleanup, CONSOLIDATE sub-scope early-teardown, and manual `/PACT:worktree-cleanup` alike — so harvest MUST precede remove.
+`git worktree remove` deletes the worktree's `docs/` directory **irrecoverably** — that directory is gitignored and worktree-ephemeral, so the phase artifacts it holds (`docs/preparation/`, `docs/architecture/`, `docs/plans/`, `docs/review/`, `docs/decision-logs/`) are gone the instant the worktree is removed. Those artifacts are the **fuller substance** behind each phase's distilled HANDOFF. This step is the single chokepoint that protects them for **all** teardown callers — `peer-review` auto-cleanup, CONSOLIDATE sub-scope early-teardown, and manual `/repacted:worktree-cleanup` alike — so harvest MUST precede remove.
 
 Run this exact command, substituting the target worktree's absolute path from Step 1 — the same path Step 2 will remove:
 

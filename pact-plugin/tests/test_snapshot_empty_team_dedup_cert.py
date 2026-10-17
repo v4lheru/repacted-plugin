@@ -54,12 +54,12 @@ from shared.task_metadata_snapshot import (  # noqa: E402
     emit_task_metadata_snapshot,
 )
 
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
 
 SCOPE = {"files": ["hooks/shared/example.py"], "boundaries": "backend only"}
-PAYLOAD_A = {"scope_contract": SCOPE}
-PAYLOAD_B = {"scope_contract": {**SCOPE, "boundaries": "widened"}}
+PAYLOAD_A = {"handoff_rejection": SCOPE}
+PAYLOAD_B = {"handoff_rejection": {**SCOPE, "boundaries": "widened"}}
 
 
 @pytest.fixture

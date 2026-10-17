@@ -87,8 +87,8 @@ from pathlib import Path
 import pytest
 
 PLUGIN_ROOT = Path(__file__).parent.parent
-HOOK = PLUGIN_ROOT / "hooks" / "session_init.py"
-AGENT_BODY = PLUGIN_ROOT / "agents" / "pact-secretary.md"
+# The resume-claim step moved here from hooks/session_init.py (A4b).
+HOOK = PLUGIN_ROOT / "hooks" / "shared" / "session_init_lead.py"
 
 # The branch that guards the marker write. Structural on purpose — see the
 # module docstring: an anchor naming the literal cannot detect the literal
@@ -140,21 +140,10 @@ def event_type():
 class TestTheResumptionMarkerTypeAgreesAcrossItsSurfaces:
     """The hook is the oracle; the other two surfaces are checked against it."""
 
-    def test_the_agent_body_names_the_type_the_hook_writes(self, event_type):
-        """Detects: a rename coordinated across every hook-side surface that
-        leaves the agent body naming the old type.
-
-        This is the consequential direction. The secretary reads the marker to
-        learn that this session resumes an arc still under judgement; reading a
-        type nothing writes returns null, which is indistinguishable from a
-        fresh start, so the rebuild runs and the agents respawned to judge the
-        arc are handed the arc's own conclusions.
-        """
-        assert event_type in AGENT_BODY.read_text(encoding="utf-8"), (
-            f"hooks/session_init.py writes {event_type!r}, but "
-            f"agents/pact-secretary.md does not name it. The secretary reads "
-            "the marker by type; a type nothing writes reads as no resumption."
-        )
+    # RETIRED with the secretary rework: the secretary no longer reads the marker at spawn. The
+    # Working Memory hold is decided in-process by session_init from the same verdict
+    # (tests/test_working_memory_rebuild.py pins both branches), so the agent body has no
+    # type to agree with. The journal-registration arm below still holds the writer.
 
     def test_the_journal_registers_the_type_the_hook_writes(self, event_type):
         """Detects: a rename at the write site that leaves the registration

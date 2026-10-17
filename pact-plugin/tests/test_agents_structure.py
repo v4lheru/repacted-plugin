@@ -28,19 +28,19 @@ EXPECTED_AGENTS = {
     "pact-frontend-coder",
     "pact-orchestrator",
     "pact-secretary",
-    "pact-n8n",
     "pact-preparer",
     "pact-qa-engineer",
     "pact-security-engineer",
     "pact-test-engineer",
 }
 
+
 REQUIRED_FRONTMATTER_KEYS = {"name", "description"}
 
 
 @pytest.fixture
 def agent_files():
-    """Load all agent markdown files (orchestrator + 12 teammates)."""
+    """Load all agent markdown files (orchestrator + 11 teammates)."""
     return list(AGENTS_DIR.glob("*.md"))
 
 
@@ -130,14 +130,14 @@ class TestTeammateModelInheritance:
 
     def test_all_teammates_declare_model_inherit(self, teammate_agent_files):
         # Addition-ratchet: the set-equality leg alone already fails on a
-        # missing/unexpected def and on a vacuous fixture glob. The `== 12`
+        # missing/unexpected def and on a vacuous fixture glob. The `== 11`
         # literal is therefore not a vacuity guard — it exists to force a
         # conscious edit HERE when a teammate def is added, because
         # set-equality would silently auto-track an EXPECTED_AGENTS
         # addition.
         names = {f.stem for f in teammate_agent_files}
-        assert names == TEAMMATE_AGENT_NAMES and len(names) == 12, (
-            f"Expected exactly the 12 teammate agent defs, got {len(names)}: "
+        assert names == TEAMMATE_AGENT_NAMES and len(names) == 11, (
+            f"Expected exactly the 11 teammate agent defs, got {len(names)}: "
             f"{sorted(names)}. If a teammate def was deliberately added or "
             f"removed, update the count literal (and EXPECTED_AGENTS) with a "
             f"comment naming which def changed and why — this failure is the "
@@ -183,13 +183,13 @@ class TestAgentBody:
 
 class TestNoSkillInvocationOnFirstAction:
     """Negative-invariant fossilization guard: no TEAMMATE agent body may
-    instruct the agent to invoke `Skill("PACT:teammate-bootstrap")` (deleted
-    skill) or `Skill("PACT:bootstrap")` (orchestrator-only ritual command).
+    instruct the agent to invoke `Skill("teammate-bootstrap")` (deleted
+    skill) or `Skill("repacted:bootstrap")` (orchestrator-only ritual command).
 
     The team protocol, teachback rules, and algedonic content arrive via the
     spawn-time skills: frontmatter (preload at Agent() spawn). A fossil
-    `Skill("PACT:teammate-bootstrap")` directive in any agent body points at
-    a permanently removed command. A `Skill("PACT:bootstrap")` directive in a
+    `Skill("teammate-bootstrap")` directive in any agent body points at
+    a permanently removed command. A `Skill("repacted:bootstrap")` directive in a
     teammate body points at the orchestrator-only session-start ritual; only
     pact-orchestrator.md may carry it (in §2 Session-Start Ritual).
 
@@ -200,16 +200,16 @@ class TestNoSkillInvocationOnFirstAction:
     # teammate-bootstrap.md was permanently removed; no agent (orchestrator
     # included) may reference it.
     FOSSIL_SKILL_INVOCATIONS_ALL_AGENTS = (
-        'Skill("PACT:teammate-bootstrap")',
-        "Skill('PACT:teammate-bootstrap')",
+        'Skill("repacted:' 'teammate-bootstrap")',
+        "Skill('repacted:" "teammate-bootstrap')",
     )
 
     # bootstrap.md is the orchestrator-only ritual command. Teammate bodies
     # must not invoke it; pact-orchestrator.md is exempt (§2 Session-Start
     # Ritual relies on this invocation).
     ORCHESTRATOR_ONLY_SKILL_INVOCATIONS = (
-        'Skill("PACT:bootstrap")',
-        "Skill('PACT:bootstrap')",
+        'Skill("repacted:bootstrap")',
+        "Skill('repacted:bootstrap')",
     )
 
     def test_no_bootstrap_skill_invocation_in_any_agent(self, agent_files):
@@ -227,7 +227,7 @@ class TestNoSkillInvocationOnFirstAction:
             for fossil in self.ORCHESTRATOR_ONLY_SKILL_INVOCATIONS:
                 assert fossil not in text, (
                     f"{f.name}: contains orchestrator-only skill invocation "
-                    f"{fossil!r}. /PACT:bootstrap is the session-start "
+                    f"{fossil!r}. /repacted:bootstrap is the session-start "
                     f"ritual; only pact-orchestrator.md may invoke it."
                 )
 
@@ -282,37 +282,30 @@ class TestNoSkillInvocationOnFirstAction:
                 agents[f.stem] = (fm, text, skill_names)
         return agents
 
-    def test_frontmatter_skill_min_baseline(self, all_agents):
-        """F3 (replacement): every agent must carry the canonical 2-skill
-        baseline (pact-agent-teams + pact-teachback). The cap was removed
-        post-#366 phase 1 because frontmatter skills don't eager-load and
-        per-agent variation is the intentional design."""
+    def test_no_frontmatter_skills_outside_the_exemption_map(self, all_agents):
+        """TEAMMATE (m6, C10): the `skills:` preload is gone. A headless `claude -p` spawn
+        injects every listed body (+25-65k per spawn); the team protocol now arrives through
+        `Skill("repacted:teammate")`, named in the prelude and in each body. Files whose owner
+        has not removed the key yet are exempt (tests/contract/test_identity.py SKILLS_EXEMPT)."""
+        from tests.contract.test_identity import SKILLS_EXEMPT
         for name, (_fm, _text, skill_names) in all_agents.items():
-            assert "pact-agent-teams" in skill_names, (
-                f"{name}: missing canonical pact-agent-teams baseline skill. "
-                f"Skills found: {skill_names!r}"
-            )
-            assert "pact-teachback" in skill_names, (
-                f"{name}: missing canonical pact-teachback baseline skill. "
-                f"Skills found: {skill_names!r}"
-            )
+            if f"agents/{name}.md" in SKILLS_EXEMPT:
+                continue
+            assert skill_names == [], (
+                f"{name}: declares frontmatter skills {skill_names!r}; the preload is retired")
 
-    def test_frontmatter_includes_team_registration(self, all_agents):
-        """Invocability insurance: every teammate-spawnable agent-def must list
-        pact-team-registration in its skills: frontmatter so the spawn-prompt
-        Invoke Skill("PACT:pact-team-registration") first-action directive is
-        guaranteed discoverable/invocable — we do not assume a non-frontmatter
-        skill is invocable. Frontmatter preloads NAME+DESCRIPTION only (the body
-        still loads on the explicit invoke), so this does not re-trigger the
-        per-spawn skill-overhead concern. Scoped to the teammates;
-        pact-orchestrator (the lead, not spawned as a teammate) is excluded by
-        the teammate_agent_files fixture."""
-        for name, (_fm, _text, skill_names) in all_agents.items():
-            assert "pact-team-registration" in skill_names, (
-                f"{name}: missing pact-team-registration in skills: frontmatter. "
-                f"The register first-action directive in the spawn prompt would "
-                f"not be guaranteed invocable. Skills found: {skill_names!r}"
-            )
+    def test_teammate_bodies_invoke_the_teammate_skill(self, all_agents):
+        """Invocability insurance, replacing the old frontmatter listing of
+        pact-team-registration: with no preload, the body itself names the one skill that
+        registers the teammate and carries the teachback gate. Exempt files keep their
+        preload until their owner removes it."""
+        from tests.contract.test_identity import SKILLS_EXEMPT
+        for name, (_fm, text, skill_names) in all_agents.items():
+            if f"agents/{name}.md" in SKILLS_EXEMPT:
+                assert "pact-agent-teams" in skill_names, name
+                continue
+            assert 'Skill("repacted:teammate")' in text, (
+                f"{name}: body never tells the agent to invoke Skill(\"repacted:teammate\")")
 
 
 class TestExtractSkillNamesParser:
@@ -485,6 +478,9 @@ class TestRequiredSkillsCondensed:
                 or "`pact-prepare-research`" in section_body
                 or "`pact-architecture-patterns`" in section_body
                 or "`n8n-" in section_body
+                # TEAMMATE (m6): the 3 merged domain skills are re-pointed to their
+                # user-layer twins.
+                or "`repacted:" in section_body
             )
             assert has_skill_ref, (
                 f"{f.name}: REQUIRED SKILLS section is present but does "
@@ -497,14 +493,15 @@ class TestRequiredSkillsCondensed:
                 f"what to invoke."
             )
 
-    def test_secretary_uses_frontmatter_skills(self, teammate_agent_files):
-        """Secretary should use frontmatter skills instead of REQUIRED SKILLS section."""
+    def test_secretary_carries_no_skills_preload(self, teammate_agent_files):
+        """C10: the secretary's frontmatter has no `skills:` list; its
+        **Skills for this role** block routes to each skill when the work starts."""
         for f in teammate_agent_files:
             if f.name != self._SECRETARY:
                 continue
-            text = f.read_text(encoding="utf-8")
-            assert "skills:" in text, (
-                "pact-secretary.md should have skills: in frontmatter"
+            frontmatter = f.read_text(encoding="utf-8").split("\n---\n", 1)[0]
+            assert "skills:" not in frontmatter, (
+                "pact-secretary.md must not preload skills"
             )
 
 
@@ -611,6 +608,12 @@ class TestTeachbackMicroSkillExtraction:
     # deliberate rather than absorbed.
     # RAISED 18600 -> 18800 for the covers_since field the wait templates now carry (18722 then).
     MAX_SKILL_CHARS = 18800
+    # TEAMMATE (m6): the reference now also carries the ct-teachback background (V4), measured
+    # 25,151 B; the ceiling is that plus the growth this package measured, not a round number.
+    MAX_SKILL_CHARS = 25_600
+    # 1.3.8 (S2): the background section left (review 1.6 item 2), measured 17,580 chars; the
+    # ceiling is that plus 120, by the tighten-back rule above.
+    MAX_SKILL_CHARS = 17_700
 
     # Key protocol elements that must be in the extracted skill.
     # Presence-only checks are deliberately strict — any drop indicates
@@ -650,7 +653,9 @@ class TestTeachbackMicroSkillExtraction:
     # byte-mirrored into pact-protocols.md); it replaced a dead non-blocking-era
     # fossil that appeared nowhere after the reconciliation to the blocking model.
     LIVE_PROTOCOL_MARKERS = {
-        "Building: {what I understand I'm building}": "protocols/pact-ct-teachback.md",
+        # 1.3.8 (S2): the background section left the teachback reference and took the "Building:"
+        # template line with it; the notify marker of Step 2 is the live phrase now.
+        "Teachback submitted on Task #<A_id>": "skills/teammate/references/teammate-teachback.md",
     }
 
     # Pre-extraction phrasings that appear NOWHERE in the current source
@@ -659,6 +664,7 @@ class TestTeachbackMicroSkillExtraction:
     HISTORICAL_PROTOCOL_MARKERS = [
         "Send as your **first message**",
         "Keep concise: 3-6 bullet points",
+        "Building: {what I understand I'm building}",
     ]
 
     # Canonical union consumed by the absent-from-stub canary (behavior
@@ -667,30 +673,31 @@ class TestTeachbackMicroSkillExtraction:
     # conscious live-vs-fossil decision (see test_protocol_markers_partition).
     FULL_PROTOCOL_MARKERS = list(LIVE_PROTOCOL_MARKERS) + HISTORICAL_PROTOCOL_MARKERS
 
+    # TEAMMATE (m6): pact-teachback merged into skills/teammate. The full protocol is the
+    # on-demand reference; the budgeted surface is skills/teammate/SKILL.md (amend_1 on #136).
     @pytest.fixture
     def teachback_skill(self):
-        skill_md = self.SKILLS_DIR / "pact-teachback" / "SKILL.md"
-        assert skill_md.is_file(), "pact-teachback/SKILL.md missing"
+        skill_md = self.SKILLS_DIR / "teammate" / "references" / "teammate-teachback.md"
+        assert skill_md.is_file(), "teammate/references/teammate-teachback.md missing"
         return skill_md
 
     @pytest.fixture
-    def agent_teams_skill(self):
-        skill_md = self.SKILLS_DIR / "pact-agent-teams" / "SKILL.md"
-        assert skill_md.is_file(), "pact-agent-teams/SKILL.md missing"
+    def teammate_skill(self):
+        skill_md = self.SKILLS_DIR / "teammate" / "SKILL.md"
+        assert skill_md.is_file(), "teammate/SKILL.md missing"
         return skill_md
 
-    def test_teachback_skill_exists_with_valid_frontmatter(self, teachback_skill):
-        """T1: skill file exists with name and description in frontmatter."""
-        text = teachback_skill.read_text(encoding="utf-8")
+    def test_teachback_skill_exists_with_valid_frontmatter(self, teammate_skill):
+        """T1: the teammate skill exists with name and a description <= 180 chars."""
+        text = teammate_skill.read_text(encoding="utf-8")
         fm = parse_frontmatter(text)
-        assert fm is not None, "pact-teachback SKILL.md has no valid frontmatter"
-        assert fm.get("name") == "pact-teachback", (
-            f"Expected name 'pact-teachback', got {fm.get('name')!r}"
-        )
-        assert "description" in fm, "pact-teachback missing description"
+        assert fm is not None, "teammate SKILL.md has no valid frontmatter"
+        assert fm.get("name") == "teammate", f"Expected name 'teammate', got {fm.get('name')!r}"
+        assert 0 < len(fm.get("description", "")) <= 180, "teammate description missing or > 180"
 
     def test_teachback_skill_under_size_budget(self, teachback_skill):
-        """T2: micro-skill must stay under MAX_SKILL_CHARS."""
+        """T2: the full teachback reference stays under MAX_SKILL_CHARS (a ceiling on the
+        on-demand layer; the per-turn SKILL.md has its own 8,000 B contract budget)."""
         text = teachback_skill.read_text(encoding="utf-8")
         char_count = len(text)
         assert char_count <= self.MAX_SKILL_CHARS, (
@@ -798,37 +805,21 @@ class TestTeachbackMicroSkillExtraction:
             "correct sibling shape."
         )
 
-    def test_all_agents_have_teachback_in_frontmatter(self, teammate_agent_files):
-        """T4: every agent must eager-load pact-teachback via frontmatter."""
-        for f in teammate_agent_files:
-            text = f.read_text(encoding="utf-8")
-            skill_names = TestNoSkillInvocationOnFirstAction._extract_skill_names(text)
-            assert "pact-teachback" in skill_names, (
-                f"{f.stem}: pact-teachback must be in frontmatter skills "
-                f"(eager-loaded at spawn). Found skills: {skill_names!r}"
-            )
+    def test_all_agents_have_teachback_in_frontmatter(self, teammate_skill):
+        """T4 (TEAMMATE m6): with no preload, the teachback gate is inline in the teammate
+        SKILL.md every teammate invokes first, with the ordering and the four rows."""
+        text = teammate_skill.read_text(encoding="utf-8").replace("`", "")
+        for element in ("Teachback gate", "metadata.teachback_submit write FIRST",
+                        "intentional_wait{reason=awaiting_lead_completion} SET THIRD",
+                        "### Common mistakes"):
+            assert element in text, f"teammate SKILL.md missing {element!r}"
 
-    def test_agent_teams_no_full_teachback_protocol(self, agent_teams_skill):
-        """T5: pact-agent-teams must not contain the full teachback protocol.
-
-        After extraction, pact-agent-teams should have a slim stub/pointer
-        to the pact-teachback skill, not the full protocol content.
-        """
-        text = agent_teams_skill.read_text(encoding="utf-8")
-        for marker in self.FULL_PROTOCOL_MARKERS:
-            assert marker not in text, (
-                f"pact-agent-teams still contains full teachback protocol "
-                f"marker: {marker!r}. The protocol should have been "
-                f"extracted to pact-teachback skill (#385)."
-            )
-
-    def test_agent_teams_references_teachback_skill(self, agent_teams_skill):
-        """T6: pact-agent-teams must reference the extracted skill."""
-        text = agent_teams_skill.read_text(encoding="utf-8")
-        assert "pact-teachback" in text, (
-            "pact-agent-teams should reference pact-teachback skill "
-            "as a pointer so agents know where the protocol lives."
-        )
+    def test_agent_teams_references_teachback_skill(self, teammate_skill):
+        """T6 (TEAMMATE m6): the teammate SKILL.md names the teachback reference with its
+        load trigger so an agent reaches the full protocol without guessing (amend_1)."""
+        text = teammate_skill.read_text(encoding="utf-8")
+        assert "references/teammate-teachback.md" in text, (
+            "teammate SKILL.md must point at references/teammate-teachback.md")
 
     def test_live_protocol_markers_present_in_source(self):
         """T7 (drift-rot guard): each LIVE marker must still appear in its
@@ -877,7 +868,7 @@ class TestNoFirstActionPreludeFossil:
     the v3.x YOUR FIRST ACTION prelude.
 
     Under v4.0.0 the orchestrator persona is delivered via `claude --agent
-    PACT:pact-orchestrator` and teammate skill content arrives via the
+    repacted:pact-orchestrator` and teammate skill content arrives via the
     spawn-time skills: frontmatter; the per-body FIRST-ACTION dispatch
     directive that v3.x relied on is now noise. A reintroduction would
     fight the new lazy-load convention silently — agents would carry both
@@ -934,19 +925,18 @@ class TestAgentFrontmatterSkills:
         return out
 
     def test_pact_agent_teams_in_frontmatter(self, agent_skills):
+        """TEAMMATE (m6): inverted. Only SKILLS_EXEMPT files may still preload the team
+        protocol; everyone else reaches it through Skill("repacted:teammate")."""
+        from tests.contract.test_identity import SKILLS_EXEMPT
         for name, skills in agent_skills.items():
-            assert "pact-agent-teams" in skills, (
-                f"{name}: pact-agent-teams must be eager-loaded via "
-                f"frontmatter post-#366. Found skills: {skills!r}"
-            )
+            exempt = f"agents/{name}.md" in SKILLS_EXEMPT
+            assert ("pact-agent-teams" in skills) == exempt, (name, skills)
 
     def test_pact_teachback_in_frontmatter(self, agent_skills):
+        from tests.contract.test_identity import SKILLS_EXEMPT
         for name, skills in agent_skills.items():
-            assert "pact-teachback" in skills, (
-                f"{name}: pact-teachback must be eager-loaded via frontmatter "
-                f"so the teachback format is always available at spawn. "
-                f"Found skills: {skills!r}"
-            )
+            exempt = f"agents/{name}.md" in SKILLS_EXEMPT
+            assert ("pact-teachback" in skills) == exempt, (name, skills)
 
 
 class TestAgentDomainSkillVariations:
@@ -968,99 +958,20 @@ class TestAgentDomainSkillVariations:
     skill loaded into context.
     """
 
+    # TEAMMATE (m6): the 11 specialist bodies carry no `skills:`; their domain skills
+    # are named in each body's REQUIRED SKILLS table and "Skills for this role" block instead.
     EXPECTED_SKILLS = {
-        "pact-preparer": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-prepare-research",
-        },
-        "pact-architect": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-architecture-patterns",
-        },
-        "pact-backend-coder": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-coding-standards",
-            "pact-security-patterns",
-        },
-        "pact-frontend-coder": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-coding-standards",
-            "pact-security-patterns",
-        },
-        "pact-database-engineer": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-coding-standards",
-        },
-        "pact-devops-engineer": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-coding-standards",
-        },
-        "pact-test-engineer": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-testing-strategies",
-        },
-        "pact-qa-engineer": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-testing-strategies",
-        },
-        "pact-security-engineer": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-security-patterns",
-        },
-        "pact-n8n": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "n8n-workflow-patterns",
-            "n8n-validation-expert",
-            "n8n-mcp-tools-expert",
-            "n8n-node-configuration",
-            "n8n-code-javascript",
-            "n8n-code-python",
-            "n8n-expression-syntax",
-        },
-        "pact-auditor": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "request-more-context",
-            "pact-architecture-patterns",
-        },
-        "pact-secretary": {
-            "pact-agent-teams",
-            "pact-teachback",
-            "pact-team-registration",
-            "pact-memory",
-            "pact-handoff-harvest",
-        },
+        "pact-preparer": set(),
+        "pact-architect": set(),
+        "pact-backend-coder": set(),
+        "pact-frontend-coder": set(),
+        "pact-database-engineer": set(),
+        "pact-devops-engineer": set(),
+        "pact-test-engineer": set(),
+        "pact-qa-engineer": set(),
+        "pact-security-engineer": set(),
+        "pact-auditor": set(),
+        "pact-secretary": set(),  # the secretary rework: no skills: preload
     }
 
     @pytest.fixture
@@ -1152,7 +1063,7 @@ class TestAgentAutonomyCharterInline:
         references it via Skill() invocation."""
         for f in teammate_agent_files:
             text = f.read_text(encoding="utf-8")
-            assert 'Skill("PACT:pact-autonomy-charter")' not in text, (
+            assert 'Skill("repacted:' 'pact-autonomy-charter")' not in text, (
                 f"{f.name}: still invokes pact-autonomy-charter skill which "
                 f"was removed post-#366. The charter content is now inline."
             )
@@ -1194,11 +1105,39 @@ class TestAgentAlgedonicTriggersInline:
                 f"the two algedonic signal levels they can emit."
             )
 
+    def test_exposure_wording_keeps_a_real_exposure_a_halt(self, agent_files):
+        """A secret committed locally, a secret printed into a transcript, and real
+        data in a local copy are exposure; the ALERT case needs all three conditions
+        and holds the push; every agent sentence that names the ALERT says that
+        unknown exposure is a HALT."""
+        protocol = (AGENTS_DIR.parent / "protocols" / "algedonic.md").read_text(encoding="utf-8")
+        rule = next(line for line in protocol.splitlines() if line.startswith("**Exposure decides"))
+        for words in ("any one of three", "data present in any copy, a local one included",
+                      "a secret committed, pushed, sent off the machine, or printed into a transcript, log or tool output",
+                      "only when none of the three exists, which takes all of local-only, nothing deployed and test data only",
+                      "a secret committed or printed on a local test stack is still exposure, so a HALT",
+                      "and any push of its branch", "Exposure unknown, or its absence not established: HALT"):
+            assert words in rule, words
+        for words in ("pushed, printed or sent off the machine", "(a local-only stack, nothing deployed, test data)",
+                      "only when all three hold"):
+            assert words not in protocol, words
+        messaging = (AGENTS_DIR.parent / "skills" / "teammate" / "references"
+                     / "teammate-messaging.md").read_text(encoding="utf-8")
+        for words in ("deployed or reachable by real users", "data in any copy, a local one included",
+                      "a secret committed, pushed"):
+            assert words in messaging, words
+        for f in agent_files:
+            for line in f.read_text(encoding="utf-8").splitlines():
+                if "SECURITY or DATA" in line and "ALERT" in line:
+                    assert "unknown" in line, f"{f.name}: {line[:120]}"
+                    if f.name != "pact-orchestrator.md":
+                        assert "a committed or printed secret and real data in a local copy are exposure" in line, f.name
+
 
 # Bodies whose DATA-tier trigger is keyed on RECOVERABILITY. Deliberately not
 # every agent: see TestDataTriggersKeyOnRecoverability for why
 # pact-devops-engineer.md is excluded.
-RECOVERABILITY_KEYED_AGENTS = ("pact-database-engineer", "pact-n8n")
+RECOVERABILITY_KEYED_AGENTS = ("pact-database-engineer",)
 
 # A line states a DATA-tier trigger if it carries one of these markers. The
 # forms are conventional in the agent bodies: a `**HALT DATA**` bullet, and the
@@ -1595,14 +1534,24 @@ class TestNoVestigialAgentTeamsProtocolSection:
                 f"removed in favor of frontmatter eager-load."
             )
 
-    def test_no_lazy_load_skill_invocation_for_agent_teams(self, agent_files):
-        """No agent should invoke pact-agent-teams via Skill() — it's
-        eager-loaded now."""
-        for f in agent_files:
-            text = f.read_text(encoding="utf-8")
-            assert 'Skill("PACT:pact-agent-teams")' not in text, (
-                f"{f.name}: still invokes pact-agent-teams via Skill(). "
-                f"Post-#366 it is eager-loaded via frontmatter and should "
-                f"not be lazy-invoked."
-            )
 
+class TestCompletionIntegrityInline:
+    """TEAMMATE (m6, architect-pact review of #136): PACT's 'Completion Integrity' rule lost its
+    home when pact-agent-teams became a stub. It is per-turn (it governs every HANDOFF), so it
+    lives inline in the teammate SKILL.md §HANDOFF, with the full text in the handoff reference.
+    rule_homes accept only inventoried ids, so this presence pin is the rule's row."""
+
+    SKILL = Path(__file__).parent.parent / "skills" / "teammate" / "SKILL.md"
+    PHRASES = (
+        "Only report work as ready if you actually performed the changes",
+        "if files don't exist, can't be edited, or tools fail, report a BLOCKER via SendMessage "
+        "and never invent results",
+    )
+
+    def test_rule_is_inline_under_handoff(self):
+        text = " ".join(self.SKILL.read_text(encoding="utf-8").replace("`", "").split())
+        start = text.index("## HANDOFF")
+        end = text.index("## ", start + 3)
+        section = text[start:end]
+        for phrase in self.PHRASES:
+            assert phrase in section, f"teammate SKILL.md §HANDOFF lost {phrase!r}"

@@ -7,8 +7,9 @@ Summary: THE single canonical JSON serialization for the hooks package. Every
          families computing a key for the same value compute the same bytes.
 Used by: task_metadata_snapshot.py (stage sizing, truncation heads, and
          payload_hash8; it re-exports this function under its historical
-         module-private name _canonical_bytes) and agent_handoff_marker.py
-         (the handoff content key).
+         module-private name _canonical_bytes), agent_handoff_marker.py
+         (the handoff content key) and payload_digest.py (the stored-object
+         digest the notify names, 1.5.0 D2).
 
 Why this is a module of its own, and why it is a LEAF. The two marker
 families must agree byte for byte, and neither can own the serializer:

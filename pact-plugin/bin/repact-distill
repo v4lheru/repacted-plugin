@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""repact-distill: turn notes the agents already wrote into proposed knowledge-base lessons.
+
+Location: pact-plugin/bin/repact-distill (KB lite, ruling R11). The modules live in
+bin/_distill/. It reads only text a model already wrote (agent-memory inboxes, HANDOFF decisions
+and uncertainty from session journals, pact-memory through its CLI, and compaction summaries),
+never raw session transcripts.
+
+  dry-run   list the sources, then print chunks, estimated tokens and the cost from your price
+            table (with its as-of date). Sends nothing and writes nothing
+  run       the real pass: redact each chunk, send it to the model backend, record it in the
+            ledger. Refused until the redaction layer and the backend are installed. Each
+            candidate is schema-checked and post-checked, spooled, then proposed to KB-GATE
+            (--no-propose: the gate's read-only check only; --no-auto-accept: always queue)
+
+Both read the profile's `distill` block (~/.config/repacted/profile.json): model, caps,
+projects include/exclude globs, pricing_source (a price table file shaped like
+templates/distill-pricing.example.json), an optional bytes_per_token and an optional
+schema_input_multiplier (default measured on one call: estimate.SCHEMA_INPUT_MULTIPLIER). Flags
+override it.
+A run stops at the first cap it would break, records `capped`, and a later run resumes from the
+ledger, skipping every chunk already `done`.
+Exit codes: 0 ok (also when capped); 2 usage or a bad setting; 3 refused.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib
+import json
+import math
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _repact_common as common  # noqa: E402
+from _distill import discover as D  # noqa: E402
+from _distill import estimate as E  # noqa: E402
+from _distill import intake as I  # noqa: E402
+from _distill import ledger as L  # noqa: E402
+from _distill import report as R  # noqa: E402
+from _distill import sources as S  # noqa: E402
+
+EXIT_OK, EXIT_USAGE, EXIT_REFUSED = 0, 2, 3
+DEFAULT_MODEL = "sonnet"
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+EXAMPLES = """examples:
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-distill" dry-run
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-distill" dry-run --pricing ~/prices.json --max-usd 5
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-distill" run --max-tokens 200000"""
+REFUSAL_RULE = ("Rule: nothing is sent to a model until the redaction layer and the model "
+                "backend are both installed and distill.enabled is true.")
+REFUSAL_INSTEAD = ("Instead: run `repact-distill dry-run` to see the sources, tokens and cost; "
+                   "it sends nothing.")
+
+
+class UsageError(ValueError):
+    """A bad flag or profile setting; the message names it and how to fix it."""
+
+
+class Refused(RuntimeError):
+    """A real run that must not start; the message says why."""
+
+
+@dataclass(frozen=True)
+class Settings:
+    model: str
+    caps: E.Caps
+    include: tuple
+    exclude: tuple
+    pricing: Optional[Path]
+    bytes_per_token: float
+    since: Optional[str]
+    enabled: bool
+    raw: dict
+    input_multiplier: float = E.SCHEMA_INPUT_MULTIPLIER
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="repact-distill", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Propose knowledge-base lessons from notes the agents already wrote. "
+                    "Start with dry-run: it shows what would be read and what it would cost.",
+        epilog=EXAMPLES)
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name, help_text in (("dry-run", "show sources, chunks, tokens and cost; send nothing"),
+                            ("run", "redact, send to the model backend and record each chunk")):
+        cmd = sub.add_parser(name, help=help_text, epilog=EXAMPLES,
+                             formatter_class=argparse.RawDescriptionHelpFormatter)
+        cmd.add_argument("--model", help="model name from the price table (default: the profile's)")
+        cmd.add_argument("--pricing", type=Path, help="price table JSON (default: profile "
+                                                      "distill.pricing_source)")
+        cmd.add_argument("--bytes-per-token", type=float, help="token estimate ratio")
+        cmd.add_argument("--schema-input-multiplier", type=float,
+                         help="input tokens billed per estimated token (default: measured once)")
+        cmd.add_argument("--max-usd", type=float, help="stop before the estimated cost passes this")
+        cmd.add_argument("--max-tokens", type=int, help="stop before tokens in+out pass this")
+        cmd.add_argument("--max-sessions", type=int, help="stop before this many sessions")
+        cmd.add_argument("--since", help="only notes dated on or after YYYY-MM-DD")
+        cmd.add_argument("--json", action="store_true", help="print the report as JSON")
+        if name == "run":
+            cmd.add_argument("--no-propose", action="store_true",
+                             help="spool candidates only; run KB-GATE's read-only check and "
+                                  "count would-queue / would-refuse (nothing written to the KB)")
+            cmd.add_argument("--no-auto-accept", action="store_true",
+                             help="queue every proposal for review, whatever the bar says")
+    return parser
+
+
+def _cap_value(value, name: str, whole: bool):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 \
+            or not math.isfinite(value) or (whole and int(value) != value):
+        kind = "a whole number" if whole else "a number"
+        raise UsageError(f"cap {name} must be {kind} of 0 or more, or null")
+    return int(value) if whole else float(value)
+
+
+def _globs(value, name: str) -> tuple:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise UsageError(f"distill.projects.{name} must be a list of glob strings")
+    return tuple(value)
+
+
+def load_settings(args: argparse.Namespace, profile: dict) -> Settings:
+    """Merge the profile's distill block with the flags and check every value."""
+    distill = profile.get("distill") if isinstance(profile.get("distill"), dict) else {}
+    caps = distill.get("caps") if isinstance(distill.get("caps"), dict) else {}
+    projects = distill.get("projects") if isinstance(distill.get("projects"), dict) else {}
+    pricing = args.pricing or distill.get("pricing_source")
+    if pricing is not None and not isinstance(pricing, (str, Path)):
+        raise UsageError("distill.pricing_source must be a file path or null")
+    ratio = _positive(args.bytes_per_token, distill, "bytes_per_token", E.DEFAULT_BYTES_PER_TOKEN)
+    multiplier = _positive(args.schema_input_multiplier, distill, "schema_input_multiplier",
+                           E.SCHEMA_INPUT_MULTIPLIER)
+    if args.since is not None and not DATE_RE.match(args.since):
+        raise UsageError("--since takes a date as YYYY-MM-DD")
+    model = args.model or distill.get("model") or DEFAULT_MODEL
+    if not isinstance(model, str):
+        raise UsageError("distill.model must be a string")
+    flags = {"usd": args.max_usd, "tokens": args.max_tokens, "sessions": args.max_sessions}
+    chosen = {key: flags[key] if flags[key] is not None else caps.get(key) for key in flags}
+    return Settings(model, E.Caps(_cap_value(chosen["usd"], "usd", False),
+                                  _cap_value(chosen["tokens"], "tokens", True),
+                                  _cap_value(chosen["sessions"], "sessions", True)),
+                    _globs(projects.get("include"), "include"),
+                    _globs(projects.get("exclude"), "exclude"),
+                    Path(pricing).expanduser() if pricing else None, ratio, args.since,
+                    distill.get("enabled") is True, distill, multiplier)
+
+
+def _positive(flag, distill: dict, key: str, default: float) -> float:
+    """The flag, else the profile's distill.<key>, else the default: a finite number above 0."""
+    value = flag if flag is not None else distill.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+            or value <= 0:
+        raise UsageError(f"{key} must be a number above 0")
+    return float(value)
+
+
+def collect(settings: Settings, config_dir: Path, summary: R.RunSummary,
+            memory_runner: Callable) -> list:
+    """Discover and read every lite source; return its chunks in run order."""
+    found = D.discover(config_dir, settings.include, settings.exclude)
+    summary.skipped.update(found.skipped)
+    segments, own = [], _own_output_dirs()
+    for source in found.sources:
+        if any(common.is_within(source.path, root) for root in own):
+            _count(summary.skipped, "feedback: inside the KB or the distill state dir")
+            continue
+        read, skipped = S.read_source(source, memory_runner)
+        for reason, count in skipped.items():
+            summary.skipped[reason] = summary.skipped.get(reason, 0) + count
+        kept = []
+        for seg in read:
+            if not S.valid_unicode(seg):
+                _count(summary.skipped, S.SKIP_BAD_UNICODE.format(seg.kind))
+                continue
+            if not S.keep_segment(seg, settings.since, settings.include, settings.exclude):
+                continue
+            seg, reason = S.filter_feedback(seg)
+            if reason:
+                _count(summary.skipped, reason)
+            if seg is not None:
+                kept.append(seg)
+        summary.files[source.kind] += 1
+        summary.segments[source.kind] += len(kept)
+        segments.extend(kept)
+    max_bytes = int(S.CHUNK_MAX_TOKENS * settings.bytes_per_token)
+    chunks = S.build_chunks(segments, max_bytes)
+    for chunk in chunks:
+        summary.chunks_by_kind[chunk.source] += 1
+        if chunk.project:
+            summary.projects[chunk.project] += 1
+    return chunks
+
+
+def _count(counts: dict, reason: str) -> None:
+    counts[reason] = counts.get(reason, 0) + 1
+
+
+def _kb_dir() -> Optional[Path]:
+    try:
+        return common.vault_scope_root()
+    except Exception:  # KB off or misconfigured: no gate, spool only
+        return None
+
+
+def _own_output_dirs() -> list:
+    """Folders the distiller writes or feeds (the KB, its state dir): never read as sources."""
+    dirs = [L.default_state_dir()]
+    kb = _kb_dir()
+    return dirs + [kb] if kb is not None else dirs
+
+
+def load_price_table(settings: Settings) -> Optional[E.PriceTable]:
+    if settings.pricing is None:
+        return None
+    try:
+        return E.load_price_table(settings.pricing)
+    except E.PriceTableError as exc:
+        raise UsageError(f"price table {settings.pricing}: {exc}") from None
+
+
+def dry_run(chunks: list, settings: Settings, table, summary: R.RunSummary) -> None:
+    """Walk the chunks a run would send, stopping where the first cap would stop it."""
+    meter = E.CapMeter(settings.caps)
+    for index, chunk in enumerate(chunks):
+        tokens_in, tokens_out, cost = E.chunk_estimate(chunk, settings.model, table,
+                                                       settings.bytes_per_token,
+                                                       settings.input_multiplier)
+        hit = meter.would_exceed(tokens_in + tokens_out, cost, chunk.session)
+        if hit:
+            summary.cap_hit, summary.chunks_capped, summary.status = hit, len(chunks) - index, "capped"
+            return
+        meter.add(tokens_in + tokens_out, cost, chunk.session)
+
+
+def load_seams() -> tuple:
+    """(redact module, backend module), or Refused. A module that is missing or fails to load
+    refuses the run: there is no fallback that sends unredacted text."""
+    loaded = []
+    for name, what in (("_distill.redact", "the redaction layer (bin/_distill/redact.py)"),
+                       ("_distill.backend", "the model backend (bin/_distill/backend.py)")):
+        try:
+            loaded.append(importlib.import_module(name))
+        except ImportError:
+            raise Refused(f"{what} is not installed") from None
+        except Exception as exc:  # fail closed on any load error
+            raise Refused(f"{what} failed to load ({type(exc).__name__})") from None
+    return tuple(loaded)
+
+
+def _row(chunk, status, run_id, backend, settings, table, fingerprint, **counts) -> dict:
+    return L.make_row(chunk, status, run_id, extractor_version=S.EXTRACTOR_VERSION,
+                      backend=backend, model=settings.model, detector_fingerprint=fingerprint,
+                      price_asof=table.asof if table else None, **counts)
+
+
+def _send_one(chunk, redactor, backend):
+    """(status, redacted chunk or None, ChunkResult or None, failure reason or None). Any
+    redaction error skips the chunk; it is never sent."""
+    try:
+        clean = redactor.redact_chunk(chunk)
+    except Exception:  # a detector that raises must skip, never send
+        return L.STATUS_SKIPPED_REDACTION, None, None, None
+    if clean is None:
+        return L.STATUS_SKIPPED_REDACTION, None, None, None
+    try:
+        result = next(iter(backend.extract([clean])))
+    except Exception as exc:   # the reason is a kind name (BackendError) or the exception type
+        reason = str(exc) if type(exc).__name__ == "BackendError" else type(exc).__name__
+        return L.STATUS_FAILED, None, None, f"backend: {reason}"
+    problem = E.usage_problem(result.cost, result.tokens_in, result.tokens_out)
+    if problem:                 # never fed to CapMeter: a NaN cost would switch the usd cap off
+        return L.STATUS_FAILED, None, None, f"backend: {problem}"
+    return L.STATUS_DONE, clean, result, None
+
+
+def execute(chunks: list, settings: Settings, table, redactor, backend, state_dir: Path,
+            summary: R.RunSummary, gate_mode: Optional[I.GateMode] = None) -> None:
+    """Run _execute and record the redaction layer's denylist state and skip counts."""
+    # denylist_status and skip_counts are optional on the seam (redact_chunk and
+    # detector_fingerprint are the contract), so a minimal redactor still runs.
+    summary.tally = summary.tally or I.Tally()
+    status = getattr(redactor, "denylist_status", None)
+    summary.denylist = status() if callable(status) else "not reported by the redaction layer"
+    try:
+        _execute(chunks, settings, table, redactor, backend, state_dir, summary,
+                 gate_mode or I.GateMode())
+    finally:   # skip reasons are counted by kind, so a mass skip (no views, broken list) is loud
+        counts = getattr(redactor, "skip_counts", None)
+        for reason, count in (counts() if callable(counts) else {}).items():
+            key = f"redaction: {reason}"
+            summary.skipped[key] = summary.skipped.get(key, 0) + count
+
+
+def _execute(chunks: list, settings: Settings, table, redactor, backend, state_dir: Path,
+             summary: R.RunSummary, gate_mode: I.GateMode) -> None:
+    """Send each chunk in order; stop with `capped` before the first one a cap would break."""
+    run_id, meter = L.new_run_id(), E.CapMeter(settings.caps)
+    fingerprint = redactor.detector_fingerprint()
+    name = getattr(backend, "name", type(backend).__name__)
+    for index, chunk in enumerate(chunks):
+        est_in, est_out, est_cost = E.chunk_estimate(chunk, settings.model, table,
+                                                     settings.bytes_per_token,
+                                                     settings.input_multiplier)
+        hit = meter.would_exceed(est_in + est_out, est_cost, chunk.session)
+        if hit:
+            L.append_row(state_dir, _row(chunk, L.STATUS_CAPPED, run_id, name, settings, table,
+                                         fingerprint, tokens_in=est_in, tokens_out=est_out,
+                                         cost_estimate=est_cost))
+            summary.statuses[L.STATUS_CAPPED] += 1
+            summary.cap_hit, summary.chunks_capped, summary.status = hit, len(chunks) - index, "capped"
+            return
+        status, clean, result, failure = _send_one(chunk, redactor, backend)
+        if failure:
+            _count(summary.failures, failure)
+        counts = {}
+        if result is not None:
+            kept = I.take(result, clean, state_dir, run_id, gate_mode, summary.tally, raw=chunk)
+            cost = result.cost if result.cost is not None else est_cost
+            counts = {"candidates": kept, "tokens_in": result.tokens_in,
+                      "tokens_out": result.tokens_out, "cost_estimate": cost}
+            meter.add(result.tokens_in + result.tokens_out, cost, chunk.session)
+        L.append_row(state_dir, _row(chunk, status, run_id, name, settings, table, fingerprint,
+                                     **counts))
+        summary.statuses[status] += 1
+
+
+def _print(summary: R.RunSummary, as_json: bool) -> None:
+    print(json.dumps(R.render_json(summary), indent=2) if as_json else R.render_text(summary))
+
+
+def _start_run(settings: Settings, seams) -> tuple:
+    if not settings.enabled:
+        raise Refused("distill.enabled is not true in profile.json")
+    redactor, backend_module = seams() if callable(seams) else seams
+    try:
+        return redactor, backend_module.make_backend(dict(settings.raw, model=settings.model))
+    except Exception as exc:  # fail closed: no backend, no run
+        raise Refused(f"the model backend did not start ({type(exc).__name__})") from None
+
+
+def main(argv: Optional[list] = None, memory_runner: Callable = S.run_memory_cli,
+         seams=load_seams, state_dir: Optional[Path] = None) -> int:
+    args = build_parser().parse_args(argv)
+    summary = R.RunSummary(mode=args.command)
+    try:
+        settings = load_settings(args, common.profile())
+        table = load_price_table(settings)
+        if args.command == "run":
+            redactor, backend = _start_run(settings, seams)
+        chunks = collect(settings, common.claude_config_dir(), summary, memory_runner)
+    except UsageError as exc:
+        print(f"repact-distill: {exc}\n\n{EXAMPLES}", file=sys.stderr)
+        return EXIT_USAGE
+    except Refused as exc:
+        print(f"repact-distill: a real run is refused: {exc}.\n{REFUSAL_RULE}\n{REFUSAL_INSTEAD}",
+              file=sys.stderr)
+        return EXIT_REFUSED
+    state = state_dir if state_dir is not None else L.default_state_dir()
+    done = L.done_keys(state)
+    todo = [chunk for chunk in chunks if chunk.chunk_key not in done]
+    summary.chunks_total, summary.chunks_done_before = len(chunks), len(chunks) - len(todo)
+    summary.estimate = E.estimate_chunks(todo, settings.model, table, settings.bytes_per_token,
+                                         settings.input_multiplier)
+    summary.bytes_per_token, summary.caps = settings.bytes_per_token, settings.caps
+    summary.input_multiplier = settings.input_multiplier
+    if args.command == "dry-run":
+        dry_run(todo, settings, table, summary)
+    else:
+        mode = I.GateMode(_kb_dir(), propose=not args.no_propose, no_auto=args.no_auto_accept)
+        execute(todo, settings, table, redactor, backend, state, summary, mode)
+    _print(summary, args.json)
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

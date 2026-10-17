@@ -68,17 +68,16 @@ def _run_main_with(stdin_data: str, monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", _PROJECT_DIR)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    with patch("session_init.setup_plugin_symlinks", return_value=None), \
-         patch("session_init.ensure_project_memory_md", return_value=None), \
-         patch("session_init.check_pinned_staleness", return_value=None), \
+    with patch("shared.session_init_common.setup_plugin_symlinks", return_value=None), \
+         patch("shared.session_init_common.ensure_project_memory_md", return_value=None), \
          patch("session_init.get_task_list", return_value=None), \
-         patch("session_init.restore_last_session", return_value=None), \
-         patch("session_init.build_context_cache",
+         patch("shared.session_init_lead.restore_last_session", return_value=None), \
+         patch("shared.session_init_lead.build_context_cache",
                return_value=(Path("/tmp/ctx.json"), {})) as mock_build_ctx, \
-         patch("session_init.persist_context", return_value=None) as mock_persist, \
-         patch("session_init.append_event") as mock_append, \
-         patch("session_init.update_session_info", return_value=None) as mock_update, \
-         patch("session_init.check_resume_state", return_value=None) as mock_paused, \
+         patch("shared.session_init_lead.persist_context", return_value=None) as mock_persist, \
+         patch("shared.session_init_lead.append_event") as mock_append, \
+         patch("shared.session_init_lead.update_session_info", return_value=None) as mock_update, \
+         patch("shared.session_init_lead.check_resume_state", return_value=None) as mock_paused, \
          patch("sys.stdin", io.StringIO(stdin_data)), \
          patch("sys.stdout", new_callable=io.StringIO):
         with pytest.raises(SystemExit) as exc_info:
@@ -332,15 +331,14 @@ class TestUnknownRoleStartupWarning:
             monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        with patch("session_init.setup_plugin_symlinks", return_value=None), \
-             patch("session_init.ensure_project_memory_md", return_value=None), \
-             patch("session_init.check_pinned_staleness", return_value=None), \
+        with patch("shared.session_init_common.setup_plugin_symlinks", return_value=None), \
+             patch("shared.session_init_common.ensure_project_memory_md", return_value=None), \
              patch("session_init.get_task_list", return_value=None), \
-             patch("session_init.restore_last_session", return_value=None), \
-             patch("session_init.persist_context", return_value=None), \
-             patch("session_init.append_event", return_value=None), \
-             patch("session_init.update_session_info", return_value=None), \
-             patch("session_init.check_resume_state", return_value=None), \
+             patch("shared.session_init_lead.restore_last_session", return_value=None), \
+             patch("shared.session_init_lead.persist_context", return_value=None), \
+             patch("shared.session_init_lead.append_event", return_value=None), \
+             patch("shared.session_init_lead.update_session_info", return_value=None), \
+             patch("shared.session_init_lead.check_resume_state", return_value=None), \
              patch("sys.stdin", io.StringIO(stdin_data)), \
              patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
             with pytest.raises(SystemExit):
@@ -417,12 +415,40 @@ class TestUnknownRoleStartupWarning:
 
     def test_qualified_specialist_does_not_fire(self, monkeypatch, tmp_path):
         """(b) the PACT:-strip pin: a qualified specialist spelling
-        (PACT:pact-backend-coder) is recognized just like is_lead accepts both
+        (repacted:pact-backend-coder) is recognized just like is_lead accepts both
         lead spellings → NO notice."""
         stdin = json.dumps({"session_id": _SESSION_ID, "source": "startup",
-                            "agent_type": "PACT:pact-backend-coder"})
+                            "agent_type": "repacted:pact-backend-coder"})
         blob = self._run_capture_systemmessage(stdin, monkeypatch, tmp_path)
         assert self._notice_text() not in blob, (
             "a qualified specialist spelling must be recognized (PACT:-strip) "
             "and NOT fire the unknown-role notice"
         )
+
+    # ---- ONE CHANNEL PER FRAME ----
+
+    @pytest.mark.parametrize("source", ["startup", "resume", "compact"])
+    @pytest.mark.parametrize("frame, channel", [
+        ({}, "additionalContext"),
+        ({"agent_type": "pact-architct"}, "systemMessage"),
+    ], ids=["absent-agent-type", "typo-agent-type"])
+    def test_each_notice_reaches_one_channel(
+        self, frame, channel, source, monkeypatch, tmp_path,
+    ):
+        """The role sentence and the in-process unattended paragraph each land in
+        at most one channel of one output; the role sentence in the expected one."""
+        import session_init
+
+        stdin = json.dumps({"session_id": _SESSION_ID, "source": source, **frame})
+        out = json.loads(self._run_capture_systemmessage(stdin, monkeypatch, tmp_path))
+        channels = {
+            "additionalContext": out.get("hookSpecificOutput", {}).get("additionalContext", ""),
+            "systemMessage": out.get("systemMessage", ""),
+        }
+        for notice in (session_init._UNKNOWN_ROLE_NOTICE, session_init._INPROCESS_MODE_NOTICE):
+            carriers = [name for name, text in channels.items() if notice in text]
+            assert len(carriers) <= 1, f"{notice[:40]!r} reached {carriers}"
+        role = [name for name, text in channels.items()
+                if session_init._UNKNOWN_ROLE_NOTICE in text]
+        launch_or_context = source != "compact" or channel == "additionalContext"
+        assert role == ([channel] if launch_or_context else [])

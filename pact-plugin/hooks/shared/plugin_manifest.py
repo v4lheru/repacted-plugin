@@ -32,7 +32,7 @@ _PREFIX = "PACT plugin: "
 # LLM tokenizer may treat as a line break, plus render-hostile control
 # bytes. Asymmetric strip sets across interpolation sinks become the
 # attacker's entry point (see security-engineer
-# patterns_symmetric_sanitization.md).
+# the symmetric-sanitisation rule).
 _RENDER_STRIP_RE = re.compile(r"[\x00-\x1f\x7f  ]")
 
 
@@ -77,6 +77,24 @@ def _read_manifest(plugin_root: str) -> Optional[dict]:
     if not isinstance(data, dict):
         return None
     return data
+
+
+def plugin_version() -> str:
+    """The manifest version of the running plugin, or "" when it cannot be read.
+
+    Reads the manifest under CLAUDE_PLUGIN_ROOT, else the one beside this file (the
+    code that runs is the plugin whose version a journal row should carry). Does not
+    raise.
+    """
+    try:
+        for root in (_resolve_plugin_root(), str(Path(__file__).resolve().parents[2])):
+            data = _read_manifest(root) if root else None
+            if data is not None:
+                version = data.get("version")
+                return _sanitize(version) if isinstance(version, str) else ""
+    except Exception:  # noqa: BLE001 - a version that cannot be read is an empty field
+        pass
+    return ""
 
 
 def format_plugin_banner() -> str:

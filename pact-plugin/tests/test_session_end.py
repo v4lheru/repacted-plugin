@@ -2556,9 +2556,9 @@ class TestIsPausedSession:
         assert _is_paused_session(session_dir) is True
 
     def test_returns_true_for_pause_quit_race(self, tmp_path):
-        """AdvF1: /PACT:pause then quit Claude Code ~1s later.
+        """AdvF1: /repacted:pause then quit Claude Code ~1s later.
 
-        The real-world flow: user runs /PACT:pause (writes
+        The real-world flow: user runs /repacted:pause (writes
         session_paused), then quits Claude Code, which fires session_end
         a moment later. Under the old semantics, session_end.ts >=
         session_paused.ts caused _is_paused_session to return False and
@@ -2580,7 +2580,7 @@ class TestIsPausedSession:
     def test_returns_true_for_equal_timestamp_tie(self, tmp_path):
         """BugF2: equal-ts tie (paused.ts == ended.ts) due to 1-Hz ISO precision.
 
-        ISO timestamps have 1-second precision, so if /PACT:pause and
+        ISO timestamps have 1-second precision, so if /repacted:pause and
         the subsequent session_end both land in the same wall-clock
         second, their `ts` fields are equal. Under the old `>=` check
         this caused _is_paused_session to return False (data loss).

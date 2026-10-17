@@ -58,7 +58,7 @@ def _warning(project_id, repo_root, filed_as=None):
 
 def test_warns_when_working_directory_is_a_different_repository():
     """The measured incident: a save issued from inside another repo."""
-    warning = _warning("PACT-prompt", Path("/Users/mj/Sites/scratchpad/viable"))
+    warning = _warning("PACT-prompt", Path("/Users/alice/Sites/scratchpad/viable"))
     assert warning is not None, "the silent mis-scope stayed silent"
     assert "PACT-prompt" in warning, "warning does not name the filed project"
     assert "viable" in warning, "warning does not name the repo we are in"
@@ -83,7 +83,7 @@ def test_warns_for_an_explicitly_supplied_foreign_project():
     entirely, so a check living in that function would miss this case.
     """
     warning = _warning(
-        "PACT-prompt", Path("/Users/mj/Sites/collab/PACT-prompt"), filed_as="somewhere-else"
+        "PACT-prompt", Path("/Users/alice/Sites/collab/PACT-prompt"), filed_as="somewhere-else"
     )
     assert warning is not None
     assert "somewhere-else" in warning
@@ -93,7 +93,7 @@ def test_warns_for_an_explicitly_supplied_foreign_project():
 
 def test_silent_when_the_repository_matches():
     """The overwhelmingly common correct save must produce nothing."""
-    assert _warning("PACT-prompt", Path("/Users/mj/Sites/collab/PACT-prompt")) is None
+    assert _warning("PACT-prompt", Path("/Users/alice/Sites/collab/PACT-prompt")) is None
 
 
 def test_silent_from_a_worktree_of_the_same_project():
@@ -105,7 +105,7 @@ def test_silent_from_a_worktree_of_the_same_project():
     `--show-toplevel` instead, this guard would fire on every worktree save
     and be worthless. This arm is what fails if that resolution is changed.
     """
-    assert _warning("PACT-prompt", Path("/Users/mj/Sites/collab/PACT-prompt")) is None
+    assert _warning("PACT-prompt", Path("/Users/alice/Sites/collab/PACT-prompt")) is None
 
 
 def test_silent_when_not_inside_any_repository():
@@ -130,7 +130,7 @@ def test_silent_when_location_agrees_but_subject_may_not():
     here rather than rediscovered in production, and so that turning this into
     a warning is a deliberate act with a visible false-positive cost.
     """
-    assert _warning("PACT-prompt", Path("/Users/mj/Sites/collab/PACT-prompt")) is None
+    assert _warning("PACT-prompt", Path("/Users/alice/Sites/collab/PACT-prompt")) is None
 
 
 # --- the git call is resolved once, not per call ---------------------------
@@ -212,7 +212,7 @@ class TestTheWarningIsReachedByARealSave:
             project_id="PACT-prompt", session_id="s", db_path=tmp_path / "wired.db"
         )
         memory_id, text = self._save_from(
-            mem, Path("/Users/mj/Sites/scratchpad/viable"), caplog
+            mem, Path("/Users/alice/Sites/scratchpad/viable"), caplog
         )
 
         assert memory_id, "the save did not complete, so the success path was not driven"
@@ -241,7 +241,7 @@ class TestTheWarningIsReachedByARealSave:
             project_id="PACT-prompt", session_id="s", db_path=tmp_path / "quiet.db"
         )
         memory_id, text = self._save_from(
-            mem, Path("/Users/mj/Sites/collab/PACT-prompt"), caplog
+            mem, Path("/Users/alice/Sites/collab/PACT-prompt"), caplog
         )
 
         assert memory_id, "the save did not complete"

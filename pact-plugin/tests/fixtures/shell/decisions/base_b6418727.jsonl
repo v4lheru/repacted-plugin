@@ -1,0 +1,14 @@
+{"base": "b6418727", "blob_id": "f080051af6f9c6e9427d4dbaad886203b1276a5c", "captured_from": "3f27b2c6", "rows": 13, "sha256": "ace0de7c46c0be29cb511dec10efc42a972f156cbf83f866f46e6407cc14f368"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"run git branch -D victim later\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -Sam \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -aaaaaaaaaaaaaaaaaaaaaaaam \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -am \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m'run git branch -D victim later'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m\"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -qam \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -sam \"run git branch -D victim later\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -am \"run git branch -D victim later\" v1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -m\"run git branch -D victim later\" v1"], {}], "result": true}

@@ -1,0 +1,17 @@
+{"base": "2d7fcd07", "blob_id": "b07f06c0c57ad9c966d637e4ac50e8beed7609ca", "captured_from": "3f27b2c6", "rows": 16, "sha256": "b3789cf523a4823f97b397f817eccd727021c7ea6a4d0e622da310477bbed972"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["git commit --message=\"run git branch -D victim later\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m $'don\\'t run git branch -D victim'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m $'don\\'t' && git branch -D victim && git commit -m 'x'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m $'don\\'t' && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m $'don\\'t' ; gh pr merge 5 --delete-branch ; git commit -m 'x'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m $'don\\'t' | git branch -D real | git commit -m 'x'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m 'don'\\''t run git branch -D victim later'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m 'don'\\''t' && git branch -D victim && git commit -m 'x'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m 'don'\\''t' && git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m 'don'\\''t' ; gh pr merge 5 --delete-branch ; git commit -m 'x'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m 'don'\\''t' | git branch -D real | git commit -m 'x'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m $'don\\'t run git branch -D victim' v1"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -m 'don'\\''t run git branch -D victim later' v1"], {}], "result": true}

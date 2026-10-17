@@ -30,7 +30,7 @@ runtime-confirmed only when BOTH hold under a real Claude Code session:
    `additionalContext` contains `## PACT Runtime Config (resolved at session
    start)` with `- PR greedy-fix: ON (PACT_PR_GREEDY_FIX)`. (The L2 test pins
    this; confirm it survives real platform hook-dispatch.)
-2. **Honoring (the runtime-only gate):** in a real `/PACT:peer-review` run whose
+2. **Honoring (the runtime-only gate):** in a real `/repacted:peer-review` run whose
    review surfaces at least one *minor* or *future* finding, the orchestrator
    under `PACT_PR_GREEDY_FIX=1` **batches** those findings into the remediation
    path (greedy) instead of running the per-finding Step A/B/C gate; and under
@@ -48,7 +48,7 @@ and `PACT_PR_GREEDY_FIX=0 claude …`. In each, inspect the SessionStart
 match the launch value.
 
 ### Step B — HONORING (reversibility-scoped, safe)
-In the greedy-ON session, run `/PACT:peer-review` on a branch whose review
+In the greedy-ON session, run `/repacted:peer-review` on a branch whose review
 yields ≥1 minor/future finding. Observe whether the orchestrator **auto-batches**
 the minor/future remediation (greedy) and **surfaces guardrail-excluded findings
 as an end-of-run summary** — rather than prompting the Step A "review the minor

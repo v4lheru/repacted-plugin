@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""repact-scratch-prune: delete rebuildable build output from stale Claude Code session temp folders.
+
+Location: pact-plugin/bin/repact-scratch-prune. The logic, the rules and the safety notes
+are in bin/_scratch_prune.py. A dry run unless --apply: it lists each stale session folder with
+the bytes its rebuildable directories hold (node_modules, .next, build output beside its project
+file, .NET bin/obj, virtualenvs, package caches, SDK installs). Reports, logs, results and .git
+always stay. hooks/doctor_brief.py starts `--auto` once a day, detached.
+
+Usage: repact-scratch-prune [--apply] [--root DIR] [--days N] [--skip-session ID]...
+       repact-scratch-prune --auto --state-dir DIR [--skip-session ID]
+Exit codes: 0 done (or --auto, always); 1 the root was left alone (missing, not owned, shared);
+2 usage error.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _scratch_prune  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(_scratch_prune.main())

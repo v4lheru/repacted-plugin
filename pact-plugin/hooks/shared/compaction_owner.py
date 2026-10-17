@@ -26,7 +26,8 @@ at stage time, so a summary recorded before the compaction never matches.
 
 The lead's transcript is the staged frame's transcript_path, and a teammate's is
 <transcript dir>/<session_id>/subagents/agent-*.jsonl. A match in the lead's
-promotes the summary to compact-summary.txt. A match in a teammate's keeps it
+promotes the summary to compact-summary.txt and writes its capped head beside
+it (summary_head). A match in a teammate's keeps it
 beside that file, which stays as it is. A summary no transcript records within
 EXPIRE_S is parked as unattributed and never becomes compact-summary.txt, even
 when there is none, because it may be a teammate's; the lead still holds its own
@@ -47,10 +48,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from . import session_journal
+from . import session_journal, summary_head
 from .constants import COMPACT_SUMMARY_NAME
-from .paths import get_claude_config_dir
-from .session_state import is_safe_path_component
+from .paths import get_claude_config_dir, is_safe_path_component
 
 # ponytail: timing constants from one machine's live window. A teammate's
 # summary record landed 7.8-10.4 s after its compaction boundary, and the lead's
@@ -368,6 +368,7 @@ def _resolve_claim(folder, pending, claim, staged_ns, wait_s, now, monotonic, sl
         _write_atomic(folder / f"{_TEAMMATE_PREFIX}{staged_ns}.txt", record["summary"])
     elif verdict == LEAD:
         _write_atomic(folder / COMPACT_SUMMARY_NAME, record["summary"])
+        summary_head.write_head(folder, record["summary"])
     else:
         _write_atomic(folder / f"{_UNATTRIBUTED_PREFIX}{staged_ns}.txt", record["summary"])
     acted.append(True)

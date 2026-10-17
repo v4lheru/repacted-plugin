@@ -11,11 +11,9 @@ reason the restore moved into the seam.
 THE POPULATION IS THE CALL SITES, NOT THE TWO TWIN MODULES. COUNTING RULE,
 STATED BESIDE THE NUMBER: one entry for each CALL EXPRESSION of
 `_atomic_write_text` in a `.py` file below `hooks/` and `skills/`, tests
-excluded, imports and comment mentions not counted. An AST walk of 78 files
-returns TEN, in five modules:
+excluded, imports and comment mentions not counted. An AST walk returns
+EIGHT, in three modules (two sites went with the 1.5.0 pin-gate cut):
 
-    hooks/staleness.py                            1   check_pinned_staleness
-    hooks/pin_marker_writer.py                    1   _plan_and_write
     hooks/shared/session_resume.py                3   update_session_info
     hooks/shared/claude_md_manager.py             3   strip_orphan_kernel_block
                                                       ensure_project_memory_md
@@ -85,7 +83,7 @@ def _assert_crlf_survived(path: Path, site: str, before: bytes) -> None:
     🔴 THE WRITE-HAPPENED GATE IS FIRST AND IT IS NOT A FORMALITY. A caller
     that takes an early return writes nothing, and every ending assertion below
     then passes on the untouched SEED. That arm certifies the seam while never
-    reaching it. This was not hypothetical: the first draft of the staleness
+    reaching it. This was not hypothetical: the first draft of a since-retired
     arm in this file passed exactly that way, on a document whose shape the
     parser did not recognise, and the pass returned None without a write.
     """
@@ -129,7 +127,7 @@ class TestSeedFixtureIsCrlf:
 
 
 class TestWorkingMemoryTwinCallSites:
-    """skills/pact-memory/scripts/working_memory.py, 2 of the 10 sites."""
+    """skills/pact-memory/scripts/working_memory.py, 2 of the 8 sites."""
 
     def test_sync_to_claude_md_keeps_the_crlf_of_the_target(
         self, tmp_path, monkeypatch
@@ -177,7 +175,7 @@ class TestWorkingMemoryTwinCallSites:
 
 
 class TestCanonicalTwinCallSites:
-    """hooks/shared/claude_md_manager.py, 3 of the 10 sites."""
+    """hooks/shared/claude_md_manager.py, 3 of the 8 sites."""
 
     def test_migrate_to_managed_structure_keeps_the_crlf_of_the_target(
         self, tmp_path, monkeypatch
@@ -204,35 +202,6 @@ class TestCanonicalTwinCallSites:
         _assert_crlf_survived(target, "claude_md_manager.py:1254", before)
 
 
-class TestStalenessCallSite:
-    """hooks/staleness.py, 1 of the 10 sites."""
-
-    def test_check_pinned_staleness_keeps_the_crlf_of_the_target(self, tmp_path):
-        """SITE staleness.py:1069, in `check_pinned_staleness`.
-
-        This is the site the seam repair REMOVED a call-site restore from. It
-        is the one site the design records as already armed end to end, and it
-        is repeated here so the ten sites read from one table.
-        """
-        from staleness import check_pinned_staleness
-
-        project = tmp_path / "project"
-        target = project / ".claude" / "CLAUDE.md"
-        from test_staleness import over_budget_body
-
-        _seed_crlf(
-            target,
-            "# Project Memory\n\n"
-            "## Pinned Context\n\n"
-            f"### Big Feature\n{over_budget_body()}\n\n",
-        )
-        before = target.read_bytes()
-
-        check_pinned_staleness(claude_md_path=target)
-
-        _assert_crlf_survived(target, "staleness.py:1069", before)
-
-
 class TestTheCoverageReportNamesItsMisses:
     """THE MISSES ARE PART OF THE RESULT, NOT AN OMISSION FROM IT.
 
@@ -254,7 +223,6 @@ class TestTheCoverageReportNamesItsMisses:
         "skills/pact-memory/scripts/working_memory.py::sync_to_claude_md": 1,
         "skills/pact-memory/scripts/working_memory.py::sync_retrieved_to_claude_md": 1,
         "hooks/shared/claude_md_manager.py::migrate_to_managed_structure": 1,
-        "hooks/staleness.py::check_pinned_staleness": 1,
     }
 
     # site -> the arm(s) that DRIVE that site, as `ClassName::test_name`.
@@ -280,10 +248,6 @@ class TestTheCoverageReportNamesItsMisses:
             "TestCanonicalTwinCallSites::"
             "test_migrate_to_managed_structure_keeps_the_crlf_of_the_target",
         ],
-        "hooks/staleness.py::check_pinned_staleness": [
-            "TestStalenessCallSite::"
-            "test_check_pinned_staleness_keeps_the_crlf_of_the_target",
-        ],
     }
 
     # site -> the reason it carries no end-to-end CRLF arm in this file.
@@ -302,11 +266,6 @@ class TestTheCoverageReportNamesItsMisses:
             "to keep this file free of a home-redirect fixture. The behaviour "
             "is the same seam call, and the gap is real rather than argued "
             "away."
-        ),
-        "pin_marker_writer.py:311 _plan_and_write": (
-            "A private entry point that reads its plan from the hook "
-            "invocation rather than from arguments, so an end-to-end drive "
-            "needs the hook input harness. NOT ATTEMPTED here."
         ),
         "session_resume.py:198 / :220 / :272 update_session_info": (
             "THREE sites in ONE function, reached by three different document "
@@ -331,7 +290,6 @@ class TestTheCoverageReportNamesItsMisses:
     UNDRIVEN_COUNTS = {
         "hooks/shared/claude_md_manager.py::ensure_project_memory_md": 1,
         "hooks/shared/claude_md_manager.py::strip_orphan_kernel_block": 1,
-        "hooks/pin_marker_writer.py::_plan_and_write": 1,
         "hooks/shared/session_resume.py::update_session_info": 3,
     }
 
@@ -478,7 +436,6 @@ class TestTheCoverageReportNamesItsMisses:
         driving_classes = (
             TestWorkingMemoryTwinCallSites,
             TestCanonicalTwinCallSites,
-            TestStalenessCallSite,
         )
         collected = {
             f"{cls.__name__}::{name}"

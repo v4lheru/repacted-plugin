@@ -1,0 +1,280 @@
+{"base": "b4041ccf", "blob_id": "48baf9e2df6bb1a214f276c70ffdaf49740db7a3", "captured_from": "3f27b2c6", "rows": 279, "sha256": "1603fce8ccfc250d0cc80baeb2a41370a2f10005b584dce4be137511a2350666"}
+{"attr": "_executed_surface_view", "callable": true}
+{"attr": "_has_pipe_to_shell", "callable": true}
+{"attr": "_single_destructive_leg", "callable": true}
+{"attr": "_single_detectable_leg", "callable": true}
+{"attr": "detect_command_operation_type", "callable": true}
+{"attr": "extract_command_context", "callable": true}
+{"attr": "is_compound_destructive_command", "callable": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"attr": "locate_command_regions", "callable": true}
+{"call": ["_executed_surface_view", ["git commit -m \"note: gh pr merge 5 --admin later\" # reviewed, do not pipe | sh"], {}], "result": "git commit -m                                     # reviewed, do not pipe | sh"}
+{"call": ["_has_pipe_to_shell", ["git commit -m                                     # reviewed, do not pipe | sh"], {}], "result": true}
+{"call": ["_single_destructive_leg", ["gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"], {}], "result": "gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"}
+{"call": ["detect_command_operation_type", ["bash -c 'gh pr merge 5'"], {}], "result": "merge"}
+{"call": ["detect_command_operation_type", ["cd . && git push origin +feature"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["cd . && git push origin +main"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["gh -R o/r api repos/o/r/git/refs/heads/x -X DELETE"], {}], "result": "branch-delete"}
+{"call": ["detect_command_operation_type", ["gh api 'repos/o/r/git/refs/heads/x' -X DELETE"], {}], "result": "branch-delete"}
+{"call": ["detect_command_operation_type", ["gh api -X PUT /repos/o/r/pulls/42/merge"], {}], "result": "merge"}
+{"call": ["detect_command_operation_type", ["gh pr close 5 # weighed gh pr merge 5"], {}], "result": "merge"}
+{"call": ["detect_command_operation_type", ["gh pr close 5 --comment 'done'"], {}], "result": "close"}
+{"call": ["detect_command_operation_type", ["gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"], {}], "result": "merge"}
+{"call": ["detect_command_operation_type", ["gh pr merge 5"], {}], "result": "merge"}
+{"call": ["detect_command_operation_type", ["git -c x=y push 'origin' --delete main"], {}], "result": "remote-ref-delete"}
+{"call": ["detect_command_operation_type", ["git branch -D \"feat/x\""], {}], "result": "branch-delete"}
+{"call": ["detect_command_operation_type", ["git push '--force' origin main"], {}], "result": "force-push"}
+{"call": ["detect_command_operation_type", ["git push 'origin' --delete HEAD:main"], {}], "result": "remote-ref-delete"}
+{"call": ["detect_command_operation_type", ["git push 'origin' --delete main"], {}], "result": "remote-ref-delete"}
+{"call": ["detect_command_operation_type", ["git push 'origin' --mirror main"], {}], "result": "remote-mass-delete"}
+{"call": ["detect_command_operation_type", ["git push 'origin' --prune main"], {}], "result": "remote-mass-delete"}
+{"call": ["detect_command_operation_type", ["git push 'origin' -d main"], {}], "result": "remote-ref-delete"}
+{"call": ["detect_command_operation_type", ["git push 'origin' HEAD:main"], {}], "result": "push-to-main"}
+{"call": ["detect_command_operation_type", ["git push 'origin' main"], {}], "result": "push-to-main"}
+{"call": ["detect_command_operation_type", ["git push --force-with-lease 'origin' --delete main"], {}], "result": "remote-ref-delete"}
+{"call": ["detect_command_operation_type", ["git push --force-with-lease origin main"], {}], "result": "push-to-main"}
+{"call": ["detect_command_operation_type", ["git push \"origin\" -d main"], {}], "result": "remote-ref-delete"}
+{"call": ["detect_command_operation_type", ["git push origin '+notaforce'"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin '--delete' main"], {}], "result": "remote-ref-delete"}
+{"call": ["detect_command_operation_type", ["git push origin +feature"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin +feature:main"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin +main"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin +master"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin +refs/heads/main"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin --delete main"], {}], "result": "remote-ref-delete"}
+{"call": ["detect_command_operation_type", ["git push origin HEAD:refs/heads/main"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin develop:main"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin feature:main"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["git push origin main"], {}], "result": "push-to-main"}
+{"call": ["detect_command_operation_type", ["git push origin master"], {}], "result": "push-to-main"}
+{"call": ["detect_command_operation_type", ["git push origin refs/heads/main"], {}], "result": null}
+{"call": ["detect_command_operation_type", ["sh -c \"gh pr merge 5\""], {}], "result": "merge"}
+{"call": ["extract_command_context", ["gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"], {}], "result": {"bound_flags": [], "operation_type": "merge", "pr_number": "5"}}
+{"call": ["extract_command_context", ["gh pr close 5 \\\n--delete-branch"], {}], "result": {"bound_flags": ["--delete-branch"], "operation_type": "close", "pr_number": "5"}}
+{"call": ["extract_command_context", ["gh pr close 5 \\\n-d"], {}], "result": {"bound_flags": ["--delete-branch"], "operation_type": "close", "pr_number": "5"}}
+{"call": ["extract_command_context", ["git push --force origin feature:main"], {}], "result": {"bound_flags": [], "operation_type": "force-push", "target_ref": "main"}}
+{"call": ["extract_command_context", ["git push --force origin main"], {}], "result": {"bound_flags": [], "operation_type": "force-push", "target_ref": "main"}}
+{"call": ["extract_command_context", ["git push --force origin"], {}], "result": {"bound_flags": [], "operation_type": "force-push"}}
+{"call": ["extract_command_context", ["git push origin main feature"], {}], "result": {"bound_flags": [], "operation_type": "push-to-main"}}
+{"call": ["extract_command_context", ["weighed gh pr merge 5 --admin but closing instead"], {"flag_scan_text": "weighed gh pr merge 5 --admin but closing instead'"}], "result": {"bound_flags": ["--admin"], "operation_type": "merge", "pr_number": "5"}}
+{"call": ["extract_command_context", ["weighed gh pr merge 5 --admin but closing instead"], {}], "result": {"bound_flags": ["--admin"], "operation_type": "merge", "pr_number": "5"}}
+{"call": ["is_compound_destructive_command", ["gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["FOO=\"gh pr merge 5 --admin\" git grep 'x' && eval $FOO"], {}], "result": true}
+{"call": ["is_dangerous_command", ["awk '/gh pr merge 5 --admin/ {print}' f"], {}], "result": true}
+{"call": ["is_dangerous_command", ["cd . && gh pr close 5 -d"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git branch -Df temp"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push origin --delete feature"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push origin --delete main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["cd . && git push origin :main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["echo \"gh pr merge 5 --admin\"# not-a-comment | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"gh pr merge 5 --admin\"\\ #x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"gh pr merge 5 --admin\"\\\n#x | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"gh pr merge 5 --admin\"\\\n#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"gh pr merge 5 --admin\"\\\n#x |sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git branch -D victim\"\\ #x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git branch -D victim\"\\\n#x | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git branch -D victim\"\\\n#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git branch -D victim\"\\\n#x |sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" # docs: | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" #x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\" ;# c | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\ #x | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\ #x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\ #x |sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\ \\ \\ #x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\&#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\;#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\\\ #x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\\n#x > >(bash)"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\\n#x | bash"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\\n#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\\n#x |sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\\n\\\n#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\\r\n#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\\t#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\\|#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo \"git push --force origin main\"\n#x | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["echo hello world"], {}], "result": false}
+{"call": ["is_dangerous_command", ["find . -iname '*.md'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["find . -iname 'gh pr merge 5 --admin' -exec cat {} \\;"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -iname 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -ipath 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -iregex 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -name '*.py'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["find . -name 'gh pr merge 5 --admin' -exec cat {} \\;"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -name 'gh pr merge 5 --admin' | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -name 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -name 'x' -exec sh -c 'gh pr merge 5 --admin' \\;"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -path './src/*' -name '*.js'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["find . -path 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["find . -regex 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh -R o/r api repos/o/r/git/refs/heads/x -X DELETE"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api 'repos/o/r/git/refs/heads/x' -X DELETE"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api -X DELETE repos/o/r/git/refs/heads/x"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api -X PUT /repos/o/r/pulls/42/merge"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh api /repos/o/r/branches/main/protection"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api /repos/o/r/git/refs"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh api /repos/o/r/pulls/5"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh issue list --author 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh issue list --label bug"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh issue list --search 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh issue list -A 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh issue list -l 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh issue list"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 \\\n--delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr close 5 \\\n-d"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr create --body \"git push --force origin main\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr list && echo done"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr list --author 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr list --base 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr list --label 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr list --search 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr list --search 'is:open'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr list -S 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr list"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr merge 5 --admin # done"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 5 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge 5"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr merge\\\n5"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh pr view 5 # checked | sh"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr view 5 # weighed gh pr merge 5 --admin"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh pr view 5"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh search code 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search code 'import os'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh search commits 'fix typo'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh search commits 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search commits --author 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search commits --committer 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search issues 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search issues --label 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search prs 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search prs 'is:open review:required'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh search prs --author 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search repos 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh search repos 'topic:cli'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["gh search repos --owner 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git --no-pager log --grep 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C /p branch -D main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C /p grep -O'vim' 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C /p grep -e 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C /p log --grep 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -C /p merge -m 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c 'user.name=A B' merge -m 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c core.pager=x log --grep 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c core.pager=x push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c merge.tool=x merge -m 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c user.name=x branch -D main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git -c x=y push 'origin' --delete main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -D \"feat/x\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -D feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -D victim"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git branch -a"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m 'fix: normal commit'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m 'gh pr merge 5 --admin # b' | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m 'note about deploy' # ok"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m \"git push --force origin main\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git commit -m \"note: gh pr merge 5 --admin later\" # reviewed, do not pipe | sh"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"note: gh pr merge 5 --admin later\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git diff HEAD~1"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git fetch && git push --mirror origin"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git grep $(sh -c 'gh pr merge 5 --admin')"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep 'TODO' src/"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git grep 'gh pr merge 5 --admin' -- src/"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep --open-files-in-pager='vim' 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep -O 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep -O'sh -c \"gh pr merge 5 --admin\"' pat"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep -e 'FIXME' -- '*.py'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git grep -e 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep -f 'gh pr merge 5 --admin' src/"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep -f <(sh -c 'gh pr merge 5 --admin')"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git grep pat -- gh pr merge 5 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --author 'Alice'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git log --author 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --author='gh pr merge 5 --admin'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git log --committer 'gh pr close 5 --delete-branch'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --committer 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --committer 'git branch -D victim'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --committer 'git push --force origin main'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --grep 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --grep 'git push --force origin main'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --grep 'refactor auth'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git log --grep 'x' && gh pr merge 5 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --grep \"gh pr merge 5 --admin\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --grep=\"gh pr merge 5 --admin\""], {}], "result": false}
+{"call": ["is_dangerous_command", ["git log --grep=foo&&gh pr merge 5 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log --oneline -20"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git log --walk-reflogs --grep-reflog 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log -G 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log -G'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log -S 'def handler'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git log -S 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log -S'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log -n5 -S'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log -nS'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git log -wG'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge --no-ff feature -m 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge -m 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge -m 'note' -m 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git merge feature -m 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git pus\\\nh --force origin main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git push '--force' origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push 'origin' --delete HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push 'origin' --delete main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push 'origin' --mirror main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push 'origin' --prune main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push 'origin' -d main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push 'origin' HEAD:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push 'origin' main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force --push-option x origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force --push-option=x origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force -o a -o b origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force -o ci.skip origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force -o ci.skip=true origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force -o x origin feature:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin feature:main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin main && echo done"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force origin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force-with-lease 'origin' --delete main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push --force-with-lease -v origin feature"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git push --force-with-lease origin feature"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git push --force-with-lease origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push -u --force-with-lease origin feature"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git push \"origin\" -d main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin '--delete' main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin --delete main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin :branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin :feature"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin grep ':main'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push origin master"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git push\\\n--force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git shortlog --author 'Bob'"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git shortlog --author 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git shortlog --committer 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git shortlog --grep \"gh pr merge 5 --admin\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git shortlog -e 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git show --author 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git show --committer 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git show --grep \"gh pr merge 5 --admin\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["git show -S'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git show HEAD"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status && git log --oneline"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git status"], {}], "result": false}
+{"call": ["is_dangerous_command", ["grep -c 'gh pr merge 5 --admin' file.txt"], {}], "result": false}
+{"call": ["is_dangerous_command", ["grep -c 'x' file.txt"], {}], "result": false}
+{"call": ["is_dangerous_command", ["grep -rn 'gh pr merge 5 --admin' ."], {}], "result": false}
+{"call": ["is_dangerous_command", ["grep -rn 'pattern' ."], {}], "result": false}
+{"call": ["is_dangerous_command", ["ls -la # TODO: gh pr merge 5 --admin | sh"], {}], "result": false}
+{"call": ["is_dangerous_command", ["ls -la"], {}], "result": false}
+{"call": ["is_dangerous_command", ["nice gh pr merge 5 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["nice git log --grep 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["python -c \"print('gh pr merge 5 --admin')\""], {}], "result": true}
+{"call": ["is_dangerous_command", ["timeout 5 gh pr merge 5 --admin"], {}], "result": true}
+{"call": ["is_dangerous_command", ["timeout 5 git grep 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["is_dangerous_command", ["timeout 5 git grep -f <(sh -c 'gh pr merge 5 --admin')"], {}], "result": true}
+{"call": ["is_dangerous_command", ["timeout 5 git log --grep 'gh pr merge 5 --admin'"], {}], "result": true}
+{"call": ["locate_command_regions", ["Yes, close it gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"], {}], "result": ["weighed gh pr merge 5 --admin but closing instead", "gh pr close 5 --comment 'weighed gh pr merge 5 --admin but closing instead'"]}

@@ -240,7 +240,7 @@ def is_pact_agent(agent_identifier: str) -> bool:
             prefix family below matches ``agent_type`` values directly, so the
             same prefix-check answers the role-class question against the field
             that is actually present at SubagentStop. The namespaced
-            spelling (``"PACT:pact-preparer"``) is checked without its ``PACT:``.
+            spelling (``"repacted:pact-preparer"``) is checked without its namespace.
 
     Returns:
         True if this is a PACT agent that should be validated

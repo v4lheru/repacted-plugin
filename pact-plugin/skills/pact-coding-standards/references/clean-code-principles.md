@@ -611,7 +611,7 @@ function processOrder(order, shippingType) { }
 const index = binarySearch(sortedItems, target);
 
 // Clarify complex regular expressions
-// Matches: user@example.com, user.name+tag@sub.example.co.uk
+// Matches: user@example.com, user.name+tag@sub.example.org
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Document assumptions and constraints

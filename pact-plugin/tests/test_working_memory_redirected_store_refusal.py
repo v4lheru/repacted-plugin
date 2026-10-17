@@ -853,7 +853,7 @@ class TestSameRepositoryIsNotSymmetric:
 # One population of layouts, driven through every site that judges project scope
 # ---------------------------------------------------------------------------
 
-_SITES = ("sync_to_claude_md", "sync_retrieved_to_claude_md", "archive_pin")
+_SITES = ("sync_to_claude_md", "sync_retrieved_to_claude_md")
 
 
 def _committed_repo(path: Path) -> Path:
@@ -1099,10 +1099,6 @@ def _arrange(layout, tmp_path, monkeypatch) -> Path:
 
 
 def _run_site(site):
-    if site == "archive_pin":
-        import archive_pin
-
-        return archive_pin.resolve_claude_md()
     import scripts.working_memory as wm
 
     if site == "sync_to_claude_md":
@@ -1115,11 +1111,10 @@ def _run_site(site):
 
 
 class TestEverySiteJudgesProjectScopeAlike:
-    """ONE population, THREE sites, the real resolver at each.
+    """ONE population, TWO sites, the real resolver at each.
 
-    `sync_to_claude_md`, `sync_retrieved_to_claude_md` and
-    `archive_pin.resolve_claude_md` all decide scope with
-    `stays_in_declared_project`. A layout is admitted or refused at all three or
+    `sync_to_claude_md` and `sync_retrieved_to_claude_md` both decide scope with
+    `stays_in_declared_project`. A layout is admitted or refused at both or
     at none, so each case below runs at each site: a guard dropped from one site
     fails that site's refusal cases and no other.
 
@@ -1140,12 +1135,6 @@ class TestEverySiteJudgesProjectScopeAlike:
 
         result = _run_site(site)
 
-        if site == "archive_pin":
-            assert Path(result[0]).resolve() == document.resolve(), (
-                f"{layout}: archive_pin resolved {result[0]}, not the document "
-                "in the declared project"
-            )
-            return
         assert result == SyncResult(SyncResult.WROTE), (
             f"{layout}: {site} returned {result!r}. The layout stays inside the "
             "declared project, so refusing it is an over-block."
@@ -1162,20 +1151,13 @@ class TestEverySiteJudgesProjectScopeAlike:
         document = _arrange(_OUTSIDE_THE_PROJECT[layout], tmp_path, monkeypatch)
         before = document.read_bytes()
 
-        if site == "archive_pin":
-            import archive_pin
-
-            with pytest.raises(archive_pin._Unevaluable) as excinfo:
-                _run_site(site)
-            assert "different project" in excinfo.value.reason, excinfo.value.reason
-        else:
-            with pytest.raises(AmbientSyncRefused):
-                _run_site(site)
+        with pytest.raises(AmbientSyncRefused):
+            _run_site(site)
         assert document.read_bytes() == before, (
             f"{layout}: {site} wrote into a document outside the declared project"
         )
 
-    @pytest.mark.parametrize("site", _SITES[:2])
+    @pytest.mark.parametrize("site", _SITES)
     def test_a_relative_declaration_disagreeing_with_the_record_is_refused(
         self, tmp_path, monkeypatch, site
     ):

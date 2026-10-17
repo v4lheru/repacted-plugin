@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""scrub-check: scan files for content that must not enter git (D12).
+
+Location: pact-plugin/bin/scrub-check (owned by unit 0; documented by the
+memory-hygiene skill). Patterns live in _repact_common.SCRUB_PATTERNS, shared with
+scrub_text. Each pattern needs a value body, so naming a prefix in prose passes.
+
+Output: one `path:line: kind` per hit. The matched text is never printed.
+The denylist (people's names, de-anonymisation keys, known secret literals) is kept outside
+git. Without it a clean scan proves nothing about names, so a missing or empty denylist
+FAILS CLOSED (exit 3) unless --no-denylist says the caller knows. The one exception is a
+machine with NO denylist configured at all (no --denylist, no $REPACT_SCRUB_DENYLIST, no
+default file): the scan runs the structural classes and reports "denylist: none configured"
+(the stranger default; --denylist-only still fails closed there). A second, OPTIONAL
+list (--denylist-words) matches whole words only, for common first names.
+--denylist-only skips the regex classes (the fork-origin scan of imported PACT files).
+--secrets-only checks credential classes alone: no PII classes, no opaque-run, no denylist
+(project-note copies, where names are expected and only secret values must not travel).
+Default list paths honour $REPACT_SCRUB_DENYLIST and $REPACT_SCRUB_DENYLIST_WORDS.
+Exit codes: 0 clean, 1 at least one hit, 2 usage error (a path that does not exist),
+3 no hits but the scan proves nothing: the denylist is missing or empty (and
+--no-denylist was not given), or no file was scanned at all.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _repact_common import (SECRET_ONLY_KINDS, denylist_configured,  # noqa: E402
+                            denylist_paths, load_denylist, scan_text)
+
+SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".worktrees"}
+SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".gz", ".tar",
+                 ".woff", ".woff2", ".ttf", ".pyc", ".sqlite", ".db"}
+
+EXAMPLES = """examples:
+  python3 "pact-plugin/bin/scrub-check" pact-plugin docs
+  python3 "pact-plugin/bin/scrub-check" --denylist ~/.config/repacted/scrub-denylist.txt notes.md
+"""
+
+
+def iter_files(paths: list[Path]):
+    """Yield every regular file under the given paths, skipping VCS, caches and binaries."""
+    for root in paths:
+        if root.is_file():
+            yield root
+            continue
+        for path in sorted(root.rglob("*")):
+            # Only parts BELOW the root count: a root that itself lives under .worktrees/
+            # must still be scanned (matching the absolute path skipped everything).
+            if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
+                continue
+            if path.is_file() and path.suffix.lower() not in SKIP_SUFFIXES:
+                yield path
+
+
+def read_text(path: Path) -> str | None:
+    """File text, or None for a binary or unreadable file."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data[:8192]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="scrub-check", description="Scan files for secrets, PII and denylisted strings.",
+        epilog=EXAMPLES, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("paths", nargs="+", type=Path, help="files or directories to scan")
+    default_denylist, default_words = denylist_paths()
+    parser.add_argument("--denylist", type=Path, default=None,
+                        help="literal strings kept outside git (default: $REPACT_SCRUB_DENYLIST "
+                             f"or {str(default_denylist).replace('%', '%%')})")
+    parser.add_argument("--denylist-words", type=Path, default=default_words,
+                        help="optional whole-word list, e.g. first names (default: "
+                             "$REPACT_SCRUB_DENYLIST_WORDS or %(default)s)")
+    parser.add_argument("--secrets-only", action="store_true",
+                        help="credential classes only; no PII classes, no opaque-run, no denylist")
+    parser.add_argument("--denylist-only", action="store_true",
+                        help="skip the regex classes and check the denylist alone (fork-origin "
+                             "files: names must never ship; a missing denylist still fails closed)")
+    parser.add_argument("--no-denylist", action="store_true",
+                        help="scan with the regex classes only (otherwise a missing or empty "
+                             "denylist fails closed with exit 3)")
+    args = parser.parse_args(argv)
+    if args.denylist_only and args.no_denylist:
+        parser.error("--denylist-only and --no-denylist together would check nothing")
+    if args.secrets_only and args.denylist_only:
+        parser.error("--secrets-only and --denylist-only together would check nothing")
+    denylist_off_by = "--secrets-only" if args.secrets_only else "--no-denylist" if args.no_denylist else ""
+    if args.secrets_only:
+        args.no_denylist = True
+    # The stranger default (none configured) is decided before the path falls back to the default.
+    none_configured = (args.denylist is None and not args.no_denylist and not args.denylist_only
+                       and not denylist_configured())
+    if args.denylist is None:
+        args.denylist = default_denylist
+
+    missing = [str(path) for path in args.paths if not path.exists()]
+    if missing:
+        print(f"scrub-check: no such path: {', '.join(missing)}\n\n"
+              'example: python3 "pact-plugin/bin/scrub-check" repacted/pact-plugin',
+              file=sys.stderr)
+        return 2
+
+    denylist = [] if args.no_denylist else load_denylist(args.denylist)
+    words = [] if args.no_denylist else load_denylist(args.denylist_words)
+    denylist_missing = not args.no_denylist and not denylist and not none_configured
+    if none_configured:
+        print(f"scrub-check: denylist: none configured (names are not checked; create "
+              f"{args.denylist.expanduser()} or set $REPACT_SCRUB_DENYLIST to check them)",
+              file=sys.stderr)
+    elif denylist_missing:
+        print(f"scrub-check: DENYLIST MISSING OR EMPTY: {args.denylist.expanduser()} "
+              "(names are not checked; pass --no-denylist to accept that)")
+    hits = 0
+    scanned = 0
+    for path in iter_files(args.paths):
+        text = read_text(path)
+        if text is None:
+            continue
+        scanned += 1
+        for finding in scan_text(text, denylist, regex=not args.denylist_only, words=words,
+                                 kinds=SECRET_ONLY_KINDS if args.secrets_only else None):
+            print(f"{path}:{finding.line}: {finding.kind}")
+            hits += 1
+    # With the denylist off by design, say so: "denylist entries 0" read as a failed load.
+    lists = (f"denylist not used ({denylist_off_by})" if denylist_off_by
+             else "denylist: none configured" if none_configured
+             else f"denylist entries {len(denylist)}, word entries {len(words)}")
+    print(f"scrub-check: {scanned} files scanned, {hits} hits, {lists}", file=sys.stderr)
+    if hits:
+        return 1
+    if scanned == 0:
+        print("scrub-check: NO FILES SCANNED (a clean result would be vacuous)")
+        return 3
+    return 3 if denylist_missing else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

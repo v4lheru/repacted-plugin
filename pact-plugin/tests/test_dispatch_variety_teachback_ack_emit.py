@@ -28,7 +28,7 @@ import pytest
 import task_lifecycle_gate as tlg  # noqa: E402
 import shared.session_journal as sj  # noqa: E402
 
-LEAD = "PACT:pact-orchestrator"
+LEAD = "repacted:pact-orchestrator"
 TEAMMATE = "pact-devops-engineer"
 VARIETY = {"novelty": 3, "scope": 3, "uncertainty": 3, "risk": 3, "total": 12}
 

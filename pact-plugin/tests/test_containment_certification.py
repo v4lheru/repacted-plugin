@@ -79,8 +79,8 @@ from pathlib import Path
 import pytest
 
 # hooks/ and the pact-memory scripts dir on path (mirrors the sibling test
-# files: test_containment_guard.py adds hooks/, test_staleness.py adds the
-# scripts dir and imports the twin as a top-level `working_memory`).
+# files: test_containment_guard.py adds hooks/; the scripts dir is added
+# here so the twin imports as a top-level `working_memory`).
 _TESTS = Path(__file__).resolve().parent
 
 
@@ -741,8 +741,8 @@ class TestCapabilityBranchInjection:
 # ===========================================================================
 
 class TestTwoLegCompositionThroughProductionEntryPoints:
-    """The regression topology, driven through each of the THREE production
-    entry points that regressed -- named individually so this cannot be
+    """The regression topology, driven through each of the production
+    entry points that regressed (the staleness one went with the 1.5.0 cut) -- named individually so this cannot be
     discharged by testing one of them.
 
     The verdict is keyed on the RETURNED STATUS STRING, not on a filesystem
@@ -752,10 +752,6 @@ class TestTwoLegCompositionThroughProductionEntryPoints:
     """
 
     _LEGACY = "# Project Memory\n\n## Pinned Context\n\n## Working Memory\n"
-    _STALE = (
-        "# Project Memory\n\n## Pinned Context\n\n"
-        "### Old Feature (PR #100, merged 2020-01-01)\n- detail\n\n"
-    )
 
     def test_migrate_to_managed_structure_refuses(self, tmp_path, monkeypatch):
         from shared.claude_md_manager import migrate_to_managed_structure
@@ -799,23 +795,6 @@ class TestTwoLegCompositionThroughProductionEntryPoints:
             encoding="utf-8"
         )
 
-    def test_check_pinned_staleness_refuses(self, tmp_path):
-        from unittest.mock import patch
-
-        from session_init import check_pinned_staleness
-
-        project = tmp_path / "proj"
-        outside = tmp_path / "outside"
-        target = _two_leg_composition(project, outside)
-        target.write_text(self._STALE, encoding="utf-8")
-        victim_before = (project / "real.md").read_bytes()
-
-        with patch("session_init._get_project_claude_md_path", return_value=target), \
-             patch("staleness._get_project_claude_md_path", return_value=target):
-            result = check_pinned_staleness()
-
-        assert result == "Pinned staleness skipped: path precondition not met."
-        assert (project / "real.md").read_bytes() == victim_before
 
 
 # ===========================================================================
@@ -838,7 +817,7 @@ class TestPredicateRefusals:
         """The two-leg composition at the predicate level, for BOTH twins.
 
         The entry-point tests above drive only the canonical copy, because the
-        three regressing entry points live there. This is the skill twin's
+        regressing entry points live there. This is the skill twin's
         independent exercise of the same topology.
         """
         project = tmp_path / "proj"

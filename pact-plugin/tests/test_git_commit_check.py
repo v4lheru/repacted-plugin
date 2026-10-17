@@ -12,11 +12,33 @@ Tests cover:
 """
 import io
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from unittest.mock import patch, MagicMock
 
 import pytest
+
+
+# Log calls are joined at run time: these fixtures are added lines of this file, and the commit
+# check reads added lines, so a literal log call here would block the commit of the file itself.
+LOG, PRINT = "console" ".log", "pri" "nt"
+REPO = "/nonexistent/repo"      # check_security rows here are decided by name and added lines
+
+
+def _added(path, content):
+    """The `added` map the content checks read: every line of `content` as an added line."""
+    return {path: list(enumerate(content.splitlines(), 1))}
+
+
+def _secret_errors(path, content):
+    """Every secret finding the commit check makes on `content` added as `path`: the shared
+    detector (every file type) and the shapes only this check knows (code files)."""
+    from git_commit_check import check_added_secrets, check_hardcoded_secrets
+    patch_text = f"+++ b/{path}\n" + "".join(f"+{line}\n" for line in content.splitlines())
+    return check_added_secrets(patch_text)[0] + check_hardcoded_secrets(_added(path, content))
+
 
 
 # ---------------------------------------------------------------------------
@@ -28,79 +50,88 @@ class TestCheckSecurity:
 
     def test_detects_env_file(self):
         from git_commit_check import check_security
-        errors = check_security([".env"])
+        errors = check_security([".env"], repo=REPO)
         assert len(errors) == 1
         assert "environment file" in errors[0].lower()
 
     def test_detects_nested_env_file(self):
         from git_commit_check import check_security
-        errors = check_security(["config/.env"])
+        errors = check_security(["config/.env"], repo=REPO)
         assert len(errors) == 1
 
     def test_detects_env_prefixed_file(self):
         from git_commit_check import check_security
-        errors = check_security([".env.local"])
+        errors = check_security([".env.local"], repo=REPO)
         assert len(errors) == 1
 
     def test_allows_non_env_files(self):
         from git_commit_check import check_security
-        errors = check_security(["src/app.py", "README.md"])
+        errors = check_security(["src/app.py", "README.md"], repo=REPO)
         assert errors == []
 
     def test_detects_console_log_process_env(self):
         from git_commit_check import check_security
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value="console.log(process.env.SECRET)"):
-            errors = check_security(["src/app.js"])
+        errors = check_security(["src/app.js"], _added("src/app.js", f"{LOG}(process.env.SECRET)"), repo=REPO)
         assert len(errors) >= 1
         assert any("pattern" in e.lower() for e in errors)
 
     def test_detects_print_os_environ(self):
         from git_commit_check import check_security
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value="print(os.environ['PASSWORD'])"):
-            errors = check_security(["main.py"])
+        errors = check_security(["main.py"], _added("main.py", f"{PRINT}(os.environ['PASSWORD'])"), repo=REPO)
         assert len(errors) >= 1
 
     def test_detects_console_log_password(self):
         from git_commit_check import check_security
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value="console.log(password)"):
-            errors = check_security(["src/login.ts"])
+        errors = check_security(["src/login.ts"], _added("src/login.ts", f"{LOG}(password)"), repo=REPO)
         assert len(errors) >= 1
 
     def test_detects_print_api_key(self):
         from git_commit_check import check_security
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value="print(api_key)"):
-            errors = check_security(["util.py"])
+        errors = check_security(["util.py"], _added("util.py", f"{PRINT}(api_key)"), repo=REPO)
         assert len(errors) >= 1
 
     def test_detects_console_log_token(self):
         from git_commit_check import check_security
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value="console.log(token)"):
-            errors = check_security(["src/auth.js"])
+        errors = check_security(["src/auth.js"], _added("src/auth.js", f"{LOG}(token)"), repo=REPO)
         assert len(errors) >= 1
 
     def test_skips_non_code_files(self):
         from git_commit_check import check_security
-        with patch("git_commit_check.get_staged_file_content") as mock_get:
-            errors = check_security(["image.png", "data.csv"])
-        mock_get.assert_not_called()
+        errors = check_security(["image.png", "data.csv"], {"image.png": [(1, f'{PRINT}(password)')], "data.csv": [(1, f'{PRINT}(password)')]}, repo=REPO)
         assert errors == []
 
     def test_case_insensitive_matching(self):
         from git_commit_check import check_security
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value="Console.Log(PASSWORD)"):
-            errors = check_security(["src/app.js"])
+        errors = check_security(["src/app.js"], _added("src/app.js", f"{LOG.title()}(PASSWORD)"), repo=REPO)
         assert len(errors) >= 1
 
     def test_multiple_env_files(self):
         from git_commit_check import check_security
-        errors = check_security([".env", "config/.env", ".env.production"])
+        errors = check_security([".env", "config/.env", ".env.production"], repo=REPO)
         assert len(errors) == 3
+
+
+class TestPatternData:
+    """The pattern lists are data (hooks/git_commit_check_patterns.json), read on the commit path."""
+
+    def test_the_data_loads_and_a_missing_file_denies_the_commit(self, monkeypatch, tmp_path):
+        import re
+        import git_commit_check as gcc
+        monkeypatch.setattr(gcc, "_patterns_read", {})
+        lists = gcc.patterns()
+        assert set(lists) == {"log_scan_extensions", "env_log_patterns", "secret_scan_extensions",
+                              "commit_only_patterns"} and all(lists.values())
+        for regex in lists["env_log_patterns"] + tuple(r for r, _kind in lists["commit_only_patterns"]):
+            re.compile(regex)
+        monkeypatch.setattr(gcc, "_patterns_read", {})
+        monkeypatch.setattr(gcc, "PATTERNS_FILE", str(tmp_path / "gone.json"))
+        command = {"tool_input": {"command": "git commit -m 'test'"}}
+        with patch("sys.stdin", io.StringIO(json.dumps(command))), \
+                patch("git_commit_check.committed_files", return_value=["src/app.py"]), \
+                patch("git_commit_check.commit_patch", return_value="+++ b/src/app.py\n@@ -0,0 +1 @@\n+x = 1\n"), \
+                pytest.raises(SystemExit) as exc:
+            gcc.main()
+        assert exc.value.code == 2
 
 
 # ---------------------------------------------------------------------------
@@ -112,69 +143,51 @@ class TestCheckFrontendCredentials:
 
     def test_detects_vite_secret_key(self):
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='const key = import.meta.env.VITE_API_SECRET'):
-            errors = check_frontend_credentials(["src/App.tsx"])
+        errors = check_frontend_credentials(["src/App.tsx"], _added("src/App.tsx", 'const key = import.meta.env.VITE_API_SECRET'))
         assert len(errors) >= 1
         assert "frontend credential" in errors[0].lower()
 
     def test_detects_react_app_token(self):
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='process.env.REACT_APP_AUTH_TOKEN'):
-            errors = check_frontend_credentials(["src/api.jsx"])
+        errors = check_frontend_credentials(["src/api.jsx"], _added("src/api.jsx", 'process.env.REACT_APP_AUTH_TOKEN'))
         assert len(errors) >= 1
 
     def test_detects_next_public_password(self):
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='NEXT_PUBLIC_DB_PASSWORD = "abc"'):
-            errors = check_frontend_credentials(["components/db.tsx"])
+        errors = check_frontend_credentials(["components/db.tsx"], _added("components/db.tsx", 'NEXT_PUBLIC_DB_PASSWORD = "abc"'))
         assert len(errors) >= 1
 
     def test_detects_nuxt_public_credential(self):
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='NUXT_PUBLIC_API_CREDENTIAL = "abc"'):
-            errors = check_frontend_credentials(["pages/index.vue"])
+        errors = check_frontend_credentials(["pages/index.vue"], _added("pages/index.vue", 'NUXT_PUBLIC_API_CREDENTIAL = "abc"'))
         assert len(errors) >= 1
 
     def test_allows_non_credential_env_vars(self):
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='const url = import.meta.env.VITE_API_URL'):
-            errors = check_frontend_credentials(["src/App.tsx"])
+        errors = check_frontend_credentials(["src/App.tsx"], _added("src/App.tsx", 'const url = import.meta.env.VITE_API_URL'))
         assert errors == []
 
     def test_skips_backend_files(self):
         """Non-frontend files should be skipped."""
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content") as mock_get:
-            errors = check_frontend_credentials(["server/api.py"])
-        mock_get.assert_not_called()
+        errors = check_frontend_credentials(["server/api.py"], {"server/api.py": [(1, 'VITE_API_KEY = 1')]})
         assert errors == []
 
     def test_checks_js_in_frontend_dir(self):
         """JS/TS files in frontend dirs should be checked."""
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='VITE_API_KEY = "secret"'):
-            errors = check_frontend_credentials(["src/config.js"])
+        errors = check_frontend_credentials(["src/config.js"], _added("src/config.js", 'VITE_API_KEY = "secret"'))
         assert len(errors) >= 1
 
     def test_skips_js_in_non_frontend_dir(self):
         """JS/TS files NOT in frontend dirs should be skipped."""
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content") as mock_get:
-            errors = check_frontend_credentials(["scripts/build.js"])
-        mock_get.assert_not_called()
+        errors = check_frontend_credentials(["scripts/build.js"], {"scripts/build.js": [(1, 'VITE_API_KEY = 1')]})
         assert errors == []
 
     def test_svelte_file_detected(self):
         from git_commit_check import check_frontend_credentials
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='VITE_SECRET_KEY = "abc"'):
-            errors = check_frontend_credentials(["src/App.svelte"])
+        errors = check_frontend_credentials(["src/App.svelte"], _added("src/App.svelte", 'VITE_SECRET_KEY = "abc"'))
         assert len(errors) >= 1
 
 
@@ -187,40 +200,30 @@ class TestCheckDirectApiCalls:
 
     def test_detects_fetch_to_external_api(self):
         from git_commit_check import check_direct_api_calls
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='fetch("https://api.example.com/data")'):
-            warnings = check_direct_api_calls(["src/service.tsx"])
+        warnings = check_direct_api_calls(["src/service.tsx"], _added("src/service.tsx", 'fetch("https://api.example.com/data")'))
         assert len(warnings) == 1
         assert "external API" in warnings[0]
 
     def test_detects_axios_to_external_api(self):
         from git_commit_check import check_direct_api_calls
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='axios.get("https://api.example.com/data")'):
-            warnings = check_direct_api_calls(["src/service.jsx"])
+        warnings = check_direct_api_calls(["src/service.jsx"], _added("src/service.jsx", 'axios.get("https://api.example.com/data")'))
         assert len(warnings) == 1
 
     def test_detects_stripe_api_call(self):
         from git_commit_check import check_direct_api_calls
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='fetch("https://api.stripe.com/v1/charges")'):
-            warnings = check_direct_api_calls(["src/payment.tsx"])
+        warnings = check_direct_api_calls(["src/payment.tsx"], _added("src/payment.tsx", 'fetch("https://api.stripe.com/v1/charges")'))
         assert len(warnings) == 1
         assert "API" in warnings[0]
 
     def test_detects_openai_api_call(self):
         from git_commit_check import check_direct_api_calls
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='fetch("https://api.openai.com/v1/chat")'):
-            warnings = check_direct_api_calls(["src/ai.jsx"])
+        warnings = check_direct_api_calls(["src/ai.jsx"], _added("src/ai.jsx", 'fetch("https://api.openai.com/v1/chat")'))
         assert len(warnings) == 1
 
     def test_skips_backend_dirs(self):
         """Backend directories should be excluded even with frontend extensions."""
         from git_commit_check import check_direct_api_calls
-        with patch("git_commit_check.get_staged_file_content") as mock_get:
-            warnings = check_direct_api_calls(["server/api.ts"])
-        mock_get.assert_not_called()
+        warnings = check_direct_api_calls(["server/api.ts"], {"server/api.ts": [(1, 'fetch("https://api.stripe.com/v1")')]})
         assert warnings == []
 
     def test_one_warning_per_file(self):
@@ -230,26 +233,19 @@ class TestCheckDirectApiCalls:
             'fetch("https://api.stripe.com/v1/charges")\n'
             'fetch("https://api.openai.com/v1/chat")\n'
         )
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            warnings = check_direct_api_calls(["src/service.tsx"])
+        warnings = check_direct_api_calls(["src/service.tsx"], _added("src/service.tsx", content))
         assert len(warnings) == 1
 
     def test_allows_relative_api_calls(self):
         """Relative API calls (to own backend) should not trigger warnings."""
         from git_commit_check import check_direct_api_calls
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value='fetch("/api/data")'):
-            warnings = check_direct_api_calls(["src/service.tsx"])
+        warnings = check_direct_api_calls(["src/service.tsx"], _added("src/service.tsx", 'fetch("/api/data")'))
         assert warnings == []
 
     def test_requires_frontend_dir_and_ext(self):
         """File must be in frontend dir AND have frontend extension."""
         from git_commit_check import check_direct_api_calls
-        with patch("git_commit_check.get_staged_file_content") as mock_get:
-            # Non-frontend ext in frontend dir
-            warnings = check_direct_api_calls(["src/config.json"])
-        mock_get.assert_not_called()
+        warnings = check_direct_api_calls(["src/config.json"], {"src/config.json": [(1, 'fetch("https://api.stripe.com/v1")')]})
         assert warnings == []
 
 
@@ -542,7 +538,7 @@ class TestSecurityResidualE2E:
     """End-to-end verification that untracking a previously-tracked .env is
     not flagged as a violation.
 
-    The argv-level pin `test_get_staged_files_excludes_deletions` asserts the
+    The argv-level pin `test_the_read_is_bounded_and_excludes_deletions` asserts the
     `--diff-filter=d` flag is on the argv; this class closes the semantic
     loop by driving `main()` end-to-end through a real git repo in the
     remediation state a user would be in (`.env` historically tracked, then
@@ -610,301 +606,178 @@ class TestCheckHardcodedSecrets:
     """Tests for check_hardcoded_secrets() — API key and secret detection."""
 
     def test_detects_openai_key(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'api_key = "sk-FAKE00000000000000000000000000"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["config.py"])
+        content = 'api_key = "sk-' + 'FAKE00000000000000000000000000"'
+        errors = _secret_errors("config.py", content)
         assert len(errors) >= 1
 
     def test_detects_stripe_live_key(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'key = "sk_live_FAKE0000000000000000"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["payment.py"])
+        content = 'key = "sk_live_' + 'Xk9mQ2vL7pR4tW8zA1bC' + '"'
+        errors = _secret_errors("payment.py", content)
         assert len(errors) >= 1
-        assert any("stripe" in e.lower() for e in errors)
+        assert any("prefixed-token" in e for e in errors)
 
     def test_detects_stripe_test_key(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'key = "sk_test_FAKE0000000000000000"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["payment.py"])
+        content = 'key = "sk_test_' + 'FAKE0000000000000000"'
+        errors = _secret_errors("payment.py", content)
         assert len(errors) >= 1
 
     def test_detects_github_pat(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'token = "ghp_FAKE00000000000000000000000000000000"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["deploy.py"])
+        content = 'token = "ghp_' + 'FAKE00000000000000000000000000000000"'
+        errors = _secret_errors("deploy.py", content)
         assert len(errors) >= 1
         assert any("github" in e.lower() for e in errors)
 
     def test_detects_github_oauth_token(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'token = "gho_FAKE00000000000000000000000000000000"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["auth.py"])
+        content = 'token = "gho_' + 'FAKE00000000000000000000000000000000"'
+        errors = _secret_errors("auth.py", content)
         assert len(errors) >= 1
 
     def test_detects_slack_token(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'token = "xoxb-1234567890-abcdefgh"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["slack.py"])
+        content = 'token = "xoxb-' + '1234567890-abcdefgh"'
+        errors = _secret_errors("slack.py", content)
         assert len(errors) >= 1
         assert any("slack" in e.lower() for e in errors)
 
     def test_detects_generic_api_key_assignment(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'api_key = "abcdefghijklmnopqrstuvwxyz1234"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["config.py"])
+        content = 'api_' + 'key = "abcdefghijklmnopqrstuvwxyz1234"'
+        errors = _secret_errors("config.py", content)
         assert len(errors) >= 1
 
     def test_detects_hardcoded_password(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'password = "my_super_secret_password"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["db.py"])
+        content = "pass" + 'word = "Xk9#mQ2vL7pR"'        # joined, so this source carries no literal
+        errors = _secret_errors("db.py", content)
         assert len(errors) >= 1
 
     def test_detects_aws_access_key_id(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = 'aws_key = "AKIAIOSFODNN7EXAMPLE"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["config.py"])
+        content = 'aws_key = "AKIA' + 'IOSFODNN7EXAMPLE"'
+        errors = _secret_errors("config.py", content)
         assert len(errors) >= 1
         assert any("aws" in e.lower() for e in errors)
 
     def test_ignores_non_akia_aws_prefix(self):
         """Only AKIA prefix indicates long-term AWS keys; ASIA is temporary."""
-        from git_commit_check import check_hardcoded_secrets
         content = 'key = "NOTAKIA0000000000000"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["config.py"])
+        errors = _secret_errors("config.py", content)
         assert not any("aws" in e.lower() for e in errors)
 
     def test_detects_rsa_private_key(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = '-----BEGIN RSA PRIVATE KEY-----\nMIIE...'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["deploy.py"])
+        content = '-----BEGIN RSA PRIVATE ' + 'KEY-----\nMIIE...'
+        errors = _secret_errors("deploy.py", content)
         assert len(errors) >= 1
-        assert any("private key" in e.lower() for e in errors)
+        assert any("private-key" in e for e in errors)
 
     def test_detects_generic_private_key(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = '-----BEGIN PRIVATE KEY-----\nMIIE...'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["certs.py"])
+        content = '-----BEGIN PRIVATE ' + 'KEY-----\nMIIE...'
+        errors = _secret_errors("certs.py", content)
         assert len(errors) >= 1
-        assert any("private key" in e.lower() for e in errors)
+        assert any("private-key" in e for e in errors)
 
     def test_detects_ec_private_key(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = '-----BEGIN EC PRIVATE KEY-----\nMHQC...'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["crypto.py"])
+        content = '-----BEGIN EC PRIVATE ' + 'KEY-----\nMHQC...'
+        errors = _secret_errors("crypto.py", content)
         assert len(errors) >= 1
-        assert any("private key" in e.lower() for e in errors)
+        assert any("private-key" in e for e in errors)
 
     def test_detects_openssh_private_key(self):
-        from git_commit_check import check_hardcoded_secrets
-        content = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn...'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["ssh.py"])
+        content = '-----BEGIN OPENSSH PRIVATE ' + 'KEY-----\nb3Blbn...'
+        errors = _secret_errors("ssh.py", content)
         assert len(errors) >= 1
-        assert any("private key" in e.lower() for e in errors)
+        assert any("private-key" in e for e in errors)
 
     def test_ignores_public_key_header(self):
         """Public keys are not secrets and should not trigger."""
-        from git_commit_check import check_hardcoded_secrets
         content = '-----BEGIN PUBLIC KEY-----\nMIIB...'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["keys.py"])
+        errors = _secret_errors("keys.py", content)
         assert not any("private key" in e.lower() for e in errors)
 
     def test_detects_jwt_token(self):
-        from git_commit_check import check_hardcoded_secrets
         # Realistic JWT structure: header.payload.signature
-        content = 'token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123def456_signature"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["auth.py"])
+        content = 'token = "eyJ' + 'hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123def456_signature"'
+        errors = _secret_errors("auth.py", content)
         assert len(errors) >= 1
         assert any("jwt" in e.lower() for e in errors)
 
     def test_ignores_short_eyj_string(self):
         """Short 'eyJ' strings that aren't full JWTs should not trigger."""
-        from git_commit_check import check_hardcoded_secrets
         content = 'x = "eyJhbGci"'  # Too short, missing dot-separated segments
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["config.py"])
+        errors = _secret_errors("config.py", content)
         assert not any("jwt" in e.lower() for e in errors)
 
     def test_allows_short_values(self):
         """Short values (< 8 chars for password, < 20 for keys) should not trigger."""
-        from git_commit_check import check_hardcoded_secrets
         content = 'password = "short"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["config.py"])
+        errors = _secret_errors("config.py", content)
         assert errors == []
 
     def test_skips_non_code_files(self):
         from git_commit_check import check_hardcoded_secrets
-        with patch("git_commit_check.get_staged_file_content") as mock_get:
-            errors = check_hardcoded_secrets(["image.png", "data.csv"])
-        mock_get.assert_not_called()
+        errors = check_hardcoded_secrets({"image.png": [(1, 'k = "sk_test_' + 'a' * 30 + '"')], "data.csv": [(1, 'k = "sk_test_' + 'a' * 30 + '"')]})
         assert errors == []
 
-    def test_truncates_long_match_preview(self):
-        """Match preview should be truncated at 30 chars."""
-        from git_commit_check import check_hardcoded_secrets
-        long_key = "a" * 50
+    def test_reports_the_path_and_kind_never_the_value(self):
+        """ENV-GUARD-2 amend_2: path plus kind only. This replaced the 30-character match
+        preview, which printed part of the value."""
+        long_key = "Xk9mQ2vL7pR4tW8zA1bC" * 2
         content = f'api_key = "{long_key}"'
-        with patch("git_commit_check.get_staged_file_content",
-                   return_value=content):
-            errors = check_hardcoded_secrets(["config.py"])
+        errors = _secret_errors("config.py", content)
         assert len(errors) >= 1
-        assert "..." in errors[0]
+        assert "config.py" in errors[0] and long_key[:10] not in errors[0]
 
 
 # ---------------------------------------------------------------------------
-# get_staged_files / get_staged_file_content
+# committed_files: what git lists, read fail-closed
 # ---------------------------------------------------------------------------
 
-class TestGitHelpers:
-    """Tests for git subprocess helper functions."""
+class TestCommittedFiles:
+    """committed_files() lists what the commit takes; a git that cannot answer denies."""
 
-    def test_get_staged_files_success(self):
-        from git_commit_check import get_staged_files
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "file1.py\nfile2.js\n"
-        with patch("shared.git_helpers.subprocess.run", return_value=mock_result):
-            files = get_staged_files()
-        assert files == ["file1.py", "file2.js"]
+    def _result(self, returncode=0, stdout="", stderr=""):
+        result = MagicMock()
+        result.returncode, result.stdout, result.stderr = returncode, stdout, stderr
+        return result
 
-    def test_get_staged_files_empty(self):
-        from git_commit_check import get_staged_files
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        with patch("shared.git_helpers.subprocess.run", return_value=mock_result):
-            files = get_staged_files()
-        assert files == []
+    def test_lists_the_staged_files(self):
+        from git_commit_check import Commit, committed_files
+        with patch("shared.git_helpers.subprocess.run", return_value=self._result(stdout="file1.py\nfile2.js\n")):
+            assert committed_files(Commit()) == ["file1.py", "file2.js"]
 
-    def test_get_staged_files_non_zero_returncode(self):
-        """Post-F4: non-zero returncode is the fail-open path (no CalledProcessError)."""
-        from git_commit_check import get_staged_files
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        with patch("shared.git_helpers.subprocess.run", return_value=mock_result):
-            files = get_staged_files()
-        assert files == []
+    def test_nothing_staged_is_an_empty_list(self):
+        from git_commit_check import Commit, committed_files
+        with patch("shared.git_helpers.subprocess.run", return_value=self._result()):
+            assert committed_files(Commit()) == []
 
-    def test_get_staged_files_timeout(self):
-        from git_commit_check import get_staged_files
-        import subprocess
+    def test_outside_a_repository_the_commit_is_refused(self):
+        from git_commit_check import Commit, NoRepository, committed_files, require_repository
         with patch("shared.git_helpers.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired(cmd=["git"], timeout=5)):
-            files = get_staged_files()
-        assert files == []
+                   return_value=self._result(128, stderr="fatal: not a git repository")):
+            with pytest.raises(NoRepository):
+                committed_files(Commit())
+            with pytest.raises(NoRepository):
+                require_repository(Commit())
 
-    def test_get_staged_files_git_not_installed(self):
-        from git_commit_check import get_staged_files
-        with patch("shared.git_helpers.subprocess.run", side_effect=FileNotFoundError("git")):
-            files = get_staged_files()
-        assert files == []
+    @pytest.mark.parametrize("failure", [
+        subprocess.TimeoutExpired(cmd=["git"], timeout=30), FileNotFoundError("git")])
+    def test_a_git_that_does_not_answer_is_unverifiable(self, failure):
+        from git_commit_check import Commit, Unverifiable, committed_files
+        with patch("shared.git_helpers.subprocess.run", side_effect=failure):
+            with pytest.raises(Unverifiable):
+                committed_files(Commit())
 
-    def test_get_staged_files_invokes_with_timeout(self):
-        """Wrapper-args invariant: timeout=5 must be passed to subprocess.run."""
-        from git_commit_check import get_staged_files
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        with patch("shared.git_helpers.subprocess.run", return_value=mock_result) as mock_run:
-            get_staged_files()
-        assert mock_run.called
-        _, kwargs = mock_run.call_args
-        assert kwargs.get("timeout") == 5
+    def test_another_failing_exit_is_unverifiable(self):
+        from git_commit_check import Commit, Unverifiable, committed_files
+        with patch("shared.git_helpers.subprocess.run", return_value=self._result(1, stderr="error")):
+            with pytest.raises(Unverifiable):
+                committed_files(Commit())
 
-    def test_get_staged_files_excludes_deletions(self):
-        """Security residual: `git rm --cached .env` deletion must not be
-        scanned as an added file. Argv passed to git MUST include
-        `--diff-filter=d` so deletion-only stagings are filtered out before
-        the downstream security checks run."""
-        from git_commit_check import get_staged_files
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        with patch("shared.git_helpers.subprocess.run", return_value=mock_result) as mock_run:
-            get_staged_files()
-        args, _ = mock_run.call_args
-        assert args[0] == [
-            "git", "diff", "--name-only", "--cached", "--diff-filter=d"
-        ]
-
-    def test_get_staged_file_content_success(self):
-        from git_commit_check import get_staged_file_content
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "file content here"
-        with patch("shared.git_helpers.subprocess.run", return_value=mock_result):
-            content = get_staged_file_content("test.py")
-        assert content == "file content here"
-
-    def test_get_staged_file_content_non_zero_returncode(self):
-        """Post-F4: non-zero returncode is the fail-open path (no CalledProcessError)."""
-        from git_commit_check import get_staged_file_content
-        mock_result = MagicMock()
-        mock_result.returncode = 128
-        with patch("shared.git_helpers.subprocess.run", return_value=mock_result):
-            content = get_staged_file_content("missing.py")
-        assert content == ""
-
-    def test_get_staged_file_content_timeout(self):
-        from git_commit_check import get_staged_file_content
-        import subprocess
-        with patch("shared.git_helpers.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired(cmd=["git"], timeout=5)):
-            content = get_staged_file_content("missing.py")
-        assert content == ""
-
-    def test_get_staged_file_content_git_not_installed(self):
-        from git_commit_check import get_staged_file_content
-        with patch("shared.git_helpers.subprocess.run", side_effect=FileNotFoundError("git")):
-            content = get_staged_file_content("missing.py")
-        assert content == ""
-
-    def test_get_staged_file_content_invokes_with_timeout(self):
-        """Wrapper-args invariant: timeout=5 must be passed to subprocess.run."""
-        from git_commit_check import get_staged_file_content
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        with patch("shared.git_helpers.subprocess.run", return_value=mock_result) as mock_run:
-            get_staged_file_content("any.py")
-        assert mock_run.called
-        _, kwargs = mock_run.call_args
-        assert kwargs.get("timeout") == 5
+    def test_the_read_is_bounded_and_excludes_deletions(self):
+        """`git rm --cached` of an env file must not be scanned as an added file: the argv
+        carries `--diff-filter=d`, and the call carries the bounded timeout."""
+        from git_commit_check import GIT_TIMEOUT_S, Commit, committed_files
+        with patch("shared.git_helpers.subprocess.run", return_value=self._result()) as mock_run:
+            committed_files(Commit())
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["git", "diff", "--name-only", "--diff-filter=d", "--cached"]
+        assert kwargs.get("timeout") == GIT_TIMEOUT_S
 
 
 # ---------------------------------------------------------------------------
@@ -928,7 +801,7 @@ class TestMain:
         from git_commit_check import main
         input_data = {"tool_input": {"command": "git commit -m 'test'"}}
         with patch("sys.stdin", io.StringIO(json.dumps(input_data))):
-            with patch("git_commit_check.get_staged_files", return_value=[]):
+            with patch("git_commit_check.committed_files", return_value=[]):
                 with pytest.raises(SystemExit) as exc:
                     main()
         assert exc.value.code == 0
@@ -937,8 +810,8 @@ class TestMain:
         from git_commit_check import main
         input_data = {"tool_input": {"command": "git commit -m 'test'"}}
         with patch("sys.stdin", io.StringIO(json.dumps(input_data))):
-            with patch("git_commit_check.get_staged_files",
-                       return_value=[".env"]):
+            with patch("git_commit_check.committed_files",
+                       return_value=[".env"]), patch("git_commit_check.commit_patch", return_value=""):
                 with patch("git_commit_check.check_env_file_in_gitignore",
                            return_value=(True, None)):
                     with pytest.raises(SystemExit) as exc:
@@ -949,10 +822,10 @@ class TestMain:
         from git_commit_check import main
         input_data = {"tool_input": {"command": "git commit -m 'test'"}}
         with patch("sys.stdin", io.StringIO(json.dumps(input_data))):
-            with patch("git_commit_check.get_staged_files",
+            with patch("git_commit_check.committed_files",
                        return_value=["src/app.py"]):
-                with patch("git_commit_check.get_staged_file_content",
-                           return_value="print('hello')"):
+                with patch("git_commit_check.commit_patch",
+                           return_value="+++ b/src/app.py\n@@ -0,0 +1 @@\n+print('hello')\n"):
                     with patch("git_commit_check.check_env_file_in_gitignore",
                                return_value=(True, None)):
                         with pytest.raises(SystemExit) as exc:
@@ -980,8 +853,9 @@ class TestMain:
         input_data = {"tool_input": {"command": "git commit -m 'test'"}}
         with (
             patch("sys.stdin", io.StringIO(json.dumps(input_data))),
-            patch("git_commit_check.get_staged_files",
+            patch("git_commit_check.committed_files",
                   return_value=["src/api.tsx"]),
+            patch("git_commit_check.commit_patch", return_value=""),
             patch("git_commit_check.check_security", return_value=[]),
             patch("git_commit_check.check_hardcoded_secrets", return_value=[]),
             patch("git_commit_check.check_frontend_credentials",
@@ -994,3 +868,361 @@ class TestMain:
             with pytest.raises(SystemExit) as exc:
                 main()
         assert exc.value.code == 0
+
+
+# ---------------------------------------------------------------------------
+# Logging a token VALUE vs counting tokens (the "token" false positive)
+# ---------------------------------------------------------------------------
+
+# The real trigger, reproduced from session transcripts (18 blocks, 3 files): a
+# print whose f-string reads a COUNT field, e.g. `row['input_tokens']`, or whose
+# message text merely contains the word "token". The log check ran
+# `print\s*\(.*token` over every line, so both blocked the commit. These are the
+# line SHAPES of those files (placeholders only, no values).
+TOKEN_COUNT_OR_PROSE_LINES = [
+    "print(f\"{Path(row['path']).name:<{width}} {row['input_tokens']:>9,}\")",
+    "print(\"token file present, contents not shown\")",
+    "print(token_count)",
+    "print(max_tokens)",
+    "print(input_tokens)",
+    "print(tokenizer.name)",
+    "print(tokenize(text))",
+    "console.log(countTokens(prompt))",
+    "console.log(`tokens used: ${usage.totalTokens}`)",
+    "print('input tokens:', n)",
+    "print('token budget exceeded')",
+    "print(f\"{n} tokens used\")",
+    "console.log(tokenCount)",
+    "print(cache_read_tokens, cache_creation_tokens)",
+    "print(completion_tokens + prompt_tokens)",
+    "print(remaining_tokens)",
+]
+
+# Logging a token's VALUE must still block. Written with ~p( / ~c( for the two log calls: the
+# installed commit check reads every line of this file, and a literal log call would block it.
+def _log_calls(lines):
+    return [line.replace("~p(", PRINT + "(").replace("~c(", LOG + "(") for line in lines]
+
+
+TOKEN_VALUE_LOG_LINES = _log_calls([
+    "~p(token)",
+    "~p(access_token)",
+    "~c(authToken)",
+    "~p(os.environ['API_TOKEN'])",
+    "~p(f\"using {token}\")",
+    "~p(config['api_token'])",
+    "~c(`bearer ${apiToken}`)",
+    "~c('token:', token)",
+    '~c("token", token)',
+    # Plural credential names are values too; only count-prefixed plurals are exempt.
+    "~p(access_tokens)",
+    "~p(refresh_tokens)",
+    "~p(auth_tokens)",
+    "~p(tokens)",
+    # Deny by default: any other word containing "token" is a value.
+    "~p(token_value)",
+    "~c(tokenStr)",
+    # An identifier-shaped string is a key wherever it sits in the call.
+    "~p(getattr(creds, 'access_token'))",
+    "~p(dict(creds).get('refresh_token'))",
+    # Prose naming the singular word plus any non-exempt code argument.
+    "~p('token:', t)",
+    "~c('token', v)",
+    "~p(f'token={t}')",
+    "~p('the token is', t)",
+    "~c(`access token: ${v}`)",
+    # A transcript shape that the prose rule now blocks (its placeholders read
+    # non-count values next to the word "token").
+    "~p(f\"{1 - themes/max(raw_labels, 1):.0%} fewer token labels\")",
+])
+
+
+class TestTokenLogging:
+
+    @pytest.mark.parametrize("line", TOKEN_COUNT_OR_PROSE_LINES)
+    def test_counting_or_mentioning_tokens_does_not_block(self, line):
+        from git_commit_check import check_security
+        path = "src/app.js" if line.startswith("console") else "tools/report.py"
+        assert check_security([path], _added(path, line), repo=REPO) == []
+
+    @pytest.mark.parametrize("line", TOKEN_VALUE_LOG_LINES)
+    def test_logging_a_token_value_still_blocks(self, line):
+        from git_commit_check import check_security
+        path = "src/auth.js" if line.startswith("console") else "auth/client.py"
+        errors = check_security([path], _added(path, line), repo=REPO)
+        assert errors and "Potential secret exposure in log" in errors[0]
+
+    def test_a_token_shaped_literal_is_still_caught_by_the_secret_patterns(self):
+        """The narrowing is about LOG lines; a hardcoded token-shaped value is a
+        separate pattern and must keep blocking (FAKE parts, per this file)."""
+        content = 'print("ghp_' + "FAKE" + "0" * 36 + '")'
+        errors = _secret_errors("tools/report.py", content)
+        assert any("github-token" in e for e in errors)
+
+    def test_the_secret_refusal_asks_the_user_before_offering_the_pragma(self):
+        """The pragma is not a first resort: a real secret must not be tagged as a fixture."""
+        content = 'print("ghp_' + "FAKE" + "0" * 36 + '")'
+        error = _secret_errors("tools/report.py", content)[0].lower()
+        assert "ask the user to confirm the value is not real" in error
+        assert error.index("remove it") < error.index("ask the user") < error.index("pragma")
+
+
+# ---------------------------------------------------------------------------
+# Which repo the commit is checked in (the cwd / -C defect)
+# ---------------------------------------------------------------------------
+
+def _git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+@pytest.fixture
+def two_repos(tmp_path, monkeypatch):
+    """A clean repo (a benign staged file, .env ignored) and a dirty repo (a
+    staged .env file), under an isolated git config."""
+    if shutil.which("git") is None:
+        pytest.skip("git not available on PATH")
+    _isolated_git_env(tmp_path, monkeypatch)
+    clean, dirty = tmp_path / "clean repo", tmp_path / "dirty"
+    for repo in (clean, dirty):
+        repo.mkdir()
+        _git(repo, "init", "--quiet")
+    (clean / ".gitignore").write_text(".env\n")
+    (clean / "notes.txt").write_text("hello\n")
+    _git(clean, "add", ".gitignore", "notes.txt")
+    (dirty / ".env").write_text("NAME=placeholder\n")
+    _git(dirty, "add", ".env")
+    return clean, dirty
+
+
+def _run_main(payload, capsys):
+    from git_commit_check import main
+    with patch("sys.stdin", io.StringIO(json.dumps(payload))):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    return exc.value.code, capsys.readouterr().err
+
+
+class TestTargetRepo:
+
+    def test_git_dash_c_checks_the_named_repo(self, two_repos, monkeypatch, capsys):
+        clean, dirty = two_repos
+        monkeypatch.chdir(clean)                       # the session sits in the clean repo
+        code, err = _run_main({"tool_input": {"command": f"git -C '{dirty}' commit -m x"}}, capsys)
+        assert code == 2 and "environment file" in err
+
+    def test_cd_prefix_checks_the_repo_it_enters(self, two_repos, monkeypatch, capsys):
+        clean, dirty = two_repos
+        monkeypatch.chdir(dirty)                       # the session sits in the dirty repo
+        code, err = _run_main({"tool_input": {"command": f"cd '{clean}' && git commit -m x"}}, capsys)
+        assert code == 0, err
+
+    def test_a_wrapped_git_dash_c_checks_the_named_repo(self, two_repos, monkeypatch, capsys):
+        clean, dirty = two_repos
+        monkeypatch.chdir(clean)
+        code, err = _run_main({"tool_input": {"command": f"rtk git -C '{dirty}' commit -m x"}}, capsys)
+        assert code == 2 and "environment file" in err
+
+    def test_a_subshell_cd_checks_the_repo_it_enters(self, two_repos, monkeypatch, capsys):
+        clean, dirty = two_repos
+        monkeypatch.chdir(clean)
+        code, err = _run_main({"tool_input": {"command": f"(cd '{dirty}' && git commit -m x)"}}, capsys)
+        assert code == 2 and "environment file" in err
+
+    def test_the_payload_cwd_is_the_base(self, two_repos, monkeypatch, capsys):
+        clean, dirty = two_repos
+        monkeypatch.chdir(dirty)
+        code, err = _run_main({"cwd": str(clean), "tool_input": {"command": "git commit -m x"}}, capsys)
+        assert code == 0, err
+
+    def test_a_relative_dash_c_resolves_against_the_payload_cwd(self, two_repos, monkeypatch, capsys):
+        clean, dirty = two_repos
+        monkeypatch.chdir(clean)
+        code, err = _run_main({"cwd": str(dirty.parent),
+                               "tool_input": {"command": f"git -C {dirty.name} commit -m x"}}, capsys)
+        assert code == 2 and "environment file" in err
+
+    def test_no_cwd_and_no_prefix_keeps_the_process_cwd(self, two_repos, monkeypatch, capsys):
+        clean, dirty = two_repos
+        monkeypatch.chdir(dirty)
+        code, err = _run_main({"tool_input": {"command": "git commit -m x"}}, capsys)
+        assert code == 2 and "environment file" in err
+
+
+class TestFindCommit:
+    """The command parser behind the target repo. The base is the payload cwd."""
+
+    @pytest.mark.parametrize("command, expected", [
+        ("git commit -m x", (True, "/w/base")),
+        ("git -C sub commit -m x", (True, "/w/base/sub")),
+        ("git -C /abs/repo commit", (True, "/abs/repo")),
+        ("git -C a -C b commit", (True, "/w/base/a/b")),
+        ("cd sub && git commit -m x", (True, "/w/base/sub")),
+        ("cd /abs/repo && git add . && git commit -m x", (True, "/abs/repo")),
+        ("cd sub; git -C inner commit", (True, "/w/base/sub/inner")),
+        ("git -c user.name=x commit -m y", (True, "/w/base")),
+        ("GIT_AUTHOR_NAME=x git commit -m y", (True, "/w/base")),
+        ("git status", (False, "/w/base")),
+        ("echo git commit", (False, "/w/base")),
+        ("git log --grep commit", (False, "/w/base")),
+        ("rtk git -C sub commit -m x", (True, "/w/base/sub")),
+        ("rtk proxy git -C sub commit", (True, "/w/base/sub")),
+        ("(cd sub && git commit -m x)", (True, "/w/base/sub")),
+        ("( cd sub && git commit -m x )", (True, "/w/base/sub")),
+        ("env GIT_EDITOR=true git -C sub commit", (True, "/w/base/sub")),
+        ("command git -C sub commit", (True, "/w/base/sub")),
+        ("nice -n 19 git -C sub commit", (True, "/w/base/sub")),
+        ("time git -C sub commit", (True, "/w/base/sub")),
+        ("sudo git -C sub commit", (True, "/w/base/sub")),
+    ])
+    def test_parses_the_commit_and_its_directory(self, command, expected):
+        from git_commit_check import find_commit
+        assert find_commit(command, "/w/base") == expected
+
+    def test_without_a_cwd_and_without_a_prefix_the_repo_is_this_process(self):
+        from git_commit_check import find_commit
+        assert find_commit("git commit -m x", None) == (True, None)
+
+    def test_an_unparseable_command_falls_back_to_the_base(self):
+        from git_commit_check import find_commit
+        assert find_commit("git commit -m 'unterminated", "/w/base") == (False, "/w/base")
+
+
+# ---------------------------------------------------------------------------
+# A `git add` in the same command as the commit (review H2): replayed on a copy of the index
+# ---------------------------------------------------------------------------
+
+# Built at run time: a literal key here would be an added line of this file.
+_KEY_LINE = 'aws_key = "AKIA' + "Q7RZ" * 4 + '"\n'
+
+
+@pytest.fixture
+def staging_repo(tmp_path, monkeypatch):
+    """A committed repo (clean.py, tracked.py, `*.log` ignored) with three unstaged files: a new
+    key file, a key added to tracked.py, and an ignored key log. Isolated git config."""
+    if shutil.which("git") is None:
+        pytest.skip("git not available on PATH")
+    _isolated_git_env(tmp_path, monkeypatch)
+    for name in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{name}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{name}_EMAIL", "t@t")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    (repo / ".gitignore").write_text(".env\n*.log\n")
+    (repo / "clean.py").write_text("x = 1\n")
+    (repo / "tracked.py").write_text("y = 2\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "--quiet", "-m", "init")
+    (repo / "new.py").write_text(_KEY_LINE)
+    (repo / "ignored.log").write_text(_KEY_LINE)
+    (repo / "clean.py").write_text("x = 3\n")
+    monkeypatch.chdir(repo)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    return repo
+
+
+def _commit_in(repo, command, capsys):
+    return _run_main({"tool_input": {"command": command}, "cwd": str(repo)}, capsys)
+
+
+class TestStagingInTheSameCommand:
+
+    @pytest.mark.parametrize("command", [
+        "git add new.py && git commit -m x",
+        "git add -A && git commit -m x",
+        "git add . ; git commit -m x",
+        "git add --all -- . && git commit -m x",
+        "git stage new.py && git commit -m x",
+        "git add 'new.py' || git commit -m x",
+        "git add -v -f new.py | cat && git commit -m x",
+        "git add *.py && git commit -m x",
+        "git status && git add new.py && git commit -m x",
+        "bash -c 'git add new.py' && git commit -m x",
+        "sh -c 'git add new.py && git commit -m x'",
+        "rtk git add new.py && rtk git commit -m x",
+        "{ git add new.py; } && git commit -m x",
+    ])
+    def test_a_key_staged_by_the_same_command_is_denied(self, staging_repo, command, capsys):
+        code, err = _commit_in(staging_repo, command, capsys)
+        assert code == 2 and "aws-key" in err, (command, err)
+
+    def test_update_stages_a_key_added_to_a_tracked_file(self, staging_repo, capsys):
+        with open(staging_repo / "tracked.py", "a") as handle:
+            handle.write(_KEY_LINE)
+        code, err = _commit_in(staging_repo, "git add -u && git commit -m x", capsys)
+        assert code == 2 and "aws-key" in err
+
+    @pytest.mark.parametrize("name", ["odd name.py", "ключ-日本.py", "-dash.py"])
+    def test_quoted_unicode_and_dash_names(self, staging_repo, name, capsys):
+        (staging_repo / name).write_text(_KEY_LINE)
+        (staging_repo / "new.py").unlink()
+        code, err = _commit_in(staging_repo, f"git add -- '{name}' && git commit -m x", capsys)
+        assert code == 2 and "aws-key" in err
+
+    def test_git_dash_c_and_cd_from_elsewhere(self, staging_repo, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        for command in (f"git -C '{staging_repo}' add new.py && git -C '{staging_repo}' commit -m x",
+                        f"cd '{staging_repo}' && git add new.py && git commit -m x"):
+            code, err = _run_main({"tool_input": {"command": command}, "cwd": str(tmp_path)}, capsys)
+            assert code == 2 and "aws-key" in err, command
+
+    def test_git_by_its_full_path(self, staging_repo, capsys):
+        git = shutil.which("git")
+        code, err = _commit_in(staging_repo, f"'{git}' add new.py && '{git}' commit -m x", capsys)
+        assert code == 2 and "aws-key" in err
+
+    @pytest.mark.parametrize("command, why", [
+        ("git add $F && git commit -m x", "expanded by the shell"),
+        ("git add \"$(ls)\" && git commit -m x", "expanded by the shell"),
+        ("git add ~/new.py && git commit -m x", "expanded by the shell"),
+        ("git add -p && git commit -m x", "interactive"),
+        ("git add -Ai && git commit -m x", "interactive"),
+        ("git add --pathspec-from-file=- && git commit -m x", "reads its paths"),
+        ("GIT_INDEX_FILE=other git add new.py && git commit -m x", "another directory"),
+        ("git -C sub add new.py && git commit -m x", "another directory"),
+        ("git apply --cached p.diff && git commit -m x", "`git apply`"),
+        ("git stash pop && git commit -m x", "`git stash`"),
+        ("git update-index --add new.py && git commit -m x", "`git update-index`"),
+        ("git st new.py && git commit -m x", "`git st`"),
+        ("find . -name new.py | xargs git add && git commit -m x", "`xargs`"),
+        ("git add missing.py; git commit -m x", "fails when replayed"),
+    ])
+    def test_a_staging_step_that_cannot_be_replayed_denies_the_combined_form(
+            self, staging_repo, command, why, capsys):
+        code, err = _commit_in(staging_repo, command, capsys)
+        assert code == 2 and why in err and "second call" in err, (command, err)
+
+    def test_an_unreadable_command_with_an_earlier_git_denies(self, staging_repo, capsys):
+        code, err = _commit_in(staging_repo, "git add new.py && git commit -m 'open", capsys)
+        assert code == 2 and "could not be read" in err
+
+    @pytest.mark.parametrize("command", [
+        "git add clean.py && git commit -m 'One sentence.'",
+        "git add clean.py 2>/dev/null && git commit -m x",
+        "git add -A -- clean.py && git commit -m x",
+        "git mv clean.py moved.py && git commit -m x",
+        "git checkout -b feat && git add clean.py && git commit -m x",
+        "git commit -m x && git add new.py",
+    ])
+    def test_clean_staging_passes(self, staging_repo, command, capsys):
+        code, err = _commit_in(staging_repo, command, capsys)
+        assert code == 0, (command, err)
+
+    def test_ignored_files_stay_out_of_add_all(self, staging_repo, capsys):
+        (staging_repo / "new.py").unlink()
+        code, err = _commit_in(staging_repo, "git add -A && git commit -m x", capsys)
+        assert code == 0, err
+
+    def test_the_split_form_reads_the_index_as_before(self, staging_repo, capsys):
+        assert _commit_in(staging_repo, "git commit -m x", capsys)[0] == 0      # key untracked
+        _git(staging_repo, "add", "new.py")
+        code, err = _commit_in(staging_repo, "git commit -m x", capsys)
+        assert code == 2 and "aws-key" in err
+
+    def test_the_real_index_is_untouched_and_the_copy_removed(self, staging_repo, capsys):
+        before = (staging_repo / ".git" / "index").read_bytes()
+        assert _commit_in(staging_repo, "git add -A && git commit -m x", capsys)[0] == 2
+        assert (staging_repo / ".git" / "index").read_bytes() == before
+        assert os.listdir(tempfile.gettempdir()) == []

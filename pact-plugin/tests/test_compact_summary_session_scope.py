@@ -107,7 +107,7 @@ class TestTwoSessionWriterNonInterference:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", _PROJECT)
         bodies = ((_SID_A, "SENTINEL-A summary bytes"), (_SID_B, "SENTINEL-B summary bytes"))
         for sid, body in bodies:
-            frame = {"session_id": sid, "agent_type": "PACT:pact-orchestrator",
+            frame = {"session_id": sid, "agent_type": "repacted:pact-orchestrator",
                      "hook_event_name": "PostCompact", "compact_summary": body}
             assert _run_postcompact_main(frame, monkeypatch, tmp_path) == 0
 
@@ -259,7 +259,7 @@ class TestDegradationIsLossFree:
 
     def test_missing_session_id_degrades_loss_free(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", _PROJECT)
-        frame = {"agent_type": "PACT:pact-orchestrator",
+        frame = {"agent_type": "repacted:pact-orchestrator",
                  "hook_event_name": "PostCompact",
                  "compact_summary": "DEGRADED-NO-SID"}
         assert _run_postcompact_main(frame, monkeypatch, tmp_path) == 0
@@ -267,7 +267,7 @@ class TestDegradationIsLossFree:
 
     def test_missing_project_dir_degrades_loss_free(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        frame = {"session_id": _SID_A, "agent_type": "PACT:pact-orchestrator",
+        frame = {"session_id": _SID_A, "agent_type": "repacted:pact-orchestrator",
                  "hook_event_name": "PostCompact",
                  "compact_summary": "DEGRADED-NO-PROJ"}
         assert _run_postcompact_main(frame, monkeypatch, tmp_path) == 0

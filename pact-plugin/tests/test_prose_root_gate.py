@@ -115,9 +115,10 @@ _TELEGRAM_PREMISE = ("telegram/config.py", 'Path.home() / ".claude" / "pact-tele
 ARM1_ALLOWLIST = [
     ("commands/telegram-setup.md", "~/.claude/pact-telegram", 2, _TELEGRAM),
     ("commands/telegram-setup.md", "~/.claude/pact-telegram/.env", 6, _TELEGRAM),
-    ("protocols/pact-protocols.md", "~/.claude/pact-memory/memory.db", 1, _DB_PIN_MIRRORED),
-    ("protocols/pact-state-recovery.md", "~/.claude/pact-memory/memory.db", 1, _DB_PIN_MIRRORED),
-    ("skills/pact-memory/SKILL.md", "~/.claude/pact-memory/memory.db", 2, _DB_PIN),
+    # the protocol consolidation: the SSOT copy is deleted; the recovery table moved to recovery.md.
+    ("protocols/recovery.md", "~/.claude/pact-memory/memory.db", 1, _DB_PIN_MIRRORED),
+    # the secretary rework: the two storage-path mentions moved verbatim to the skill's long form.
+    ("skills/pact-memory/references/memory-long-form.md", "~/.claude/pact-memory/memory.db", 2, _DB_PIN),
     ("skills/pact-memory/scripts/cli.py", "~/.claude/pact-memory/...", 1,
      "illustrative, no consumer — a stderr-scrubbing comment. NOT 'pact-memory, "
      "by design': that reason is false here and would license the next bare "
@@ -190,7 +191,7 @@ def test_arm1_allowlist_is_exact_in_both_directions():
 
 # The file and substitution used by the tail-discrimination arm. Chosen because
 # it is the entry whose justification names this exact hazard.
-_SWAP_FILE = "skills/pact-memory/SKILL.md"
+_SWAP_FILE = "skills/pact-memory/references/memory-long-form.md"
 _SWAP_FROM = "~/.claude/pact-memory/memory.db"
 _SWAP_TO = "~/.claude/tasks/"
 # The counterfactual key: ARM1_KEY with the tail capture removed.

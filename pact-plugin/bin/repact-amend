@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""repact-amend: prepare a lead amendment (amend_<n>) for a task. Read-only.
+
+Location: pact-plugin/bin/repact-amend. The lead
+records a post-dispatch directive as one top-level task-metadata key per amendment,
+amend_<n> = {"text", "at", "from", "kind"} (plus "sha" for kind commit, the lead's commit
+confirmation); this prints the next free n, the ready-to-paste metadata object for the
+lead's own TaskUpdate call, and the one-line wake to send after the write is stored: the
+task id and the digest of the object, never its text (a busy owner gets the text from
+hooks/amendment_relay.py within one tool call, an idle one reads it with repact-payload).
+It never writes: the lead makes the TaskUpdate call. Rules live in
+hooks/shared/amendments.py; hooks/amendment_gate.py checks the owner's HANDOFF disposes of
+every amendment.
+
+Exit codes: 0 printed; 2 usage error; 4 task not found.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+BIN_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BIN_DIR))
+sys.path.insert(0, str(BIN_DIR.parent / "hooks"))
+from shared import evidence as ev  # noqa: E402
+from shared.payload_digest import payload_digest  # noqa: E402
+from _repact_common import utc_now_iso  # noqa: E402
+
+EXAMPLE = 'repact-amend next 34 --kind ruling --text "Use the placeholder class, not an exemption."'
+EXAMPLES = (
+    "examples:\n"
+    f"  {EXAMPLE}\n"
+    "  repact-amend next 34 --team session-5a318e14 --kind premise --text-file /tmp/premise.txt\n"
+    '  repact-amend next 34 --kind commit --sha 5c3ae4d7 --text "committed Add the shape gate."\n'
+    "  repact-amend next 34\n"
+    "exit: 0 printed, 2 usage, 4 task not found."
+)
+
+
+def load_rules():
+    path = BIN_DIR.parent / "hooks" / "shared" / "amendments.py"
+    spec = importlib.util.spec_from_file_location("_amendments", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}\n\n  {EXAMPLE}", file=sys.stderr)
+        sys.exit(2)
+
+
+def build_parser() -> Parser:
+    rules = load_rules()
+    parser = Parser(
+        prog="repact-amend", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Print the next amend_<n> key for a task, the metadata object to paste into "
+                    "your TaskUpdate, and the one-line wake to send once it is stored. Read-only.",
+        epilog=EXAMPLES)
+    parser.add_argument("verb", choices=("next",))
+    parser.add_argument("task", help="task id")
+    parser.add_argument("--team", help="team name (default: this session's team that holds the task)")
+    parser.add_argument("--kind", default="note", choices=rules.KINDS)
+    parser.add_argument("--sha", help="the commit, 7 to 40 hex characters: required with --kind commit, "
+                                      "refused with any other kind")
+    text = parser.add_mutually_exclusive_group()
+    text.add_argument("--text", help="the amendment text")
+    text.add_argument("--text-file", help="read the amendment text from this file")
+    return parser
+
+
+def render(rules, task: dict, task_id: str, team: str, args) -> str:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    existing = rules.amendments(metadata)
+    key = f"{rules.AMEND_PREFIX}{rules.next_number(metadata)}"
+    text = args.text
+    if args.text_file:
+        text = Path(args.text_file).expanduser().read_text(encoding="utf-8")
+    if text:
+        value = rules.make_amendment(text, args.kind, utc_now_iso(), sha=args.sha)
+        digest = payload_digest(value) or "unavailable"
+    else:       # a placeholder to fill in: its digest would not be the stored object's
+        value = {"text": "<text>", "at": utc_now_iso(), "from": "team-lead", "kind": args.kind}
+        value.update({"sha": args.sha.lower()} if args.sha else {})
+        digest = "<digest from the stored line>"
+    owner = task.get("owner") or "<owner>"
+    listed = ", ".join(f"{name} ({item.get('kind') or 'note'})" for name, item in existing.items()) or "none"
+    return "\n".join([
+        f"next: {key} on #{task_id} (team {team}, owner {owner}, status {task.get('status')})",
+        f"existing: {listed}",
+        "metadata (paste into your TaskUpdate):",
+        json.dumps({key: value}, ensure_ascii=False),
+        f"wake (send after the line \"Amendment {key} stored on #{task_id}\"; its digest must match):",
+        rules.wake_line(owner, task_id, "amended", digest),
+    ])
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    rules = load_rules()
+    problem = rules.sha_problem(args.kind, args.sha)
+    if problem:
+        parser.error(problem)
+    task_id = str(args.task)
+    team = args.team or ev.resolve_team(os.environ.get("CLAUDE_CODE_SESSION_ID"), task_id)
+    task = ev.load_task(ev.task_path(team, task_id)) if team else None
+    if task is None:
+        print(f"repact-amend: task {task_id} not found{' in team ' + team if team else ''}",
+              file=sys.stderr)
+        return 4
+    try:
+        print(render(rules, task, task_id, team, args))
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

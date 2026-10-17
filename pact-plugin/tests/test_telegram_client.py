@@ -313,6 +313,15 @@ class TestSendMessageWithButtons:
         assert keyboard[0][0] == {"text": "Yes", "callback_data": "Yes"}
         assert keyboard[0][1] == {"text": "No", "callback_data": "No"}
 
+    @pytest.mark.asyncio
+    async def test_a_label_carrying_a_secret_is_redacted(self, telegram_client, mock_http_client):
+        """Labels leave the machine too (T-4dbe65b9): they get the outbound filter."""
+        mock_http_client.post.return_value = make_ok_response({"message_id": 42})
+        fake = "glpat-" + "Fk9mQ2vLp7Rz4tXk9mQ2"
+        await telegram_client.send_message_with_buttons("Choose:", buttons=[f"use {fake}", "No"])
+        params = mock_http_client.post.call_args.kwargs.get("json")
+        assert fake not in str(params) and "No" in str(params)
+
 
 # =============================================================================
 # answer_callback_query Tests

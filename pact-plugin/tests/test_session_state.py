@@ -2,7 +2,7 @@
 Tests for hooks/shared/session_state.py — single-session state summarizer
 that replaces task_scanner.py (#411 root cause).
 
-Covers the 18-test matrix from docs/architecture/journal-based-task-scanner.md
+Covers the 18-test matrix from the design notes
 §3.5 + 3 explicit regression guards for #411 and #412 Fix A:
 - iteration-order independence (filesystem order must not influence output)
 - no-foreign-session-read (a second session's journal in the same parent
@@ -1300,6 +1300,50 @@ class TestDeriveVarietyFromJournal:
 # ---------------------------------------------------------------------------
 
 
+class TestTaskBStampedBeforeItsGate:
+    """FIX-STATE (f5). journal_emitter writes a FEATURE-level variety row for a Task B
+    stamped before its Task A exists (its early guess), then a DISPATCH row for the same
+    task at the wiring. The feature pick must never adopt that Task B: a task whose
+    LATEST row (session_journal.latest_variety_by_task, journal order) is dispatch-marked
+    is skipped. A task whose latest row is a feature re-stamp stays eligible (lead
+    ruling, amend_1 on #132)."""
+
+    FEATURE = make_event("variety_assessed", task_id="1", variety={"total": 10},
+                         ts="2026-09-27T01:00:00Z")
+    B_EARLY_GUESS = make_event("variety_assessed", task_id="7", variety={"total": 6},
+                               ts="2026-09-27T01:05:00Z")
+    B_WIRED = make_event("variety_assessed", task_id="7", scope="dispatch",
+                         variety={"total": 6}, ts="2026-09-27T01:06:00Z")
+
+    def test_the_rewired_task_b_is_never_the_feature(self):
+        events = [self.FEATURE, self.B_EARLY_GUESS, self.B_WIRED]
+        assert _derive_feature_from_journal(events)[0] == "1"
+        assert _derive_variety_from_journal(events) == {"total": 10}
+
+    def test_before_the_wiring_lands_the_early_guess_still_reads_as_a_feature(self):
+        """Control: the fix keys on the dispatch row; without one there is nothing to skip."""
+        events = [self.FEATURE, self.B_EARLY_GUESS]
+        assert _derive_feature_from_journal(events)[0] == "7"
+
+    def test_a_later_feature_restamp_of_the_same_task_stays_eligible(self):
+        restamp = make_event("variety_assessed", task_id="7", variety={"total": 8},
+                             ts="2026-09-27T01:07:00Z")
+        events = [self.FEATURE, self.B_EARLY_GUESS, self.B_WIRED, restamp]
+        assert _derive_feature_from_journal(events)[0] == "7"
+        assert _derive_variety_from_journal(events) == {"total": 8}
+
+    def test_the_ordinary_in_order_journal(self):
+        """The chronological case latest_variety_by_task assumes: journal order == ts order.
+        Only the Task B is skipped; a later genuine feature (a new arc) still wins."""
+        new_arc = make_event("variety_assessed", task_id="20", variety={"total": 7},
+                             ts="2026-09-27T02:00:00Z")
+        events = [self.FEATURE, self.B_EARLY_GUESS, self.B_WIRED, new_arc]
+        assert _derive_feature_from_journal(events)[0] == "20"
+
+    def test_only_a_rewired_task_b_means_no_feature_yet(self):
+        assert _derive_feature_from_journal([self.B_EARLY_GUESS, self.B_WIRED]) == (None, None)
+
+
 class TestFeatureSubjectDiskFallback:
     """Tests for the disk-read fallback for feature_subject when the
     journal identifies feature_id but no matching agent_handoff exists."""
@@ -1391,7 +1435,7 @@ class TestFeatureSubjectDiskFallback:
 # implementation used `Path(value).name == value` which returned True
 # for ".." (since `Path("..").name == ".."`), admitting a one-directory
 # escape at the disk-helper boundary. See security-engineer memory
-# patterns_path_name_fallback_escape.md.
+# the Path.name escape rule.
 # ---------------------------------------------------------------------------
 
 
@@ -1574,7 +1618,7 @@ class TestIsSafePathComponent_Public:
     """Cycle-8 Test 3 — promoted shared helper, public-API surface.
 
     Previously `_is_safe_path_component` (private). Cycle-8 promoted to
-    public `is_safe_path_component` + exported via `shared/__init__.py`
+    public `is_safe_path_component` (imported from `shared.session_state`)
     so session_end.py's three allowlist callsites can DRY them out.
 
     COUNTER-TEST BY REVERT target: removing the `fullmatch` regex
@@ -1632,18 +1676,16 @@ class TestIsSafePathComponent_Public:
         assert is_safe_path_component(42) is False  # type: ignore[arg-type]
         assert is_safe_path_component(["x"]) is False  # type: ignore[arg-type]
 
-    def test_exported_from_shared_package(self):
-        """`is_safe_path_component` is reachable via `shared.__init__` export.
-
-        Pins the public API: session_end.py imports via the package
-        root, not via the session_state submodule. Breaking the export
-        would break that DRY refactor.
-        """
+    def test_session_end_uses_the_shared_predicate(self):
+        """`is_safe_path_component` has one home, `shared.session_state`, and session_end.py
+        binds that object (the DRY refactor); the package itself re-exports nothing."""
         import shared
-        assert hasattr(shared, "is_safe_path_component")
-        assert hasattr(shared, "SAFE_PATH_COMPONENT_RE")
-        assert shared.is_safe_path_component("pact-0001639f") is True
-        assert shared.is_safe_path_component("../etc") is False
+        import session_end
+        from shared import session_state
+        assert session_end.is_safe_path_component is session_state.is_safe_path_component
+        assert not hasattr(shared, "is_safe_path_component")
+        assert session_state.is_safe_path_component("pact-0001639f") is True
+        assert session_state.is_safe_path_component("../etc") is False
 
 
 class TestSessionStateTaskReaderContainmentParity:

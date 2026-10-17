@@ -1,9 +1,10 @@
 """
 Location: pact-plugin/hooks/shared/task_utils.py
 Summary: Shared Task system integration utilities for PACT hooks.
-Used by: PACT lifecycle/wake hooks (via get_task_list), the lifecycle gate
-and handoff machinery (via read_task_json), and dispatch helpers (via
-iter_team_task_jsons).
+Used by: PACT lifecycle/wake hooks (via get_task_list) and every reader of the
+task analysis functions. The store itself (paths, reads, the locked write) is
+shared/task_store.py; iter_team_task_jsons, read_task_json and update_task_file
+are re-exported from here until 1.7.
 
 This module provides common functions for reading and analyzing Tasks from
 the Claude Task system. Tasks live under one of two storage topologies, keyed
@@ -16,25 +17,24 @@ Functions:
     get_task_list: Read all tasks from the Task system
     find_feature_task: Identify the main Feature task
     find_current_phase: Find the currently active phase task
-    find_active_agents: Find all active agent tasks
+    find_active_agents: Find the tasks live agents are working or waiting on
     find_blockers: Find blocker/algedonic tasks
     build_post_compaction_checkpoint: Build [POST-COMPACTION CHECKPOINT] message from Task state
-    iter_team_task_jsons: Yield parsed task JSONs from a team dir (path-traversal safe)
-    read_task_json: Read the raw task JSON by id + team_name (path-traversal safe)
     is_teachback_subject: True iff a subject matches the canonical Teachback shape
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
-from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from shared.pact_context import get_session_id, get_team_name
-from shared.session_state import is_safe_path_component
-from shared.paths import get_claude_config_dir
+from shared.task_store import TaskStore
+# shim: delete in 1.7. The readers and the writer live in task_store; the names stay
+# importable from here for one release.
+from shared.task_store import (  # noqa: F401  # re-export: shim until 1.7
+    iter_team_task_jsons, read_task_json, update_task_file)
 
 
 def get_task_list(tasks_base_dir: str | None = None) -> list[dict[str, Any]] | None:
@@ -45,154 +45,197 @@ def get_task_list(tasks_base_dir: str | None = None) -> list[dict[str, Any]] | N
       - TEAM session -> tasks under ~/.claude/tasks/{team_name}/   (Agent Teams)
       - SOLO session -> tasks under ~/.claude/tasks/{session_id}/  (no team)
     team_name is mode-independent (resolves identically under in-process and
-    tmux), so the team branch needs no teammateMode detection. This function
-    reads directly from the filesystem since hooks cannot call Task tools.
+    tmux), so the team branch needs no teammateMode detection. Hooks cannot
+    call Task tools, so the store is read from disk through TaskStore, which
+    applies the one set of path rules (safe component, containment, symlink
+    and dotfile skips, object-only parse) to both branches.
 
     Args:
         tasks_base_dir: Override for the ~/.claude/tasks base dir (testing only;
-            production default None resolves the real home path). Mirrors the
-            institutional test seam in _read_task_counts / read_task_json.
+            production default None resolves the real home path).
 
     Returns:
         List of task dicts, or None if tasks unavailable
     """
-    # TEAM branch (the team-dir resolution fix): a team session stores tasks
-    # under {team_name}, NOT the bare session_id. Reuse the path-traversal-safe
-    # SSOT reader. An empty/absent team dir returns None and MUST NOT fall
-    # through to the solo session_id dir: a team session with no tasks yet is
-    # still a team session (branch key = "is this a team session?", not "did the
-    # team dir have tasks?"). The return lives INSIDE the `if` to guarantee that
-    # invariant — control never reaches the solo branch when team_name is truthy.
+    store = TaskStore(tasks_base_dir) if tasks_base_dir else TaskStore()
+    # A team session with no tasks yet is still a team session: the return lives
+    # inside the `if` so control never reaches the solo branch when team_name is set.
     team_name = get_team_name()
     if team_name:
-        tasks = list(iter_team_task_jsons(team_name, tasks_base_dir=tasks_base_dir))
+        tasks = store.list(team_name)
         return tasks if tasks else None
-
-    # SOLO / no-team branch: the CLAUDE_CODE_TASK_LIST_ID-or-session_id key
-    # choice is preserved, and the dir is read by this branch's own direct glob
-    # (NOT routed through iter_team_task_jsons) — but with the SAME FIVE
-    # path-safety + content-hygiene defenses applied INLINE, in FULL PARITY with
-    # the team branch (iter_team_task_jsons): (1) is_safe_path_component on the
-    # name (F2 guard below), (2) a resolve/relative_to base-anchor on the dir,
-    # (3) a per-file is_symlink skip, (4) a dotfile-prefixed-file skip, and
-    # (5) an isinstance(dict) parse guard. The solo branch is therefore NOT
-    # raw/unvalidated: it has FULL 5/5 defense parity with the team branch, just
-    # implemented inline. Surgical-inline duplication (NOT a shared-helper
-    # refactor) is the accepted trade-off to avoid touching the working/tested
-    # team path. Only the base root is parameterized (test seam).
-    session_id = get_session_id()
-    # Also check for multi-session task list ID
-    task_list_id = os.environ.get("CLAUDE_CODE_TASK_LIST_ID", session_id)
-
+    # SOLO: CLAUDE_CODE_TASK_LIST_ID (user-controlled, so it passes the same component
+    # check as a team name inside the store) else the session id.
+    task_list_id = os.environ.get("CLAUDE_CODE_TASK_LIST_ID", get_session_id())
     if not task_list_id:
         return None
-
-    # F2 (security): task_list_id is USER-CONTROLLED via the
-    # CLAUDE_CODE_TASK_LIST_ID env var, then used as a path component. Validate
-    # it with the same positive allowlist the team branch already applies to
-    # team_name (is_safe_path_component, inside iter_team_task_jsons) so a
-    # traversal value ("../secret") cannot escape the tasks base and read *.json
-    # outside it. Legitimate task-list IDs (pact-<slug>, UUIDs, multi-session
-    # pointers) are single [A-Za-z0-9_-] components and pass unchanged — no solo
-    # behavior change for real inputs (the env var must name a ~/.claude/tasks/
-    # dir, which the platform generates within that alphabet). Validating BEFORE
-    # the path-join also rejects an embedded-NUL value before the .exists() call
-    # (which could otherwise raise ValueError on some Python versions). Fail
-    # CLOSED (return None) to preserve the None-on-unavailable contract.
-    if not is_safe_path_component(task_list_id):
-        return None
-
-    base = Path(tasks_base_dir) if tasks_base_dir else (get_claude_config_dir() / "tasks")
-    tasks_dir = base / task_list_id
-
-    # R3 (security): the {task_list_id} dir could itself be a SYMLINK that
-    # escapes the tasks base. is_safe_path_component (above) rejects '../' in the
-    # NAME, but not a safe-NAME dir that resolves out-of-base via a symlink.
-    # Mirror the team branch's anchor (iter_team_task_jsons): resolve the dir and
-    # assert it stays under the resolved base. A legit (non-symlink) dir resolves
-    # to itself and passes unchanged; only an escaping symlink-dir is rejected.
-    try:
-        tasks_dir.resolve().relative_to(base.resolve())
-    except (OSError, ValueError):
-        return None
-
-    if not tasks_dir.exists():
-        return None
-
-    tasks = []
-    try:
-        for task_file in tasks_dir.glob("*.json"):
-            # R4 (hygiene parity): skip dotfile-prefixed JSON. pathlib glob
-            # INCLUDES them, but the platform task system never writes them; an
-            # attacker dropping one into the user's own tasks dir could otherwise
-            # inflate the task count. Mirrors the team branch's dotfile skip.
-            if task_file.name.startswith("."):
-                continue
-            # R3 (security): skip a *.json that is a SYMLINK — it could point
-            # outside the tasks base. Mirrors the team branch's per-file
-            # is_symlink skip; real task files are regular files, unaffected.
-            try:
-                if task_file.is_symlink():
-                    continue
-            except OSError:
-                continue
-            try:
-                content = task_file.read_text(encoding='utf-8')
-                task = json.loads(content)
-                # R4 (hygiene parity): skip a parse that is not a dict (e.g.
-                # [1,2,3]/42/"x" from a malformed-but-valid JSON). Mirrors the
-                # team branch's isinstance(dict) yield-guard; downstream readers
-                # (find_feature_task etc.) call .get() and need a dict.
-                if not isinstance(task, dict):
-                    continue
-                tasks.append(task)
-            except (IOError, json.JSONDecodeError):
-                continue
-    except Exception:
-        return None
-
+    tasks = store.list(task_list_id)
     return tasks if tasks else None
+
+
+# Subject prefixes of the lead's phase tasks: never the feature, never an agent's.
+_PHASE_PREFIXES = ("PREPARE:", "ARCHITECT:", "CODE:", "TEST:", "Review:")
+
+# Agent-type subject prefixes, for a task dispatched with no owner set.
+_AGENT_TYPE_PREFIXES = (
+    "preparer:",
+    "architect:",
+    "backend-coder:",
+    "frontend-coder:",
+    "database-engineer:",
+    "devops-engineer:",
+    "test-engineer:",
+    "security-engineer:",
+    "qa-engineer:",
+    "auditor:",
+    "secretary:",
+)
+
+_SIGNAL_TASK_TYPES = ("blocker", "algedonic")
+# A wait the lead resolves: awaiting_lead_completion, awaiting_lead_commit.
+_WAITS_ON_LEAD_PREFIX = "awaiting_lead"
+# The lead's owner name. Kept here, not imported from shared.amendments, so
+# this module adds no helper to the import closure of the hooks that load it.
+_LEAD_OWNER = "team-lead"
+_AGENT_NAME_MAX_CHARS = 64
+_WAIT_REASON_MAX_CHARS = 60
+_SUBJECT_MAX_CHARS = 120
+_TASK_ID_MAX_CHARS = 12
+# The checkpoint lists this many agents, and this many tasks per agent, then "+N more".
+_MAX_LISTED_AGENTS = 12
+_MAX_LISTED_AGENT_TASKS = 6
+_OPEN_STATUSES = ("in_progress", "pending")
+_CHECKPOINT_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]+")
+
+
+def _text(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _task_key(task: dict[str, Any]) -> str:
+    """The task id as a string, or "" when it has none usable."""
+    task_id = task.get("id")
+    if isinstance(task_id, bool) or not isinstance(task_id, (str, int)):
+        return ""
+    return str(task_id)
+
+
+def _id_list(value: Any) -> list[str]:
+    """A blocks / blockedBy value as id strings; anything else gives []."""
+    if not isinstance(value, list):
+        return []
+    return [
+        str(i) for i in value
+        if isinstance(i, (str, int)) and not isinstance(i, bool) and str(i)
+    ]
+
+
+def _metadata(task: dict[str, Any]) -> dict[str, Any]:
+    metadata = task.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def task_agent_name(task: dict[str, Any]) -> str:
+    """The teammate that owns this task, or "" when no owner is set or the
+    lead owns it. The owner is the agent's NAME; its subject prefix may be an
+    agent type, a name or neither."""
+    owner = _text(task.get("owner")).strip()
+    return "" if owner == _LEAD_OWNER else owner
+
+
+def task_wait_reason(task: dict[str, Any]) -> str:
+    """The reason of the task's intentional_wait, or ""."""
+    wait = _metadata(task).get("intentional_wait")
+    return _text(wait.get("reason")).strip() if isinstance(wait, dict) else ""
+
+
+def _is_agent_task(task: dict[str, Any]) -> bool:
+    if task_agent_name(task):
+        return True
+    return _text(task.get("subject")).lower().startswith(_AGENT_TYPE_PREFIXES)
+
+
+def _is_feature_candidate(task: dict[str, Any]) -> bool:
+    """An open task that is the lead's own and neither a phase nor a signal."""
+    if not _task_key(task) or task.get("status") not in _OPEN_STATUSES:
+        return False
+    if _is_agent_task(task) or _text(task.get("subject")).startswith(_PHASE_PREFIXES):
+        return False
+    return _metadata(task).get("type") not in _SIGNAL_TASK_TYPES
+
+
+def _blocked_tasks(tasks: list[dict[str, Any]]) -> dict[str, set]:
+    """id -> ids of the tasks it blocks, from both `blocks` and `blockedBy`.
+
+    A completed blocker stays in `blockedBy` on disk, so an edge says the two
+    tasks belong together, not that one is still waiting on the other."""
+    edges: dict[str, set] = {}
+    for task in tasks:
+        key = _task_key(task)
+        if not key:
+            continue
+        edges.setdefault(key, set()).update(_id_list(task.get("blocks")))
+        for blocker in _id_list(task.get("blockedBy")):
+            edges.setdefault(blocker, set()).add(key)
+    return edges
+
+
+def _reachable(start: str, edges: dict[str, set]) -> set:
+    seen: set = set()
+    stack = [start]
+    while stack:
+        for nxt in edges.get(stack.pop(), ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return seen
 
 
 def find_feature_task(tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
     """
     Find the main Feature task from the task list.
 
-    Feature tasks are top-level tasks that represent the overall work item.
-    They can be identified by:
-    - Having no blockedBy (top-level)
-    - Subject starting with a verb (e.g., "Implement user auth")
-    - OR having phase tasks as children
+    Among the lead's open tasks, in this order:
+    1. the in_progress one a live agent task leads to through blocks /
+       blockedBy (through phase tasks and other agent tasks);
+    2. else the one in_progress task, linked or not: with more than one, None;
+    3. else, with none in progress, the pending one a live agent task leads to;
+    4. else None: the list does not say which task is the feature.
+
+    An in_progress task outranks a pending one, so a task waiting on the
+    feature (a release blockedBy it) or an older one never started is not
+    named over the task the lead is working. A feature is normally blockedBy
+    its agent tasks, so being blocked never rules a task out. Phase tasks,
+    agent tasks and blocker / algedonic signal tasks are never the feature.
 
     Args:
         tasks: List of all tasks
 
     Returns:
-        Feature task dict, or None if not found
+        Feature task dict, or None if it cannot be told
     """
-    # Feature task is one that blocks others but isn't blocked itself
-    # (or has status in_progress at top level)
-    for task in tasks:
-        task_id = task.get("id")
-        if not task_id:
-            continue
+    tasks = [t for t in tasks if isinstance(t, dict)]
+    candidates = {_task_key(t): t for t in tasks if _is_feature_candidate(t)}
 
-        # Skip if this task is blocked by something
-        if task.get("blockedBy"):
-            continue
+    edges = _blocked_tasks(tasks)
+    linked: set = set()
+    for agent_task in find_active_agents(tasks):
+        linked |= _reachable(_task_key(agent_task), edges) & set(candidates)
+    in_progress = {
+        key for key, task in candidates.items() if task.get("status") == "in_progress"
+    }
 
-        # Check if it's a feature-like task (not a phase task)
-        subject = task.get("subject", "")
-        # Phase tasks start with phase names
-        phase_prefixes = ("PREPARE:", "ARCHITECT:", "CODE:", "TEST:", "Review:")
-        if any(subject.startswith(p) for p in phase_prefixes):
-            continue
+    def chain_end(keys: set) -> dict[str, Any] | None:
+        # With a chain of lead tasks, the feature is the one at the end of it.
+        ends = [key for key in keys if not (_reachable(key, edges) & keys)]
+        return candidates[ends[0]] if len(ends) == 1 else None
 
-        # This looks like a feature task
-        if task.get("status") in ("in_progress", "pending"):
-            return task
-
-    return None
+    feature = chain_end(linked & in_progress)
+    if feature is not None:
+        return feature
+    if in_progress:
+        return candidates[next(iter(in_progress))] if len(in_progress) == 1 else None
+    return chain_end(linked)
 
 
 def find_current_phase(tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -211,7 +254,9 @@ def find_current_phase(tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
     phase_prefixes = ("PREPARE:", "ARCHITECT:", "CODE:", "TEST:")
 
     for task in tasks:
-        subject = task.get("subject", "")
+        if not isinstance(task, dict):
+            continue
+        subject = _text(task.get("subject"))
         if any(subject.startswith(p) for p in phase_prefixes):
             if task.get("status") == "in_progress":
                 return task
@@ -221,40 +266,27 @@ def find_current_phase(tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 def find_active_agents(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    Find all currently active agent tasks.
+    Find the tasks live agents are working or waiting on.
 
-    Agent tasks follow the pattern: "{agent-type}: {work-description}"
-    and have status "in_progress".
+    An agent task is in_progress and either owned by a teammate (any name;
+    the owner is the agent) or, with no owner set, has an agent-type subject
+    prefix ("{agent-type}: {work-description}"). An agent idle on an
+    intentional_wait (awaiting_lead_completion, awaiting_lead_commit) still
+    holds its task in_progress, so it is listed.
 
     Args:
         tasks: List of all tasks
 
     Returns:
-        List of agent task dicts
+        List of agent task dicts, in id order
     """
-    agent_prefixes = (
-        "preparer:",
-        "architect:",
-        "backend-coder:",
-        "frontend-coder:",
-        "database-engineer:",
-        "devops-engineer:",
-        "n8n:",
-        "test-engineer:",
-        "security-engineer:",
-        "qa-engineer:",
-        "auditor:",
-        "secretary:",
-    )
-
-    active = []
-    for task in tasks:
-        subject = task.get("subject", "").lower()
-        if any(subject.startswith(p) for p in agent_prefixes):
-            if task.get("status") == "in_progress":
-                active.append(task)
-
-    return active
+    active = [
+        task for task in tasks
+        if isinstance(task, dict)
+        and task.get("status") == "in_progress"
+        and _is_agent_task(task)
+    ]
+    return sorted(active, key=lambda t: (len(_task_key(t)), _task_key(t)))
 
 
 def find_blockers(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -272,13 +304,57 @@ def find_blockers(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     blockers = []
     for task in tasks:
-        metadata = task.get("metadata", {})
-        task_type = metadata.get("type", "")
-        if task_type in ("blocker", "algedonic"):
+        if not isinstance(task, dict):
+            continue
+        task_type = _metadata(task).get("type", "")
+        if task_type in _SIGNAL_TASK_TYPES:
             if task.get("status") != "completed":
                 blockers.append(task)
 
     return blockers
+
+
+def _checkpoint_field(value: Any, limit: int) -> str:
+    """Task-authored text for one checkpoint line: control characters and line
+    breaks become spaces, and the length is bounded."""
+    cleaned = " ".join(_CHECKPOINT_CONTROL_CHARS.sub(" ", _text(value)).split())
+    return cleaned if len(cleaned) <= limit else cleaned[: limit - 3] + "..."
+
+
+def _describe_agents(agents: list[dict[str, Any]]) -> "tuple[list[str], list[str]]":
+    """(one entry per live agent, the names of those waiting on the lead).
+
+    An agent is named by its task owner, with each task it holds and the
+    intentional_wait reason where it has one. A task with no owner is listed
+    by its subject."""
+    by_name: dict[str, list[str]] = {}
+    unowned: list[str] = []
+    waiting_on_lead: list[str] = []
+    for task in agents:
+        if not isinstance(task, dict):
+            continue
+        name = _checkpoint_field(task_agent_name(task), _AGENT_NAME_MAX_CHARS)
+        if not name:
+            unowned.append(_checkpoint_field(task.get("subject"), _SUBJECT_MAX_CHARS) or "unknown")
+            continue
+        reason = _checkpoint_field(task_wait_reason(task), _WAIT_REASON_MAX_CHARS)
+        state = f"waiting: {reason}" if reason else "in progress"
+        by_name.setdefault(name, []).append(
+            f"#{_checkpoint_field(_task_key(task), _TASK_ID_MAX_CHARS)} {state}"
+        )
+        if reason.startswith(_WAITS_ON_LEAD_PREFIX) and name not in waiting_on_lead:
+            waiting_on_lead.append(name)
+    entries = [
+        f"{name} ({'; '.join(_capped(states, _MAX_LISTED_AGENT_TASKS))})"
+        for name, states in by_name.items()
+    ]
+    return entries + unowned, waiting_on_lead
+
+
+def _capped(items: list[str], limit: int) -> list[str]:
+    """The first `limit` items, then "+N more" for the rest."""
+    extra = len(items) - limit
+    return items[:limit] + [f"+{extra} more"] if extra > 0 else items
 
 
 def build_post_compaction_checkpoint(
@@ -295,7 +371,7 @@ def build_post_compaction_checkpoint(
     Args:
         feature: Feature task dict or None
         phase: Current phase task dict or None
-        agents: List of active agent tasks
+        agents: List of active agent tasks (find_active_agents)
         blockers: List of active blocker tasks
 
     Returns:
@@ -306,26 +382,35 @@ def build_post_compaction_checkpoint(
 
     # Feature context
     if feature:
-        feature_subject = feature.get("subject", "unknown feature")
-        feature_id = feature.get("id", "")
+        feature_subject = (
+            _checkpoint_field(feature.get("subject"), _SUBJECT_MAX_CHARS) or "unknown feature"
+        )
+        feature_id = feature.get("id") and _checkpoint_field(
+            _task_key(feature), _TASK_ID_MAX_CHARS
+        )
         if feature_id:
             lines.append(f"Feature: {feature_subject} (id: {feature_id})")
         else:
             lines.append(f"Feature: {feature_subject}")
     else:
-        lines.append("Feature: Unable to identify feature task")
+        lines.append(
+            "Feature: cannot tell which task is the feature from the task list"
+        )
 
     # Phase context
     if phase:
-        phase_subject = phase.get("subject", "unknown phase")
+        phase_subject = (
+            _checkpoint_field(phase.get("subject"), _SUBJECT_MAX_CHARS) or "unknown phase"
+        )
         lines.append(f"Current Phase: {phase_subject}")
     else:
         lines.append("Current Phase: None detected")
 
     # Active agents
-    if agents:
-        agent_names = [a.get("subject", "unknown") for a in agents]
-        lines.append(f"Active Agents ({len(agents)}): {', '.join(agent_names)}")
+    agent_entries, waiting_on_lead = _describe_agents(agents)
+    if agent_entries:
+        listed = _capped(agent_entries, _MAX_LISTED_AGENTS)
+        lines.append(f"Active Agents ({len(agent_entries)}): {', '.join(listed)}")
     else:
         lines.append("Active Agents: None")
 
@@ -334,9 +419,10 @@ def build_post_compaction_checkpoint(
         lines.append("")
         lines.append("**BLOCKERS DETECTED:**")
         for blocker in blockers:
-            subj = blocker.get("subject", "unknown blocker")
-            meta = blocker.get("metadata", {})
-            level = meta.get("level", "")
+            subj = (
+                _checkpoint_field(blocker.get("subject"), _SUBJECT_MAX_CHARS) or "unknown blocker"
+            )
+            level = _checkpoint_field(_metadata(blocker).get("level"), _WAIT_REASON_MAX_CHARS)
             if level:
                 lines.append(f"  - {level}: {subj}")
             else:
@@ -346,7 +432,14 @@ def build_post_compaction_checkpoint(
     lines.append("")
     if blockers:
         lines.append("Next Step: **Address blockers before proceeding.**")
-    elif agents:
+    elif waiting_on_lead:
+        lines.append(
+            f"Next Step: {', '.join(_capped(waiting_on_lead, _MAX_LISTED_AGENTS))} "
+            "waiting on you. Read the "
+            "task files and act on each wait first, then monitor the other "
+            "agents via TaskList."
+        )
+    elif agent_entries:
         lines.append("Next Step: Monitor active agents via TaskList, then proceed.")
     elif phase:
         lines.append("Next Step: Continue current phase or check agent completion.")
@@ -356,170 +449,12 @@ def build_post_compaction_checkpoint(
     return "\n".join(lines)
 
 
-def iter_team_task_jsons(
-    team_name: str,
-    tasks_base_dir: str | None = None,
-) -> Iterator[dict]:
-    """
-    Yield parsed task JSON dicts from ~/.claude/tasks/{team_name}/*.json.
-
-    Path-traversal defense (single source of truth for per-team task
-    iteration):
-      - team_name validated via is_safe_path_component (positive
-        allowlist; rejects empty, non-string, traversal fragments,
-        separators, controls, whitespace).
-      - tasks_root resolved once; team_dir resolved and asserted under
-        tasks_root via relative_to (symlink-escape defense).
-
-    Args:
-        team_name: Team identifier; the {team_name} path component.
-        tasks_base_dir: Override for the ~/.claude/tasks base dir (testing
-            only; production default None resolves the real home path). The
-            symlink-escape relative_to assertion still anchors to this base,
-            so the path-traversal defense holds for any base. Mirrors the
-            institutional test seam in _read_task_counts / read_task_json.
-
-    Pure generator; never raises. Yields nothing on any error
-    (unsafe team_name, missing dir, symlink escape, IO error). Individual
-    unreadable / unparseable task files are skipped silently. Callers
-    treat "no tasks" as fail-open — wake mechanism degrades to baseline
-    idle-poll rather than crashing the hook.
-
-    Yields:
-        dict per successfully-parsed task JSON file.
-    """
-    if not is_safe_path_component(team_name):
-        return
-    try:
-        base = Path(tasks_base_dir) if tasks_base_dir else (get_claude_config_dir() / "tasks")
-        tasks_root = base.resolve()
-    except OSError:
-        return
-    team_dir = tasks_root / team_name
-    try:
-        resolved_team_dir = team_dir.resolve()
-        resolved_team_dir.relative_to(tasks_root)
-    except (OSError, ValueError):
-        return  # symlink escape or unreadable path
-    if not resolved_team_dir.exists():
-        return
-    try:
-        for task_file in resolved_team_dir.glob("*.json"):
-            # Exclude dotfile-prefixed JSON files: pathlib glob includes
-            # them, but the platform's task system never writes them.
-            # An attacker dropping one into the team's tasks dir could
-            # otherwise inflate the active-task count.
-            if task_file.name.startswith("."):
-                continue
-            # Per-file symlink defense: glob() returns symlink entries
-            # as their raw paths. Even though resolved_team_dir is
-            # asserted under tasks_root, a symlink inside it could
-            # resolve outside. Skip symlinks silently — the platform
-            # task system writes only regular files.
-            try:
-                if task_file.is_symlink():
-                    continue
-            except OSError:
-                continue
-            try:
-                content = task_file.read_text(encoding="utf-8")
-                task = json.loads(content)
-            except (IOError, OSError, json.JSONDecodeError):
-                continue
-            if isinstance(task, dict):
-                yield task
-    except (IOError, OSError):
-        return
-
-
-def read_task_json(
-    task_id: str,
-    team_name: str | None,
-    tasks_base_dir: str | None = None,
-) -> dict:
-    """
-    Read the raw task JSON from disk, safe against path traversal.
-
-    Locates the task file in the team directory first, then falls back to
-    the base directory. Hoisted from handoff_gate.py so non-hook callers
-    (agent_handoff_emitter.py) can consume the same reader.
-
-    Args:
-        task_id: Task identifier. Sanitized to strip `/`, `\\`, and `..`.
-        team_name: Team name for scoped task lookup (may be None).
-        tasks_base_dir: Override for tasks base directory (testing).
-
-    Returns:
-        Full task dict from the JSON file, or empty dict on any failure
-        (missing file, malformed JSON, IO error). Fail-open by design —
-        callers treat "no task data" as a signal to bypass, not crash.
-    """
-    if not task_id:
-        return {}
-
-    task_id = re.sub(r'[/\\]|\.\.', '', task_id)
-    if not task_id:
-        return {}
-
-    if tasks_base_dir is None:
-        tasks_base_dir = str(get_claude_config_dir() / "tasks")
-
-    base = Path(tasks_base_dir)
-
-    task_dirs = []
-    # Case-fold for the team-dir lookup so this status-read sink and the O_EXCL
-    # marker sink treat team_name case IDENTICALLY. The marker SSOT
-    # (agent_handoff_marker._resolve_marker_target) lowercases team_name before
-    # deriving its dir; this reader historically did not, so the two sinks could
-    # diverge on a mixed-case name. Harmless today (generate_team_name mints
-    # lowercase-only "session-[a-f0-9-]"), so this is a latent-only convergence:
-    # for any real value lowered == original. Validate the FOLDED value so a
-    # name that is safe only after folding cannot reach the join.
-    team_name_lc = team_name.lower() if team_name else team_name
-    # Bounded containment parity, guard (1): reject a traversal team_name
-    # (mirror iter_team_task_jsons's is_safe_path_component return-on-invalid).
-    # An unsafe team_name skips the team dir and falls through to the bare-base
-    # read, preserving the fail-open {} contract. Legit pact-<slug>/UUID names
-    # are single [A-Za-z0-9_-] components and pass unchanged.
-    if team_name_lc and is_safe_path_component(team_name_lc):
-        task_dirs.append(base / team_name_lc)
-    task_dirs.append(base)
-
-    for task_dir in task_dirs:
-        # Bounded containment parity, guard (2): skip a task_dir that resolves
-        # OUTSIDE base — e.g. a safe-named team dir that is a SYMLINK escaping
-        # the tasks base. Mirror the sibling readers' resolve()+relative_to;
-        # fail-open (continue to the bare-base fallback), preserving {}. Only
-        # guards (1)+(2) apply to this single-named-file reader; the glob-result
-        # hygiene guards (per-file is_symlink / dotfile skip / isinstance(dict))
-        # are correctly absent — read_task_json reads ONE named file, never globs.
-        try:
-            task_dir.resolve().relative_to(base.resolve())
-        except (ValueError, OSError):
-            continue
-        task_file = task_dir / f"{task_id}.json"
-        # M2 (security): exists() is INSIDE the try and ValueError is caught.
-        # A NUL byte in task_id that slips past the sanitizer raises
-        # ValueError('embedded null byte') from the path syscall in exists();
-        # catching it degrades to the fail-open {} (same as a missing/malformed
-        # file) instead of propagating to a caller's catch-all — e.g. the
-        # lifecycle gate, where an uncaught exception skips rule enforcement for
-        # the turn (advisory-suppression DoS).
-        try:
-            if task_file.exists():
-                return json.loads(task_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, IOError, ValueError):
-            return {}
-
-    return {}
-
-
 # Canonical Teachback Task subject pattern: `<teammate-name>: TEACHBACK
 # <mission descriptor>`, normally `TEACHBACK for …`. The leading
 # `[a-z0-9-]+:` is the canonical teammate-prefix shape used across the
 # plugin (matches names like `backend-coder-2`, `secretary`,
 # `architect-1`); `TEACHBACK` is the canonical mission-framing marker per
-# pact-completion-authority.md.
+# protocols/completion.md.
 #
 # WHY a structural match instead of substring `"teachback" in subject`:
 # the substring form fires on ANY task subject containing the word —

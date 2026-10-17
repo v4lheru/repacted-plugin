@@ -1,0 +1,41 @@
+{"base": "6f404f2e", "blob_id": "4c39097504d008ebe4d4ec61bc2e0d843afbaff4", "captured_from": "3f27b2c6", "rows": 40, "sha256": "06b0dc053ceb4b2ecb9ba124ecda65261184bbdbe25e570544093cd1ac1b266f"}
+{"attr": "__bases__", "missing": true}
+{"attr": "__test__", "missing": true}
+{"attr": "is_dangerous_command", "callable": true}
+{"call": ["is_dangerous_command", ["gh gist create f.txt --desc \"note\";gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["gh release create v1 --notes \"Release v1.0\";gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git commit -m \"x\";gh pr merge 5;git tag v1"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\" && gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\" ; gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\" | gh pr merge 5 --delete-branch"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"&&curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"&&gh api -X DELETE repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"&&gh pr close 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"&&gh pr merge 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"&&wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\";curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\";gh api -X DELETE repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\";gh pr close 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\";gh pr merge 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\";git push --force origin main"], {}], "result": true}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\";wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"|curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"|gh api -X DELETE repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"|gh pr close 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"|gh pr merge 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -a v1 -m \"Release v1.0\"|wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note&&curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note&&gh api -X DELETE repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note&&gh pr close 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note&&gh pr merge 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note&&wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note;curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note;gh api -X DELETE repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note;gh pr close 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note;gh pr merge 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note;wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note|curl -X DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note|gh api -X DELETE repos/o/r/git/refs/heads/main"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note|gh pr close 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note|gh pr merge 5 --delete-branch"], {}], "result": false}
+{"call": ["is_dangerous_command", ["git tag -m note|wget --method=DELETE https://api.github.com/repos/o/r/git/refs/heads/main"], {}], "result": false}

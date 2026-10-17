@@ -265,14 +265,14 @@ class TestTeachbackReminder:
         - metadata.teachback_submit as the delivery mechanism
         - Edit/Write/Bash as the ordering rule anchor
         - 'gate' semantics (teachback is a blocking gate)
-        - pact-teachback skill reference for the full format
+        - teammate skill reference for the full format (TEAMMATE m6)
         """
         from peer_inject import _TEACHBACK_REMINDER
 
         assert "metadata.teachback_submit" in _TEACHBACK_REMINDER
         assert "Edit/Write/Bash" in _TEACHBACK_REMINDER
         assert "gate" in _TEACHBACK_REMINDER.lower()
-        assert "pact-teachback" in _TEACHBACK_REMINDER
+        assert "teammate skill" in _TEACHBACK_REMINDER
 
     def test_reminder_not_present_when_no_team(self, tmp_path):
         """When get_peer_context returns None, no reminder is attached."""
@@ -510,7 +510,9 @@ class TestBootstrapPrelude:
         """
         from peer_inject import _BOOTSTRAP_PRELUDE_TEMPLATE
 
-        assert "pact-communication-charter.md" in _BOOTSTRAP_PRELUDE_TEMPLATE
+        assert "teammate-messaging.md" in _BOOTSTRAP_PRELUDE_TEMPLATE
+        # TEAMMATE (m6): the reach line now names the teammate skill itself.
+        assert 'Skill("repacted:teammate")' in _BOOTSTRAP_PRELUDE_TEMPLATE
 
     def test_template_uses_format_placeholder(self):
         """Template must accept agent_name via str.format()."""
@@ -642,7 +644,7 @@ class TestBootstrapPreludeNoAgentName:
             teams_dir=str(tmp_path / "teams"),
         )
 
-        assert "pact-communication-charter.md" in result
+        assert "teammate-messaging.md" in result
 
 
 class TestSanitizeAgentName:
@@ -1170,7 +1172,6 @@ _PACT_AGENT_TYPES = [
     "pact-auditor",
     "pact-preparer",
     "pact-secretary",
-    "pact-n8n",
     "pact-qa-engineer",
     "pact-security-engineer",
 ]
@@ -1250,7 +1251,7 @@ class TestCompletionAuthorityNoteParametrizedAgents:
         agents/ that a team member can be spawned as.
 
         pact-orchestrator.md is excluded: it is delivered via the
-        `claude --agent PACT:pact-orchestrator` flag for the team-lead
+        `claude --agent repacted:pact-orchestrator` flag for the team-lead
         session ONLY and is never a team member, so the completion-authority
         directive (which is a teammate-facing rule) does not apply to it.
 
@@ -1414,7 +1415,7 @@ class TestMemberOnlyInjection:
 
     @pytest.mark.parametrize(
         "agent_type",
-        ["Explore", "general-purpose", "Plan", "pact-backend-coder", "PACT:pact-preparer"],
+        ["Explore", "general-purpose", "Plan", "pact-backend-coder", "repacted:pact-preparer"],
     )
     def test_a_non_member_subagent_gets_nothing(
         self, agent_type, tmp_path, capsys, pact_context

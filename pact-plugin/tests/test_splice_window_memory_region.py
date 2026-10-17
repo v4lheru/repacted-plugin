@@ -1,7 +1,7 @@
 """The two write-side splice windows are bound to the MEMORY region.
 
-SIBLING OF `test_pin_marker_writer.py`, and it borrows that module's
-production-derived builders rather than spell a boundary of its own.
+It uses the production-derived builders in `claude_md_builders.py` rather
+than spell a boundary of its own.
 
 WHAT THIS GUARDS. `extract_managed_region` returns the WIDE managed region.
 The session block sits IN that region and ABOVE the memory marker pair, and
@@ -40,7 +40,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from shared.claude_md_manager import MEMORY_START_MARKER, MEMORY_END_MARKER
-from tests.test_pin_marker_writer import build_claude_md
+from tests.claude_md_builders import build_claude_md
 
 
 # The text this suite looks for in the emitted document. It is deliberately

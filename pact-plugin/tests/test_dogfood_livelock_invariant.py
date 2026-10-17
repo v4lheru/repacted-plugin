@@ -61,6 +61,7 @@ import pytest
 # F2: the single shared writable-journal sentinel (SSOT in fixtures.emitter),
 # imported rather than re-literalled. tests/ is on sys.path via conftest.
 from fixtures.emitter import WRITABLE_TEST_JOURNAL
+from helpers import effective_hooks_config  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +100,7 @@ _LIVELOCK_SAFE_MARKER = "# livelock-safe:"
 
 def _load_hooks_json() -> dict:
     """Read hooks.json from the on-disk source (not a cached copy)."""
-    return json.loads(_HOOKS_JSON.read_text(encoding="utf-8"))
+    return effective_hooks_config()
 
 
 def _hook_script_paths_for_event(
@@ -599,8 +600,7 @@ class TestLayer4_CounterTestByRevert:
         than renaming the existing emitter — preserves the legitimate
         binding while introducing the forbidden second.
         """
-        raw = _HOOKS_JSON.read_text(encoding="utf-8")
-        config = json.loads(raw)
+        config = effective_hooks_config()
         # In-memory revert: append a second handler binding to the
         # TaskCompleted block. Pre-revert there is 1 binding; post-
         # revert there are 2.

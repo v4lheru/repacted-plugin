@@ -13,9 +13,9 @@ Used by: hooks/task_lifecycle_gate.py (write-time + completion-time advisories),
          with a grep for this module's name before trusting it.
 
 When the canonical field set or the required/recommended split changes, this is
-the only Python edit site. The four LLM-loaded template surfaces
-(protocols/pact-phase-transitions.md, protocols/pact-protocols.md,
-skills/pact-agent-teams/SKILL.md, commands/rePACT.md) mirror these names in
+the only Python edit site. The LLM-loaded template surfaces
+(protocols/workflows.md §Phase Transitions,
+skills/teammate/references/teammate-handoff.md) mirror these names in
 prose via grep-at-edit-time alignment.
 
 Contract: pure module; no I/O, no global state, no platform dependencies.
@@ -41,9 +41,20 @@ Public surface:
   well-formed input or a reason string suitable for advisory text.
 - resolve_handoff_field(handoff, field) — pure reader returning the canonical
   value, falling back to a legacy spelling of that same field.
+- normalise_handoff(handoff) — the write-side repair handoff_ordering_gate
+  applies before the write lands: (normalised copy, coercions). Only the
+  mechanically safe drifts; anything else is left for the validators.
 """
 
 from __future__ import annotations
+
+import re
+
+# The task store holds rev as a JS number, exact only up to 2^53-1. The same
+# bound as stored_line.REV_MAX, restated so this module stays an import leaf:
+# session_init reaches it through session_resume, and an import here would
+# widen that hook's closure (hook_infra_classifier). A test pins the two equal.
+REV_MAX = 2**53 - 1
 
 
 # Canonical field order, as taught by the four LLM-loaded template surfaces.
@@ -77,8 +88,10 @@ HANDOFF_REQUIRED_FIELDS: tuple[str, ...] = tuple(
 # a spelling in neither it nor the durable record is not legacy — it is simply
 # wrong, and it gets the ordinary missing-required advisory. Do NOT widen this
 # map by inference; an unbounded synonym map is a new source of silent
-# wrongness. Read-side only: nothing here teaches an agent to WRITE a legacy
-# spelling, and no LLM-loaded surface carries one.
+# wrongness. Nothing here teaches an agent to WRITE a legacy spelling, and no
+# LLM-loaded surface carries one. normalise_handoff renames these at the write
+# gate (1.5.0, D3; measured: key_decisions on 55 journal rows), so new writes
+# land canonical; resolve_handoff_field still reads the old journal rows.
 HANDOFF_LEGACY_ALIASES: dict[str, str] = {
     "key_decisions": "decisions",
     "areas_of_uncertainty": "uncertainty",
@@ -166,3 +179,59 @@ def resolve_handoff_field(handoff: object, field: str) -> object:
             if alias_value:
                 return alias_value
     return value
+
+
+# A rev the gate turns into an int: ASCII digits only (str.isdigit also takes
+# other scripts' digits and superscripts), at most as many as REV_MAX has, so
+# int() never sees a huge string.
+_REV_DIGITS = re.compile(r"[0-9]{1,%d}" % len(str(REV_MAX)))
+
+
+def normalise_handoff(handoff: object) -> tuple[object, list[dict]]:
+    """Return (handoff with the benign drifts repaired, one coercion row per
+    repair). The input is never mutated; with nothing to repair the SAME
+    object comes back with an empty list, so normalising twice changes nothing.
+
+    Repairs, the only ones measured as recurring and safe to make blind
+    (journal census 2026-10-03: rev as a string on 11 of 441 HANDOFF rows,
+    key_decisions on 55):
+      - rev as a string of ASCII digits naming 1..REV_MAX -> that int.
+        "two", "-1", "2.0", " 2", the float 2.0 and a bool are left alone and
+        handoff_ordering_gate returns them as before.
+      - a legacy alias (HANDOFF_LEGACY_ALIASES) with its canonical key absent
+        -> renamed in place, keeping the key order.
+      - a legacy alias WITH its canonical key present -> the canonical key
+        wins and the alias is dropped (design rule); the two are
+        never merged.
+    A coercion row names the field and the kind of repair, never the value.
+    Pure; never raises; a non-dict comes back unchanged.
+    """
+    if not isinstance(handoff, dict):
+        return handoff, []
+    coercions: list[dict] = []
+    rev = handoff.get("rev")
+    new_rev = rev
+    if isinstance(rev, str) and _REV_DIGITS.fullmatch(rev) and 1 <= int(rev) <= REV_MAX:
+        new_rev = int(rev)
+        coercions.append({"key": "handoff", "field": "rev", "coercion": "digit_string_to_int"})
+    renames: dict[str, str] = {}
+    drops: set[str] = set()
+    for alias, canonical in HANDOFF_LEGACY_ALIASES.items():
+        if alias not in handoff:
+            continue
+        if canonical in handoff:
+            drops.add(alias)
+            coercions.append({"key": "handoff", "field": alias,
+                              "coercion": f"dropped_{canonical}_present"})
+        else:
+            renames[alias] = canonical
+            coercions.append({"key": "handoff", "field": alias,
+                              "coercion": f"renamed_to_{canonical}"})
+    if not coercions:
+        return handoff, []
+    repaired: dict = {}
+    for key, value in handoff.items():
+        if key in drops:
+            continue
+        repaired[renames.get(key, key)] = new_rev if key == "rev" else value
+    return repaired, coercions

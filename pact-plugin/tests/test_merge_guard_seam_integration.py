@@ -60,6 +60,8 @@ from merge_guard_post import (
 )
 from merge_guard_pre import check_merge_authorization, main as _pre_main
 from shared.merge_guard_common import extract_command_context
+from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
+from merge_guard_repo_fixture import minted_context  # noqa: E402  (amend_3 on #141: mint-side repo binding)
 
 # ─────────────────── parse the documented template (anti-drift) ──────────────
 
@@ -152,7 +154,7 @@ class TestSeamFunctionLevel:
         token file, is authorized when run — the real mint→read handoff over a
         real on-disk token (token_dir injected, nothing stubbed)."""
         command = _concrete(_CMD_TEMPLATE, pr)
-        context = extract_command_context(command)
+        context = minted_context(command)
         assert context.get("operation_type") == "merge"
         assert context.get("pr_number") == pr
 
@@ -185,7 +187,7 @@ class TestSeamFunctionLevel:
         axis — the bare retire would have burned the token, so the escalated
         re-execution would then be held."""
         escalated = "gh pr close 5 --delete-branch"
-        context = extract_command_context(escalated)
+        context = minted_context(escalated)
         assert context.get("bound_flags") == ["--delete-branch"]
         write_token(context, token_dir=tmp_path)
 
@@ -418,9 +420,11 @@ class TestNoMintAdvisory1052:
            "multiSelect": False}],
          {"Do these?": "Yes"},
          "more than one distinct"),
+        # FIX-MERGE f3: a bare close now gates, so the not-dangerous exemplar is the
+        # inert help form (classified close, never gated).
         ("not_dangerous",
          [{"question": "Close it?",
-           "options": [{"label": "Yes", "description": "Run `gh pr close 7`"}],
+           "options": [{"label": "Yes", "description": "Run `gh pr close 7 --help`"}],
            "multiSelect": False}],
          {"Close it?": "Yes"},
          "is not one that the merge guard gates"),
