@@ -61,6 +61,45 @@ In full mode, give the lead work:
 
 The [quickstart](docs/quickstart.md) walks through all of this in about ten minutes.
 
+#### If specialist agents will not spawn
+
+**Symptom.** Every attempt to start a specialist is refused, and the refusal blames a missing task assignment. Creating that task is itself impossible, because the tools that create tasks are absent from the session. The bootstrap step does not complete, so file edits and later spawns stay blocked as well. For the cause, read the vendor statement below.
+
+**First, confirm this is what you are hitting.** In the stuck session, ask Claude:
+
+```
+Can you see all four of these tools right now: TaskCreate, TaskUpdate, TaskList,
+TaskGet? If your tools load on demand, run ToolSearch with the query
+select:TaskCreate,TaskUpdate,TaskList,TaskGet and tell me which of the four
+are present.
+```
+
+- **Any of the four missing** — this is the problem, and the setting below fixes it.
+- **All four present** — this is *not* the problem, and the setting below will not help. Something else is refusing the spawn; this check rules out one cause, not the rest.
+
+**The setting.** Add `CLAUDE_CODE_ENABLE_TODO_TOOLS` to the `env` block of your `~/.claude/settings.json`, alongside the Agent Teams setting, then start a new session:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
+  }
+}
+```
+
+The value is the string `"1"`, which is the form measured to work.
+
+**Why the Agent Teams setting does not cover this.** The two values gate different things, and one does not replace the other. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` enables Agent Teams. `CLAUDE_CODE_ENABLE_TODO_TOOLS` restores the task tools. A session with Agent Teams enabled and no task tools shows the symptom above. That is why the Agent Teams setting did not prevent it.
+
+**Where this comes from.** The vendor documents the gate: "In Claude Code v2.1.233 and later, the following tools aren't available on Opus 4.8, Sonnet 5, Fable 5, Mythos 5, or later versions of those families unless you opt in: `TodoWrite`, `TaskCreate`, `TaskGet`, `TaskUpdate`, and `TaskList`." See [Task tool availability](https://code.claude.com/docs/en/tools-reference#task-tool-availability), which records other opt-in routes as well. This page gives the `env` block, because it persists across sessions.
+
+**If you set `DISABLE_GROWTHBOOK` on earlier advice, it is retired, and it is not neutral.** With `CLAUDE_CODE_ENABLE_TODO_TOOLS` absent, that setting forces the declared default, and the declared default withholds the tools. So it reproduces the symptom above rather than only failing to help. It is not the one setting that does this. `DISABLE_TELEMETRY` reaches the same declared default by a different route. Those are two known routes, and not a full list.
+
+**Setting `CLAUDE_CODE_ENABLE_TODO_TOOLS` is the remedy. Removal of a retired setting is hygiene.** The two together are measured to work, so a reader who sets the new value and keeps a retired setting is safe. A reader who removes a retired setting and sets nothing can stay blocked, because a second route reaches the same default.
+
+The retired setting is blunt: it stops the remote configuration channel of Claude Code fully, each remotely-controlled option reverts to its built-in default, and Remote Control stops working. That channel is also the fastest route the vendor has to send a mitigation between releases. It is not a standing recommendation, so remove it. If you set it deliberately to close the remote-configuration channel, keep it and set `CLAUDE_CODE_ENABLE_TODO_TOOLS` as well, because what you keep is one cause of the symptom above.
+
 ## Requirements
 
 - The Claude Code CLI. Version 2.1.302 is tested. Other Claude Code apps are not tested.
