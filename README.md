@@ -15,7 +15,7 @@ In Claude Code, run:
 
 Then restart Claude Code. Do not turn on rePACTed and the original PACT plugin at the same time: both would run their hooks on every event.
 
-**Pin a version.** `/plugin marketplace add` takes a GitHub repository, a URL or a local folder. It has no option for a tag. To stay on one release, clone this repository at a release tag and add the clone's folder as the marketplace. Release tags will be named `repacted--v<version>`. No release tag exists yet.
+**Pin a version.** `/plugin marketplace add` takes a GitHub repository, a URL or a local folder. It has no option for a tag. To stay on one release, clone this repository at a release tag and add the clone's folder as the marketplace. Release tags are named `repacted--v<version>`, for example `repacted--v1.7.0`.
 
 ## Try the guards
 
@@ -127,7 +127,7 @@ Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. S
 
 ## Coming next
 
-Knowledge-base distillation: turn the lessons that agents write during your sessions into notes in a folder you own. It is not in this release and has no date yet.
+This release has an early knowledge-base distiller, `repact-distill`, off by default (`distill.enabled`). It turns notes the agents already wrote into proposed lessons for a folder you own, and you review each one. Next: distilling from session transcripts, reviewing proposals in batches, and a guide to building your knowledge base. No dates yet.
 
 ## Contributing, security, license
 
