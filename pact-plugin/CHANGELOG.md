@@ -2,6 +2,10 @@
 
 Release notes for rePACTed, newest first. Entries start at the first public release.
 
+## 1.7.2 (2026-10-17)
+
+- Tests: the task-log replay timing test no longer fails on Python 3.14 when a full garbage collection lands inside its timed window. No change to the plugin's behaviour.
+
 ## 1.7.1 (2026-10-17)
 
 First-run fixes from a clean-install walkthrough.

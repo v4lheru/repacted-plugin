@@ -6,6 +6,7 @@ credential and D26 rules, where the log lives, and the read side's import closur
 from __future__ import annotations
 
 import ast
+import gc
 import json
 import random
 import tempfile
@@ -576,6 +577,11 @@ def test_the_read_side_imports_only_the_stdlib_and_no_subprocess_or_network():
 # clock reached 0.155 s, so the budget also scales with a same-run baseline (a plain json.loads of
 # every line, the cheapest part of the load): load + summary may take REPLAY_BASELINE_RATIO times
 # that. Standalone the ratio is ~4 (11 ms vs 2.6 ms); a quadratic replay would be orders above.
+# A full (generation-2) collection walks every object the whole suite has left on the heap, so one
+# landing in the timed window measures the test process, not the replay: on Python 3.14 in CI it
+# took the window to 204-475 ms (2026-10-17), and a per-file probe of the local suite caught 40-90
+# ms single passes. The test collects first, so the next full pass cannot be due inside the window,
+# and asserts that none ran there.
 REPLAY_BUDGET_S = 0.1
 REPLAY_BASELINE_RATIO = 10
 
@@ -605,11 +611,22 @@ def test_replay_of_a_512_kb_log_is_measured(world, capsys):
             json.loads(line)
         return time.perf_counter() - started
 
+    def note_full_pass(phase, info):
+        if phase == "start" and info["generation"] == 2:
+            full_passes.append(info)
+
     before = parse_baseline()
-    started = time.perf_counter()
-    state = R.load(repo)
-    R.summary_line(state)
-    elapsed = time.perf_counter() - started
+    full_passes = []
+    gc.collect()
+    gc.callbacks.append(note_full_pass)
+    try:
+        started = time.perf_counter()
+        state = R.load(repo)
+        R.summary_line(state)
+        elapsed = time.perf_counter() - started
+    finally:
+        gc.callbacks.remove(note_full_pass)
+    assert not full_passes, "a full collection ran inside the timed window"
     baseline = max(before, parse_baseline())
     budget = max(REPLAY_BUDGET_S, REPLAY_BASELINE_RATIO * baseline)
     with capsys.disabled():
