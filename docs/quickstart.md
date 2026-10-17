@@ -25,7 +25,7 @@ Do not turn on rePACTed and the original PACT plugin at the same time. Both woul
 **To pin a version**, clone a release tag and add the folder as the marketplace instead (if you already added the GitHub marketplace, first run `claude plugin marketplace remove repacted`):
 
 ```
-git clone --branch repacted--v1.7.0 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
+git clone --branch repacted--v1.7.1 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
 claude plugin marketplace add ~/repacted-plugin
 claude plugin install repacted@repacted
 ```

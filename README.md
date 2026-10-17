@@ -18,7 +18,7 @@ From a shell, the same two steps are `claude plugin marketplace add v4lheru/repa
 **Pin a version.** `/plugin marketplace add` has no option for a tag. Clone a release tag (named `repacted--v<version>`) and add the folder instead:
 
 ```
-git clone --branch repacted--v1.7.0 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
+git clone --branch repacted--v1.7.1 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
 claude plugin marketplace add ~/repacted-plugin
 claude plugin install repacted@repacted
 ```
@@ -95,6 +95,7 @@ Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. T
 find ~/.claude/agents -name 'pact-*.md' -type l -delete   # links to the plugin's agents
 rm ~/.claude/protocols/pact-plugin                         # link to its protocols
 rm -rf ~/.claude/pact-sessions                             # session journals and state
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/repacted"     # lock files for CLAUDE.md writes
 ```
 
 - In each repository you used, the block from `<!-- PACT_MANAGED_START` to `<!-- PACT_MANAGED_END -->` in `.claude/CLAUDE.md`. Delete those lines, or the file if nothing else is in it.
