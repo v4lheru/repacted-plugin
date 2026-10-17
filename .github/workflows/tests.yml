@@ -7,6 +7,7 @@
 #                     ruff import-hygiene lint.
 #     core-purity     the shipped purity scanner in public mode.
 #     plugin-validate `claude plugin validate --strict` on the plugin and the marketplace.
+#     clean-room      dev/clean-room/run.sh on ubuntu-latest and macos-latest (see CLEAN ROOM).
 #   Docs regeneration runs in docs.yml; the needs-import label in labeller.yml.
 #
 # WHERE PURITY RUNS
@@ -20,8 +21,12 @@
 #   purity gate checks every class except the denylist-driven personal one, and says so.
 #   Without it the gate fails closed, which is right everywhere else.
 #
-# CLEAN ROOM (U4.6, not built yet)
-#   A job that runs dev/clean-room/run.sh on both OSes belongs here once that script exists.
+# CLEAN ROOM
+#   The `clean-room` job runs dev/clean-room/run.sh on ubuntu and macOS without Docker: it installs
+#   the plugin from this checkout into a scratch HOME under `env -i` and checks every step of a
+#   stranger's first install (validate, purity on the installed copy, init twice, doctor, each hook
+#   entry point, each bin/ tool, uninstall). No model call, no login, no network after the CLI
+#   install. The same script runs in Docker with `make -C dev/clean-room gate`.
 #
 # SECRETS
 #   None. Every job runs with a read-only token and no repository secrets.
@@ -162,3 +167,28 @@ jobs:
         run: |
           claude plugin validate --strict pact-plugin
           claude plugin validate --strict .
+
+  # A stranger's first install, scripted (dev/clean-room/run.sh; its header lists the steps). The
+  # script copies this checkout to a scratch directory and re-runs itself under `env -i`, so the
+  # runner's HOME, settings and tools on PATH do not reach the check. Python 3.9 is the declared
+  # floor; the CLI version is pinned to the one plugin-validate uses, and --expect-cli fails the
+  # job if the install resolved anything else. A step failure prints its log tail.
+  clean-room:
+    name: clean-room on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      CLAUDE_CODE_VERSION: "2.1.288"
+      DISABLE_AUTOUPDATER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.9"
+      - name: Install the Claude Code CLI
+        run: npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+      - name: Clean-room check
+        run: bash dev/clean-room/run.sh --expect-cli "$CLAUDE_CODE_VERSION" .
