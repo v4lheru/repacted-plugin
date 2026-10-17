@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/v4lheru/repacted/security/advisories/new
+    url: https://github.com/v4lheru/repacted-plugin/security/advisories/new
     about: Report it privately in a security advisory, never in a public issue.
   - name: Quickstart and docs
-    url: https://github.com/v4lheru/repacted/blob/main/docs/quickstart.md
+    url: https://github.com/v4lheru/repacted-plugin/blob/main/docs/quickstart.md
     about: Install, setup and a first team in about ten minutes.

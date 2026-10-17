@@ -9,7 +9,7 @@ It is an independent fork of [PACT-Plugin](https://github.com/Synaptic-Labs-AI/P
 In Claude Code, run:
 
 ```
-/plugin marketplace add v4lheru/repacted
+/plugin marketplace add v4lheru/repacted-plugin
 /plugin install repacted@repacted
 ```
 

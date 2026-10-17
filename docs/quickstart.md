@@ -9,7 +9,7 @@ You need the Claude Code CLI and Python 3.9 or newer. macOS is tested. Linux and
 In Claude Code, run these two commands:
 
 ```
-/plugin marketplace add v4lheru/repacted
+/plugin marketplace add v4lheru/repacted-plugin
 /plugin install repacted@repacted
 ```
 
