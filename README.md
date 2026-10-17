@@ -13,9 +13,17 @@ In Claude Code, run:
 /plugin install repacted@repacted
 ```
 
-Then restart Claude Code. Do not turn on rePACTed and the original PACT plugin at the same time: both would run their hooks on every event.
+From a shell, the same two steps are `claude plugin marketplace add v4lheru/repacted-plugin` and `claude plugin install repacted@repacted`. Then restart Claude Code. Do not turn on rePACTed and the original PACT plugin at the same time: both would run their hooks on every event.
 
-**Pin a version.** `/plugin marketplace add` takes a GitHub repository, a URL or a local folder. It has no option for a tag. To stay on one release, clone this repository at a release tag and add the clone's folder as the marketplace. Release tags are named `repacted--v<version>`, for example `repacted--v1.7.0`.
+**Pin a version.** `/plugin marketplace add` has no option for a tag. Clone a release tag (named `repacted--v<version>`) and add the folder instead:
+
+```
+git clone --branch repacted--v1.7.0 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
+claude plugin marketplace add ~/repacted-plugin
+claude plugin install repacted@repacted
+```
+
+A folder marketplace runs the plugin from that folder. Keep the folder: if you move or delete it, the plugin breaks, and if you check out another tag in it, the version you run changes.
 
 ## Try the guards
 
@@ -43,7 +51,7 @@ Open Claude Code in your project and run:
 /repacted:init --repo
 ```
 
-Init shows a diff first and writes nothing until you say yes. It turns on the Agent Teams flag (an experimental Claude Code setting) in your user `settings.json`, and with `--repo` it makes Claude Code start as the lead in this project. Every file it changes is first copied to `<file>.bak-<time>`. Leave out `--repo` to set up only your machine.
+Init shows a diff first and changes your settings only after you say yes. It turns on the Agent Teams flag (an experimental Claude Code setting) and the task tools flag in your user `settings.json`, and with `--repo` it makes Claude Code start as the lead in this project. Every file it changes is first copied to `<file>.bak-<time>`. Leave out `--repo` to set up only your machine.
 
 Restart Claude Code, then ask Claude to run `repact-doctor`. Near the end you see one of these lines:
 
@@ -52,53 +60,18 @@ mode: guards-only (Agent Teams flag off)
 mode: full (Agent Teams on)
 ```
 
-In full mode, give the lead work:
+In full mode, try it first with `/repacted:demo`: the lead fixes a failing test in a scratch copy of a toy project ([what happens](docs/examples/first-run.md)). Then give the lead your own work, for example:
 
 ```
 /repacted:comPACT backend add a --verbose flag to the greet command
 /repacted:orchestrate add a config file that sets the default greeting
 ```
 
-The [quickstart](docs/quickstart.md) walks through all of this in about ten minutes.
+The [quickstart](docs/quickstart.md) walks through all of this in about ten minutes. It also lists the few files the plugin writes on its own at the first session.
 
-#### If specialist agents will not spawn
+### If specialist agents will not spawn
 
-**Symptom.** Every attempt to start a specialist is refused, and the refusal blames a missing task assignment. Creating that task is itself impossible, because the tools that create tasks are absent from the session. The bootstrap step does not complete, so file edits and later spawns stay blocked as well. For the cause, read the vendor statement below.
-
-**First, confirm this is what you are hitting.** In the stuck session, ask Claude:
-
-```
-Can you see all four of these tools right now: TaskCreate, TaskUpdate, TaskList,
-TaskGet? If your tools load on demand, run ToolSearch with the query
-select:TaskCreate,TaskUpdate,TaskList,TaskGet and tell me which of the four
-are present.
-```
-
-- **Any of the four missing** — this is the problem, and the setting below fixes it.
-- **All four present** — this is *not* the problem, and the setting below will not help. Something else is refusing the spawn; this check rules out one cause, not the rest.
-
-**The setting.** Add `CLAUDE_CODE_ENABLE_TODO_TOOLS` to the `env` block of your `~/.claude/settings.json`, alongside the Agent Teams setting, then start a new session:
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
-  }
-}
-```
-
-The value is the string `"1"`, which is the form measured to work.
-
-**Why the Agent Teams setting does not cover this.** The two values gate different things, and one does not replace the other. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` enables Agent Teams. `CLAUDE_CODE_ENABLE_TODO_TOOLS` restores the task tools. A session with Agent Teams enabled and no task tools shows the symptom above. That is why the Agent Teams setting did not prevent it.
-
-**Where this comes from.** The vendor documents the gate: "In Claude Code v2.1.233 and later, the following tools aren't available on Opus 4.8, Sonnet 5, Fable 5, Mythos 5, or later versions of those families unless you opt in: `TodoWrite`, `TaskCreate`, `TaskGet`, `TaskUpdate`, and `TaskList`." See [Task tool availability](https://code.claude.com/docs/en/tools-reference#task-tool-availability), which records other opt-in routes as well. This page gives the `env` block, because it persists across sessions.
-
-**If you set `DISABLE_GROWTHBOOK` on earlier advice, it is retired, and it is not neutral.** With `CLAUDE_CODE_ENABLE_TODO_TOOLS` absent, that setting forces the declared default, and the declared default withholds the tools. So it reproduces the symptom above rather than only failing to help. It is not the one setting that does this. `DISABLE_TELEMETRY` reaches the same declared default by a different route. Those are two known routes, and not a full list.
-
-**Setting `CLAUDE_CODE_ENABLE_TODO_TOOLS` is the remedy. Removal of a retired setting is hygiene.** The two together are measured to work, so a reader who sets the new value and keeps a retired setting is safe. A reader who removes a retired setting and sets nothing can stay blocked, because a second route reaches the same default.
-
-The retired setting is blunt: it stops the remote configuration channel of Claude Code fully, each remotely-controlled option reverts to its built-in default, and Remote Control stops working. That channel is also the fastest route the vendor has to send a mitigation between releases. It is not a standing recommendation, so remove it. If you set it deliberately to close the remote-configuration channel, keep it and set `CLAUDE_CODE_ENABLE_TODO_TOOLS` as well, because what you keep is one cause of the symptom above.
+If every specialist spawn is refused for a missing task assignment, the session has no task tools. Init sets `CLAUDE_CODE_ENABLE_TODO_TOOLS="1"`, which turns them on; start a new session after it. The [troubleshooting page](docs/troubleshooting.md#if-specialist-agents-will-not-spawn) has the check and the full story.
 
 ## Requirements
 
@@ -116,7 +89,18 @@ claude plugin uninstall repacted@repacted
 claude plugin marketplace remove repacted
 ```
 
-Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. Settings that init changed stay. Restore them from the `.bak-` copies, or remove them by hand: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` in your user `settings.json`, and the `"agent"` line in the project's `.claude/settings.json`.
+Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. These stay behind; remove them by hand:
+
+```
+find ~/.claude/agents -name 'pact-*.md' -type l -delete   # links to the plugin's agents
+rm ~/.claude/protocols/pact-plugin                         # link to its protocols
+rm -rf ~/.claude/pact-sessions                             # session journals and state
+```
+
+- In each repository you used, the block from `<!-- PACT_MANAGED_START` to `<!-- PACT_MANAGED_END -->` in `.claude/CLAUDE.md`. Delete those lines, or the file if nothing else is in it.
+- Settings that init changed. Restore them from the `.bak-` copies, or remove by hand: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, `CLAUDE_CODE_ENABLE_TODO_TOOLS` and the allow rules init added in your user `settings.json`; with `--repo`, the `"agent"` line in `.claude/settings.json`, the `.repacted/` folder and the `.repacted/tasks.jsonl merge=union` line in `.gitattributes`.
+
+If you also use the original PACT plugin, check where these links point (`ls -l`) before you delete them.
 
 ## Learn more
 

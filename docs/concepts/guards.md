@@ -19,6 +19,8 @@ A [guard](../glossary.md#guard) is a hook that reads a tool call before it runs.
 
 The commit-message rule ships off: set `modes.commit_rule` to `"gate"` in `bin/checks.json` to refuse commits with AI attribution, a body or more than one sentence, and list any words to refuse in `commit_rule.deny_words` (an empty list checks none).
 
+`bin/checks.json` is inside the installed plugin. For a GitHub install it is `~/.claude/plugins/cache/repacted/repacted/<version>/bin/checks.json`; for a [pinned folder install](../quickstart.md#1-install) it is `pact-plugin/bin/checks.json` in your clone. There is no user-level copy. An update replaces the file, and so does checking out another tag in the clone, so make your change again after each one.
+
 ## What a refusal looks like
 
 A [refusal](../glossary.md#refusal) is one line:
