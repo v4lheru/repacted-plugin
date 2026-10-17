@@ -89,19 +89,18 @@ claude plugin uninstall repacted@repacted
 claude plugin marketplace remove repacted
 ```
 
-Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. These stay behind; remove them by hand:
+Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. These stay behind; remove them by hand. If you also use the original PACT plugin, it shares the `pact-sessions` folder and may use the same link names: check where the links point (`ls -l`) and keep `pact-sessions`.
 
 ```
-find ~/.claude/agents -name 'pact-*.md' -type l -delete   # links to the plugin's agents
-rm ~/.claude/protocols/pact-plugin                         # link to its protocols
-rm -rf ~/.claude/pact-sessions                             # session journals and state
+C="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+find "$C/agents" -name 'pact-*.md' -type l -delete      # links to the plugin's agents
+rm "$C/protocols/pact-plugin"                            # link to its protocols
+rm -rf "$C/pact-sessions"                                # session journals and state
 rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/repacted"     # lock files for CLAUDE.md writes
 ```
 
 - In each repository you used, the block from `<!-- PACT_MANAGED_START` to `<!-- PACT_MANAGED_END -->` in `.claude/CLAUDE.md`. Delete those lines, or the file if nothing else is in it.
 - Settings that init changed. Restore them from the `.bak-` copies, or remove by hand: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, `CLAUDE_CODE_ENABLE_TODO_TOOLS` and the allow rules init added in your user `settings.json`; with `--repo`, the `"agent"` line in `.claude/settings.json`, the `.repacted/` folder and the `.repacted/tasks.jsonl merge=union` line in `.gitattributes`.
-
-If you also use the original PACT plugin, check where these links point (`ls -l`) before you delete them.
 
 ## Learn more
 
