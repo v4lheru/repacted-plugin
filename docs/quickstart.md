@@ -37,7 +37,7 @@ A folder marketplace runs the plugin from that folder. Keep the folder: if you m
 - a managed block in your repository's `.claude/CLAUDE.md`, between `<!-- PACT_MANAGED_START` and `<!-- PACT_MANAGED_END -->`;
 - links to its agents in `~/.claude/agents/` (`pact-*.md`);
 - a link `~/.claude/protocols/pact-plugin` to its protocols;
-- session journals and state under `~/.claude/pact-sessions/`.
+- session journals and state under `~/.claude/pact-sessions/`;
 - lock files for `CLAUDE.md` writes under `${XDG_STATE_HOME:-~/.local/state}/repacted/locks/`.
 
 The [README](../README.md#uninstall) says how to remove them.

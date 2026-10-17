@@ -89,14 +89,14 @@ claude plugin uninstall repacted@repacted
 claude plugin marketplace remove repacted
 ```
 
-Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. These stay behind; remove them by hand. If you also use the original PACT plugin, it shares the `pact-sessions` folder and may use the same link names: check where the links point (`ls -l`) and keep `pact-sessions`.
+Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. These stay behind; remove them by hand. The original PACT plugin uses the same `pact-sessions` folder and may use the same link names, so the lines that would also remove its files are commented out: if you do not use it, remove the `#` before running them; if you do, check where the links point first (`ls -l`) and keep `pact-sessions`.
 
 ```
 C="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-find "$C/agents" -name 'pact-*.md' -type l -delete      # links to the plugin's agents
-rm "$C/protocols/pact-plugin"                            # link to its protocols
-rm -rf "$C/pact-sessions"                                # session journals and state
 rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/repacted"     # lock files for CLAUDE.md writes
+# find "$C/agents" -name 'pact-*.md' -type l -delete    # links to the plugin's agents
+# rm "$C/protocols/pact-plugin"                          # link to its protocols
+# rm -rf "$C/pact-sessions"                              # session journals and state
 ```
 
 - In each repository you used, the block from `<!-- PACT_MANAGED_START` to `<!-- PACT_MANAGED_END -->` in `.claude/CLAUDE.md`. Delete those lines, or the file if nothing else is in it.
