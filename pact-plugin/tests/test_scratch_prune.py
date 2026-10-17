@@ -250,6 +250,28 @@ def test_a_missing_shared_or_foreign_root_is_left_alone(root, tmp_path, monkeypa
     assert (root / "-Users-me-proj" / SID / "w" / "node_modules" / "a.js").exists()
 
 
+def test_the_pre_3_11_delete_walk_never_follows_a_link_or_a_swapped_directory(tmp_path):
+    """_rmtree_at is the delete before Python 3.11 (no rmtree dir_fd); it runs here on every
+    interpreter. A symlink inside the target goes as a link, its target stays; a directory whose
+    identity no longer matches the surveyed one is counted and left whole."""
+    outside = put(tmp_path / "home" / "precious.js").parent
+    target = tmp_path / "s" / "node_modules"
+    put(target / "a" / "b" / "c.js")
+    (target / "a" / "out").symlink_to(outside)
+    (target / "link.js").symlink_to(outside / "precious.js")
+    parent = os.open(tmp_path / "s", sp.DIR_FLAGS)
+    try:
+        failures = []
+        sp._rmtree_at(parent, "node_modules", os.lstat(target), failures)
+        assert failures == [] and not target.exists() and (outside / "precious.js").exists()
+        put(target / "kept.js")
+        failures = []
+        sp._rmtree_at(parent, "node_modules", os.lstat(outside), failures)
+        assert len(failures) == 1 and (target / "kept.js").exists()
+    finally:
+        os.close(parent)
+
+
 def test_permission_errors_are_counted_never_raised(root, monkeypatch):
     s = session(root)
     put(s / "a" / "node_modules" / "locked" / "f.js")

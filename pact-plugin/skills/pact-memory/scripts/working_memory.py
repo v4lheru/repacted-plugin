@@ -18,6 +18,7 @@ the design notes.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import logging
 import os
 import re
@@ -104,6 +105,11 @@ MEMORY_END_MARKER = "<!-- PACT_MEMORY_END -->"
 _LOCK_TIMEOUT_SECONDS = 5.0
 _LOCK_POLL_INTERVAL = 0.1
 
+
+class LockDirError(OSError):
+    """file_lock could not create or open its lock; the routed cause names it, paths stay out."""
+
+
 # _sanitize_prompt_field twin of session_resume._sanitize_prompt_field (drift-gated, as are its
 # constants).
 _REFRESH_FIELD_TRUNCATION_LIMIT = 200
@@ -121,27 +127,36 @@ _PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
 def file_lock(target_file: Path):
     """Acquire an exclusive sidecar file lock for a target CLAUDE.md path.
 
-    Twin of hooks/shared/claude_md_manager.file_lock — kept local as a
-    drift-gated twin; importing the canonical would require the sys.path
-    bootstrap pact_session.py in this directory carries. Body MUST
-    stay byte-identical to the canonical copy (drift test enforces this).
+    Drift-gated twin of hooks/shared/claude_md_manager.file_lock (importing it would need the
+    sys.path bootstrap pact_session.py carries); the body MUST stay byte-identical.
 
-    NOT RE-ENTRANT: fcntl.flock is non-re-entrant at the OS level. Nesting one
-    sync site inside another under the SAME target would self-deadlock until the
-    fail-open TimeoutError (after _LOCK_TIMEOUT_SECONDS). This is not reachable
-    on the current call graph — the two sync sites are independent top-level
-    calls, never nested — so no behavioral re-entrancy guard is added (a guard
-    would alter this body and trip the drift test; the OS-level non-re-entrancy
-    plus the callers' fail-open already bound the worst case).
+    NOT RE-ENTRANT (fcntl.flock): nesting the two sync sites under one target would self-deadlock
+    until the fail-open TimeoutError. They are independent top-level calls, so no guard is added.
     """
-    # Lock key = resolved parent (the directory the write binds into) + literal leaf name: os.replace
-    # binds the leaf as an entry without following it, so lock and write identity cannot diverge.
-    # Two names for one inode (hardlinks) do not share a lock, by design.
-    lock_path = target_file.parent.resolve() / f".{target_file.name}.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    # 0o600: the lock file is adjacent to user-private CLAUDE.md content;
-    # match the same permissions to avoid leaving a world-readable sidecar.
-    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    # Lock key = (st_dev, st_ino) of the resolved parent, where os.replace binds the leaf without
+    # following it, + the literal leaf name: every spelling of that dir (case, Unicode form, symlink)
+    # shares one lock; a missing parent keys on its path; hardlinks do not share, by design. The lock
+    # dir depends on HOME only (never CLAUDE_CONFIG_DIR, which can switch per session), so writers
+    # share it and it never lands in the repo where `git add -A` would stage it.
+    parent = target_file.parent.resolve()
+    try:
+        st = parent.stat()
+        lock_key = f"{st.st_dev}:{st.st_ino}/{target_file.name}"
+    except OSError:
+        lock_key = str(parent / target_file.name)
+    state_home = os.environ.get("XDG_STATE_HOME", "")
+    if not os.path.isabs(state_home):
+        state_home = str(Path.home() / ".local" / "state")
+    digest = hashlib.sha256(lock_key.encode("utf-8", "surrogateescape")).hexdigest()
+    lock_path = Path(state_home) / "repacted" / "locks" / f"{digest}.lock"
+    try:
+        lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # 0o600: the lock file is keyed to user-private CLAUDE.md content.
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        print(f"PACT file_lock: lock dir {lock_path.parent} unwritable ({exc.strerror}); "
+              "make it writable or set XDG_STATE_HOME", file=sys.stderr)
+        raise LockDirError(exc.errno, f"lock dir unusable: {exc.strerror}", str(lock_path.parent)) from exc
     deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
     try:
         while True:
@@ -153,7 +168,7 @@ def file_lock(target_file: Path):
                     # Warn before raising: callers fail open on TimeoutError, so a stuck holder would be silent.
                     print(
                         f"PACT file_lock timeout: failed to acquire "
-                        f"lock on {lock_path} within "
+                        f"lock on {lock_path} (for {target_file}) within "
                         f"{_LOCK_TIMEOUT_SECONDS}s; falling open",
                         file=sys.stderr,
                     )
@@ -174,18 +189,15 @@ def file_lock(target_file: Path):
 
 
 # Why the sync sites lock the WHOLE read->mutate->write window (not just the
-# write). This rationale is shared by both sync_to_claude_md and
-# sync_retrieved_to_claude_md, which each carry only a short pointer back here.
-# (Distinct from the "why an inline twin" note above: that explains WHY the lock
-# is vendored; this explains WHY the lock spans the whole window.)
+# write), shared by sync_to_claude_md and sync_retrieved_to_claude_md (each points here).
 #   - read-under-lock is the load-bearing no-clobber property: a write-only lock
 #     would let a 2nd writer read stale (pre-this-write) content, mutate it, and
 #     overwrite this writer's entry the instant the lock releases — the exact
 #     lost update the lock exists to prevent.
-#   - lock identity is the sidecar inode of the RESOLVED CLAUDE.md path, so this
+#   - lock identity is the sidecar keyed by the RESOLVED CLAUDE.md path, so this
 #     serializes against session_init / session_resume: all writers resolve to
 #     the same .claude/CLAUDE.md (CLAUDE_PROJECT_DIR is set every session → all
-#     hit the env-var branch first) and thus share one .CLAUDE.md.lock sidecar.
+#     hit the env-var branch first) and thus share one lock in the per-user lock dir.
 #   - CLAUDE_PROJECT_DIR edge: if it were ever unset AND the git-root/cwd
 #     fallbacks diverged between processes, the sidecars would differ and the
 #     lock would not serialize — accepted as out-of-contract (no safe fallback
@@ -212,27 +224,9 @@ def _detect_line_ending(name: str, parent_fd: int) -> str:
     """
     Report the line ending `name` uses today, read THROUGH `parent_fd`.
 
-    READ THE BYTES, BECAUSE EVERY TEXT READ HAS ALREADY LOST THE ANSWER.
-    `Path.read_text` applies universal-newline translation, so a CRLF file
-    arrives as LF and the original ending is unrecoverable from the string a
-    caller holds. This is the only place that looks.
-
-    IT TAKES A DESCRIPTOR AND A NAME RATHER THAN A PATH, AND THAT IS THE WHOLE
-    POINT OF THE SIGNATURE. `_atomic_write_text` pins the parent directory open
-    and binds the write through that descriptor. A read by name inside it would
-    reintroduce the name-based race the descriptor design removes, so this
-    samples the same kernel object the containment walk approved.
-
-    DOMINANT WINS, AND A TIE GOES TO LF. The write this feeds is unrecoverable,
-    because CLAUDE.md is gitignored, so the correct rule is the one that changes
-    the fewest lines. Dominant-wins minimises that count by construction. A file
-    with no CRLF at all has a dominant of LF, so no file can gain an ending it
-    did not have. A file written only with bare carriage returns reports LF.
-
-    A TARGET THAT IS NOT ON DISK REPORTS LF, and that arm is load-bearing rather
-    than defensive: it is why file creation is not a gap. A create-only caller
-    writes its LF template to a name that is not there, so nothing converts.
-    A read failure reports LF for the same reason.
+    Reads bytes (a text read has already translated CRLF), through the descriptor (no name race);
+    the dominant ending wins, a tie, an absent target or a read failure reports LF. The full
+    rationale is on the canonical.
 
     Twin copy: the canonical definition is in `hooks/shared/claude_md_manager.py`;
     importing it would require the sys.path bootstrap pact_session.py in this

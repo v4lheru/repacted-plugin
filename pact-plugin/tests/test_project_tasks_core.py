@@ -530,6 +530,29 @@ class TestAcceptAndReject:
 # the read side stays importable by the session-start brief (§7): stdlib only
 # ---------------------------------------------------------------------------------------------
 
+def _stdlib_names(names):
+    """The members of `names` that are stdlib modules. sys.stdlib_module_names on 3.10+; on
+    3.9 each is judged by where it is found: built-in, frozen, or under the stdlib dir and
+    outside site-packages (realpath both sides: Homebrew reports the stdlib via opt/)."""
+    import sys
+    if hasattr(sys, "stdlib_module_names"):
+        return names & set(sys.stdlib_module_names)
+    import importlib.util
+    import os
+    import sysconfig
+    paths = {k: os.path.realpath(v) for k, v in sysconfig.get_paths().items()}
+    site = (paths["purelib"], paths["platlib"])
+    found = set()
+    for name in names:
+        spec = importlib.util.find_spec(name)
+        origin = getattr(spec, "origin", None) or ""
+        if origin in ("built-in", "frozen") or (
+                origin and os.path.realpath(origin).startswith(paths["stdlib"])
+                and not os.path.realpath(origin).startswith(site)):
+            found.add(name)
+    return found
+
+
 def test_the_read_side_imports_only_the_stdlib_and_no_subprocess_or_network():
     tree = ast.parse(READER_PATH.read_text())
     names = set()
@@ -539,8 +562,7 @@ def test_the_read_side_imports_only_the_stdlib_and_no_subprocess_or_network():
         elif isinstance(node, ast.ImportFrom):
             names.add((node.module or "").split(".")[0])
     names.discard("__future__")
-    import sys
-    assert names <= set(sys.stdlib_module_names), names
+    assert names <= _stdlib_names(names), names
     assert not names & {"subprocess", "socket", "urllib", "http", "sqlite3", "multiprocessing"}, names
 
 

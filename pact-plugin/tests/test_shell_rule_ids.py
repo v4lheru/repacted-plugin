@@ -27,6 +27,7 @@ from shell.merge import arms
 TAIL = re.compile(r" \[rule: ([a-z_]+(?:\.[a-z_]+)+)\]$")
 MARKER = "inert-marker-5e1d"
 _FORCE = "--" + "force"  # built, so a hook that reads this file's text sees no live flag
+WIDE_ENTRIES = 4
 
 
 @pytest.fixture
@@ -36,7 +37,17 @@ def tree(tmp_path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"DEMO_KEY={MARKER}\n", encoding="utf-8")
     (tmp_path / "notes.txt").write_text("plain\n", encoding="utf-8")
+    for n in range(WIDE_ENTRIES):
+        (tmp_path / "wide" / f"f{n}.txt").parent.mkdir(exist_ok=True)
+        (tmp_path / "wide" / f"f{n}.txt").write_text("plain\n", encoding="utf-8")
     return tmp_path
+
+
+def narrow_walk(monkeypatch, rule: str) -> None:
+    """The too_wide row walks the tree's own wide/ under a walk limit below its entry count,
+    so the rule never depends on what the host's / holds (a CI image keeps .netrc files)."""
+    if rule == "env.search.too_wide":
+        monkeypatch.setattr(search, "WALK_LIMIT", WIDE_ENTRIES - 1)
 
 
 def env_reason(payload: dict) -> str | None:
@@ -63,7 +74,7 @@ ENV_ROWS = [
     ("env", "env.dump.environment"),
     ('cat .env "unterminated', "env.parse_failed"),
     ("grep -r KEY $DIR", "env.search.unknown_root"),
-    ("grep -r KEY /", "env.search.too_wide"),
+    ("grep -r KEY wide", "env.search.too_wide"),
     ("grep -r KEY .", "env.search.reaches_class"),
     ("git -C $D add .", "env.git.unknown_dir"),
     ("cd $D && git add .", "env.git.unknown_dir"),
@@ -109,7 +120,8 @@ UNCOVERED = {
 # ── the tail shape ───────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("command, rule", ENV_ROWS)
-def test_every_env_deny_ends_with_its_rule_tail(tree, command, rule):
+def test_every_env_deny_ends_with_its_rule_tail(tree, monkeypatch, command, rule):
+    narrow_walk(monkeypatch, rule)
     text = env_reason(bash(command, tree))
     assert text is not None, command
     match = TAIL.search(text)
@@ -136,6 +148,7 @@ def test_every_merge_refusal_ends_with_its_rule_tail(command, rule):
 
 @pytest.mark.parametrize("command, rule", ENV_ROWS)
 def test_an_env_reason_minus_its_tail_is_the_untailed_message(tree, monkeypatch, command, rule):
+    narrow_walk(monkeypatch, rule)
     tailed = env_reason(bash(command, tree))
     monkeypatch.setattr(search, "rule_of", lambda message: None)
     plain = env_reason(bash(command, tree))

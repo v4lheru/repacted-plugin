@@ -17,7 +17,7 @@ def test_an_installed_copy_takes_its_name_from_the_cache_path(tmp_path, monkeypa
     cache = tmp_path / "cfg" / "plugins" / "cache"
     private = cache / "repacted-local" / "repacted" / "1.7.0"
     public = cache / "repacted" / "repacted" / "1.8.0"
-    assert plugin_paths.data_dirname(private) == plugin_paths.PLUGIN_DATA_DIRNAME  # owner: unchanged
+    assert plugin_paths.data_dirname(private) == "repacted-repacted-local"  # its own marketplace
     assert plugin_paths.data_dirname(public) == "repacted-repacted"
 
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)

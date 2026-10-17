@@ -525,7 +525,7 @@ def _isolate_plugin_data_to_tmp(tmp_path, tmp_path_factory, monkeypatch):
     registry anyway. Runs for EVERY test (autouse).
 
     ``bin/_repact_common.plugin_data_dir()`` honors ``$CLAUDE_PLUGIN_DATA`` and otherwise falls back
-    to ``~/.claude/plugins/data/repacted-repacted-local``. That is where ``repact-task init``
+    to ``~/.claude/plugins/data/repacted-repacted``. That is where ``repact-task init``
     records a checkout in ``projects.json`` (D10 §15.3), and the real atlas renders ``_index.md``
     from that file. ``_isolate_config_root_to_tmp`` above does not cover it for a CHILD process:
     ``Path.home`` is patched in-process only, and the scrub removes ``CLAUDE_CONFIG_DIR``, so a child
@@ -555,6 +555,18 @@ def _isolate_plugin_data_to_tmp(tmp_path, tmp_path_factory, monkeypatch):
         f"this test wrote a tmp path into the LIVE project registry {', '.join(leaked)}: something it started ran "
         "without the per-test CLAUDE_PLUGIN_DATA. Give that call the test's environment."
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state_home_to_tmp(tmp_path, monkeypatch):
+    """Point XDG_STATE_HOME at this test's tmp, for in-process writers AND children.
+
+    The CLAUDE.md file_lock keeps its lock files under ``$XDG_STATE_HOME/repacted/locks`` (else
+    ``~/.local/state``). Path.home is patched in-process only, so a child hook would otherwise leave
+    one lock per tmp project in the operator's real state dir.
+    """
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    yield
 
 
 # (module, test) pairs whose bodies INSPECT the writer's identity and therefore

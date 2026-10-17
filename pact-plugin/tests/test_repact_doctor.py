@@ -464,6 +464,21 @@ def test_a_users_home_alias_is_canonicalised_but_the_rest_is_not(monkeypatch):
     assert seen == ["/Users/alice"], "only the home prefix may be resolved, never the vault part"
 
 
+def test_maintainer_only_rows_hide_from_the_table_only_when_they_skip():
+    """F7: a stranger's install shows no release/gates/state SKIP rows; an owner whose check
+    applies still sees the row, and the cache keeps every row either way."""
+    doctor = load("_doctor_maintainer_rows", PLUGIN_ROOT / "bin" / "_doctor.py")
+    Result = doctor.Result
+    results = [Result("index", "index budgets", "green", "ok"),
+               Result("release", "release position", "skip", "no repo or no release worktree"),
+               Result("gates", "release gates", "amber", "1 pending"),
+               Result("state", "state ownership", "skip", "no state-ownership table shipped here")]
+    table = "\n".join(doctor.render_report(results))
+    assert "release position" not in table and "state ownership" not in table
+    assert "AMBER 2. release gates" in table and "GREEN 1. index budgets" in table
+    assert len(results) == 4
+
+
 def test_a_lagging_release_tag_is_amber_and_an_undeclared_tag_too(world):
     world.new_tag("repacted-m1")
     states = world.states("--full")

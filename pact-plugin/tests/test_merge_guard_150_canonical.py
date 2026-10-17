@@ -102,11 +102,17 @@ def test_a_nul_in_a_dollar_quote_ends_the_word_as_bash_does(tmp_path):
 
 
 def test_a_one_megabyte_quoted_command_is_read_in_time(tmp_path):
-    command = "git \"pu\"sh --force origin main " + "'a' " * 250_000
-    started = time.monotonic()
-    assert canonical_spelling(command).startswith("git push --force origin main a a ")
-    assert _gated(command, tmp_path)
-    assert time.monotonic() - started < 10
+    """The read is linear: four times the text takes about four times as long (a quadratic read
+    takes sixteen). The ratio holds on any machine; the absolute cap only stops a hang (a 2026
+    laptop reads the megabyte in 4-6 s, a shared CI runner in about 14)."""
+    def timed(words):
+        command = "git \"pu\"sh --force origin main " + "'a' " * words
+        started = time.monotonic()
+        assert canonical_spelling(command).startswith("git push --force origin main a a ")
+        assert _gated(command, tmp_path)
+        return time.monotonic() - started
+    quarter, full = timed(62_500), timed(250_000)
+    assert full < 8 * quarter and full < 60, (quarter, full)
 
 
 def test_a_long_command_is_refused_the_same_with_and_without_kept_readings(tmp_path, monkeypatch):

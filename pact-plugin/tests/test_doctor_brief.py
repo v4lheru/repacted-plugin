@@ -100,7 +100,7 @@ def test_one_line_when_something_is_red(env):
 
 def test_outside_the_harness_the_cache_is_found_under_the_config_dir(env):
     """No CLAUDE_PLUGIN_DATA: the path comes from shared.paths.get_claude_config_dir()."""
-    fallback = Path(env["CLAUDE_CONFIG_DIR"], "plugins", "data", "repacted-repacted-local")
+    fallback = Path(env["CLAUDE_CONFIG_DIR"], "plugins", "data", "repacted-repacted")
     fallback.mkdir(parents=True)
     no_data = {k: v for k, v in env.items() if k != "CLAUDE_PLUGIN_DATA"}
     write_cache({**env, "CLAUDE_PLUGIN_DATA": str(fallback)}, RED)

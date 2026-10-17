@@ -244,7 +244,7 @@ def test_each_suite_run_reaches_the_live_ledger_and_the_child_keeps_its_scratch_
     result = subprocess.run([sys.executable, str(WRAPPER), "--full", "--pkg", "t", "--wait", "30",
                              "--python", str(rig["stub"])], env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
-    live = tmp / "live" / "plugins" / "data" / "repacted-repacted-local" / "runs" / "ledger.jsonl"
+    live = tmp / "live" / "plugins" / "data" / "repacted-repacted" / "runs" / "ledger.jsonl"
     child = [json.loads(line) for line in (tmp / "t" / "repacted-test-runs" / "runs" / "ledger.jsonl").read_text().splitlines()]
     copied = [json.loads(line) for line in live.read_text().splitlines()]
     assert [row["log_path"] for row in copied] == [row["log_path"] for row in child] and len(copied) == 1
@@ -284,7 +284,7 @@ def test_full_prints_the_slowest_files_after_the_counts_and_ledgers_them(rig):
     assert out[counts + 1].startswith("run-tests: plugin") and "slowest 2 test files" in out[counts + 1]
     assert out[counts + 2].split() == ["3.50", "tests/test_b_pact-plugin.py"]
     assert out[counts + 3].split() == ["0.70", "tests/test_a_pact-plugin.py"]
-    live = tmp / "live" / "plugins" / "data" / "repacted-repacted-local" / "runs" / "ledger.jsonl"
+    live = tmp / "live" / "plugins" / "data" / "repacted-repacted" / "runs" / "ledger.jsonl"
     rows = [json.loads(line) for line in live.read_text().splitlines()]
     assert rows[0]["slowest"] == [["tests/test_b_pact-plugin.py", 3.5], ["tests/test_a_pact-plugin.py", 0.7]]
     assert len(rows) == 1

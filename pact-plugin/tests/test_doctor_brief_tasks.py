@@ -29,6 +29,10 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 HOOK = PLUGIN_ROOT / "hooks" / "doctor_brief.py"
 SUPPRESS = {"suppressOutput": True}
 REAL_LOG_BYTES = 300 * 1024           # about the size of the busiest real task log (296 KB)
+# The brief's latency pin over a bare interpreter start, set on a 2026 laptop (13-20 ms here for
+# the real-size replay). GitHub's shared runners measured 25 ms (macOS) and 30-44 ms (ubuntu) for
+# the same linear replay: machine speed, not a slower brief, so CI (CI=true) gets three times it.
+PIN_MS = 25 * (3 if os.environ.get("CI") else 1)
 GREEN = [{"id": c, "name": c, "state": "green", "summary": "s", "detail": [], "ran_at": "x"}
          for c in ("links", "split", "index", "secrets", "actions")]
 RED = [{"id": "secrets", "name": "secrets", "state": "red", "summary": "credential values in 2 place(s)",
@@ -295,7 +299,7 @@ def test_the_inline_replay_of_a_real_size_log_fits_the_brief_pin(env, repo, tmp_
     assert tasks_part(run_brief(env, repo)).startswith("tasks: ")
     delta = _delta_ms(env, repo, tmp_path)
     print(f"doctor_brief + inline tasks replay at {REAL_LOG_BYTES} bytes: median delta {delta:.1f} ms")
-    assert delta < 25
+    assert delta < PIN_MS
 
 
 def test_the_cached_line_fits_the_brief_pin(env, repo, tmp_path):
@@ -307,7 +311,7 @@ def test_the_cached_line_fits_the_brief_pin(env, repo, tmp_path):
                                             "line": "tasks: FROM THE CACHE"}))
     delta = _delta_ms(env, repo, tmp_path)
     print(f"doctor_brief + cached tasks line: median delta {delta:.1f} ms")
-    assert delta < 25
+    assert delta < PIN_MS
 
 
 def test_the_copied_paths_match_the_readers():

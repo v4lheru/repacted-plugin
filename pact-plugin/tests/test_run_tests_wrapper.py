@@ -131,7 +131,9 @@ def test_the_child_environment_is_isolated_and_niced(tmp_path):
     assert out["HOME"] != str(tmp_path / "real-home")
     assert out["CLAUDE_CONFIG_DIR"] is None and out["CLAUDE_PLUGIN_ROOT"] is None
     assert out["PYTHONDONTWRITEBYTECODE"] == "1"
-    assert out["NICE"] >= 19
+    # `nice -n 19` adds 19 to the niceness it inherits, capped at 19 or 20 (Linux, macOS); a
+    # runner that starts at a negative niceness (GitHub's macOS image) ends below 19.
+    assert out["NICE"] >= min(19, os.getpriority(os.PRIO_PROCESS, 0) + 19)
     assert Path(out["CWD"]).resolve() == PLUGIN_ROOT.resolve()
 
 
@@ -272,7 +274,7 @@ def test_in_a_session_the_log_sits_beside_the_live_ledger_and_outside_one_under_
         assert "pytest: collected 1 · passed 1 " in result.stdout, result.stdout + result.stderr
         return Path(next(line for line in result.stdout.splitlines() if line.startswith("log: "))[5:])
 
-    live = config / "plugins" / "data" / "repacted-repacted-local" / "runs"
+    live = config / "plugins" / "data" / "repacted-repacted" / "runs"
     log = log_of(run_clean(args, tmp_path, drop, CLAUDE_CONFIG_DIR=str(config), TMPDIR=str(tmp),
                            CLAUDE_CODE_SESSION_ID="s-1"))
     assert log.parent.resolve() == live.resolve() and log.is_file()

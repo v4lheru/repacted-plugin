@@ -28,8 +28,9 @@ target. Every other file stays.
 
 Safety: the walk never follows a symlink, and every open below the root is relative to its
 parent's descriptor with O_NOFOLLOW, so nothing outside the root is reached. Deletion is
-shutil.rmtree with dir_fd, which refuses a symlink and resists a swap mid-run; on a platform
-where it does not (rmtree.avoids_symlink_attacks False) nothing is deleted. Permission and other
+shutil.rmtree with dir_fd (3.11+), which refuses a symlink and resists a swap mid-run; before
+3.11, which lacks that keyword, _rmtree_at makes the same descriptor-relative walk. On a platform
+without descriptor-relative calls (SAFE_DELETE False) nothing is deleted. Permission and other
 OS errors are counted and skipped, never raised.
 
 --auto (the hook's run) takes a lock in --state-dir, runs at most once per RUN_EVERY, writes
@@ -63,6 +64,9 @@ DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 NAMED = object()  # survey's mark for a directory its parent found rebuildable by name
 IN_GIT = object()  # survey's mark for a directory inside a .git: never a target
 clock = time.time  # the staleness clock (tests move it)
+RMTREE_DIR_FD = sys.version_info >= (3, 11)   # shutil.rmtree's dir_fd keyword
+SAFE_DELETE = shutil.rmtree.avoids_symlink_attacks and (RMTREE_DIR_FD or (
+    {os.open, os.stat, os.unlink, os.rmdir} <= os.supports_dir_fd and os.scandir in os.supports_fd))
 
 # Rebuilt by an install or a build, whatever sits beside them.
 ALWAYS = frozenset({
@@ -258,8 +262,14 @@ def remove(session_fd: int, relpath: str, uid: int) -> tuple[int, bool]:
         if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
             return 1, False
         failures = []
-        handler = "onexc" if sys.version_info >= (3, 12) else "onerror"
-        shutil.rmtree(parts[-1], dir_fd=parent, **{handler: lambda *args: failures.append(args)})
+        if RMTREE_DIR_FD:
+            handler = "onexc" if sys.version_info >= (3, 12) else "onerror"
+            shutil.rmtree(parts[-1], dir_fd=parent, **{handler: lambda *args: failures.append(args)})
+        else:
+            try:
+                _rmtree_at(parent, parts[-1], st, failures)
+            except RecursionError as exc:      # deeper than the stack: what is left stays
+                failures.append(exc)
         try:
             os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
             gone = False
@@ -271,6 +281,47 @@ def remove(session_fd: int, relpath: str, uid: int) -> tuple[int, bool]:
     finally:
         for fd in opened:
             os.close(fd)
+
+
+def _rmtree_at(parent: int, name: str, expected, failures: list) -> None:
+    """shutil.rmtree(name, dir_fd=parent) for Python before 3.11, the walk shutil makes there.
+    Each directory is opened O_NOFOLLOW relative to its parent's descriptor and must be the entry
+    just listed (`expected`, its lstat: same device and inode), so a directory swapped for a
+    symlink or another directory mid-run fails the open or the check and is counted, never
+    entered. Errors go to `failures`; nothing raises but RecursionError."""
+    try:
+        fd = os.open(name, DIR_FLAGS, dir_fd=parent)
+    except OSError as exc:
+        failures.append(exc)
+        return
+    try:
+        if not os.path.samestat(expected, os.fstat(fd)):
+            failures.append(OSError(f"{name} changed during the delete"))
+            return
+        with os.scandir(fd) as listing:
+            entries = list(listing)
+        for entry in entries:
+            try:
+                st = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                failures.append(exc)
+                continue
+            if stat.S_ISDIR(st.st_mode):
+                _rmtree_at(fd, entry.name, st, failures)
+            else:
+                try:
+                    os.unlink(entry.name, dir_fd=fd)
+                except OSError as exc:
+                    failures.append(exc)
+    except OSError as exc:
+        failures.append(exc)
+        return
+    finally:
+        os.close(fd)
+    try:
+        os.rmdir(name, dir_fd=parent)
+    except OSError as exc:
+        failures.append(exc)
 
 
 def remaining(session_fd: int, relpath: str) -> int:
@@ -375,9 +426,9 @@ def prune(root: Path, apply: bool, days: float, skip: set) -> tuple[list, str]:
     root_fd, refused = open_root(root, uid)
     if root_fd is None:
         return [], refused
-    if apply and not shutil.rmtree.avoids_symlink_attacks:
+    if apply and not SAFE_DELETE:
         os.close(root_fd)
-        return [], "this platform's rmtree does not resist symlink attacks"
+        return [], "this platform cannot delete relative to a directory descriptor"
     cutoff = clock() - days * 86400
     sessions = []
     try:

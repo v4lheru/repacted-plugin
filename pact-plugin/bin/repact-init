@@ -3,8 +3,8 @@
 
 Location: pact-plugin/bin/repact-init. Called by commands/init.md. Stdlib only.
 
-Machine part: merges templates/user-settings.example.json (the Agent Teams flag and allow rules
-for the plugin's own bin tools) into the user settings, $CLAUDE_CONFIG_DIR/settings.json, else
+Machine part: merges templates/user-settings.example.json (the Agent Teams and task-tools flags
+and allow rules for the plugin's own bin tools) into the user settings, $CLAUDE_CONFIG_DIR/settings.json, else
 ~/.claude/settings.json. Repo part (--repo): merges templates/settings.example.json (the agent
 line) into <repo>/.claude/settings.json, creates <repo>/.repacted/, and adds the task-log line to
 <repo>/.gitattributes.
@@ -52,6 +52,7 @@ DOCTOR = PLUGIN_ROOT / "bin" / "repact-doctor"
 GITATTRIBUTES_LINE = ".repacted/tasks.jsonl merge=union"
 USER_MODE = 0o600
 DOCTOR_TIMEOUT = 300
+DOCTOR_STATES = {0: "green", 1: "amber", 2: "red"}
 EXIT_OK, EXIT_REFUSED, EXIT_UNCONFIRMED, EXIT_USAGE = 0, 1, 3, 64
 
 
@@ -265,7 +266,8 @@ def run_doctor(cwd: Path) -> None:
         print(f"doctor did not run: {error}")
         return
     print((proc.stdout + proc.stderr).rstrip())
-    print(f"doctor exit {proc.returncode} (0 green, 1 amber, 2 red)")
+    state = DOCTOR_STATES.get(proc.returncode, "error")
+    print(f"doctor exit {proc.returncode} = {state} (codes: 0 green, 1 amber, 2 red)")
 
 
 class _Parser(argparse.ArgumentParser):

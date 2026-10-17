@@ -11,7 +11,7 @@
       "name": "repacted",
       "source": "./pact-plugin",
       "description": "rePACTed: a compact orchestration harness for Claude Code, forked from PACT 4.8.1",
-      "version": "1.7.0",
+      "version": "1.7.1",
       "author": {
         "name": "Uros Pesic",
         "url": "https://github.com/v4lheru"

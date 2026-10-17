@@ -1104,7 +1104,7 @@ _POINTER_URL_RE = re.compile(r"https://github\.com/[^\s\"'\\]+#[^\s\"'\\]+")
 # so an edit to EITHER side reds, which is what makes this a correspondence
 # check rather than a restatement of one side.
 _VERIFIED_ANCHOR = "if-specialist-agents-will-not-spawn"
-_VERIFIED_HEADING = "#### If specialist agents will not spawn"
+_VERIFIED_HEADING = "### If specialist agents will not spawn"
 
 
 def _pointer_urls(source_name):
@@ -1286,7 +1286,7 @@ _DISCLOSURE_ELEMENTS = {
     "retirement note": "not a standing recommendation",
 }
 
-_DOC_SURFACES = ("README.md", "pact-plugin/README.md")
+_DOC_SURFACES = ("README.md", "pact-plugin/README.md", "docs/troubleshooting.md")
 
 
 def _sections(text):

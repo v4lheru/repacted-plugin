@@ -196,11 +196,8 @@ class TestEnsureProjectMemoryMdErrorPaths:
         """Should return truncated error message when write fails."""
         from shared.claude_md_manager import ensure_project_memory_md
 
-        # A WRITABLE project dir: the failure is injected, not environmental.
-        # An unwritable directory cannot be used to reach this code path --
-        # file_lock creates its sidecar in the same directory the write needs,
-        # so the lock raises first and the write is never attempted. The
-        # mocked failure is unreachable in production; only injection gets here.
+        # A WRITABLE project dir: the failure is injected, not environmental,
+        # so the test does not depend on chmod semantics (root, ACLs).
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -411,6 +408,11 @@ class TestEnsureDotClaudeParent:
         assert blocker.read_text(encoding="utf-8") == "I am a file, not a directory"
 
 
+def _lock_files(tmp_path):
+    """The lock files under the per-test XDG_STATE_HOME (conftest points it at tmp_path/state)."""
+    return sorted((tmp_path / "state" / "repacted" / "locks").glob("*.lock"))
+
+
 class TestFileLockContextManager:
     """file_lock(target_file) acquires/releases an fcntl sidecar lock."""
 
@@ -428,21 +430,54 @@ class TestFileLockContextManager:
             pass  # Second acquisition must not block or raise
 
         # Sidecar exists and is not cleaned up (by design)
-        sidecar = tmp_path / ".CLAUDE.md.lock"
-        assert sidecar.exists()
+        assert len(_lock_files(tmp_path)) == 1
 
-    def test_sidecar_path_shape(self, tmp_path):
-        """Sidecar lock must be `{parent}/.{name}.lock` adjacent to target."""
+    def test_sidecar_lives_outside_the_project_tree(self, tmp_path):
+        """F2: the lock goes to the per-user lock dir, never beside the target, so `git add -A`
+        in the user's repo cannot stage it; one target maps to one lock file."""
         from shared.claude_md_manager import file_lock
 
-        target = tmp_path / "CLAUDE.md"
+        project = tmp_path / "repo" / ".claude"
+        project.mkdir(parents=True)
+        target = project / "CLAUDE.md"
         target.write_text("x", encoding="utf-8")
 
         with file_lock(target):
-            sidecar = tmp_path / ".CLAUDE.md.lock"
-            assert sidecar.exists()
-            # Sidecar is NOT the target itself
-            assert sidecar != target
+            assert sorted(p.name for p in project.iterdir()) == ["CLAUDE.md"]
+            assert len(_lock_files(tmp_path)) == 1
+        with file_lock(project / ".." / ".claude" / "CLAUDE.md"):
+            assert len(_lock_files(tmp_path)) == 1  # same resolved target, same lock
+
+    @pytest.mark.parametrize("spelling", ["symlinked_parent", "case_variant"])
+    def test_two_spellings_of_one_dir_share_one_lock_and_serialise(self, tmp_path, spelling):
+        """L1: two spellings of one directory give one lock file, and holding it through
+        one spelling blocks a non-blocking flock taken through the lock file meanwhile."""
+        import fcntl
+        import os
+        from shared.claude_md_manager import file_lock
+
+        real = tmp_path / "Proj"
+        real.mkdir()
+        (real / "CLAUDE.md").write_text("x", encoding="utf-8")
+        if spelling == "symlinked_parent":
+            other = tmp_path / "alias"
+            other.symlink_to(real, target_is_directory=True)
+        else:
+            other = tmp_path / "proj"
+            if not other.exists():
+                pytest.skip("case-sensitive filesystem")
+
+        with file_lock(real / "CLAUDE.md"):
+            pass
+        (lock,) = _lock_files(tmp_path)
+        with file_lock(other / "CLAUDE.md"):
+            assert _lock_files(tmp_path) == [lock]  # no second lock file for the alias
+            fd = os.open(str(lock), os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):  # the alias holds the canonical lock
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
 
     def test_sidecar_has_secure_permissions(self, tmp_path):
         """Sidecar lock file should be 0o600 to match CLAUDE.md permissions."""
@@ -452,13 +487,10 @@ class TestFileLockContextManager:
         target = tmp_path / "CLAUDE.md"
         target.write_text("x", encoding="utf-8")
 
-        sidecar = tmp_path / ".CLAUDE.md.lock"
-        if sidecar.exists():
-            sidecar.unlink()
-
         with file_lock(target):
             pass
 
+        (sidecar,) = _lock_files(tmp_path)
         mode = stat.S_IMODE(sidecar.stat().st_mode)
         # Allow umask to tighten but not widen the permissions
         assert mode & 0o077 == 0, (
@@ -545,7 +577,7 @@ class TestFileLockContextManager:
                 pass
 
         assert "Failed to acquire lock" in str(exc_info.value)
-        assert ".CLAUDE.md.lock" in str(exc_info.value)
+        assert "repacted/locks/" in str(exc_info.value)
 
         # Clean up the holder
         holder_release.set()
@@ -613,7 +645,7 @@ class TestFileLockContextManager:
         # + the lock-target path so debug-log readers can attribute
         # the warning to a specific managed file.
         assert "PACT file_lock timeout" in captured.err
-        assert str(target.parent / f".{target.name}.lock") in captured.err
+        assert str(target) in captured.err
         assert "falling open" in captured.err
 
 

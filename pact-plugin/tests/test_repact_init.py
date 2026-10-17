@@ -19,6 +19,7 @@ PLUGIN = Path(__file__).resolve().parent.parent
 CLI = PLUGIN / "bin" / "repact-init"
 SEED = json.loads((PLUGIN / "templates" / "user-settings.example.json").read_text())
 TEAMS_FLAG = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
+TODO_FLAG = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
 ATTR_LINE = ".repacted/tasks.jsonl merge=union"
 
 
@@ -75,6 +76,35 @@ def test_second_run_nothing_to_do(env):
     assert settings(env).read_text() == before and not backups(settings(env))
 
 
+def test_task_tools_flag_added_beside_teams_and_kept_when_set(env):
+    """F5: the diff adds CLAUDE_CODE_ENABLE_TODO_TOOLS next to the Agent Teams flag; a value the
+    user already set (any value) is left alone, so a run with both set has nothing to do."""
+    dry = run(env, "--dry-run")
+    added = [line for line in dry.stdout.splitlines() if line.startswith("+")]
+    assert any(TODO_FLAG in line for line in added) and any(TEAMS_FLAG in line for line in added)
+    settings(env).write_text(json.dumps({"env": {TODO_FLAG: "0", TEAMS_FLAG: "1"},
+                                         "permissions": SEED["permissions"]}))
+    again = run(env, "--yes")
+    assert again.returncode == 0 and "nothing to do" in again.stdout
+    assert json.loads(settings(env).read_text())["env"][TODO_FLAG] == "0"
+
+
+def test_doctor_line_names_the_state_not_counts(tmp_path, monkeypatch, capsys):
+    """F7: the last line reads as one exit code and its meaning, never as three counts."""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("repact_init_under_test", str(CLI))
+    init = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    monkeypatch.setitem(sys.modules, loader.name, init)  # its dataclass looks itself up there
+    loader.exec_module(init)
+    fake = tmp_path / "fake-doctor"
+    fake.write_text("import sys\nprint('AMBER 1. something')\nsys.exit(1)\n")
+    monkeypatch.setattr(init, "DOCTOR", fake)
+    init.run_doctor(tmp_path)
+    assert capsys.readouterr().out.rstrip().splitlines()[-1] == (
+        "doctor exit 1 = amber (codes: 0 green, 1 amber, 2 red)")
+
+
 def test_config_dir_honoured(env, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
@@ -91,7 +121,8 @@ def test_merge_keeps_user_keys_and_values(env):
     result = run(env, "--yes")
     assert result.returncode == 0 and f'settings.json: env.{TEAMS_FLAG} = "0"' in result.stdout
     data = json.loads(settings(env).read_text())
-    assert data["env"] == {TEAMS_FLAG: "0", "OTHER": "x"} and data["hooks"] == {"Stop": []}
+    assert data["env"] == {TEAMS_FLAG: "0", "OTHER": "x", TODO_FLAG: "1"}
+    assert data["hooks"] == {"Stop": []}
     allow = data["permissions"]["allow"]
     assert allow[:2] == mine["permissions"]["allow"] and len(allow) == len(set(allow))
     assert set(SEED["permissions"]["allow"]) <= set(allow)

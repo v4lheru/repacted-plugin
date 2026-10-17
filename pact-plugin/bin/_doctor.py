@@ -47,6 +47,7 @@ LOCK_NAME = "doctor.lock"
 CACHE_VERSION = 1
 SLOW_MAX_AGE = datetime.timedelta(days=7)
 SLOW_CHECKS = ("secrets", "mcp")
+MAINTAINER_ONLY = ("release", "gates", "state")  # only a checkout of the plugin's source repo
 STATES = ("green", "amber", "red", "skip")
 TEXT_SUFFIXES = {".md", ".txt", ".json", ".jsonl", ".yaml", ".yml"}
 RELEASE_WORKTREE = "release"
@@ -977,7 +978,9 @@ def try_run_lock(data_dir: Path) -> Optional[int]:
 
 
 def render_report(results: List[Result]) -> List[str]:
-    width = max(len(r.name) for r in results)
+    """The table; a maintainer-only row that does not apply is hidden (doctor.json keeps it)."""
+    results = [r for r in results if not (r.state == "skip" and r.id in MAINTAINER_ONLY)]
+    width = max((len(r.name) for r in results), default=0)
     lines = []
     for n, r in enumerate(results, 1):
         lines.append(f"{r.state.upper():5} {n}. {r.name:<{width}}  {r.summary}")

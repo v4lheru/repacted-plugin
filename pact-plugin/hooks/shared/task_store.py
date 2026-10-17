@@ -408,10 +408,22 @@ def _refuse_constant(token: str):
     raise ValueError(f"{token} is not JSON")
 
 
+# CPython's default int digit limit (3.11+, and late 3.9/3.10 patches). Enforced here so
+# every interpreter refuses the same files, and int() never runs quadratic on a huge token.
+_INT_DIGITS_MAX = 4300
+
+
+def _bounded_int(token: str) -> int:
+    if len(token.lstrip("-")) > _INT_DIGITS_MAX:
+        raise ValueError("integer has too many digits")
+    return int(token)
+
+
 def _parse(text: str):
-    """`json.loads` without Python's extension: NaN, Infinity and -Infinity raise ValueError.
-    The host never writes them, and a file that holds one is unreadable to a strict parser."""
-    return json.loads(text, parse_constant=_refuse_constant)
+    """`json.loads` without Python's extension: NaN, Infinity and -Infinity raise ValueError,
+    as does an integer longer than _INT_DIGITS_MAX digits. The host never writes them, and a
+    file that holds one is unreadable to a strict parser."""
+    return json.loads(text, parse_constant=_refuse_constant, parse_int=_bounded_int)
 
 
 def _load(path: Path) -> Optional[dict]:

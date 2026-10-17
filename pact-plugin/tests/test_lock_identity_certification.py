@@ -2,13 +2,18 @@
 
 WHAT IS UNDER CERTIFICATION. `file_lock` keys its sidecar on
 
-    target_file.parent.resolve() / f".{target_file.name}.lock"
+    (st_dev, st_ino) of target_file.parent.resolve()  +  target_file.name
 
-in both twins (`hooks/shared/claude_md_manager.py`,
-`skills/pact-memory/scripts/working_memory.py`). The PARENT is resolved so two
-SPELLINGS of one directory produce one sidecar; the LEAF is deliberately NOT
-resolved, because the write is `os.replace` — renameat(2) — which binds the
-final component as a directory ENTRY without following it.
+(the resolved parent's path string when that parent does not exist), hashed to
+a file in the per-user lock dir `$XDG_STATE_HOME/repacted/locks/`, in both
+twins (`hooks/shared/claude_md_manager.py`,
+`skills/pact-memory/scripts/working_memory.py`). The sidecar no longer sits
+beside the target, so "agrees with the write" is certified as LOCK IDENTITY
+(the lock for the target is the lock for the directory the write binds into),
+not as sidecar location. The PARENT is keyed by inode so every SPELLING of one
+directory produces one sidecar; the LEAF is deliberately NOT resolved, because
+the write is `os.replace` — renameat(2) — which binds the final component as a
+directory ENTRY without following it.
 
 The superseded formula resolved the WHOLE target. Under a leaf symlink that
 named a different directory than the write, and — because the write REPLACES
@@ -542,8 +547,8 @@ def derive_sidecar_from_production(mod, target):
     return Path(opens[0]["path"])
 
 
-def derive_write_parent_ident(mod, target, content, root):
-    """Return (st_dev, st_ino) of the directory the WRITE binds into.
+def derive_write_parent(mod, target, content, root):
+    """Return the WRITE's parent open: {"ident": (st_dev, st_ino), "path": ...}.
 
     STRUCTURAL discriminator, deliberately not positional: the parent open is
     the unique call that is both O_DIRECTORY and top-level (`dir_fd is None`).
@@ -568,7 +573,7 @@ def derive_write_parent_ident(mod, target, content, root):
         f"expected exactly one top-level O_DIRECTORY open (the write's "
         f"parent); found {len(parents)}: {[p['path'] for p in parents]}"
     )
-    return parents[0]["ident"]
+    return parents[0]
 
 
 def _dir_ident(path: Path):
@@ -579,6 +584,19 @@ def _dir_ident(path: Path):
 
 def _dirs(root: Path):
     return {p for p in root.rglob("*") if p.is_dir()}
+
+
+def _lock_dir_chain(root: Path):
+    """The per-user lock dir and its ancestors under the per-test XDG_STATE_HOME
+    (conftest points it at root/"state"). Creating THESE is file_lock's design;
+    they are subtracted by name, never by prefix, so any other directory under
+    the state dir still counts as created."""
+    state = root / "state"
+    return {state, state / "repacted", state / "repacted" / "locks"}
+
+
+def _created_beyond_lock_dir(root: Path, before):
+    return _dirs(root) - before - _lock_dir_chain(root)
 
 
 def _topology(kind, root: Path):
@@ -739,33 +757,51 @@ class TestSidecarAgreesWithTheWrite:
     """L1/L2 -- the sidecar names the directory the write binds into."""
 
     @pytest.mark.parametrize("kind", SIX_TOPOLOGIES)
-    def test_sidecar_directory_is_the_directory_the_write_binds(
+    def test_lock_is_the_lock_of_the_directory_the_write_binds(
         self, tmp_path, twin, kind
     ):
-        """L1. Compared by (st_dev, st_ino), NEVER by string equality -- string
-        equality would also hide a userspace-vs-kernel resolution disagreement,
-        which is the class of defect this whole arc is about."""
+        """L1. The sidecar lives in the per-user lock dir, so agreement is
+        LOCK IDENTITY: the lock production takes for `target` must be the lock
+        it takes for the write's parent directory, reached by that directory's
+        realpath (a spelling with no symlink in it) plus the same leaf. The
+        write's parent is the kernel object the write opened, read by
+        (st_dev, st_ino) at open time, never a string the test computed; the
+        sha formula is never recomputed here."""
         mod, expected_module = twin
         assert_same_module(mod, expected_module)
 
         proj, target = _topology(kind, tmp_path)
         assert_topology_constructed(kind, proj, target)
         sidecar = derive_sidecar_from_production(mod, target)
-        write_ident = derive_write_parent_ident(mod, target, "PAYLOAD\n", proj)
+        write_parent = derive_write_parent(mod, target, "PAYLOAD\n", proj)
 
-        if write_ident is None:
+        if write_parent is None:
             # Dangling parent: the write cannot open a parent at all, so there
             # is no identity to agree with. Assert that rather than fabricate
-            # agreement -- and assert the sidecar's directory is likewise
-            # absent, which is the honest form of "they agree".
+            # agreement; the lock falls back to the parent's path string, and
+            # the row in TestDirectoryCreationCeiling pins that it creates no
+            # directory there.
             assert kind == "parent-out-dangling", (
                 f"{kind}: the write established no parent, which was only "
                 f"expected on the dangling-parent row"
             )
             return
-        assert _dir_ident(sidecar.parent) == write_ident, (
-            f"{kind}: sidecar directory {sidecar.parent} does not name the "
-            f"same kernel object as the directory the write binds into"
+        write_dir = Path(os.path.realpath(write_parent["path"]))
+        assert _dir_ident(write_dir) == write_parent["ident"], (
+            f"{kind}: instrument fault, realpath {write_dir} is not the "
+            f"directory the write opened"
+        )
+        assert derive_sidecar_from_production(mod, write_dir / target.name) == sidecar, (
+            f"{kind}: the lock for {target} is not the lock for the directory "
+            f"the write binds into ({write_dir})"
+        )
+        # Non-vacuity: a constant lock path would pass the equality above on
+        # every topology. Another directory must get another lock.
+        other = tmp_path / "unrelated"
+        other.mkdir()
+        assert derive_sidecar_from_production(mod, other / target.name) != sidecar, (
+            f"{kind}: an unrelated directory shares the lock, so the equality "
+            f"above proves nothing"
         )
 
     def test_sidecar_is_stable_across_the_write(self, tmp_path, twin):
@@ -801,31 +837,14 @@ class TestSidecarAgreesWithTheWrite:
         alias = tmp_path / "alias"
         _os.symlink(str(real), str(alias), target_is_directory=True)
 
-        # READ THIS BEFORE ADDING CASE OR UNICODE VARIANTS TO THIS TEST.
-        #
-        # The property is MUTUAL EXCLUSION. It is verified here by PATH-STRING
-        # EQUALITY, which is a STRICTER PROXY than the property -- sound only
-        # for the case built above, where `resolve()` collapses a directory
-        # symlink alias to one string.
-        #
-        # It does NOT generalise. A case-variant (`Proj` vs `proj`) and an
-        # NFC/NFD pair are the SAME kernel object reached by DIFFERENT strings,
-        # so the two derived sidecar paths differ while `samefile` is True and
-        # `flock` serialises on the inode regardless -- mutual exclusion is
-        # fully intact and this assertion would nonetheless FAIL.
-        #
-        # So widening this test with those rows produces a RED THAT IS THE
-        # INSTRUMENT'S FAULT, and the natural repair -- deleting the rows you
-        # just added -- discards correct coverage to silence a wrong check. To
-        # cover them, assert `samefile` on the two sidecars, or actual `flock`
-        # exclusion (hold via one spelling, attempt via the other). NOT path
-        # equality.
-        #
-        # THE PRECEDENT THAT WILL TEMPT YOU IS ONE FILE AWAY:
-        # test_containment_certification.py has case-variant and NFD-variant
-        # tests for the neighbouring containment property, where they are
-        # correct. Copying that pattern here without changing the assertion is
-        # the specific mistake this comment exists to prevent.
+        # The property is MUTUAL EXCLUSION, verified here by sidecar-path
+        # equality. That proxy is sound for every spelling now: the sidecar
+        # is named by the parent's (st_dev, st_ino), so a symlink alias, a
+        # case variant and an NFC/NFD pair of one directory all name one lock
+        # file. (Under the superseded sidecar-beside-the-target formula a case
+        # variant gave two sidecar strings for one inode, so path equality was
+        # NOT a valid check for it.) The case-variant row, with actual flock
+        # exclusion, is TestFileLockContextManager in test_claude_md_manager.py.
         via_real = derive_sidecar_from_production(mod, real / ".claude" / "CLAUDE.md")
         via_alias = derive_sidecar_from_production(mod, alias / ".claude" / "CLAUDE.md")
         assert via_real == via_alias, (
@@ -863,29 +882,46 @@ class TestSidecarAgreesWithTheWrite:
 class TestDirectoryCreationCeiling:
     """L3/L4 -- the DoS-relevant axis. Every 'creates nothing' assertion is
     paired with a positive control in the SAME harness, because an empty
-    created-set is equally produced by a harness that never ran."""
+    created-set is equally produced by a harness that never ran.
 
-    def test_positive_control_dangling_parent_DOES_create_directories(
-        self, tmp_path, twin
-    ):
-        """The control. If this does not create directories, the snapshot
-        machinery is not observing creation and every zero below is worthless.
-        This row creates dirs under BOTH schemes -- it is untouched by the fix
-        and belongs to a separately-tracked residual."""
+    The lock dir is the one directory file_lock creates by design; each zero
+    below subtracts exactly that chain (`_lock_dir_chain`), nothing broader."""
+
+    def test_positive_control_first_lock_creates_the_lock_dir(self, tmp_path, twin):
+        """The control. The first file_lock in a fresh XDG_STATE_HOME must
+        create the lock dir chain, and the snapshot must see it. If it does
+        not, the snapshot machinery is not observing creation and every zero
+        below is worthless."""
+        mod, expected_module = twin
+        assert_same_module(mod, expected_module)
+        proj, target = _topology("plain", tmp_path)
+        assert_topology_constructed("plain", proj, target)
+        assert not (tmp_path / "state").exists(), "state dir exists before the first lock"
+        before = _dirs(tmp_path)
+        with mod.file_lock(target):
+            pass
+        assert _dirs(tmp_path) - before == _lock_dir_chain(tmp_path), (
+            "the first lock did not create exactly the lock dir chain -- the "
+            "snapshot cannot observe creation, so the zero-assertions below "
+            "would prove nothing"
+        )
+
+    def test_dangling_parent_creates_zero_directories(self, tmp_path, twin):
+        """The superseded sidecar-beside-the-target scheme mkdir'ed the
+        missing parent, so this row used to create the dangling chain and was
+        the positive control. The per-user lock dir closed that residual: the
+        lock keys on the parent's path string and creates nothing there."""
         mod, expected_module = twin
         assert_same_module(mod, expected_module)
         proj, target = _topology("parent-out-dangling", tmp_path)
         assert_topology_constructed("parent-out-dangling", proj, target)
         before = _dirs(tmp_path)
-        try:
-            with mod.file_lock(target):
-                pass
-        except OSError:
+        with mod.file_lock(target):
             pass
-        assert _dirs(tmp_path) - before, (
-            "the dangling-PARENT control created NO directories -- the "
-            "snapshot cannot observe creation, so the zero-assertions below "
-            "would prove nothing"
+        assert not (tmp_path / "nodir").exists(), "file_lock created the dangling parent"
+        assert _created_beyond_lock_dir(tmp_path, before) == set(), (
+            f"dangling-parent topology created directories: "
+            f"{_created_beyond_lock_dir(tmp_path, before)}"
         )
 
     def test_dangling_leaf_creates_zero_directories(self, tmp_path, twin):
@@ -899,9 +935,9 @@ class TestDirectoryCreationCeiling:
         before = _dirs(tmp_path)
         with mod.file_lock(target):
             pass
-        assert _dirs(tmp_path) - before == set(), (
+        assert _created_beyond_lock_dir(tmp_path, before) == set(), (
             f"dangling-leaf topology created directories: "
-            f"{_dirs(tmp_path) - before}"
+            f"{_created_beyond_lock_dir(tmp_path, before)}"
         )
 
     def test_two_leg_sidecar_is_byte_zero_and_creates_no_directory(
@@ -915,7 +951,7 @@ class TestDirectoryCreationCeiling:
         assert_topology_constructed("two-leg", proj, target)
         before = _dirs(tmp_path)
         sidecar = derive_sidecar_from_production(mod, target)
-        assert _dirs(tmp_path) - before == set(), "two-leg created a directory"
+        assert _created_beyond_lock_dir(tmp_path, before) == set(), "two-leg created a directory"
         assert sidecar.stat().st_size == 0, (
             f"two-leg sidecar is {sidecar.stat().st_size} bytes, expected 0"
         )

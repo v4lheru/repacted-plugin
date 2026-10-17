@@ -1,6 +1,6 @@
 # rePACTed plugin
 
-This folder is the plugin that `/plugin install repacted@repacted` installs (version 1.7.0). Setup and a first run are in the repository [README](https://github.com/v4lheru/repacted-plugin#readme) and the [quickstart](https://github.com/v4lheru/repacted-plugin/blob/main/docs/quickstart.md).
+This folder is the plugin that `/plugin install repacted@repacted` installs (version 1.7.1). Setup and a first run are in the repository [README](https://github.com/v4lheru/repacted-plugin#readme) and the [quickstart](https://github.com/v4lheru/repacted-plugin/blob/main/docs/quickstart.md).
 
 ## What is here
 

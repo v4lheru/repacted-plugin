@@ -157,20 +157,21 @@ class TestCrossWriterSerialization:
                     pass  # pragma: no cover - acquisition must not succeed
 
     def test_twin_sidecar_path_matches_canonical(self, tmp_path):
-        """Both copies derive the sidecar as .{name}.lock beside the target —
+        """Both copies derive the same sidecar in the per-user lock dir —
         the identity that makes the inode shared across processes."""
         from shared import claude_md_manager as cmm
         from scripts import working_memory as wm
 
         target = tmp_path / "CLAUDE.md"
         target.write_text("# x\n", encoding="utf-8")
-        expected = tmp_path / ".CLAUDE.md.lock"
+        locks = tmp_path / "state" / "repacted" / "locks"
 
         with wm.file_lock(target):
-            assert expected.exists(), "twin did not create the canonical sidecar"
+            created = sorted(locks.glob("*.lock"))
+            assert len(created) == 1, "twin did not create its sidecar"
         # Sanity: the canonical lock uses the identical sidecar path.
         with cmm.file_lock(target):
-            assert expected.exists()
+            assert sorted(locks.glob("*.lock")) == created
 
 
 class TestFailOpenOnTimeout:

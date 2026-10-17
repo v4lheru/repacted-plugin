@@ -53,7 +53,7 @@ A fresh agent per task is the default (LEAN-DEFAULTS: most spend is agents re-re
 
 **Tracking**: a blocker is `TaskCreate(subject="BLOCKER: ...", metadata={"type": "blocker"})` + `addBlockedBy` on the agent's task; an algedonic signal is `metadata={"type": "algedonic", "level", "category"}` blocking the phase (ALERT) or feature (HALT) task; `metadata.type` is required. A downstream task names its upstream task ids; read a HANDOFF with `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff`. `agent_handoff_emitter.py` skips journal emission for `metadata.type` blocker/algedonic, and `shared/task_utils.py` and `shared/session_resume.py` sort signal tasks by the same literal.
 
-**Roster**: `pact-preparer`, `pact-architect`, `pact-backend-coder`, `pact-frontend-coder`, `pact-database-engineer`, `pact-devops-engineer`, `pact-n8n`, `pact-test-engineer`, `pact-security-engineer`, `pact-qa-engineer`, `pact-auditor` (concurrent CODE observer), `pact-secretary`.
+**Roster**: `pact-preparer`, `pact-architect`, `pact-backend-coder`, `pact-frontend-coder`, `pact-database-engineer`, `pact-devops-engineer`, `pact-test-engineer`, `pact-security-engineer`, `pact-qa-engineer`, `pact-auditor` (concurrent CODE observer), `pact-secretary`.
 
 **PR review**: ONE reviewer by default; several in parallel only when the user asks or risk ≥ 3 (`pact-architect`, `pact-test-engineer`, the domain coders), plus `pact-security-engineer` for auth, input, APIs or crypto and `pact-qa-engineer` for user-facing change; synthesize in `docs/review/`, then `/repacted:pin-memory`.
 

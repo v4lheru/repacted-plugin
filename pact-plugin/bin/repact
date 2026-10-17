@@ -6,8 +6,8 @@
 # --dangerously-skip-permissions belong in your own shell function or alias.
 #
 # Two modes, read from enabledPlugins in <config root>/settings.json:
-#   installed  a repacted@ plugin is enabled (repacted@repacted-local from a local marketplace,
-#              or repacted@repacted from the GitHub marketplace):
+#   installed  a repacted@ plugin is enabled (repacted@repacted from the GitHub marketplace
+#              or a local clone added as a marketplace):
 #              exec claude --agent repacted:pact-orchestrator "$@"
 #   installed  has NO single-session check: nothing is renamed or relinked, so 6-7 concurrent
 #              sessions are fine.

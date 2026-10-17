@@ -8,7 +8,7 @@ Used by: the plugin suite. The fixture is in tests/conftest.py; the paths and th
          tests/fixtures/plugin_data.py.
 
 Why: P3's early test runs left 12 pytest temp paths in the live
-~/.claude/plugins/data/repacted-repacted-local/projects.json. The CLI helper then set a plugin data dir
+~/.claude/plugins/data/repacted-repacted/projects.json. The CLI helper then set a plugin data dir
 per call, but any test that started `repact-task init` without it would have leaked again. This
 isolation is suite-wide, not per helper.
 """

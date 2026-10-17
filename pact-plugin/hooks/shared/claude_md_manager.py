@@ -17,6 +17,7 @@ Rationale: the design notes
 from __future__ import annotations
 
 import fcntl  # Unix-only; PACT supports macOS/Linux. No Windows compat shim.
+import hashlib
 import os
 import re
 import sys
@@ -33,28 +34,49 @@ from .paths import get_claude_config_dir
 _DOT_CLAUDE_RELATIVE = Path(".claude") / "CLAUDE.md"
 _LEGACY_RELATIVE = Path("CLAUDE.md")
 
-# Sidecar lock (`.{filename}.lock`) serializing read-mutate-write between concurrent
-# session_init hooks; independent of the target's inode, which the write replaces.
+# Sidecar lock (`<state>/repacted/locks/<sha256>.lock`, keyed by the target path) serializing
+# read-mutate-write between concurrent session_init hooks; independent of the target's inode.
 _LOCK_TIMEOUT_SECONDS = 5.0
 _LOCK_POLL_INTERVAL = 0.1
+
+
+class LockDirError(OSError):
+    """file_lock could not create or open its lock; the routed cause names it, paths stay out."""
+
 
 
 @contextmanager
 def file_lock(target_file: Path):
     """Acquire an exclusive sidecar file lock for a target CLAUDE.md path.
 
-    Not re-entrant. The sidecar `.{name}.lock` sits in the resolved parent and is never
+    Not re-entrant. The sidecar sits in the per-user lock dir, outside the repo, and is never
     removed (removing it inside the lock window races other waiters). Raises TimeoutError
     after _LOCK_TIMEOUT_SECONDS; callers fail open.
     """
-    # Lock key = resolved parent (the directory the write binds into) + literal leaf name: os.replace
-    # binds the leaf as an entry without following it, so lock and write identity cannot diverge.
-    # Two names for one inode (hardlinks) do not share a lock, by design.
-    lock_path = target_file.parent.resolve() / f".{target_file.name}.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    # 0o600: the lock file is adjacent to user-private CLAUDE.md content;
-    # match the same permissions to avoid leaving a world-readable sidecar.
-    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    # Lock key = (st_dev, st_ino) of the resolved parent, where os.replace binds the leaf without
+    # following it, + the literal leaf name: every spelling of that dir (case, Unicode form, symlink)
+    # shares one lock; a missing parent keys on its path; hardlinks do not share, by design. The lock
+    # dir depends on HOME only (never CLAUDE_CONFIG_DIR, which can switch per session), so writers
+    # share it and it never lands in the repo where `git add -A` would stage it.
+    parent = target_file.parent.resolve()
+    try:
+        st = parent.stat()
+        lock_key = f"{st.st_dev}:{st.st_ino}/{target_file.name}"
+    except OSError:
+        lock_key = str(parent / target_file.name)
+    state_home = os.environ.get("XDG_STATE_HOME", "")
+    if not os.path.isabs(state_home):
+        state_home = str(Path.home() / ".local" / "state")
+    digest = hashlib.sha256(lock_key.encode("utf-8", "surrogateescape")).hexdigest()
+    lock_path = Path(state_home) / "repacted" / "locks" / f"{digest}.lock"
+    try:
+        lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # 0o600: the lock file is keyed to user-private CLAUDE.md content.
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        print(f"PACT file_lock: lock dir {lock_path.parent} unwritable ({exc.strerror}); "
+              "make it writable or set XDG_STATE_HOME", file=sys.stderr)
+        raise LockDirError(exc.errno, f"lock dir unusable: {exc.strerror}", str(lock_path.parent)) from exc
     deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
     try:
         while True:
@@ -66,7 +88,7 @@ def file_lock(target_file: Path):
                     # Warn before raising: callers fail open on TimeoutError, so a stuck holder would be silent.
                     print(
                         f"PACT file_lock timeout: failed to acquire "
-                        f"lock on {lock_path} within "
+                        f"lock on {lock_path} (for {target_file}) within "
                         f"{_LOCK_TIMEOUT_SECONDS}s; falling open",
                         file=sys.stderr,
                     )

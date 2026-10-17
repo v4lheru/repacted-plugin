@@ -93,6 +93,8 @@ def _notice_time(value) -> "datetime | None":
     ISO-8601 string with an offset. Never raises."""
     if not isinstance(value, str) or len(value) > _NOTICE_TS_MAX:
         return None
+    if value.endswith("Z"):     # fromisoformat reads "Z" only from Python 3.11
+        value = value[:-1] + "+00:00"
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError:

@@ -5,7 +5,7 @@ disable-model-invocation: true
 ---
 # Set up rePACTed
 
-One setup command. The machine part adds the Agent Teams flag and allow rules for the plugin's own tools to the user settings (`{config_dir}/settings.json`: `$CLAUDE_CONFIG_DIR` when set, else `~/.claude`). The repo part (`--repo`) adds the `agent` line to `.claude/settings.json`, creates `.repacted/`, and adds the task-log line to `.gitattributes`. Nothing the user already has is removed or overwritten.
+One setup command. The machine part adds the Agent Teams flag, the task-tools flag (`CLAUDE_CODE_ENABLE_TODO_TOOLS`) and allow rules for the plugin's own tools to the user settings (`{config_dir}/settings.json`: `$CLAUDE_CONFIG_DIR` when set, else `~/.claude`). The repo part (`--repo`) adds the `agent` line to `.claude/settings.json`, creates `.repacted/`, and adds the task-log line to `.gitattributes`. Nothing the user already has is removed or overwritten.
 
 1. Ask the user whether to set up the current repository too, unless `$ARGUMENTS` already says `--repo`.
 2. Show what would change, writing nothing:

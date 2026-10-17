@@ -204,6 +204,13 @@ _HANDOFF_SHAPE_REASON = (
 ).rstrip()
 
 
+def _bounded_int(token: str) -> int:
+    """int() under CPython's default 4300-digit limit on every interpreter (3.9.6 has none)."""
+    if len(token.lstrip("-")) > 4300:
+        raise ValueError("integer has too many digits")
+    return int(token)
+
+
 def _metadata_object(metadata: object) -> dict | None:
     """The metadata object of this write (parsed out of a JSON string if needed), else None.
     Raises ValueError for a string object that names the handoff key and cannot be parsed.
@@ -213,7 +220,7 @@ def _metadata_object(metadata: object) -> dict | None:
     if not isinstance(metadata, str):
         return None
     try:
-        parsed = json.loads(metadata)
+        parsed = json.loads(metadata, parse_int=_bounded_int)
     except (ValueError, RecursionError):
         if metadata.lstrip("\ufeff \t\r\n").startswith("{") and _NAMES_HANDOFF.search(metadata):
             raise ValueError("metadata string names handoff and cannot be parsed") from None
@@ -664,7 +671,7 @@ def main() -> None:
         print(_SUPPRESS_OUTPUT)
         sys.exit(0)
     try:
-        input_data = json.loads(raw)
+        input_data = json.loads(raw, parse_int=_bounded_int)
     except (ValueError, RecursionError):
         if _NAMES_HANDOFF.search(raw) or _string_metadata_names_handoff(raw):
             _emit_deny(_HANDOFF_SHAPE_REASON)

@@ -19,7 +19,7 @@ Contract
   - A file readable by 'other' (mode & 0o004) is refused: chmod 600 it.
   - Refer to the values inside <cmd> through the environment, in single quotes so YOUR
     shell does not expand them first.
-  - For an API call that a string-matching guard must see (n8n writes, D19), keep the
+  - For an API call that a string-matching guard must see (an API write), keep the
     guarded CLI as the program and feed only the header through env-get by process
     substitution; never wrap the guarded call as `env-get ... -- sh -c 'curl ...'`
     (the guard then sees `env-get` as the program and a quoted string, and stays silent).
@@ -31,8 +31,8 @@ Exit codes
   otherwise the exit code of <cmd>
 
 Examples
-  env-get ~/.config/n8n/instance.env N8N_API_KEY -- sh -c 'echo "len=${#N8N_API_KEY}"'
-  curl -sS -X PUT -H @<(env-get ~/.config/n8n/instance.env N8N_API_KEY -- sh -c 'printf "X-N8N-API-KEY: %s\n" "$N8N_API_KEY"') -H "Content-Type: application/json" --data @/tmp/wf.json "https://<host>/api/v1/workflows/<id>"
+  env-get ~/.config/myapp/api.env API_KEY -- sh -c 'echo "len=${#API_KEY}"'
+  curl -sS -X PUT -H @<(env-get ~/.config/myapp/api.env API_KEY -- sh -c 'printf "Authorization: Bearer %s\n" "$API_KEY"') -H "Content-Type: application/json" --data @/tmp/item.json "https://<host>/api/v1/items/<id>"
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ EXIT_KEY_FILE, EXIT_USAGE, EXIT_NOT_FOUND = 2, 64, 127
 KEY_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 USAGE = ("usage: env-get FILE KEY[,KEY...] -- <cmd> [args...]\n"
          "       env-get --keys FILE\n\nExample:\n"
-         "  env-get ~/.config/n8n/instance.env N8N_API_KEY -- sh -c 'echo \"len=${#N8N_API_KEY}\"'")
+         "  env-get ~/.config/myapp/api.env API_KEY -- sh -c 'echo \"len=${#API_KEY}\"'")
 
 
 class UsageError(Exception):

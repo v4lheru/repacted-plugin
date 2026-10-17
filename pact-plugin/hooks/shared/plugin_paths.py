@@ -20,7 +20,7 @@ from typing import Optional
 from .paths import get_claude_config_dir
 
 
-PLUGIN_DATA_DIRNAME = "repacted-repacted-local"   # data_dirname()'s fallback outside an install
+PLUGIN_DATA_DIRNAME = "repacted-repacted"   # data_dirname()'s fallback outside an install
 DATA_DIR_MODE = 0o700
 
 

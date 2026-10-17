@@ -9,6 +9,8 @@ Used by: pytest. Every credential-shaped value is assembled at import and is fak
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 import egress_guard as guard
@@ -134,7 +136,7 @@ def test_an_env_file_is_refused(path, tmp_path):
 def test_a_template_hard_linked_or_symlinked_to_an_env_file_is_refused(tmp_path):
     (tmp_path / ".env").write_text("A=1\n", encoding="utf-8")
     (tmp_path / "link").mkdir()
-    (tmp_path / "link" / ".env.example").hardlink_to(tmp_path / ".env")
+    os.link(tmp_path / ".env", tmp_path / "link" / ".env.example")   # Path.hardlink_to is 3.10+
     (tmp_path / "sym").mkdir()
     (tmp_path / "sym" / ".env.example").symlink_to(tmp_path / ".env")
     assert len(check_security(["link/.env.example", "sym/.env.example"], repo=str(tmp_path))) == 2

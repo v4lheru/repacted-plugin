@@ -1,6 +1,6 @@
 # Specialist charter
 
-Every specialist agent (architect, preparer, the coders, devops, test, QA, security, n8n) carries
+Every specialist agent (architect, preparer, the coders, devops, test, QA, security) carries
 the same coordination rule, authority, escalation triggers and signal duty. This file is their one
 home; an agent body keeps only what differs for its role (its triggers and its extra authority).
 

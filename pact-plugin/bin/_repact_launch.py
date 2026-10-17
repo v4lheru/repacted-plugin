@@ -54,7 +54,7 @@ import _agentlinks  # noqa: E402  PACT's install root, needed by the exit trap
 import _memdir  # noqa: E402  resolve_root and the comm-only process check
 from shared.coexistence import _read_json, legacy_keys, managed_legacy_enablement  # noqa: E402  the one managed-settings reader
 
-INSTALLED_PREFIX = "repacted@"  # repacted@repacted-local here, repacted@repacted from GitHub
+INSTALLED_PREFIX = "repacted@"  # repacted@repacted, from GitHub or a local clone
 DEFAULT_LEGACY_KEY = "PACT@pact-marketplace"
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 2, 64
 CORE_SOURCE_OVERRIDE = "REPACTED_CORE_SOURCE"  # tests point it at a temp file (or a missing one)
@@ -72,8 +72,8 @@ SESSION_ACTIVITY_DIRS = ("teams", "sessions")
 def launch_mode(config_root: Path) -> str:
     """`installed` when the user settings enable repacted from ANY marketplace, else `alternate`.
 
-    A local install is repacted@repacted-local; a GitHub install is repacted@repacted (the root
-    marketplace). Either one means repacted is the installed product and no swap is wanted.
+    A GitHub install and a local clone both install repacted@repacted (the root
+    marketplace). Any repacted@ entry means repacted is the installed product and no swap is wanted.
     """
     plugins = _read_json(config_root / "settings.json")
     return "installed" if any(isinstance(k, str) and k.startswith(INSTALLED_PREFIX) and v is True
