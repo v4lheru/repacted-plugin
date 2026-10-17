@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a new feature or a change to how rePACTed works.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what makes it hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: What should rePACTed do instead? A command, an option, a guard, a change to a doc.
+    validations:
+      required: true
+  - type: textarea
+    id: other
+    attributes:
+      label: Other ways you tried
+      description: Workarounds or other tools you looked at, if any.
+  - type: checkboxes
+    id: pr
+    attributes:
+      label: Pull request
+      options:
+        - label: I would like to send a pull request for this (see CONTRIBUTING.md first).

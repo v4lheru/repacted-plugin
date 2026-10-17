@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in rePACTed does not work as the docs say.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Remove every secret, token and private path before you paste anything.
+        For a security problem, do not use this form: see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest command or prompt that shows the problem.
+      placeholder: |
+        1. Run ...
+        2. Ask Claude to ...
+    validations:
+      required: true
+  - type: textarea
+    id: refusal
+    attributes:
+      label: Refusal line or error
+      description: "If a guard refused something, paste the whole line, including the `[rule: ...]` part. Ask Claude to run `repact-explain` to see it again."
+      render: text
+  - type: textarea
+    id: doctor
+    attributes:
+      label: repact-doctor output
+      description: Ask Claude to run `repact-doctor` and paste the output.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: rePACTed version
+      description: The `version` in `pact-plugin/.claude-plugin/plugin.json`.
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Claude Code version
+      description: The output of `claude --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows (WSL)
+        - Other
+    validations:
+      required: true
