@@ -1,0 +1,38 @@
+# Generated docs are current.
+#
+# WHAT THIS DOES
+#   Re-renders the generated regions of docs/reference/*.md and docs/troubleshooting.md at
+#   the repository root, and the plugin's own pact-plugin/docs/troubleshooting.md, and fails
+#   when any page differs from what pact-plugin/bin/repact-docs-gen would write. `--check`
+#   writes nothing. The generator is standard library only, so there is no install step.
+#
+# FIXING A RED RUN
+#   Run the same two commands without `--check`, commit the regenerated pages, and push.
+#
+# SECRETS
+#   None; read-only token.
+
+name: docs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  docs-regen:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions are pinned to a full commit SHA; the comment names the release it resolves to.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Reference pages and root troubleshooting page
+        run: python3 pact-plugin/bin/repact-docs-gen --check .
+      - name: Plugin troubleshooting page
+        run: python3 pact-plugin/bin/repact-docs-gen --check --pages troubleshooting pact-plugin

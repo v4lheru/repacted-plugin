@@ -1,0 +1,99 @@
+# needs-import label for pull requests that touch export-owned paths.
+#
+# WHAT THIS DOES
+#   Most of this repository is generated from a private source tree by an exporter. A change
+#   to an export-owned path cannot be merged here as-is: the maintainer imports it into the
+#   source and the next export carries it back. This workflow labels such pull requests
+#   `needs-import`, and removes the label once a PR no longer touches those paths.
+#   .github/ownership.json lists the globs: `public_owned` paths live only here,
+#   `export_owned` paths come from the export.
+#
+# WHY pull_request_target, AND WHY IT IS SAFE HERE
+#   A pull request from a fork gets a read-only token under `pull_request`, so it could not
+#   be labelled. `pull_request_target` runs with this repository's token, which is dangerous
+#   only when the job runs code from the pull request. This job never checks anything out:
+#   it reads ownership.json from the BASE commit through the API and the PR's file list
+#   through the API, and compares names as strings in Python. Never add a checkout of the
+#   PR head here.
+#
+# PERMISSIONS
+#   contents: read for ownership.json; pull-requests and issues write for the label (labels
+#   live on the issue side of a PR, and the first use creates the label). Nothing else.
+#   No secrets.
+
+name: labeller
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: labeller-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  needs-import:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Label PRs that touch export-owned paths
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+
+          LABEL = "needs-import"
+          repo, pr, base = os.environ["REPO"], os.environ["PR_NUMBER"], os.environ["BASE_SHA"]
+
+          def gh(*args):
+              return subprocess.run(["gh", "api", *args], check=True,
+                                    capture_output=True, text=True).stdout
+
+          def matches(path, glob):
+              # ownership.json holds exact paths and `dir/**` globs only; refuse anything else
+              # rather than guess at its meaning.
+              if glob.endswith("/**") and not any(c in glob[:-3] for c in "*?["):
+                  return path.startswith(glob[:-2])
+              if any(c in glob for c in "*?["):
+                  sys.exit(f"ownership.json: unsupported glob {glob!r} (exact paths and dir/** only)")
+              return path == glob
+
+          owners = json.loads(gh(f"repos/{repo}/contents/.github/ownership.json?ref={base}",
+                                 "-H", "Accept: application/vnd.github.raw"))
+          export_owned = owners["export_owned"]
+          if not export_owned:
+              sys.exit("ownership.json: export_owned is empty")
+
+          paths = set()
+          for line in gh("--paginate", f"repos/{repo}/pulls/{pr}/files?per_page=100",
+                         "--jq", ".[] | .filename, (.previous_filename // empty)").splitlines():
+              if line:
+                  paths.add(line)
+          if not paths:
+              sys.exit(f"PR #{pr}: the API returned no changed files")
+
+          hits = sorted(p for p in paths if any(matches(p, g) for g in export_owned))
+          print(f"{len(paths)} changed paths, {len(hits)} export-owned")
+          for p in hits[:50]:
+              print(f"  export-owned: {p}")
+
+          labels = json.loads(gh(f"repos/{repo}/issues/{pr}/labels"))
+          has = any(l["name"] == LABEL for l in labels)
+          if hits and not has:
+              gh("--method", "POST", f"repos/{repo}/issues/{pr}/labels", "-f", f"labels[]={LABEL}")
+              print(f"added {LABEL}")
+          elif not hits and has:
+              gh("--method", "DELETE", f"repos/{repo}/issues/{pr}/labels/{LABEL}")
+              print(f"removed {LABEL}")
+          else:
+              print(f"{LABEL}: no change")
+          PY
