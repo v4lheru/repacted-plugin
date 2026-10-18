@@ -4,8 +4,10 @@ You describe the work. rePACTed turns Claude Code into a small engineering team 
 
 One session becomes the **lead**. It sizes your request, picks a workflow and hands the pieces to **specialists**: a preparer for research, an architect, backend, frontend, database and devops coders, a test engineer, a security reviewer and a QA engineer. You decide what gets merged; the rest runs on its own.
 
-## What makes it different
+## Why developers use it
 
+- **You stay the reviewer, not the typist.** Hand over a fix or a feature and come back to work that was planned, built, tested and checked, with a report of what was done and what is still open. Nothing merges without you.
+- **Parallel work without a mess.** Each feature gets its own [git worktree](docs/concepts/worktrees.md) and each specialist its own fresh context, so two features, or two parts of one, are built at once without touching each other's files, and the lead's view stays small.
 - **Work lives in tasks, not in chat.** Every piece of work is a task with an owner, a brief and a status. Before a specialist starts, it says the brief back in its own words (a [teachback](docs/concepts/teachback.md)) and the lead checks it. When it finishes, it writes a report (a [HANDOFF](docs/concepts/handoff.md)) that the lead checks before it accepts the work. Corrections are written onto the task, so nothing gets lost in a scrollback.
 - **The right amount of process.** The lead scores each request for novelty, scope, uncertainty and risk. A small fix gets one specialist (`/repacted:comPACT`), a feature gets the full cycle of prepare, architect, code and test (`/repacted:orchestrate`), and a large or risky change gets a plan first (`/repacted:plan-mode`).
 - **A project plan that survives sessions.** If you allow it, the project's task log lives in your repository (`.repacted/tasks.jsonl`, with a readable `docs/progress.md`). Come back next week, run `/repacted:next`, and the lead knows what is done and what comes next.
@@ -14,7 +16,9 @@ One session becomes the **lead**. It sizes your request, picks a workflow and ha
 
 Also: blocked work gets triaged (`/repacted:imPACT`), finished work gets a review (`/repacted:peer-review`), progress can reach you on Telegram, [packs](#packs) add new domains (an n8n pack ships), and a [recipe](#run-compact-unattended-in-ci) runs comPACT unattended in CI up to a pull request.
 
-rePACTed is an independent fork of [PACT-Plugin](https://github.com/Synaptic-Labs-AI/PACT-Plugin) v4.8.1 by Synaptic Labs. It is not affiliated with or endorsed by Synaptic Labs. See [NOTICE](pact-plugin/NOTICE.md).
+## Built on PACT
+
+rePACTed stands on [PACT-Plugin](https://github.com/Synaptic-Labs-AI/PACT-Plugin) by Synaptic Labs. PACT gave it its core: the Prepare, Architect, Code, Test cycle and a lead that runs a team of specialists. rePACTed is an independent fork of PACT v4.8.1 that builds on that core with the project task log, the knowledge base, its secret and git guards, setup with `/repacted:init`, packs, team policy and the unattended CI recipe. It is not affiliated with or endorsed by Synaptic Labs. See [NOTICE](pact-plugin/NOTICE.md).
 
 ## Install
 
