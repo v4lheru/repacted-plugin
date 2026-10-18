@@ -269,7 +269,49 @@ Instead: ask the user to run, in their own terminal: python3 "<plugin>/bin/repac
 
 The files are written, not committed. Commit `.repacted/kb` when you are ready to share it.
 
-## 6. Transcripts and the session queue
+## 6. Share lessons with your team
+
+Promote shares a lesson with everyone who reads one repository. To share lessons across projects with your team, keep them in a git repository the team owns, and share them in two steps: **stage** puts reviewed lessons into your clone of that repository and commits them there; **push** checks every commit that would leave and sends them after you confirm. Nothing reaches the team until you push, from your own terminal.
+
+**Set it up once.** Clone the team repository and point the profile at the clone. The branch you push must have an upstream (run `git push -u` once yourself):
+
+```json
+{"team": {"repo": "~/src/team-kb"}}
+```
+
+Write the **team list**, `~/.config/repacted/team-denylist.txt` (or the file `team.denylist` names): one client, project or person name per line that must never reach the team repository. It is required, and stricter than your personal list: a lesson that names anything on either list is refused. Without the file, or with an empty one, stage and push refuse.
+
+**Stage.** Stage reads the same lessons as promote: only those a named decider accepted or edited, never the auto-accept bar. Start with a dry run; it writes nothing:
+
+```
+python3 "$R/bin/repact-distill" team stage --dry-run
+```
+
+The real run needs your own terminal. For each lesson you read the exact text and retype its id; Enter skips it. The confirmed lessons are written to `<clone>/lessons/<id>.md`, in the same format as a promoted file, and committed in the clone. Nothing is sent.
+
+```
+python3 "$R/bin/repact-distill" team stage --by <your name> --i-reviewed <your name>
+```
+
+**Push.** Push re-checks every commit between the branch's upstream and your HEAD. It refuses the whole push when any commit is a merge or does anything but add a `lessons/<id>.md` file, when a commit message holds a secret or a listed name, or when a lesson file is not exactly what you reviewed: a file edited after staging, a lesson whose KB decision changed, a file with no accepted decision in your KB, or a lesson that now names something on either list. See what would leave first:
+
+```
+python3 "$R/bin/repact-distill" team push --dry-run
+```
+
+Then, in your own terminal, push and retype the head commit's short id when asked:
+
+```
+python3 "$R/bin/repact-distill" team push --by <your name> --i-reviewed <your name>
+```
+
+- A remote that is not a local path needs `--i-reviewed <your name>`: the lessons reach everyone who can read it. Nothing about the remote is fetched or guessed.
+- A remote URL that carries a password or token is refused, with or without `--i-reviewed`. Use a credential helper or an SSH key instead.
+- Push sends exactly the commit it checked, to the upstream branch: no force, no tags, no submodules. Git may ask for your credentials.
+
+An agent may run both commands with `--dry-run`. Run without a terminal, the real commands refuse and name the command to run. The limits in [What the review gates do and do not stop](#what-the-review-gates-do-and-do-not-stop) apply here too: the check that a file is what you reviewed uses your KB's sealed decisions, which a process running as you can rewrite.
+
+## 7. Transcripts and the session queue
 
 With `"transcripts": true`, the SessionEnd hook writes the id of each ended lead session to a queue. It writes ids only: it never opens the transcript, starts no process and calls no model. The next run reads those sessions first. Check the queue:
 
@@ -387,6 +429,8 @@ Check your employer's policy on sending work content to a model provider before 
 | Session queue (ids only) | `~/.claude/plugins/data/repacted-repacted/distill/queue.txt` |
 | Seal key | `~/.claude/plugins/data/repacted-repacted/kb-gate.key` |
 | Promoted lessons | `<repo>/.repacted/kb/<id>.md` |
+| Team list | `~/.config/repacted/team-denylist.txt`, or where `team.denylist` points |
+| Team lessons | `<clone>/lessons/<id>.md` in the clone `team.repo` names |
 
 The distill folder is readable only by you (folders 0700, files 0600). `~/.claude` stands for your [config folder](glossary.md#config-folder). The distiller never reads its own output: the KB and the distill folder are skipped as sources, and notes that quote a distilled lesson are dropped.
 
