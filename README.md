@@ -18,7 +18,7 @@ From a shell, the same two steps are `claude plugin marketplace add v4lheru/repa
 **Pin a version.** `/plugin marketplace add` has no option for a tag. Clone a release tag (named `repacted--v<version>`) and add the folder instead:
 
 ```
-git clone --branch repacted--v1.7.2 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
+git clone --branch repacted--v2.0.0 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
 claude plugin marketplace add ~/repacted-plugin
 claude plugin install repacted@repacted
 ```
@@ -112,7 +112,23 @@ rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/repacted"     # lock files for CLA
 
 ## Build a knowledge base
 
-From 1.8.0, `repact-distill` turns notes the agents already wrote, and if you allow it your lead session transcripts, into proposed lessons for a folder you own. It is off by default (`distill.enabled`). A dry run shows what it would read and cost and sends nothing. It can send through `claude -p`, the Anthropic API or the Batch API. You or the lead review the proposals one at a time or 20 at a time, and you can promote accepted lessons into a repository for your team. Read the [knowledge base guide](docs/kb.md) first: it covers privacy, cost and what to check before you distill work sessions.
+From 2.0.0, `repact-distill` turns notes the agents already wrote, and if you allow it your lead session transcripts, into proposed lessons for a folder you own. It is off by default (`distill.enabled`). A dry run shows what it would read and cost and sends nothing. It can send through `claude -p`, the Anthropic API or the Batch API. You or the lead review the proposals one at a time or 20 at a time, and you can promote accepted lessons into a repository for your team. Read the [knowledge base guide](docs/kb.md) first: it covers privacy, cost and what to check before you distill work sessions.
+
+## Packs
+
+A pack is a second plugin in the same marketplace that adds skills and specialists. The first one adds n8n skills and a `pact-n8n` specialist for building workflows over the n8n REST API:
+
+```
+/plugin install repacted-n8n@repacted
+```
+
+## Run comPACT unattended in CI
+
+A recipe and a workflow template run `/repacted:comPACT` on a labelled issue in GitHub Actions and stop at a draft pull request that a person reviews. Read the [unattended CI recipe](pact-plugin/docs/recipes/unattended-ci.md) before the first run: it covers the setup, what holds the run back and what it costs.
+
+## Hook latency
+
+Hooks run on every tool call. On a recent Mac (Apple silicon, Python 3.14, 30 recorded runs) a Bash call adds about 250 ms at p50: the wall time of its two hook processes, Pre plus Post, from spawn to exit. `repact-report` prints p50 and p95 for each hook from your own sessions, and CI fails if a hook slows down past its budget.
 
 ## Contributing, security, license
 

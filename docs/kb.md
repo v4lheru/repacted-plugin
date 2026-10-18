@@ -1,6 +1,6 @@
 # Build your knowledge base
 
-rePACTed can turn what your agents learned into short lessons in a folder you own. A model reads the notes, proposes lessons, and you or the lead review each one before it lands. This page walks you through it, from a first dry run to sharing a lesson with your team. You need rePACTed 1.8.0 or newer.
+rePACTed can turn what your agents learned into short lessons in a folder you own. A model reads the notes, proposes lessons, and you or the lead review each one before it lands. This page walks you through it, from a first dry run to sharing a lesson with your team. You need rePACTed 2.0.0 or newer.
 
 **Off by default.** Nothing on this page sends anything anywhere until you turn it on. Read [Privacy](#privacy) and [Before you distill work sessions](#before-you-distill-work-sessions) first.
 

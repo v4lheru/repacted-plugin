@@ -228,6 +228,13 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 - **Why:** A listing that prints full command lines would also print any token passed as an argument to a running process, so only listings by pid and name are allowed.
 - **Way through:** List processes by name only, with `pgrep -x <name>` or `ps -axo pid=,etime=,comm=`.
 
+<a id="process-pty-wrap"></a>
+### `process.pty_wrap`
+
+- **Rule:** A command would run a KB step that only a human at a terminal may take (repact-distill promote, or vault-note drain/decide) inside a pseudo-terminal wrapper (script, expect, unbuffer, socat, a terminal multiplexer such as screen or tmux, or a pty spawn), so it was refused.
+- **Why:** These steps check for a person at an interactive terminal, and a wrapper would fake one. The rule matches the command text, so it is a brake on habit, not a boundary: a wrapper started from a script file evades it, and so does a multiplexer driven across two separate commands, or a terminal from ssh -tt, asciinema rec -c, osascript's do script or an editor's terminal.
+- **Way through:** Ask the user to run the step themselves in their own terminal; an agent may run `repact-distill promote --dry-run` to show what would be written.
+
 ## Approvals for hard-to-undo operations
 
 <a id="mg-merge-explicit"></a>
@@ -348,6 +355,59 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 - **Rule:** The authorization token could not be consumed.
 - **Why:** Merges, closes, force-pushes, deletes and pushes to main are hard to undo, so each one needs the user's approval for that exact command; a command that hides its shape cannot be bound to an approval.
 - **Way through:** Run repact-doctor, then ask the user to approve the command again.
+
+## Project specialists
+
+<a id="dispatch-gate-project-agent-shadows-plugin"></a>
+### `dispatch_gate.project_agent_shadows_plugin`
+
+- **Rule:** A project agent file under .claude/agents claims the name of a shipped specialist, and the host starts a project agent before a plugin agent of the same name, so the bare spawn was refused.
+- **Why:** A project's own agent files become a teammate's instructions and the host starts them before a shipped agent of the same name, so a file is spawned only when it is bound to the teammate protocol and can be told apart from every shipped agent.
+- **Way through:** Spawn the shipped agent by its plugin name (`repacted:pact-<role>`), or rename the project file's `name:` so it matches no shipped agent.
+
+<a id="dispatch-gate-project-agent-unbound"></a>
+### `dispatch_gate.project_agent_unbound`
+
+- **Rule:** The project agent file has no teammate binding (`Skill("repacted:teammate")` in its body, outside code blocks and comments), so it would not follow the teammate protocol and was refused.
+- **Why:** A project's own agent files become a teammate's instructions and the host starts them before a shipped agent of the same name, so a file is spawned only when it is bound to the teammate protocol and can be told apart from every shipped agent.
+- **Way through:** Add the binding line from templates/agent.md to the file's body, or scaffold the agent with `repact-agent new <role>`, then `repact-agent check <file>`.
+
+<a id="dispatch-gate-project-agent-invalid"></a>
+### `dispatch_gate.project_agent_invalid`
+
+- **Rule:** The project agent file is not a valid specialist (a symbolic link, over 64 KiB, not UTF-8, a name that is not a plain pact-&lt;role&gt; equal to the file name, or frontmatter outside the plain key: value form), so it was refused.
+- **Why:** A project's own agent files become a teammate's instructions and the host starts them before a shipped agent of the same name, so a file is spawned only when it is bound to the teammate protocol and can be told apart from every shipped agent.
+- **Way through:** Run `repact-agent check <file>` and fix what it names, or scaffold a fresh file with `repact-agent new <role>`.
+
+<a id="dispatch-gate-project-agent-ambiguous"></a>
+### `dispatch_gate.project_agent_ambiguous`
+
+- **Rule:** More than one project agent file can claim the spawned name (a duplicate, or a file whose name cannot be read with certainty), so which one the host starts is unknown and the spawn was refused.
+- **Why:** A project's own agent files become a teammate's instructions and the host starts them before a shipped agent of the same name, so a file is spawned only when it is bound to the teammate protocol and can be told apart from every shipped agent.
+- **Way through:** Keep one file defining the name under the project's .claude/agents directories; run `repact-agent check` to see what each file claims.
+
+<a id="dispatch-gate-project-agents-unreadable"></a>
+### `dispatch_gate.project_agents_unreadable`
+
+- **Rule:** The project's .claude/agents directories could not all be read (too deep, more than 200 files, or unreadable), so a file shadowing the spawned name cannot be ruled out and the bare spawn was refused.
+- **Why:** A project's own agent files become a teammate's instructions and the host starts them before a shipped agent of the same name, so a file is spawned only when it is bound to the teammate protocol and can be told apart from every shipped agent.
+- **Way through:** Spawn the shipped agent by its plugin name (`repacted:pact-<role>`), or trim the .claude/agents tree; `repact-agent check` names the cause.
+
+<a id="dispatch-gate-project-agents-disabled"></a>
+### `dispatch_gate.project_agents_disabled`
+
+- **Rule:** The team policy sets agents.project_scope to off, so specialists a project brings in .claude/agents are not spawned as teammates.
+- **Why:** A team policy can only tighten; the refusal names the policy file that set it.
+- **Way through:** Spawn a shipped specialist instead, or ask the policy's owner to change agents.project_scope in .repacted/policy.json.
+
+## Session spend
+
+<a id="dispatch-gate-session-cost-cap"></a>
+### `dispatch_gate.session_cost_cap`
+
+- **Rule:** The session's estimated spend (list API prices over its transcripts' token counts) is at or past its cost cap, so no new specialist is spawned.
+- **Why:** The cap is the lower of PACT_SESSION_COST_CAP_USD and the team policy's session.cost_cap_usd; the refusal names who set it.
+- **Way through:** Finish the work in the lead or in a new session, or raise or unset PACT_SESSION_COST_CAP_USD; a cap set in .repacted/policy.json changes only there.
 
 ## Notes, not refusals
 

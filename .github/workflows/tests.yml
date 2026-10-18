@@ -6,6 +6,7 @@
 #                     Python 3.9 (the declared floor in pyproject.toml) and 3.14, plus the
 #                     ruff import-hygiene lint.
 #     core-purity     the shipped purity scanner in public mode.
+#     hook-latency    each hook check's p95 on a fixed workload against a committed budget.
 #     plugin-validate `claude plugin validate --strict` on the plugin and the marketplace.
 #     clean-room      dev/clean-room/run.sh on ubuntu-latest and macos-latest (see CLEAN ROOM).
 #   Docs regeneration runs in docs.yml; the needs-import label in labeller.yml.
@@ -150,6 +151,23 @@ jobs:
         env:
           REPACT_PURITY_NO_DENYLIST: "1"
         run: python tests/contract/_purity.py --check
+
+  # The hook latency budget (tests/perf/hook_latency.py): the dispatcher on a fixed synthetic
+  # workload, each check's handler p95 against the committed baseline, normalised by a
+  # calibration loop timed in this job, failing only when a budget is missed in two trials.
+  # A script in its own process, outside the one test-runner invocation: a long test heap puts
+  # full-GC pauses inside timing windows. One cell only, ubuntu + 3.14, to keep it from
+  # flaking across runners. It needs no packages.
+  hook-latency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Hook latency budget
+        working-directory: pact-plugin
+        run: python tests/perf/hook_latency.py
 
   # `claude plugin validate` reads manifests only and needs no login or API key (checked with
   # an empty HOME and no credentials). The CLI version is pinned; --strict turns warnings into
