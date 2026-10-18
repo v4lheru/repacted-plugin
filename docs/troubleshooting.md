@@ -231,7 +231,7 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 <a id="process-pty-wrap"></a>
 ### `process.pty_wrap`
 
-- **Rule:** A command would run a KB step that only a human at a terminal may take (repact-distill promote, or vault-note drain/decide) inside a pseudo-terminal wrapper (script, expect, unbuffer, socat, a terminal multiplexer such as screen or tmux, or a pty spawn), so it was refused.
+- **Rule:** A command would run a KB step that only a human at a terminal may take (repact-distill promote, repact-distill team, vault-note drain/decide or kb-note drain/decide) inside a pseudo-terminal wrapper (script, expect, unbuffer, socat, a terminal multiplexer such as screen or tmux, or a pty spawn), so it was refused.
 - **Why:** These steps check for a person at an interactive terminal, and a wrapper would fake one. The rule matches the command text, so it is a brake on habit, not a boundary: a wrapper started from a script file evades it, and so does a multiplexer driven across two separate commands, or a terminal from ssh -tt, asciinema rec -c, osascript's do script or an editor's terminal.
 - **Way through:** Ask the user to run the step themselves in their own terminal; an agent may run `repact-distill promote --dry-run` to show what would be written.
 
