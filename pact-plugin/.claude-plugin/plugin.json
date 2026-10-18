@@ -1,7 +1,7 @@
 {
   "name": "repacted",
   "version": "2.0.0",
-  "description": "rePACTed: a compact orchestration harness for Claude Code, forked from PACT 4.8.1",
+  "description": "rePACTed: a lead agent that plans, builds, tests and reviews your work with a team of specialists, every step tracked as a task",
   "author": {
     "name": "Uros Pesic",
     "url": "https://github.com/v4lheru"

@@ -1,6 +1,6 @@
 # Quickstart
 
-In about ten minutes you install rePACTed, watch a [guard](glossary.md#guard) refuse a risky command, set it up, and start your first [team](glossary.md#team).
+In about ten minutes you install rePACTed, set it up, and hand your first piece of work to a [team](glossary.md#team): a lead that plans it and specialists that build, test and review it. On the way you see a [guard](glossary.md#guard), the safety net that runs in every session, refuse a risky command.
 
 You need the Claude Code CLI and Python 3.9 or newer. macOS is tested. Linux and WSL are expected to work.
 

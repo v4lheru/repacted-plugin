@@ -1,8 +1,20 @@
 # rePACTed
 
-rePACTed is a Claude Code plugin. It adds guards that stop leaked secrets and risky git acts in every session, and it lets one session lead a team of specialist agents.
+You describe the work. rePACTed turns Claude Code into a small engineering team that plans it, builds it, tests it and reviews it, and keeps every step on disk.
 
-It is an independent fork of [PACT-Plugin](https://github.com/Synaptic-Labs-AI/PACT-Plugin) v4.8.1 by Synaptic Labs. It is not affiliated with or endorsed by Synaptic Labs. See [NOTICE](pact-plugin/NOTICE.md).
+One session becomes the **lead**. It sizes your request, picks a workflow and hands the pieces to **specialists**: a preparer for research, an architect, backend, frontend, database and devops coders, a test engineer, a security reviewer and a QA engineer. You decide what gets merged; the rest runs on its own.
+
+## What makes it different
+
+- **Work lives in tasks, not in chat.** Every piece of work is a task with an owner, a brief and a status. Before a specialist starts, it says the brief back in its own words (a [teachback](docs/concepts/teachback.md)) and the lead checks it. When it finishes, it writes a report (a [HANDOFF](docs/concepts/handoff.md)) that the lead checks before it accepts the work. Corrections are written onto the task, so nothing gets lost in a scrollback.
+- **The right amount of process.** The lead scores each request for novelty, scope, uncertainty and risk. A small fix gets one specialist (`/repacted:comPACT`), a feature gets the full cycle of prepare, architect, code and test (`/repacted:orchestrate`), and a large or risky change gets a plan first (`/repacted:plan-mode`).
+- **A project plan that survives sessions.** If you allow it, the project's task log lives in your repository (`.repacted/tasks.jsonl`, with a readable `docs/progress.md`). Come back next week, run `/repacted:next`, and the lead knows what is done and what comes next.
+- **It remembers.** Decisions and lessons go into a memory the lead can query, and an optional [knowledge base](docs/kb.md) turns past sessions into reviewed lessons for you and your team.
+- **A safety net in every session.** [Guards](docs/concepts/guards.md) stop a leaked secret, a commit that holds a credential, and a force-push, merge or branch delete you did not approve. They work even without teams.
+
+Also: blocked work gets triaged (`/repacted:imPACT`), finished work gets a review (`/repacted:peer-review`), progress can reach you on Telegram, [packs](#packs) add new domains (an n8n pack ships), and a [recipe](#run-compact-unattended-in-ci) runs comPACT unattended in CI up to a pull request.
+
+rePACTed is an independent fork of [PACT-Plugin](https://github.com/Synaptic-Labs-AI/PACT-Plugin) v4.8.1 by Synaptic Labs. It is not affiliated with or endorsed by Synaptic Labs. See [NOTICE](pact-plugin/NOTICE.md).
 
 ## Install
 
@@ -24,24 +36,6 @@ claude plugin install repacted@repacted
 ```
 
 A folder marketplace runs the plugin from that folder. Keep the folder: if you move or delete it, the plugin breaks, and if you check out another tag in it, the version you run changes.
-
-## Try the guards
-
-Guards work in every session, with or without teams. Ask Claude:
-
-```
-Run cat .env
-```
-
-You do not need a real `.env` file. The `env_guard` hook refuses the command before it runs. Claude gets this line (trimmed in the middle):
-
-```
-env_guard: Blocked: this would print the contents of .env (a .env-class file) into the transcript; [...] → Pass the value to the command that needs it with `env-get FILE KEY -- <command>` (or `env-get --keys FILE` for the key names); do not print the file. [rule: env.read.operand]
-```
-
-Every refusal has this shape: what was refused and why, then `→` and what to do instead, then the rule id. Ask Claude to run `repact-explain` to see the last refusals again.
-
-Other guards stop a credential leaving your machine, a commit that holds a secret, and a force-push, merge or branch delete until you approve it. The [guards page](docs/concepts/guards.md) lists them all.
 
 ## Turn on teams
 
@@ -72,6 +66,24 @@ The [quickstart](docs/quickstart.md) walks through all of this in about ten minu
 ### If specialist agents will not spawn
 
 If every specialist spawn is refused for a missing task assignment, the session has no task tools. Init sets `CLAUDE_CODE_ENABLE_TODO_TOOLS="1"`, which turns them on; start a new session after it. The [troubleshooting page](docs/troubleshooting.md#if-specialist-agents-will-not-spawn) has the check and the full story.
+
+## Try the guards
+
+Guards work in every session, with or without teams. Ask Claude:
+
+```
+Run cat .env
+```
+
+You do not need a real `.env` file. The `env_guard` hook refuses the command before it runs. Claude gets this line (trimmed in the middle):
+
+```
+env_guard: Blocked: this would print the contents of .env (a .env-class file) into the transcript; [...] → Pass the value to the command that needs it with `env-get FILE KEY -- <command>` (or `env-get --keys FILE` for the key names); do not print the file. [rule: env.read.operand]
+```
+
+Every refusal has this shape: what was refused and why, then `→` and what to do instead, then the rule id. Ask Claude to run `repact-explain` to see the last refusals again.
+
+Other guards stop a credential leaving your machine, a commit that holds a secret, and a force-push, merge or branch delete until you approve it. The [guards page](docs/concepts/guards.md) lists them all.
 
 ## Requirements
 
