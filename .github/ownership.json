@@ -17,6 +17,7 @@
     "LICENSE",
     "UPSTREAM.json",
     "dev/**",
+    "packs/**",
     "pact-plugin/**",
     "pyproject.toml",
     "pyrightconfig.json",

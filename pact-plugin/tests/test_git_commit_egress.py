@@ -11,11 +11,13 @@ Used by: the plugin suite. The older compliance rules are in tests/test_git_comm
 """
 from __future__ import annotations
 
+import gc
 import io
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -198,6 +200,79 @@ class TestSharedScan:
         assert [path for path, _, _ in hits] == ["a.yml"]    # which secret class wins is the detector's
         assert all(kind in common.SECRET_ONLY_KINDS for _, kind, _ in hits)
         assert skipped == ["b.py"]
+
+    PW_FAKE = "Hx7#" + "kq92LmZ"                                  # a password-like value, fake
+    DSN_FAKE = "postgres://admin:" + "Hx7kq92LmZw" + "@db.example.com/x"   # fake
+    SECOND = "ghp_" + "Zq8wN3xRt6Yk2Hm5Jc9Vb4Lp7Df1Gs0Aa8Q"     # a second github-token shape, fake
+
+    @pytest.mark.parametrize("line", [
+        f"+A = '{FAKE}'; B = '{SECOND}'  # {PRAGMA}",
+        f"+A = '{FAKE}'  # {PRAGMA}  B = '{SECOND}'",
+        f"+password = '{PW_FAKE}'; token = '{FAKE}'  # {PRAGMA}",
+        f'+secret = "{PRAGMA} {FAKE}"',
+        f"+{PRAGMA} {FAKE} {SECOND}",
+    ], ids=["two-tokens", "second-after-the-pragma", "password-and-token", "pragma-inside-the-value",
+            "bare-pragma-two-tokens"])
+    def test_a_pragma_covers_one_value_so_a_second_secret_on_its_line_is_a_hit(self, line):
+        """Regression: the pragma skipped the whole added line, so a second real secret beside a
+        reviewed fixture value passed the commit check and the push scan."""
+        common = load("repact_common_scan", PLUGIN_ROOT / "bin" / "_repact_common.py")
+        hits, skipped = common.scan_added_lines("\n".join(["+++ b/f.py", "@@ -0,0 +1 @@", line]))
+        assert [(path, number) for path, _, number in hits] == [("f.py", 1)] and skipped == []
+
+    @pytest.mark.parametrize("line", [
+        f"+TOKEN = '{FAKE}'  # {PRAGMA}", f"+token: {FAKE}  # {PRAGMA}",
+        f"+export API_KEY={FAKE} # {PRAGMA}", f"+curl -H 'Authorization: Bearer {FAKE}' # {PRAGMA}",
+        f"+DSN = '{DSN_FAKE}'  # {PRAGMA}",
+        f'+x = "{PRAGMA}"; TOKEN = "{FAKE}"',
+    ], ids=["assignment", "yaml", "export", "bearer", "password-in-url", "pragma-in-another-string"])
+    def test_a_pragma_on_a_line_with_one_value_still_covers_it(self, line):
+        common = load("repact_common_scan", PLUGIN_ROOT / "bin" / "_repact_common.py")
+        hits, skipped = common.scan_added_lines("\n".join(["+++ b/f.py", "@@ -0,0 +1 @@", line]))
+        assert hits == [] and skipped == ["f.py"]
+
+    BEGIN = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"                # a key block's first line, fake
+
+    def test_a_pragma_never_covers_a_private_key_block(self):
+        """Regression: a pragma on a key block's first line hid the whole key from the commit check
+        and the push scan (its body lines match no class alone)."""
+        common = load("repact_common_scan", PLUGIN_ROOT / "bin" / "_repact_common.py")
+        patch = "\n".join(["+++ b/id_ed25519", "@@ -0,0 +1,3 @@", f"+{self.BEGIN}  # {PRAGMA}",
+                           "+b3BlbnNzaC1rZXktdjE", "+-----END " + "OPENSSH PRIVATE KEY-----"])
+        hits, skipped = common.scan_added_lines(patch)
+        assert [(path, number) for path, _, number in hits] == [("id_ed25519", 1)] and skipped == []
+
+    def test_a_headerless_hunk_line_takes_the_one_value_rule(self):
+        """Regression: an added line before any hunk header still used the any-pragma rule."""
+        common = load("repact_common_scan", PLUGIN_ROOT / "bin" / "_repact_common.py")
+        two = common.scan_added_lines("\n".join(["+++ b/f.py", f"+A = '{FAKE}'; B = '{self.SECOND}'  # {PRAGMA}"]))
+        one = common.scan_added_lines("\n".join(["+++ b/f.py", f"+A = '{FAKE}'  # {PRAGMA}"]))
+        assert [(path, number) for path, _, number in two[0]] == [("f.py", 0)] and two[1] == []
+        assert one == ([], ["f.py"])
+
+    def test_counting_the_values_on_a_long_pragma_line_is_not_quadratic(self):
+        """Regression: the value count compared every span with every other: 4000 values took
+        0.5 s and 40000 about 54 s, past the hooks' timeout (which denies)."""
+        load("repact_common_scan", PLUGIN_ROOT / "bin" / "_repact_common.py")
+        from shared.scrub import pragma_covers          # importable once _repact_common loaded
+        line = " ".join(f"{FAKE[:-5]}{i:05d}" for i in range(20000)) + f"  # {PRAGMA}"
+        gc.collect()
+        gc.disable()
+        try:
+            started = time.perf_counter()
+            covered = pragma_covers(line)
+            elapsed = time.perf_counter() - started
+        finally:
+            gc.enable()
+        assert covered is False and elapsed < 1
+
+    def test_the_commit_only_shapes_honour_the_same_one_value_rule(self):
+        check = load("git_commit_check_pragma", HOOK)
+        value = "sk_test_" + "a" * 50
+        covered = check.check_hardcoded_secrets({"config.py": [(1, f'k = "{value}"  # {PRAGMA}')]})
+        two = check.check_hardcoded_secrets({"config.py": [(1, f'k = "{value}"; j = "{value[:-1]}b"'
+                                                               f'  # {PRAGMA}')]})
+        assert covered == [] and two and "config.py" in two[0]
 
     def test_the_legacy_check_prints_no_value(self):
         check = load("git_commit_check_preview", HOOK)

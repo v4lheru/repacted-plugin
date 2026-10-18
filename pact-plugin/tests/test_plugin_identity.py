@@ -31,8 +31,18 @@ def test_plugin_name_is_the_manifest_name():
 
 
 def test_the_marketplace_distributes_the_plugin_under_its_name():
+    """Core comes first under the plugin name from ./pact-plugin; any further entry is a pack
+    (the public tree's n8n pack, U8.6) named <plugin>-<pack> from ./packs/<pack>, and its own
+    manifest carries that name."""
     marketplace = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-    assert [p["name"] for p in marketplace["plugins"]] == [PLUGIN_NAME]
+    core, *packs = marketplace["plugins"]
+    assert (core["name"], core["source"]) == (PLUGIN_NAME, "./pact-plugin")
+    for pack in packs:
+        folder = pack["source"].removeprefix("./packs/")
+        assert pack["source"] == "./packs/" + folder and folder and "/" not in folder, pack["source"]
+        assert pack["name"] == f"{PLUGIN_NAME}-{folder}"
+        manifest = REPO_ROOT / "packs" / folder / ".claude-plugin" / "plugin.json"
+        assert json.loads(manifest.read_text(encoding="utf-8"))["name"] == pack["name"]
 
 
 def test_the_namespace_is_the_plugin_name_and_a_colon():

@@ -172,7 +172,8 @@ REGISTRY: dict[str, tuple[Check, ...]] = {
     "SubagentStop": (_hook("validate_handoff"),),
     "Stop": (_hook("stop_background_gate"),),
     "SubagentStart": (_hook("peer_inject"),),
-    "SessionEnd": (_hook("session_ledger"),),
+    "SessionEnd": (_hook("session_ledger"),
+                   Check(name="distill_enqueue", native="distill_enqueue:dispatch_check")),
     "TaskCompleted": (_hook("agent_handoff_emitter"),),
     "TeammateIdle": (_hook("teammate_idle"),),
     "PostToolUse": (

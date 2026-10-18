@@ -7,24 +7,59 @@ and double wakes, lead->teammate delivery delays, rejections by cause, the amend
 log, process-table guard denials, task-list reminders, UNFLAGGED alarms, the write-time checks' returns,
 repeats, notes and noted writes per check, and the context cost from the session dir: bytes the
 hooks injected (context-cost.json, top 5 checks) and bytes of teachback and handoff writes
-per agent (metadata_write journal rows);
+per agent (metadata_write journal rows), and the hook latency: p50 and p95 per event, overall
+and for the five slowest checks (hook-latency.ndjson, written by hooks/dispatch.py);
 --cost-all sums every session of the project. Definitions follow
 the design notes section 1 (see bin/_transcripts.py). Counts only.
 
+--since 7d (or 12h, 30m, 2w, or an ISO date or time) counts across every session of the
+project in the window instead: sessions, refusals by rule id, teammates dispatched,
+teachbacks, handoffs, tasks accepted and rejected, compactions and the summed session-ledger
+numbers (bin/_report_since.py). --all-projects widens it to every project, --project NAME
+picks one. With --json it prints the same counts under the schema documented in
+reference/since-counts.md.
+
 Usage: repact-report [--transcript PATH | --session ID] [--team NAME] [--until ISO] [--cost-all] [--json]
+       repact-report --since WINDOW [--until ISO] [--project NAME | --all-projects] [--json]
 Exit codes: 0 printed; 2 usage error; 3 no session transcript found.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))   # bin -> shared, the allowed direction
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shared import transcripts as tr  # noqa: E402
 
-EXAMPLE = "repact-report --json --until 2026-09-26T22:15:00Z"
+EXAMPLE = "repact-report --json --until 2026-09-26T22:15:00Z; repact-report --since 7d --json"
+SESSION_ONLY = ("transcript", "session", "team", "cost_all")
+
+
+def current_project() -> str:
+    """The pact-sessions folder name of this project: the resolved basename of
+    $CLAUDE_PROJECT_DIR, else of the cwd (the rule of shared.pact_context.project_slug)."""
+    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()).resolve().name
+
+
+def since_report(args, parser, until) -> int:
+    import _report_since as rs
+
+    used = [f"--{name.replace('_', '-')}" for name in SESSION_ONLY if getattr(args, name)]
+    if used:
+        parser.error(f"--since counts across sessions; it does not take {', '.join(used)}")
+    if args.project and args.all_projects:
+        parser.error("--project and --all-projects name two scopes")
+    since = rs.since_window(args.since)
+    if since is None:
+        parser.error(f"--since is not a window (7d, 12h, 30m, 2w) or an ISO date: {args.since!r}")
+    projects = None if args.all_projects else [args.project or current_project()]
+    report = rs.build(since, until=until, projects=projects)
+    print(json.dumps(report, indent=1, sort_keys=True) if args.json else "\n".join(rs.render(report)))
+    return 0
 
 
 def main(argv=None) -> int:
@@ -35,12 +70,19 @@ def main(argv=None) -> int:
     parser.add_argument("--team", help="the team name (default: from the teammates' metadata)")
     parser.add_argument("--until", help="replay: read only entries at or before this ISO time")
     parser.add_argument("--cost-all", action="store_true",
-                        help="context cost over every session journal of the project, not just this one")
+                        help="context cost and hook latency over every session of the project, not just this one")
+    parser.add_argument("--since", help="counts across sessions since a window (7d, 12h, 30m, 2w) or an ISO date")
+    parser.add_argument("--project", help="with --since: the project folder name (default: this project)")
+    parser.add_argument("--all-projects", action="store_true", help="with --since: every project")
     parser.add_argument("--json", action="store_true", help="machine output")
     args = parser.parse_args(argv)
     until = tr.parse_ts(args.until) if args.until else None
     if args.until and until is None:
         parser.error(f"--until is not an ISO time: {args.until!r}")
+    if args.since is not None:
+        return since_report(args, parser, until)
+    if args.project or args.all_projects:
+        parser.error("--project and --all-projects go with --since")
     lead = tr.find_lead_transcript(args.transcript, args.session)
     if lead is None:
         print("repact-report: no session transcript found (give --transcript or --session)", file=sys.stderr)

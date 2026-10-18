@@ -5,7 +5,11 @@ Summary: PreToolUse(Bash) hook. Denies a process-table read that prints command 
          (pgrep -f/-a, ps with no -o list or with a command column, pstree, top -c, a read
          of /proc/<pid>/cmdline or environ, sysctl kern.procargs*), because a token passed as an argument to any running process
          then lands in the transcript. The deny message names the safe form, so the
-         caller repairs in the same turn.
+         caller repairs in the same turn. A second rule (process.pty_wrap) denies a command
+         that wraps a human-only KB step (`repact-distill promote`, `repact-distill team`,
+         `vault-note drain/decide` or `kb-note drain/decide`) in a pseudo-terminal (script, expect, unbuffer, socat, a
+         terminal multiplexer such as screen or tmux, a pty spawn), since that would pass the
+         step's terminal check with no human at it.
 Used by: hooks.json PreToolUse entry (matcher "Bash"), registered by EVENTS
          (the design notes section D1). Tested by
          tests/test_process_table_guard.py.
@@ -33,7 +37,7 @@ import json
 import sys
 
 from shell_words import (HEREDOC_MARK, PREFIX_WORDS, Unreadable, quoted_words, read_script,
-                         segments, strip_prefix, tokens)
+                         runner_prefix, segments, strip_prefix, token_spans, tokens)
 
 _ALLOW_OUTPUT = json.dumps({"suppressOutput": True})
 RULE_ID = "process.listing"     # hooks/shared/rules.py holds its sentence and way through
@@ -41,6 +45,138 @@ DENY_MESSAGE = (
     "Process listings that print command lines can expose tokens passed as arguments. "
     f"Use `pgrep -x <name>` or `ps -axo pid=,comm=`. [rule: {RULE_ID}]"
 )
+PTY_RULE_ID = "process.pty_wrap"
+PTY_DENY_MESSAGE = (
+    "A pseudo-terminal wrapper around a KB step that only a human at a terminal may take would "
+    "pass its terminal check with no human there. Ask the user to run the step in their own "
+    f"terminal (an agent may run `repact-distill promote --dry-run`). [rule: {PTY_RULE_ID}]"
+)
+# The wrapper must be a command (script, expect, unbuffer, socat, ... in command position, after any
+# runner words such as sudo or nice), or a pty spawn in an interpreter string; the human step may
+# be anywhere in the command (an expect -c body or a heredoc is where it hides). A terminal
+# multiplexer (screen, tmux, ...) counts in any form, `tmux ls` included: send-keys or -X stuff
+# types into a pty it already holds. A brake on habit, not a boundary, like the listing rule: a
+# wrapper started from a script file or a name the shell assembles evades it, and so does a
+# multiplexer driven across two separate commands, or a terminal from ssh -tt, asciinema rec -c,
+# osascript's do script or an editor's terminal (Rule.why in hooks/shared/rules.py says so).
+# The step is its program's basename and its verb, each a whole word, in any case (APFS opens
+# Vault-Note for vault-note). The forms that never prompt for or record a decision are allowed:
+# promote or team (stage and push) with --dry-run in the same simple command (bin/_distill/promote.py
+# run and bin/_distill/team.py: no gate, and they return before writing or sending), and a drain with no deciding option anywhere after it, which is the
+# list form and --blind-brief (bin/_kb/drain.py cmd_drain). Options are matched as argparse
+# reads them, so an abbreviation (--decid, --acc) counts as the option it abbreviates.
+_HUMAN_STEPS = (("repact-distill", ("promote", "team")), ("vault-note", ("drain", "decide")),
+                ("kb-note", ("drain", "decide")))
+_DRAIN_DECIDING = ("--decide", "--decisions", "--accept-all", "--batch", "--page")
+_SIMPLE_COMMAND_END = ";&|\n()`"
+_REDIRECTS = "<>"
+PTY_WRAPPERS = frozenset({"script", "expect", "unbuffer", "socat", "zpty", "faketty", "empty",
+                          "screen", "tmux", "byobu", "zellij", "dtach", "abduco"})
+# A pty spawn inside an interpreter string, matched lower-cased with the whitespace removed
+# (python pty/posix/pexpect and a dynamic import of pty, perl IO::Pty and IO::Tty, ruby PTY,
+# node-pty).
+# `openpty` and `forkpty` bare (from os import openpty), `pty.spawn` with no paren (ruby
+# PTY.spawn "cmd").
+_PTY_SPAWNS = ("pty.spawn", "pty.fork(", "openpty", "forkpty", "importpty",
+               "importpexpect", "importptyprocess", "frompty", "frompexpect", "fromptyprocess",
+               "import__('pty", 'import__("pty',
+               "import_module('pty", 'import_module("pty', "io::pty", "io::tty", "node-pty")
+
+
+def _is_word_char(char: str) -> bool:
+    return char.isalnum() or char in "_-"
+
+
+def _whole_words(text: str, word: str) -> list[int]:
+    """The end offset of each place `word` stands in `text` as a whole word: no letter, digit,
+    `_` or `-` on either side (kb-notes and --decide are not kb-note and decide)."""
+    ends, at = [], text.find(word)
+    while at >= 0:
+        end = at + len(word)
+        if (at == 0 or not _is_word_char(text[at - 1])) \
+                and (end == len(text) or not _is_word_char(text[end])):
+            ends.append(end)
+        at = text.find(word, at + 1)
+    return ends
+
+
+def _options(text: str) -> list[str]:
+    """Each `--name` option word in `text`, cut at `=` and at the first non-word character."""
+    found = []
+    for word in text.split():
+        word = word.strip("'\"")
+        if word.startswith("--") and len(word) > 2:
+            name = word.split("=", 1)[0]
+            cut = next((i for i, char in enumerate(name[2:], 2) if not _is_word_char(char)), None)
+            found.append(name[:cut])
+    return found
+
+
+def _shell_words(text: str) -> list[str]:
+    """The words the shell passes for `text`, up to a `#` comment (--dry-run
+    inside a quoted value or a comment is not a dry run). A redirection operator and the word
+    after it are not passed (`> --dry-run` names a file). [] when the quoting
+    cannot be read, so the step stays refused."""
+    words, target = [], False
+    for start, _end, word in token_spans(text, _REDIRECTS) or ():
+        if text[start] in _REDIRECTS:           # an unquoted operator: its next word is a target
+            target = True
+        elif text[start] == "#":
+            break
+        elif target:
+            target = False
+        else:
+            words.append(word)
+    return words
+
+
+def _agent_allowed(verb: str, after: str) -> bool:
+    """True when this run of the step can never prompt for or record a decision (see above).
+    `after` is the lower-cased command text after the verb."""
+    if verb in ("promote", "team"):
+        cut = next((i for i, char in enumerate(after) if char in _SIMPLE_COMMAND_END), len(after))
+        return "--dry-run" in _shell_words(after[:cut])
+    if verb == "drain":
+        return not any(flag.startswith(option) for option in _options(after)
+                       for flag in _DRAIN_DECIDING)
+    return False
+
+
+def _names_human_step(command: str) -> bool:
+    text = command.lower()
+    for program, verbs in _HUMAN_STEPS:
+        for end in _whole_words(text, program):
+            rest = text[end:]
+            for verb in verbs:
+                named = _whole_words(rest, verb)
+                if named and not _agent_allowed(verb, rest[named[0]:]):
+                    return True
+    return False
+
+
+def _command_word(word: str) -> str:
+    """A word's program name as the shell finds it: quotes and the directory dropped, lower case
+    (a case-insensitive file system runs /usr/bin/TMUX)."""
+    return word.strip("'\"").rsplit("/", 1)[-1].lower()
+
+
+def _runs_pty_wrapper(command: str) -> bool:
+    squeezed = "".join(command.split()).lower()
+    if any(spawn in squeezed for spawn in _PTY_SPAWNS):
+        return True
+    for words in segments(command):
+        # A runner given by path (/usr/bin/env tmux) is still a runner.
+        words = [_command_word(word) if _command_word(word) in PREFIX_WORDS else word
+                 for word in words]
+        index, _ = runner_prefix(words, keep=PTY_WRAPPERS)
+        if index < len(words) and _command_word(words[index]) in PTY_WRAPPERS:
+            return True
+    return False
+
+
+def wraps_human_gate(command: str) -> bool:
+    """True when a command names a human-only KB step and runs a pseudo-terminal wrapper."""
+    return _names_human_step(command) and _runs_pty_wrapper(command)
 
 # ps -o keywords that print no command line. Anything else is denied (allowlist).
 PS_SAFE_KEYWORDS = frozenset({
@@ -359,12 +495,16 @@ def decide(payload: dict) -> dict | None:
         return None
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str) or not command_is_listing(command):
+    if not isinstance(command, str):
+        return None
+    reason = DENY_MESSAGE if command_is_listing(command) else \
+        PTY_DENY_MESSAGE if wraps_human_gate(command) else None
+    if reason is None:
         return None
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
-        "permissionDecisionReason": DENY_MESSAGE,
+        "permissionDecisionReason": reason,
     }}
 
 
@@ -382,7 +522,7 @@ def main() -> int:
         print(_ALLOW_OUTPUT)
         return 0
     print(json.dumps(output))
-    print(DENY_MESSAGE, file=sys.stderr)
+    print(output["hookSpecificOutput"]["permissionDecisionReason"], file=sys.stderr)
     return 2
 
 

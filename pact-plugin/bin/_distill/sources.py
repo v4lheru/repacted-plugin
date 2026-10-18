@@ -16,6 +16,7 @@ segment, a line starting with `---` is indented so only real segment headers car
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import re
@@ -56,6 +57,7 @@ class Segment:
     project: str
     session: str
     text: str
+    score: int = 0       # segment.pre_score for a transcript turn; 0 for every lite source
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class Chunk:
     segments: int
     newest_ts: str
     priority: int
+    score: int = 0       # the best segment's pre-score: orders chunks of the same priority
 
     @property
     def size(self) -> int:
@@ -184,8 +187,7 @@ def filter_feedback(segment: Segment) -> tuple:
         return segment, None
     if not text.strip():
         return None, FEEDBACK_RECALLED
-    return Segment(segment.kind, segment.ref, segment.ts, segment.project, segment.session,
-                   text.strip()), FEEDBACK_RECALLED
+    return dataclasses.replace(segment, text=text.strip()), FEEDBACK_RECALLED
 
 
 def valid_unicode(segment: Segment) -> bool:
@@ -235,12 +237,14 @@ def _make_chunk(group: list) -> Chunk:
     first, last = group[0], group[-1]
     return Chunk(chunk_key(first.kind, first.ref, last.ref, view), first.kind, first.session,
                  first.project, first.ref, last.ref, view, text, len(group),
-                 max(seg.ts for seg in group), D.PRIORITY[first.kind])
+                 max(seg.ts for seg in group), D.PRIORITY[first.kind],
+                 max(seg.score for seg in group))
 
 
 def build_chunks(segments: list, max_bytes: int) -> list:
     """Pack segments of the same (kind, session) into chunks of at most `max_bytes` (a single
-    larger segment stays whole in its own chunk). Order: priority, then newest first."""
+    larger segment stays whole in its own chunk). Order: priority, then the best pre-score,
+    then newest first (lite segments all score 0, so their order is priority, then newest)."""
     groups: dict = {}
     for seg in segments:
         groups.setdefault((seg.kind, seg.session), []).append(seg)
@@ -257,5 +261,5 @@ def build_chunks(segments: list, max_bytes: int) -> list:
         if current:
             chunks.append(_make_chunk(current))
     chunks.sort(key=lambda c: c.newest_ts, reverse=True)
-    chunks.sort(key=lambda c: c.priority)
+    chunks.sort(key=lambda c: (c.priority, -c.score))
     return chunks

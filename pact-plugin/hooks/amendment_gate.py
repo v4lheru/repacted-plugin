@@ -381,8 +381,19 @@ def note(ev, team: str, task_id: str, findings: dict, update_metadata: dict) -> 
 
 
 def run(payload: dict) -> tuple[str | None, str | None]:
-    """(deny reason, note) for one payload; (None, None) allows silently. The rejection shape
-    is checked first, on the tool input alone, so no early return below is a way past it."""
+    """(deny reason, note) for one payload; (None, None) allows silently. A deny names the team
+    policy when the policy raised one of this gate's modes (shared.team_policy.refusal_note)."""
+    reason, note = _run(payload)
+    if reason:
+        from shared.team_policy import refusal_note
+        reason += refusal_note((f"modes.{MODE_KEY}", f"modes.{REF_MODE_KEY}",
+                                f"modes.{SHAPE_MODE_KEY}"))
+    return reason, note
+
+
+def _run(payload: dict) -> tuple[str | None, str | None]:
+    """The rejection shape is checked first, on the tool input alone, so no early return below
+    is a way past it."""
     if payload.get("tool_name") != "TaskUpdate":
         return None, None
     tool_input = payload.get("tool_input")

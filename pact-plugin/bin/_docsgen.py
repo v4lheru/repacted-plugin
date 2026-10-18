@@ -88,6 +88,13 @@ FAMILIES: Tuple[Tuple[str, str, str], ...] = (
      "Merges, closes, force-pushes, deletes and pushes to main are hard to undo, so each one "
      "needs the user's approval for that exact command; a command that hides its shape "
      "cannot be bound to an approval."),
+    ("agents", "Project specialists",
+     "A project's own agent files become a teammate's instructions and the host starts them "
+     "before a shipped agent of the same name, so a file is spawned only when it is bound to "
+     "the teammate protocol and can be told apart from every shipped agent."),
+    ("budget", "Session spend",
+     "A session can carry a cost cap; past it no new specialist is spawned, so the spend of a "
+     "session stays within what its user or team set."),
     ("inert", "Notes, not refusals",
      "The merge guard records why it read this text as data on an allowed command; nothing "
      "was refused."),
@@ -149,7 +156,8 @@ def rule_family(rule_id: str) -> str:
     if rule_id.startswith("mg.inert."):
         return "inert"
     for prefix, family in (("env.", "env"), ("process.", "process"), ("mg.", "mg"),
-                           ("dispatch.", "session")):
+                           ("dispatch.", "session"), ("dispatch_gate.project_", "agents"),
+                           ("dispatch_gate.session_cost", "budget")):
         if rule_id.startswith(prefix):
             return family
     if rule_id == "team_config_absent":
@@ -216,6 +224,10 @@ def render_config(tree: ShippedTree) -> Dict[str, str]:
         if row["type"] == "bool":
             default = "`1` (on)" if row["default"] else "`0` (off)"
             values = "`1`, `true`, `yes` or `on` turn it on; anything else is off"
+        elif row["type"] == "usd":
+            default = "unset (no cap)"
+            values = (f"a plain number of US dollars above 0, at most {config.USD_MAX:,}; "
+                      "anything else is ignored and noted")
         else:
             default = f"`{row['default']}`"
             values = ", ".join(f"`{v}`" for v in row["allowed"])
@@ -268,7 +280,7 @@ def render_troubleshooting(tree: ShippedTree) -> Dict[str, str]:
         for rule_id, rule in by_family[key]:
             blocks.append(f'<a id="{rules.anchor(rule_id)}"></a>\n### `{rule_id}`\n\n'
                           f"- **Rule:** {_prose(rule.explain)}\n"
-                          f"- **Why:** {why}\n"
+                          f"- **Why:** {_prose(getattr(rule, 'why', '') or why)}\n"
                           f"- **Way through:** {_prose(rule.instead)}")
     return {"troubleshooting": "\n\n".join(blocks)}
 

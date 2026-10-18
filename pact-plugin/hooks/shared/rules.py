@@ -43,6 +43,7 @@ class Rule:
     explain: str   # one sentence, present tense, names what happened and why it was refused
     doc: str       # `<page>#<anchor>` the user can open
     instead: str   # one plain sentence: what to do instead (the way through)
+    why: str = ""  # troubleshooting's Why line when the rule's family reason does not fit it
 
 
 def _timeout(check: str, what: str, seconds: int) -> Rule:
@@ -88,6 +89,64 @@ RULES: dict[str, Rule] = {
         instead=("Put the whole mission in the spawn prompt and ask for the HANDOFF as the "
                  "agent's final message; after a resume, run /repacted:bootstrap first."),
     ),
+    # dispatch_gate project-agent refusals (hooks/dispatch_gate.py PROJECT_AGENT*_RULE)
+    "dispatch_gate.project_agent_shadows_plugin": Rule(
+        explain=("A project agent file under .claude/agents claims the name of a shipped "
+                 "specialist, and the host starts a project agent before a plugin agent of "
+                 "the same name, so the bare spawn was refused."),
+        doc=f"{REFUSALS_DOC}#dispatch-gate-project-agent-shadows-plugin",
+        instead=("Spawn the shipped agent by its plugin name (`repacted:pact-<role>`), or "
+                 "rename the project file's `name:` so it matches no shipped agent."),
+    ),
+    "dispatch_gate.project_agent_unbound": Rule(
+        explain=("The project agent file has no teammate binding (`Skill(\"repacted:teammate\")` "
+                 "in its body, outside code blocks and comments), so it would not follow the "
+                 "teammate protocol and was refused."),
+        doc=f"{REFUSALS_DOC}#dispatch-gate-project-agent-unbound",
+        instead=("Add the binding line from templates/agent.md to the file's body, or scaffold "
+                 "the agent with `repact-agent new <role>`, then `repact-agent check <file>`."),
+    ),
+    "dispatch_gate.project_agent_invalid": Rule(
+        explain=("The project agent file is not a valid specialist (a symbolic link, over "
+                 "64 KiB, not UTF-8, a name that is not a plain pact-<role> equal to the file "
+                 "name, or frontmatter outside the plain key: value form), so it was refused."),
+        doc=f"{REFUSALS_DOC}#dispatch-gate-project-agent-invalid",
+        instead=("Run `repact-agent check <file>` and fix what it names, or scaffold a fresh "
+                 "file with `repact-agent new <role>`."),
+    ),
+    "dispatch_gate.project_agent_ambiguous": Rule(
+        explain=("More than one project agent file can claim the spawned name (a duplicate, "
+                 "or a file whose name cannot be read with certainty), so which one the host "
+                 "starts is unknown and the spawn was refused."),
+        doc=f"{REFUSALS_DOC}#dispatch-gate-project-agent-ambiguous",
+        instead=("Keep one file defining the name under the project's .claude/agents "
+                 "directories; run `repact-agent check` to see what each file claims."),
+    ),
+    "dispatch_gate.project_agents_unreadable": Rule(
+        explain=("The project's .claude/agents directories could not all be read (too deep, "
+                 "more than 200 files, or unreadable), so a file shadowing the spawned name "
+                 "cannot be ruled out and the bare spawn was refused."),
+        doc=f"{REFUSALS_DOC}#dispatch-gate-project-agents-unreadable",
+        instead=("Spawn the shipped agent by its plugin name (`repacted:pact-<role>`), or "
+                 "trim the .claude/agents tree; `repact-agent check` names the cause."),
+    ),
+    "dispatch_gate.project_agents_disabled": Rule(
+        explain=("The team policy sets agents.project_scope to off, so specialists a project "
+                 "brings in .claude/agents are not spawned as teammates."),
+        doc=f"{REFUSALS_DOC}#dispatch-gate-project-agents-disabled",
+        instead=("Spawn a shipped specialist instead, or ask the policy's owner to change "
+                 "agents.project_scope in .repacted/policy.json."),
+        why="A team policy can only tighten; the refusal names the policy file that set it.",
+    ),
+    "dispatch_gate.session_cost_cap": Rule(
+        explain=("The session's estimated spend (list API prices over its transcripts' token "
+                 "counts) is at or past its cost cap, so no new specialist is spawned."),
+        doc=f"{REFUSALS_DOC}#dispatch-gate-session-cost-cap",
+        instead=("Finish the work in the lead or in a new session, or raise or unset "
+                 "PACT_SESSION_COST_CAP_USD; a cap set in .repacted/policy.json changes only there."),
+        why=("The cap is the lower of PACT_SESSION_COST_CAP_USD and the team policy's "
+             "session.cost_cap_usd; the refusal names who set it."),
+    ),
     # process_table_guard (hooks/process_table_guard.py RULE_ID)
     "process.listing": Rule(
         explain=("A command would list processes with their full command lines (ps, pgrep -f, "
@@ -95,6 +154,22 @@ RULES: dict[str, Rule] = {
         doc=f"{REFUSALS_DOC}#process-listing",
         instead=("List processes by name only, with `pgrep -x <name>` or "
                  "`ps -axo pid=,etime=,comm=`."),
+    ),
+    # process_table_guard (hooks/process_table_guard.py PTY_RULE_ID)
+    "process.pty_wrap": Rule(
+        explain=("A command would run a KB step that only a human at a terminal may take "
+                 "(repact-distill promote, repact-distill team, vault-note drain/decide or "
+                 "kb-note drain/decide) inside a pseudo-terminal wrapper (script, expect, "
+                 "unbuffer, socat, a terminal multiplexer such as screen or tmux, or a pty "
+                 "spawn), so it was refused."),
+        doc=f"{REFUSALS_DOC}#process-pty-wrap",
+        instead=("Ask the user to run the step themselves in their own terminal; an agent may run "
+                 "`repact-distill promote --dry-run` to show what would be written."),
+        why=("These steps check for a person at an interactive terminal, and a wrapper would fake "
+             "one. The rule matches the command text, so it is a brake on habit, not a boundary: "
+             "a wrapper started from a script file evades it, and so does a multiplexer driven "
+             "across two separate commands, or a terminal from ssh -tt, asciinema rec -c, "
+             "osascript's do script or an editor's terminal."),
     ),
 }
 

@@ -411,6 +411,66 @@ class TestRevTypeDeny:
             assert _run_main(monkeypatch, capsys, frame) == (0, gate._SUPPRESS_OUTPUT + "\n"), frame[:40]
 
 
+class TestEscapedHandoffKey:
+    """Regression: a handoff key spelled with \\u escapes in metadata that cannot be parsed failed open."""
+
+    BROKEN = ', "x": [1,}'
+    ESCAPED_KEYS = ["\\u0068andoff", "\\u0068\\u0061\\u006e\\u0064\\u006f\\u0066\\u0066",
+                    "h\\u0061ndo\\u0066f", "hand\\u006Fff", "handof\\u0066"]
+
+    @pytest.mark.parametrize("key", ESCAPED_KEYS)
+    @pytest.mark.parametrize("rest", ['{"rev": 1}' + BROKEN, '{"rev": "one"', '{"rev": 1, "n": NaN}}',
+                                      '{"rev": 1, "n": [1e999]}}'],
+                             ids=["broken-tail", "truncated", "nan-nested", "overflowed-float"])
+    def test_an_escaped_key_in_string_metadata_that_cannot_be_parsed_is_returned(
+            self, key, rest, monkeypatch, capsys):
+        metadata = '{"note": "a", "%s": %s' % (key, rest)
+        with pytest.raises(ValueError):
+            gate._metadata_object(metadata)
+        frame = {"tool_name": "TaskUpdate", "tool_input": {"taskId": "42", "metadata": metadata}}
+        code, out = _run_main(monkeypatch, capsys, json.dumps(frame))
+        assert code == 2 and "must be an object with an integer rev" in out
+
+    @pytest.mark.parametrize("metadata", [
+        '{"\\ud800andoff": {"rev": "x"}' + BROKEN, '{"\\u0000handoff": {"rev": "x"}' + BROKEN,
+        '{"\\u0068ando', '{"Handoff": {"rev": "x"}' + BROKEN, '{"handoff\\u0000": {"rev": "x"}' + BROKEN,
+        '{"t": "quotes \\"\\u0068andoff\\": {} only"' + BROKEN,
+        '{"t": "\\u0022handoff\\u0022: {}"' + BROKEN,
+    ], ids=["lone-surrogate", "nul-prefix", "truncated-key", "other-case", "nul-suffix",
+            "escaped-quote-text", "escaped-quote-char"])
+    def test_a_string_that_does_not_spell_the_key_still_passes(self, metadata, monkeypatch, capsys):
+        assert gate._metadata_object(metadata) is None
+        frame = {"tool_name": "TaskUpdate", "tool_input": {"taskId": "42", "metadata": metadata}}
+        assert _run_main(monkeypatch, capsys, json.dumps(frame)) == (0, gate._SUPPRESS_OUTPUT + "\n")
+
+    def test_a_duplicate_key_is_judged_by_the_last_copy_as_the_host_reads_it(self, monkeypatch, capsys):
+        metadata = '{"handoff": {"rev": 1}, "\\u0068andoff": {"rev": "one"}}'
+        frame = {"tool_name": "TaskUpdate", "tool_input": {"taskId": "42", "metadata": metadata}}
+        code, out = _run_main(monkeypatch, capsys, json.dumps(frame))
+        assert code == 2 and "must be a positive integer" in out
+
+    OVER_THE_READ_CAP = "P" * (9 * 1024 * 1024)
+
+    @pytest.mark.parametrize("key", ESCAPED_KEYS)
+    @pytest.mark.parametrize("tail", ["", ', "pad": "' + OVER_THE_READ_CAP], ids=["cut", "over-the-read-cap"])
+    def test_a_cut_frame_whose_string_metadata_escapes_the_key_is_returned(
+            self, key, tail, monkeypatch, capsys):
+        metadata = '{"%s": {"rev": "one", "produced": ["x"]}%s}' % (key, tail)
+        frame = json.dumps({"tool_name": "TaskUpdate", "tool_input": {"taskId": "42", "metadata": metadata}})
+        code, out = _run_main(monkeypatch, capsys, frame[:-9])
+        assert code == 2, out[:200]
+        assert "must be an object with an integer rev" in out
+
+    @pytest.mark.parametrize("metadata", [
+        '{"t": "quotes \\"\\u0068andoff\\": {} only"}', '{"\\ud800andoff": {"rev": "x"}}',
+        '{"\\u0068andoff": null, "pad": "abcdefghijkl"}',
+    ], ids=["escaped-quote-text", "lone-surrogate", "null-handoff"])
+    def test_a_cut_frame_whose_string_metadata_does_not_open_the_key_passes(
+            self, metadata, monkeypatch, capsys):
+        frame = json.dumps({"tool_name": "TaskUpdate", "tool_input": {"taskId": "42", "metadata": metadata}})
+        assert _run_main(monkeypatch, capsys, frame[:-9]) == (0, gate._SUPPRESS_OUTPUT + "\n")
+
+
 # =============================================================================
 # Teammate-side text
 # =============================================================================

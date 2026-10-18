@@ -273,16 +273,21 @@ def evaluated(cls: str, ctx: Context) -> bool:
 
 
 # D28: the user chose their own name as the core's author, so profile identity.name may appear in
-# exactly these fields (plugin author, marketplace owner and plugin-entry author, NOTICE modifier) (relative to the core root) and nowhere else. Each regex's group "v" is the
-# field's value; a personal hit is allowed only inside a value that IS the identity name.
+# exactly these fields (plugin author, marketplace owner and plugin-entry author, NOTICE modifier)
+# of the core and of each shipped pack (relative to the export root) and nowhere else. Each regex's
+# group "v" is the field's value; a personal hit is allowed only inside a value that IS the
+# identity name.
+_PLUGIN_AUTHOR = (re.compile(r'"author"\s*:\s*\{[^{}]*?"name"\s*:\s*"(?P<v>[^"]*)"'),
+                  re.compile(r'"author"\s*:\s*"(?P<v>[^"]*)"'))
+_NOTICE_MODIFIER = (re.compile(r"(?m)^- Modified by:?[ \t]+(?P<v>[^\n]*?)[ \t]*$"),)
 AUTHOR_FIELDS = {
-    "pact-plugin/.claude-plugin/plugin.json": (
-        re.compile(r'"author"\s*:\s*\{[^{}]*?"name"\s*:\s*"(?P<v>[^"]*)"'),
-        re.compile(r'"author"\s*:\s*"(?P<v>[^"]*)"')),
+    "pact-plugin/.claude-plugin/plugin.json": _PLUGIN_AUTHOR,
     ".claude-plugin/marketplace.json": (                 # the owner, and each plugin entry's author
         re.compile(r'"owner"\s*:\s*\{[^{}]*?"name"\s*:\s*"(?P<v>[^"]*)"'),
-        re.compile(r'"author"\s*:\s*\{[^{}]*?"name"\s*:\s*"(?P<v>[^"]*)"')),
-    "pact-plugin/NOTICE.md": (re.compile(r"(?m)^- Modified by:?[ \t]+(?P<v>[^\n]*?)[ \t]*$"),),
+        _PLUGIN_AUTHOR[0]),
+    "pact-plugin/NOTICE.md": _NOTICE_MODIFIER,
+    "packs/n8n/.claude-plugin/plugin.json": _PLUGIN_AUTHOR,
+    "packs/n8n/NOTICE.md": _NOTICE_MODIFIER,
 }
 
 

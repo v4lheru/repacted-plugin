@@ -226,6 +226,18 @@ _EXPECTED_TOP_LEVEL: Tuple[str, ...] = (
     "agents", "commands", "hooks", "protocols", "skills", "tests",
 )
 
+# Every subtree a marketplace entry may distribute, with the top-level
+# directories its enumeration must reach (the same positive control). Core is
+# pact-plugin/; packs/n8n/ is the n8n pack the PUBLIC marketplace lists as a
+# second plugin (U8.6; the private marketplace lists core only). A source not
+# named here fails the premise test, so a third subtree cannot ship unscanned:
+# re-derive the boundary for it, then add it here and the absence scan covers it.
+_CORE_SOURCE = "./pact-plugin"
+_DISTRIBUTED_TREES = {
+    _CORE_SOURCE: _EXPECTED_TOP_LEVEL,
+    "./packs/n8n": ("agents", "skills"),
+}
+
 # Directories the repo-wide premise sweep MUST reach, for the same reason: they
 # hold the two manifests whose contents its absence conclusions are about.
 _WALK_SENTINEL_DIRS = (
@@ -297,7 +309,9 @@ def _packaged_tree(root: Path) -> Path:
     return tree
 
 
-def _packaged_files(tree: Path) -> List[Path]:
+def _packaged_files(
+    tree: Path, expected: Tuple[str, ...] = _EXPECTED_TOP_LEVEL, holds_this_module: bool = True
+) -> List[Path]:
     """Every file under the packaged tree, with the positive control baked in.
 
     The control is deliberately inseparable from the enumeration. An absence
@@ -317,18 +331,21 @@ def _packaged_files(tree: Path) -> List[Path]:
     in a worktree is caught too. It is NOT a superset across a symlinked
     directory, which ``rglob`` does not descend into; that gap is a known
     residual and is tracked separately rather than papered over here.
+
+    A pack tree (``holds_this_module=False``) does not hold this module, so its
+    control is non-empty plus the pack's own ``expected`` top-level directories.
     """
     files = [p for p in tree.rglob("*") if p.is_file()]
     assert files, (
         f"packaged-tree enumeration under {tree} is EMPTY — the scan input is "
         "not real, so no absence conclusion drawn from it means anything"
     )
-    assert _THIS_FILE in {p.resolve() for p in files}, (
+    assert not holds_this_module or _THIS_FILE in {p.resolve() for p in files}, (
         f"packaged-tree enumeration under {tree} did not reach {_THIS_FILE}, "
         "which lives inside it — the scan is not covering the tree it claims to"
     )
     unreached = sorted(
-        set(_EXPECTED_TOP_LEVEL) - {p.relative_to(tree).parts[0] for p in files}
+        set(expected) - {p.relative_to(tree).parts[0] for p in files}
     )
     assert not unreached, (
         f"packaged-tree enumeration under {tree} never reached {unreached}. "
@@ -374,6 +391,32 @@ def _walk_repo(root: Path) -> List[Tuple[Path, List[str]]]:
     return walked
 
 
+def _declared_sources(root: Path) -> List[str]:
+    """The `source` of every marketplace.json plugin entry, sorted."""
+    manifest = json.loads(
+        (root / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
+    )
+    plugins = manifest.get("plugins") or []
+    assert plugins, "marketplace.json declares no plugins"
+    return sorted({plugin.get("source") for plugin in plugins})
+
+
+def _distributed_files(root: Path) -> List[Path]:
+    """Every file of every declared subtree, each with its own positive control.
+
+    Core always, then each further declared source the premise test knows. An
+    unknown source is not scanned here; the premise test fails on it instead.
+    """
+    files = _packaged_files(_packaged_tree(root))
+    for source in _declared_sources(root):
+        if source == _CORE_SOURCE or source not in _DISTRIBUTED_TREES:
+            continue
+        tree = root / source
+        assert tree.is_dir(), f"marketplace.json distributes {source}, which is not a directory"
+        files += _packaged_files(tree, _DISTRIBUTED_TREES[source], holds_this_module=False)
+    return files
+
+
 # ---------- guard liveness ----------
 
 def test_guard_is_active_in_a_source_checkout():
@@ -394,10 +437,10 @@ def test_guard_is_active_in_a_source_checkout():
 # ---------- the deletion guard: the installers never ship ----------
 
 def test_no_capture_shim_installer_ships_in_the_packaged_tree():
-    """The deleted installers, and anything shaped like one, stay out of the packaged tree."""
+    """The deleted installers, and anything shaped like one, stay out of every
+    distributed subtree: core and each pack the marketplace lists."""
     root = _require_source_checkout()
-    tree = _packaged_tree(root)
-    files = _packaged_files(tree)
+    files = _distributed_files(root)
 
     # Exact names first, THEN the broader shape. Order is load-bearing: every
     # exact name also matches the shape pattern, so checking shape first would
@@ -427,26 +470,29 @@ def test_no_capture_shim_installer_ships_in_the_packaged_tree():
 # ---------- the premise the proxy rests on ----------
 
 def test_premise_marketplace_maps_only_the_pact_plugin_subtree():
-    """The identity mapping is DECLARED here; everything above depends on it."""
+    """The identity mapping is DECLARED here; everything above depends on it.
+
+    Core must be a source, and every source must be a subtree this module
+    knows and scans (``_DISTRIBUTED_TREES``); a third one fails here.
+    """
     root = _require_source_checkout()
     # Sanity the resolved root the same way its three sibling tests do. Without
     # this, a root that satisfies _require_source_checkout but is not a repo
     # root still passes here — this test reads only the manifest, so it would
     # happily report on whichever marketplace.json the upward walk landed on.
     _packaged_tree(root)
-    manifest = json.loads(
+    sources = _declared_sources(root)
+    plugins = json.loads(
         (root / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
-    )
-    plugins = manifest.get("plugins") or []
-    assert plugins, "marketplace.json declares no plugins"
-
-    sources = sorted({plugin.get("source") for plugin in plugins})
-    assert sources == ["./pact-plugin"], (
-        f"marketplace.json now distributes {sources} rather than only "
-        "['./pact-plugin']. The absence assertion in this module scans "
-        "pact-plugin/ ONLY, so it would keep passing while repo-root dev/ "
-        "shipped to consumers. Re-derive the packaging boundary before "
-        "relaxing this."
+    )["plugins"]
+    unknown = sorted(set(sources) - set(_DISTRIBUTED_TREES))
+    assert _CORE_SOURCE in sources and not unknown, (
+        f"marketplace.json now distributes {sources}; this module scans only "
+        f"{sorted(_DISTRIBUTED_TREES)} (core required). The absence assertion "
+        f"would not cover {unknown or 'the core subtree'}, so it would keep "
+        "passing while repo-root dev/ shipped to consumers. Re-derive the "
+        "packaging boundary for the new subtree and add it to "
+        "_DISTRIBUTED_TREES before relaxing this."
     )
 
     # `source` pins WHERE the plugin comes from; this pins that nothing else in
@@ -498,11 +544,11 @@ def test_premise_marketplace_maps_only_the_pact_plugin_subtree():
 def test_premise_no_mechanism_selects_a_subset_of_the_packaged_tree():
     """A filter would break "position under pact-plugin/" as the only lever."""
     root = _require_source_checkout()
-    plugin_manifest = json.loads(
-        (root / "pact-plugin" / ".claude-plugin" / "plugin.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    plugin_manifest = {}                 # the keys of every distributed plugin.json, core and packs
+    for source in [_CORE_SOURCE] + [s for s in _declared_sources(root) if s in _DISTRIBUTED_TREES]:
+        plugin_manifest.update(json.loads(
+            (root / source / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        ))
     expansion = sorted(k for k in _EXPANSION_KEYS if k in plugin_manifest)
     assert not expansion, (
         f"plugin.json now carries file-selection key(s) {expansion}, which can "

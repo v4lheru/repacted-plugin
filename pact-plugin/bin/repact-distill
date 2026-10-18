@@ -2,9 +2,11 @@
 """repact-distill: turn notes the agents already wrote into proposed knowledge-base lessons.
 
 Location: pact-plugin/bin/repact-distill (KB lite, ruling R11). The modules live in
-bin/_distill/. It reads only text a model already wrote (agent-memory inboxes, HANDOFF decisions
-and uncertainty from session journals, pact-memory through its CLI, and compaction summaries),
-never raw session transcripts.
+bin/_distill/. By default it reads only text a model already wrote (agent-memory inboxes,
+HANDOFF decisions and uncertainty from session journals, pact-memory through its CLI, and
+compaction summaries). With distill.transcripts set to true it also reads the lead session
+transcripts through the R0 view (bin/_distill/view.py: the human's prompts and the assistant's
+prose only), split into pre-scored turns (bin/_distill/segment.py).
 
   dry-run   list the sources, then print chunks, estimated tokens and the cost from your price
             table (with its as-of date). Sends nothing and writes nothing
@@ -12,12 +14,27 @@ never raw session transcripts.
             ledger. Refused until the redaction layer and the backend are installed. Each
             candidate is schema-checked and post-checked, spooled, then proposed to KB-GATE
             (--no-propose: the gate's read-only check only; --no-auto-accept: always queue)
+  queue     one line: how many ended sessions hooks/distill_enqueue.py queued, and the command
+  promote   copy lessons a human accepted into <repo>/.repacted/kb/, one confirmed lesson at a
+            time at your own terminal (bin/_distill/promote.py)
+  team      stage accepted lessons in a clone of your team's repository, then push them after
+            every outgoing commit is re-checked and you confirm at your own terminal
+            (bin/_distill/team.py)
+
+Queued sessions go first among the transcripts in dry-run and run; a run drops a queued
+id once every chunk of that session has a done or skipped ledger row, or none was found for it.
 
 Both read the profile's `distill` block (~/.config/repacted/profile.json): model, caps,
-projects include/exclude globs, pricing_source (a price table file shaped like
-templates/distill-pricing.example.json), an optional bytes_per_token and an optional
+projects include/exclude globs, transcripts (true or false, default false), pricing_source (a
+price table file shaped like templates/distill-pricing.example.json), an optional
+bytes_per_token and an optional
 schema_input_multiplier (default measured on one call: estimate.SCHEMA_INPUT_MULTIPLIER). Flags
 override it.
+Backends: distill.backend "claude-cli" (default: `claude -p` on your login, bin/_distill/backend.py)
+or "api" (the Anthropic API, bin/_distill/backend_api.py: needs `uv pip install anthropic` and
+ANTHROPIC_API_KEY in the environment; default model claude-opus-5-5, max_output_tokens). With
+distill.batch true (or run --batch) the api backend sends one Message Batch per run at half the
+token price (bin/_distill/batchrun.py); in batch mode the caps apply to the pre-submit estimate.
 A run stops at the first cap it would break, records `capped`, and a later run resumes from the
 ledger, skipping every chunk already `done`.
 Exit codes: 0 ok (also when capped); 2 usage or a bad setting; 3 refused.
@@ -40,11 +57,17 @@ from _distill import discover as D  # noqa: E402
 from _distill import estimate as E  # noqa: E402
 from _distill import intake as I  # noqa: E402
 from _distill import ledger as L  # noqa: E402
+from _distill import promote as P  # noqa: E402
 from _distill import report as R  # noqa: E402
+from _distill import segment as G  # noqa: E402
+from _distill import team as T  # noqa: E402
 from _distill import sources as S  # noqa: E402
+from shared import distill_queue as Q  # noqa: E402
 
 EXIT_OK, EXIT_USAGE, EXIT_REFUSED = 0, 2, 3
 DEFAULT_MODEL = "sonnet"
+BACKENDS = {"claude-cli": ("_distill.backend", DEFAULT_MODEL),     # name -> (module, model)
+            "api": ("_distill.backend_api", "claude-opus-5-5")}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 EXAMPLES = """examples:
   python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-distill" dry-run
@@ -54,6 +77,8 @@ REFUSAL_RULE = ("Rule: nothing is sent to a model until the redaction layer and 
                 "backend are both installed and distill.enabled is true.")
 REFUSAL_INSTEAD = ("Instead: run `repact-distill dry-run` to see the sources, tokens and cost; "
                    "it sends nothing.")
+RUN_COMMAND = 'python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-distill" run'
+UNFINISHED = (L.STATUS_CAPPED, L.STATUS_FAILED)
 
 
 class UsageError(ValueError):
@@ -76,6 +101,9 @@ class Settings:
     enabled: bool
     raw: dict
     input_multiplier: float = E.SCHEMA_INPUT_MULTIPLIER
+    transcripts: bool = False
+    backend: str = "claude-cli"
+    batch: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,11 +113,16 @@ def build_parser() -> argparse.ArgumentParser:
                     "Start with dry-run: it shows what would be read and what it would cost.",
         epilog=EXAMPLES)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("queue", help="print how many ended sessions wait to be distilled")
+    P.add_parser(sub)
+    T.add_parser(sub)
     for name, help_text in (("dry-run", "show sources, chunks, tokens and cost; send nothing"),
                             ("run", "redact, send to the model backend and record each chunk")):
         cmd = sub.add_parser(name, help=help_text, epilog=EXAMPLES,
                              formatter_class=argparse.RawDescriptionHelpFormatter)
         cmd.add_argument("--model", help="model name from the price table (default: the profile's)")
+        cmd.add_argument("--backend", choices=sorted(BACKENDS),
+                         help="claude-cli (default) or api (the Anthropic API; profile distill.backend)")
         cmd.add_argument("--pricing", type=Path, help="price table JSON (default: profile "
                                                       "distill.pricing_source)")
         cmd.add_argument("--bytes-per-token", type=float, help="token estimate ratio")
@@ -106,6 +139,8 @@ def build_parser() -> argparse.ArgumentParser:
                                   "count would-queue / would-refuse (nothing written to the KB)")
             cmd.add_argument("--no-auto-accept", action="store_true",
                              help="queue every proposal for review, whatever the bar says")
+            cmd.add_argument("--batch", action="store_true", default=None,
+                             help="api backend: one Message Batch per run (profile distill.batch)")
     return parser
 
 
@@ -140,7 +175,18 @@ def load_settings(args: argparse.Namespace, profile: dict) -> Settings:
                            E.SCHEMA_INPUT_MULTIPLIER)
     if args.since is not None and not DATE_RE.match(args.since):
         raise UsageError("--since takes a date as YYYY-MM-DD")
-    model = args.model or distill.get("model") or DEFAULT_MODEL
+    transcripts = distill.get("transcripts", False)
+    if not isinstance(transcripts, bool):
+        raise UsageError("distill.transcripts must be true or false")
+    backend = args.backend or distill.get("backend") or "claude-cli"
+    if backend not in BACKENDS:
+        raise UsageError("distill.backend must be one of: " + ", ".join(sorted(BACKENDS)))
+    batch = getattr(args, "batch", None) or distill.get("batch", False)
+    if not isinstance(batch, bool):
+        raise UsageError("distill.batch must be true or false")
+    if batch and backend != "api":
+        raise UsageError("batch mode needs the api backend (--backend api or distill.backend)")
+    model = args.model or distill.get("model") or BACKENDS[backend][1]
     if not isinstance(model, str):
         raise UsageError("distill.model must be a string")
     flags = {"usd": args.max_usd, "tokens": args.max_tokens, "sessions": args.max_sessions}
@@ -151,7 +197,8 @@ def load_settings(args: argparse.Namespace, profile: dict) -> Settings:
                     _globs(projects.get("include"), "include"),
                     _globs(projects.get("exclude"), "exclude"),
                     Path(pricing).expanduser() if pricing else None, ratio, args.since,
-                    distill.get("enabled") is True, distill, multiplier)
+                    distill.get("enabled") is True, distill, multiplier, transcripts,
+                    backend, batch)
 
 
 def _positive(flag, distill: dict, key: str, default: float) -> float:
@@ -166,14 +213,18 @@ def _positive(flag, distill: dict, key: str, default: float) -> float:
 def collect(settings: Settings, config_dir: Path, summary: R.RunSummary,
             memory_runner: Callable) -> list:
     """Discover and read every lite source; return its chunks in run order."""
-    found = D.discover(config_dir, settings.include, settings.exclude)
+    found = D.discover(config_dir, settings.include, settings.exclude,
+                       transcripts=settings.transcripts)
     summary.skipped.update(found.skipped)
     segments, own = [], _own_output_dirs()
     for source in found.sources:
         if any(common.is_within(source.path, root) for root in own):
             _count(summary.skipped, "feedback: inside the KB or the distill state dir")
             continue
-        read, skipped = S.read_source(source, memory_runner)
+        if source.kind == D.KIND_TRANSCRIPT:
+            read, skipped = G.read_transcript(source)
+        else:
+            read, skipped = S.read_source(source, memory_runner)
         for reason, count in skipped.items():
             summary.skipped[reason] = summary.skipped.get(reason, 0) + count
         kept = []
@@ -193,11 +244,54 @@ def collect(settings: Settings, config_dir: Path, summary: R.RunSummary,
         segments.extend(kept)
     max_bytes = int(S.CHUNK_MAX_TOKENS * settings.bytes_per_token)
     chunks = S.build_chunks(segments, max_bytes)
+    if settings.transcripts:
+        chunks = queue_first(chunks, _queued())
     for chunk in chunks:
         summary.chunks_by_kind[chunk.source] += 1
         if chunk.project:
             summary.projects[chunk.project] += 1
     return chunks
+
+
+def _queued() -> list:
+    try:
+        return Q.queued()
+    except OSError:  # an unreadable queue changes the order only
+        return []
+
+
+def queue_first(chunks: list, queued: list) -> list:
+    """Chunks of queued sessions ahead of the rest of their priority. The sort is stable, so
+    each group keeps build_chunks' score order."""
+    waiting = set(queued)
+    return sorted(chunks, key=lambda chunk: (chunk.priority, chunk.session not in waiting))
+
+
+def finished_sessions(chunks: list, queued: list, state_dir: Path) -> set:
+    """Queued ids with nothing left to send: each chunk of the session has a ledger row that
+    is not capped or failed, or the run found no chunk for it (gone, excluded, over the cap)."""
+    ended = {row.get("chunk_key") for row in L.read_rows(state_dir)
+             if row.get("status") not in UNFINISHED}
+    keys: dict = {}
+    for chunk in chunks:
+        keys.setdefault(chunk.session, []).append(chunk.chunk_key)
+    return {sid for sid in queued if all(key in ended for key in keys.get(sid, ()))}
+
+
+def drop_finished(chunks: list, state_dir: Path) -> None:
+    """After a run: finished sessions leave the queue. A queue error is reported, never fatal."""
+    try:
+        Q.remove(finished_sessions(chunks, Q.queued(), state_dir))
+    except (OSError, TimeoutError) as exc:
+        print(f"repact-distill: the session queue was not updated ({type(exc).__name__})",
+              file=sys.stderr)
+
+
+def queue_line(profile: dict) -> str:
+    distill = profile.get("distill") if isinstance(profile.get("distill"), dict) else {}
+    state = "on" if distill.get("transcripts") is True else "off (distill.transcripts is not true)"
+    return (f"{Q.queued_count()} ended session(s) queued for distilling, transcript distill "
+            f"{state}; distill them with: {RUN_COMMAND}")
 
 
 def _count(counts: dict, reason: str) -> None:
@@ -241,12 +335,13 @@ def dry_run(chunks: list, settings: Settings, table, summary: R.RunSummary) -> N
         meter.add(tokens_in + tokens_out, cost, chunk.session)
 
 
-def load_seams() -> tuple:
+def load_seams(backend: str = "claude-cli") -> tuple:
     """(redact module, backend module), or Refused. A module that is missing or fails to load
     refuses the run: there is no fallback that sends unredacted text."""
-    loaded = []
+    loaded, module = [], BACKENDS[backend][0]
+    path = "bin/" + module.replace(".", "/") + ".py"
     for name, what in (("_distill.redact", "the redaction layer (bin/_distill/redact.py)"),
-                       ("_distill.backend", "the model backend (bin/_distill/backend.py)")):
+                       (module, f"the model backend ({path})")):
         try:
             loaded.append(importlib.import_module(name))
         except ImportError:
@@ -306,6 +401,12 @@ def _execute(chunks: list, settings: Settings, table, redactor, backend, state_d
     run_id, meter = L.new_run_id(), E.CapMeter(settings.caps)
     fingerprint = redactor.detector_fingerprint()
     name = getattr(backend, "name", type(backend).__name__)
+    if getattr(backend, "batch", False) is True:
+        from _distill import batchrun   # api backend only: never loaded on the claude-cli path
+        row = lambda chunk, status, rid, **counts: _row(chunk, status, rid, name, settings, table,
+                                                       fingerprint, **counts)  # noqa: E731
+        return batchrun.execute(batchrun.Run(settings, table, redactor, backend, state_dir,
+                                             summary, gate_mode, row, run_id), chunks)
     for index, chunk in enumerate(chunks):
         est_in, est_out, est_cost = E.chunk_estimate(chunk, settings.model, table,
                                                      settings.bytes_per_token,
@@ -324,7 +425,9 @@ def _execute(chunks: list, settings: Settings, table, redactor, backend, state_d
         counts = {}
         if result is not None:
             kept = I.take(result, clean, state_dir, run_id, gate_mode, summary.tally, raw=chunk)
-            cost = result.cost if result.cost is not None else est_cost
+            cost = result.cost if result.cost is not None else E.cost_of(
+                result.tokens_in, result.tokens_out, settings.model, table)  # api: tokens only
+            cost = cost if cost is not None else est_cost
             counts = {"candidates": kept, "tokens_in": result.tokens_in,
                       "tokens_out": result.tokens_out, "cost_estimate": cost}
             meter.add(result.tokens_in + result.tokens_out, cost, chunk.session)
@@ -340,16 +443,26 @@ def _print(summary: R.RunSummary, as_json: bool) -> None:
 def _start_run(settings: Settings, seams) -> tuple:
     if not settings.enabled:
         raise Refused("distill.enabled is not true in profile.json")
-    redactor, backend_module = seams() if callable(seams) else seams
+    redactor, backend_module = seams(settings.backend) if callable(seams) else seams
     try:
-        return redactor, backend_module.make_backend(dict(settings.raw, model=settings.model))
+        return redactor, backend_module.make_backend(dict(settings.raw, model=settings.model,
+                                                          batch=settings.batch))
     except Exception as exc:  # fail closed: no backend, no run
-        raise Refused(f"the model backend did not start ({type(exc).__name__})") from None
+        refusal = getattr(exc, "refusal", None)    # backend_api.Unavailable: one safe line
+        raise Refused(refusal if isinstance(refusal, str)
+                      else f"the model backend did not start ({type(exc).__name__})") from None
 
 
 def main(argv: Optional[list] = None, memory_runner: Callable = S.run_memory_cli,
          seams=load_seams, state_dir: Optional[Path] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "queue":
+        print(queue_line(common.profile()))
+        return EXIT_OK
+    if args.command == "promote":
+        return P.cli(args, common.vault_scope_root)
+    if args.command == "team":
+        return T.cli(args, common.vault_scope_root)
     summary = R.RunSummary(mode=args.command)
     try:
         settings = load_settings(args, common.profile())
@@ -377,6 +490,8 @@ def main(argv: Optional[list] = None, memory_runner: Callable = S.run_memory_cli
     else:
         mode = I.GateMode(_kb_dir(), propose=not args.no_propose, no_auto=args.no_auto_accept)
         execute(todo, settings, table, redactor, backend, state, summary, mode)
+        if settings.transcripts:
+            drop_finished(chunks, state)
     _print(summary, args.json)
     return EXIT_OK
 

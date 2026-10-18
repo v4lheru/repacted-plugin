@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "modes": {
+    "commit_rule": "gate",
+    "amendment_gate": "enforce"
+  },
+  "commit_rule": {
+    "deny_words": ["internal-only", "do-not-ship"]
+  },
+  "pact_options": {
+    "PACT_DISPATCH_INLINE_MISSION_MODE": "deny",
+    "PACT_DISPATCH_VARIETY_MODE": "deny"
+  },
+  "egress": {
+    "allow_pragma": false,
+    "network_programs": ["aws", "gsutil"]
+  }
+}

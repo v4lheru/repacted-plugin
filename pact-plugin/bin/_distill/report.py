@@ -33,6 +33,7 @@ class RunSummary:
     denylist: Optional[str] = None                        # redact.denylist_status(), run only
     failures: dict = field(default_factory=dict)          # backend failure reason -> chunks
     tally: object = None                                  # intake.Tally, run only
+    notes: list = field(default_factory=list)             # one line each (batch mode)
 
 
 def _counts(counts) -> str:
@@ -100,6 +101,7 @@ def render_text(summary: RunSummary) -> str:
         verb = "would stop" if summary.mode == "dry-run" else "stopped"
         lines.append(f"capped: {verb} at the {summary.cap_hit} cap; {summary.chunks_capped} chunks "
                      f"left for a later run")
+    lines.extend(f"note: {note}" for note in summary.notes)
     lines.append(f"status: {summary.status}")
     return "\n".join(lines)
 
@@ -121,6 +123,7 @@ def render_json(summary: RunSummary) -> dict:
             "chunks_capped": summary.chunks_capped, "bytes_per_token": summary.bytes_per_token,
             "input_multiplier": summary.input_multiplier,
             "denylist": summary.denylist, "failures": dict(summary.failures),
+            "notes": list(summary.notes),
             "candidates": _tally_json(summary.tally) if summary.mode == "run" else None,
             "estimate": None if est is None else {
                 "chunks": est.chunks, "tokens_in": est.tokens_in, "tokens_out": est.tokens_out,

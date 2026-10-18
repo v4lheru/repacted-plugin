@@ -9,9 +9,11 @@ The generator documents the plugin tree it runs in. Two modes, chosen by what is
              install): every file is read as it is.
     private  the plugin sits at <repo>/repacted/pact-plugin and <repo>/tools/public-export/
              holds the export manifests: each path is classified with the exporter's own
-             manifest code. `exclude` and unclassified paths read as absent, `transform`
-             paths read through the exporter's substitution and line-drop rules, so the
-             text equals what the public tree holds and a public `--check` sees no diff.
+             manifest code. `exclude` and unclassified paths read as absent, and so do
+             paths a pack fragment relocates (they ship in that pack's plugin, not in
+             core). `transform` paths read through the exporter's substitution and
+             line-drop rules, so the text equals what the public tree holds and a public
+             `--check` sees no diff.
 
 Python sources the generator reads values from (the rule registry, the config registry) are
 executed from that same shipped text under a private module name, never imported as
@@ -33,6 +35,8 @@ from typing import List, Optional
 
 EXPORT_DIR = ("tools", "public-export")
 PRIVATE_PARENT = "repacted"
+PACK = "pack"          # the action recorded for a path a pack fragment relocates out of core
+ABSENT_ACTIONS = ("exclude", PACK, None)
 
 
 class SourceError(RuntimeError):
@@ -60,7 +64,7 @@ class ShippedTree:
             return False
         if self._export is None:
             return True
-        return self._action(rel) not in ("exclude", None)
+        return self._action(rel) not in ABSENT_ACTIONS
 
     def text(self, rel: str) -> Optional[str]:
         """The file's text as it ships, or None when it does not ship."""
@@ -112,7 +116,10 @@ class ShippedTree:
             if rule is None:
                 print(f"repact-docs-gen: {key} is unclassified, so it is left out",
                       file=sys.stderr)
-            self._actions[key] = rule.action if rule is not None else None
+            if rule is not None and self._relocated[rule.fragment]:
+                self._actions[key] = PACK
+            else:
+                self._actions[key] = rule.action if rule is not None else None
         return self._actions[key]
 
     def _load_export(self) -> None:
@@ -127,6 +134,7 @@ class ShippedTree:
         self._manifest, self._transforms = manifest_module, transforms_module
         try:
             self._fragments = manifest_module.load_manifest(self._export / "manifest.d")
+            self._relocated = {f.area: bool(f.relocate) for f in self._fragments}
             self._subs = transforms_module.load_rules(self._export / "substitutions.d",
                                                       "substitution", self._fragments)
             self._drops = transforms_module.load_rules(self._export / "linedrop.d",

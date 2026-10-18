@@ -78,6 +78,8 @@ _KEEP_SET = _MODULE_ALLOWLIST | {
     "tests/test_working_memory_concurrency_comprehensive.py",
     # function-level: a capture tool conftest installs under PACT_CAPTURE_LIVE=1, also run standalone
     "tests/tools/live_capture.py",
+    # module-level: a standalone timing script run outside pytest; puts hooks/ on the path itself
+    "tests/perf/hook_latency.py",
     # codegen strings (subprocess harnesses embed path lines in child code)
     "tests/test_agent_handoff_marker.py",
     "tests/test_containment_certification.py",

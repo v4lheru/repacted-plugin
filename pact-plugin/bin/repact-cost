@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""repact-cost: the session's per-agent context table, from <session dir>/context-cost.json.
+"""repact-cost: the session's per-agent context table, or with --preview N the one-line cost
+preview the lead prints before it dispatches N specialists.
 Location: pact-plugin/bin/repact-cost. Read-only, on demand. The rows are kept by
 hooks/shared/context_ledger.py from SIZES only (tool input and response bytes per actor, hook
-bytes, the transcript's stat size): no text is on file, so none is printed.
+bytes, the transcript's stat size): no text is on file, so none is printed. The preview is
+bin/_cost_preview.py: dollars estimated at list API prices from the transcripts' token counts,
+the session so far and the session cost cap (reference/config.md, "Session cost cap").
 Usage: repact-cost [--top N] [--session ID | --session-dir PATH] [--json]
+       repact-cost --preview N [--session ID | --session-dir PATH]
   est_context  BASE + in + out + injected bytes: a lower bound on the actor's next call
   est_spend    sum of est_context over its calls, in MB-calls: what the re-reads cost
   tier         the highest advisory already spoken for the actor ("" | advise | stop | hard)
 The session is $CLAUDE_CODE_SESSION_ID unless --session or --session-dir names another.
-Exit codes: 0 printed; 1 no agent row yet; 2 usage error; 3 no counter file found.
+Exit codes: 0 printed (the preview always prints); 1 no agent row yet; 2 usage error;
+3 no counter file found.
 """
 from __future__ import annotations
 
@@ -22,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _repact_common as common  # noqa: E402
 
 EXAMPLE = "repact-cost --top 5"
+PREVIEW_EXAMPLE = "repact-cost --preview 3"
+MAX_PREVIEW = 50
 COST_FILE = "context-cost.json"
 COLUMNS = ("agent", "calls", "est_context", "est_spend", "in", "out", "injected", "transcript", "tier")
 
@@ -85,14 +92,24 @@ def render(rows: list[dict]) -> list[str]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="repact-cost", description=__doc__.split("\n")[0],
-                                     epilog=f"example: {EXAMPLE}")
+                                     epilog=f"examples: {EXAMPLE}; {PREVIEW_EXAMPLE}")
     parser.add_argument("--top", type=int, default=20, help="rows to show (default 20)")
     parser.add_argument("--session", help="the session id (default: $CLAUDE_CODE_SESSION_ID)")
     parser.add_argument("--session-dir", help="the session directory holding context-cost.json")
     parser.add_argument("--json", action="store_true", help="machine output (the rows)")
+    parser.add_argument("--preview", type=int, metavar="N",
+                        help="print the one-line cost preview for N planned dispatches")
     args = parser.parse_args(argv)
     if args.top < 1:
         parser.error("--top must be at least 1")
+    if args.preview is not None:
+        if not 1 <= args.preview <= MAX_PREVIEW:
+            parser.error(f"--preview must be 1 to {MAX_PREVIEW}\n\nexample: {PREVIEW_EXAMPLE}")
+        import _cost_preview
+        session = args.session or (Path(args.session_dir).expanduser().name if args.session_dir
+                                   else _cost_preview.session_from_env())
+        print(_cost_preview.preview_line(args.preview, session, args.session_dir))
+        return 0
     path = cost_path(args.session, args.session_dir)
     if path is None:
         print("repact-cost: no context-cost.json found (give --session or --session-dir)",

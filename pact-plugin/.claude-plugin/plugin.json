@@ -1,6 +1,6 @@
 {
   "name": "repacted",
-  "version": "1.7.2",
+  "version": "2.0.0",
   "description": "rePACTed: a compact orchestration harness for Claude Code, forked from PACT 4.8.1",
   "author": {
     "name": "Uros Pesic",

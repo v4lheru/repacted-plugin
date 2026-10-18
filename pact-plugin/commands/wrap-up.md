@@ -132,7 +132,7 @@ Then invoke `/repacted:worktree-cleanup` to remove the worktree cleanly, and fir
 
 ## 7b. KB Queue Drain
 
-Optional: only when a knowledge base is configured (`paths.kb` in the profile; with none, `vault-note queue` exits 3: skip this step). Before step 8's commit, drain earlier sessions' KB queue items ([kb-queue.md](../reference/wrap-up/kb-queue.md)): run `python3 "{plugin_root}/bin/vault-note" queue`; if any is new, run `vault-note drain --blind-brief` and dispatch ONE fresh blind answerer with only those situations, never the notes or the KB; mark each claim against its blind answer and record `vault-note drain --decide ID <decision> --by <you> --blind <mark>`; then `python3 "{plugin_root}/bin/vault-note" apply`. With no PACT lead, the main agent drains. Never ask the user, but relay the `held for the user` line. Empty: skip.
+Optional: only when a knowledge base is configured (`paths.kb` in the profile; with none, `vault-note queue` exits 3: skip this step). Before step 8's commit, drain earlier sessions' KB queue items ([kb-queue.md](../reference/wrap-up/kb-queue.md)): run `python3 "{plugin_root}/bin/vault-note" queue`; if any is new, run `vault-note drain --blind-brief` and dispatch ONE fresh blind answerer with only those situations, never the notes or the KB; mark each claim against its blind answer, record it (`drain --decide`, §3), then `python3 "{plugin_root}/bin/vault-note" apply`. No lead: the main agent drains. Empty: skip. Never ask the user; relay the `held for the user` line and, always, `bin/repact-distill queue`'s line (§6).
 
 ## 8. Session Decision
 

@@ -204,7 +204,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" SessionEnd",
-            "timeout": 90
+            "timeout": 150
           }
         ]
       }

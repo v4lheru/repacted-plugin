@@ -18,6 +18,7 @@ Contract: the design notes (nothing outside the KB folder is read):
                 flags and queues it, so no lesson bypasses the gate.
   queue | drain list the queue; `drain --decide ID accepted|edited|rejected|deferred --by WHO`
                 records a decision in `_kb/queue/decided/YYYY-MM/`. Only a named decider rejects.
+                `drain --batch [--page N] [--decisions FILE --by WHO]` decides 20 at a time.
   apply         writes the accepted items additively, then refreshes the index and the catalog.
   append        adds text under a `## ` heading (created above `## Related` if missing),
                 bumps `modified`; never deletes a byte of existing text. It refuses text that
@@ -255,24 +256,7 @@ def cmd_queue(args, vault: Path) -> int:
 
 
 def cmd_drain(args, vault: Path) -> int:
-    if args.blind_brief:
-        print("\n".join(gate("views").blind_brief(vault)))
-        return 0
-    if not args.decide:
-        return cmd_queue(args, vault)
-    G = gate()
-    item_id, decision = args.decide
-    try:
-        edit = json.loads(Path(args.edit).read_text(encoding="utf-8")) if args.edit else None
-        result = gate("decide").decide(vault, item_id, decision, args.by, args.blind, edit)
-    except (OSError, ValueError) as exc:
-        print(f"vault-note: cannot read --edit ({exc.__class__.__name__})", file=sys.stderr)
-        return 2
-    except G.Refusal as refusal:
-        print(f"vault-note: refused ({refusal.check}): {refusal}", file=sys.stderr)
-        return refusal.code
-    print(f"{result['id']}: {result['decision']}")
-    return 0
+    return gate("drain").cmd_drain(args, vault)       # one decision, or a page (bin/_kb/drain.py)
 
 
 def cmd_apply_queue(args, vault: Path) -> int:
@@ -1048,7 +1032,7 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--keys", type=lambda v: [k.strip() for k in v.split(",") if k.strip()], default=[],
                      help="3-8 key phrases (comma-separated) for a new topic page")
     sub.add_parser("queue", help="list the KB queue and the auto-accept bars")
-    drain = sub.add_parser("drain", help="list the queue, or record one decision")
+    drain = sub.add_parser("drain", help="list the queue, record one decision, or decide a page (--batch)")
     drain.add_argument("--decide", nargs=2, metavar=("ID", "DECISION"),
                        help="accepted | edited | rejected | deferred")
     drain.add_argument("--by", help="who decided (required with --decide)")
@@ -1056,6 +1040,11 @@ def build_parser() -> argparse.ArgumentParser:
     drain.add_argument("--edit", help="JSON file with the corrected fields (with edited)")
     drain.add_argument("--blind-brief", action="store_true",
                        help="print only the new items' situations for the ONE blind answerer")
+    drain.add_argument("--reason", help="why it waits (with deferred)")
+    drain.add_argument("--batch", action="store_true", help="show one page of 20 cards, or decide it")
+    drain.add_argument("--page", type=int, help="the page for --batch (from 1)")
+    drain.add_argument("--decisions", help="JSON list of {id, decision, reason, edit, blind} (- = stdin)")
+    drain.add_argument("--accept-all", action="store_true", help="accept the page's undecided, eligible items")
     sub.add_parser("apply", help="write the accepted items, then refresh the index and the catalog")
     append = sub.add_parser("append", help="add text under a heading, or a MOC line")
     append.add_argument("page", help="relpath or stem")

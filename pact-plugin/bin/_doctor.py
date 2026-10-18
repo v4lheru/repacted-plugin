@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 if str(Path(__file__).resolve().parents[1] / "hooks") not in sys.path:   # bin -> shared, the allowed direction
     sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "hooks"))
 import _agentlinks  # noqa: E402
+import _doctor_policy as _dp  # noqa: E402
 import _doctor_state as _ds  # noqa: E402
 from _doctor_result import MAX_DETAIL, Result, _capped  # noqa: E402,F401  re-export: callers and tests name _doctor.Result
 import _memdir  # noqa: E402
@@ -339,8 +340,8 @@ def check_kb(ctx: Context) -> Result:
 
 def _kb_queue(vault: Path) -> Optional[dict]:
     try:
-        from _kb import gate as kb_gate
-        return kb_gate.queue_health(vault)
+        from _kb import views as kb_views
+        return kb_views.queue_health(vault)
     except Exception:  # noqa: BLE001 - the queue count is advice; the catalog result stands without it
         return None
 
@@ -926,11 +927,14 @@ def run_checks(ctx: Context, cache: dict, mode: str = "default",
     plan: List[tuple] = [("links", lambda: check_links(ctx)), ("split", lambda: check_split(ctx)),
                          ("index", lambda: check_index(ctx)), ("kb", lambda: check_kb(ctx)),
                          ("profile", lambda: _ds.check_profile(ctx)),
+                         ("distill", lambda: _ds.check_distill(ctx)),
                          ("secrets", lambda: check_secrets(ctx)),
                          ("stale_refs", lambda: check_stale_refs(ctx)),
                          ("release", lambda: check_release(ctx, state)), ("mcp", lambda: check_mcp(ctx)),
                          ("actions", lambda: check_actions(ctx)), ("gates", lambda: check_gates(ctx, state)),
-                         ("tasks", lambda: check_tasks(ctx, now)), ("state", lambda: _ds.check_state(ctx))]
+                         ("tasks", lambda: check_tasks(ctx, now)), ("state", lambda: _ds.check_state(ctx)),
+                         ("policy", lambda: _dp.check_policy(ctx)),
+                         ("packs", lambda: _ds.check_packs(ctx))]
     results = []
     for check_id, run in plan:
         if check_id in SLOW_CHECKS and mode != "full":

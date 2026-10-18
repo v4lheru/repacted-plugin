@@ -1,10 +1,10 @@
 """The one data wrapper for KB text shown to an agent: a <recalled-lesson> element.
 
-Location: pact-plugin/bin/_kb/datawrap.py. Used by _recall/vault.py (data_line),
-_kb/views.py (the KB-GATE queue card and blind brief) and bin/vault-find (text output), so every
-path that shows model-written (distill-origin) text renders it the same way: provenance in
-attributes, the text on one line and escaped, so nothing inside can close the element, forge
-another one or read as an instruction. Imports nothing from the plugin (vault-find loads it).
+Location: pact-plugin/bin/_kb/datawrap.py. Used by _recall/vault.py and _recall/packs.py
+(data_line), _kb/views.py (the KB-GATE queue card and blind brief) and bin/vault-find (text
+output), so every path that shows model-written (distill-origin) or pack text renders it the
+same way: provenance in attributes, the text on one line and escaped, so nothing inside can
+close the element, forge another one or read as an instruction. Imports nothing from the plugin (vault-find loads it).
 """
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ def escape(text) -> str:
 
 
 def element(source: str, at: str, origin: str, text) -> str:
-    """One data element on one line. `origin` is `distill` or `kb`; every value is escaped and
+    """One data element on one line. `origin` is `distill`, `kb` or `pack` (a skill pack's trigger
+    text, _recall/packs.py); every value is escaped and
     whitespace (newlines included) collapses to single spaces."""
     flat = " ".join(str(text).split())
     return (f'<{DATA_TAG} source="{escape(source)}" at="{escape(at)}" '

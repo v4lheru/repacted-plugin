@@ -7,7 +7,7 @@ own (already scrubbed) summary, so nothing is generated.
 """
 from __future__ import annotations
 
-from . import cut, vault
+from . import cut, packs, vault
 
 UNION_MAX = 20
 SURFACE_MAX = 3
@@ -28,6 +28,8 @@ def union(*groups: list[dict]) -> list[dict]:
 def pointer_line(cand: dict) -> str:
     if cand["store"] == "skill":
         name = cand["title"]
+        if cand.get("pack"):             # a pack's text is surfaced as data, like KB text
+            return f"recall: skill {name} (invoke Skill({name})) {packs.data_line(cand)}"
         return cut(f"recall: skill {name} — {cand['summary']} (invoke Skill({name}))", OUTPUT_CAP)
     if cand["store"] == "vault":         # KB text is surfaced as data with provenance, whole
         return f"recall: {vault.data_line(cand)}"

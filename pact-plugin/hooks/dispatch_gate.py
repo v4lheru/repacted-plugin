@@ -3,14 +3,18 @@
 
 Rules, cheapest first, short-circuit on the first non-ALLOW: (1) SOLO_EXEMPT carve-out,
 (2) non-pact-* carve-out, (3) name present, (4) name length/NFKC/regex/reserved,
-(5) plugin agents/ + specialist registry, (6) session team from the SSOT (never the
+(5) plugin agents/ + specialist registry (shipped agents, then the project's own:
+shared/project_agents.py), (6) session team from the SSOT (never the
 platform-ignored team_name arg), (7) member-name uniqueness, (8) task assigned,
-(9) inline-mission heuristic (PACT_DISPATCH_INLINE_MISSION_MODE warn|deny|shadow).
+(9) inline-mission heuristic (PACT_DISPATCH_INLINE_MISSION_MODE warn|deny|shadow), then
+(10) the session cost cap on a spawn (1)-(9) let through, of any type but COST_CAP_EXEMPT
+(shared/cost_cap.py; a spend that cannot be read lets the spawn through with a
+once-per-session note, never a silent pass).
 Fail-closed on load failure and on a runtime exception. DENY -> exit 2; ALLOW -> exit 0;
 WARN -> additionalContext. Every decision is journaled with the prompt redacted.
 
 Map: _emit_load_failure_deny, _redact, _team_member_names, _resolves_a_registered_team,
-_lead_identity_refusal, evaluate_dispatch, _journal_decision,
+_lead_identity_refusal, evaluate_dispatch, _apply_cost_cap, _journal_decision,
 _augment_deny_with_stale_diagnosis, _compose_deny_diagnosis, main.
 Rationale: the design notes
 """
@@ -39,10 +43,14 @@ try:
 
     import shared.pact_context as pact_context
     import shared.pact_config as pact_config
+    from shared import project_agents
     from shared.dispatch_helpers import (
         SOLO_EXEMPT,
-        is_registered_pact_specialist,
         has_task_assigned,
+        project_dir,
+        project_scan,
+        project_scope_allowed,
+        shipped_specialists,
     )
     from shared.session_journal import append_event_checked, make_event
     from shared.paths import get_claude_config_dir
@@ -116,6 +124,16 @@ REDACTION_PATTERNS = (
         re.DOTALL,
     ),
 )
+
+
+# Project-agent refusals (rule 5): hooks/shared/rules.py holds each sentence and way through.
+PROJECT_AGENT_SHADOW_RULE = "dispatch_gate.project_agent_shadows_plugin"
+PROJECT_AGENT_UNBOUND_RULE = "dispatch_gate.project_agent_unbound"
+PROJECT_AGENT_INVALID_RULE = "dispatch_gate.project_agent_invalid"
+PROJECT_AGENT_AMBIGUOUS_RULE = "dispatch_gate.project_agent_ambiguous"
+PROJECT_AGENTS_UNREADABLE_RULE = "dispatch_gate.project_agents_unreadable"
+PROJECT_AGENTS_OFF_RULE = "dispatch_gate.project_agents_disabled"
+_SHOWN_FILES = 3   # files a refusal names before "and N more"
 
 
 # ─── helpers ───────────────────────────────────────────────────────────────
@@ -217,6 +235,69 @@ def _lead_identity_refusal(name) -> tuple[str, str, str] | None:
     return None
 
 
+def _files(paths) -> str:
+    """The agent files a refusal names: ascii() without quotes, so a file name from the
+    repository cannot put a newline or control character into agent context."""
+    shown = ", ".join(ascii(str(p))[1:-1] for p in paths[:_SHOWN_FILES])
+    return shown + (f" and {len(paths) - _SHOWN_FILES} more" if len(paths) > _SHOWN_FILES else "")
+
+
+def _registry_refusal(subagent_type: str, scoped: bool,
+                      plugin_root: str) -> tuple[str, str, str] | None:
+    """Rule 5's registry check, or None to go on. A namespaced spelling names the plugin's own
+    agent, which no project file can shadow; a bare one is what the host resolves project
+    first (code.claude.com/docs/en/sub-agents), so the project's agent files decide it."""
+    shipped = shipped_specialists(plugin_root)
+    not_registered = ("DENY",
+                      f"PACT dispatch_gate: subagent_type {subagent_type!r} is not a registered "
+                      "PACT specialist (no matching agents/pact-*.md in the plugin, and no "
+                      "project agent of that name in .claude/agents).",
+                      "specialist_not_registered")
+    if not shipped:
+        return not_registered
+    if scoped:
+        return None if subagent_type in shipped else not_registered
+    directory = project_dir()
+    if subagent_type not in shipped and not project_scope_allowed(directory):
+        from shared.team_policy import refusal_note
+        return ("DENY",
+                f"PACT dispatch_gate: {subagent_type!r} is not a shipped specialist and the "
+                "team policy turns project-scope specialists off."
+                + refusal_note(("agents.",), directory or None)
+                + f" [rule: {PROJECT_AGENTS_OFF_RULE}]",
+                "project_agents_disabled")
+    verdict = project_agents.resolve(subagent_type, shipped, project_scan(plugin_root, directory))
+    if verdict.kind in ("shipped", "project"):
+        return None
+    if verdict.kind == "none":
+        return not_registered
+    return _project_refusal(subagent_type, verdict)
+
+
+def _project_refusal(subagent_type: str, verdict) -> tuple[str, str, str]:
+    files = _files(list(verdict.files))
+    detail = ascii(verdict.detail)[1:-1]   # it can carry a directory path from the repository
+    head = f"PACT dispatch_gate: subagent_type {subagent_type!r}: "
+    if verdict.kind == "shadowed":
+        return ("DENY", head + f"a project agent file ({files}) claims this shipped name, and "
+                "the host starts a project agent before the plugin's. "
+                f"[rule: {PROJECT_AGENT_SHADOW_RULE}]", "project_agent_shadows_plugin")
+    if verdict.kind == "unbound":
+        return ("DENY", head + f"the project agent file {files} has no teammate binding "
+                f"({project_agents.BINDING} in its body). [rule: {PROJECT_AGENT_UNBOUND_RULE}]",
+                "project_agent_unbound")
+    if verdict.kind == "ambiguous":
+        return ("DENY", head + f"the name cannot be tied to one project agent file ({files}"
+                f"{': ' + detail if detail else ''}). "
+                f"[rule: {PROJECT_AGENT_AMBIGUOUS_RULE}]", "project_agent_ambiguous")
+    if verdict.kind == "incomplete":
+        return ("DENY", head + f"the project's agent files could not all be read "
+                f"({detail}), so a file shadowing this name cannot be ruled out. "
+                f"[rule: {PROJECT_AGENTS_UNREADABLE_RULE}]", "project_agents_unreadable")
+    return ("DENY", head + f"the project agent file {files} is not a valid specialist "
+            f"({detail}). [rule: {PROJECT_AGENT_INVALID_RULE}]", "project_agent_invalid")
+
+
 def evaluate_dispatch(
     tool_input: dict, input_data: dict | None = None,
 ) -> tuple[str, str | None, str | None]:
@@ -299,15 +380,12 @@ def evaluate_dispatch(
                 "unavailable. Plugin install may be broken; check "
                 "pact-session-context.json plugin_root field.",
                 "plugin_agents_missing")
-    # subagent_type registered in the agent registry. Empty registry
-    # (which would also trigger the plugin_agents_missing rule above) is
-    # fail-closed by is_registered_pact_specialist.
-    if not is_registered_pact_specialist(subagent_type):
-        return ("DENY",
-                f"PACT dispatch_gate: subagent_type {subagent_type!r} "
-                "is not a registered PACT specialist (no matching "
-                "agents/pact-*.md).",
-                "specialist_not_registered")
+    # ⑤c The type is a shipped specialist no project file shadows, or one valid project
+    # specialist. An empty shipped registry is fail-closed here too.
+    scoped = tool_input.get("subagent_type") != subagent_type
+    refusal = _registry_refusal(subagent_type, scoped, plugin_root)
+    if refusal:
+        return refusal
 
     # (6) Session team from the SSOT; empty fails closed because (7)/(8) use it as a path segment.
     session_team = pact_context.get_team_name()
@@ -364,13 +442,54 @@ def evaluate_dispatch(
                "TaskCreate(description=...) and let the teammate read "
                "it via TaskList/TaskGet. See orchestrator persona §11.")
         if INLINE_MISSION_MODE == "deny":
-            return ("DENY", msg, "long_inline_mission")
+            from shared.team_policy import refusal_note
+            return ("DENY", msg + refusal_note(("pact_options.PACT_DISPATCH_INLINE_MISSION_MODE",)),
+                    "long_inline_mission")
         if INLINE_MISSION_MODE == "shadow":
             # Journal sees the rule fired; caller treats as ALLOW (no advisory).
             return ("ALLOW", msg, "long_inline_mission")
         return ("WARN", msg, "long_inline_mission")
 
     return ("ALLOW", None, None)
+
+
+# Spawn types the session cost cap never refuses: the read-only research agents and the
+# secretary. general-purpose is capped: it has every tool, so it would be the way around.
+COST_CAP_EXEMPT = frozenset({"Explore", "Plan", "pact-secretary"})
+
+
+def _is_capped_spawn(tool_input: dict) -> bool:
+    """The spawns rule (10) judges: every Agent spawn but COST_CAP_EXEMPT, whatever its
+    plugin (built-in, another plugin's, a project's own). A spawn with no type starts
+    general-purpose, so it is capped too. Rules (3)-(9) keep their own pact-* scope."""
+    subagent_type = tool_input.get("subagent_type") if isinstance(tool_input, dict) else None
+    if not isinstance(subagent_type, str) or not subagent_type:
+        return True
+    return pact_context.strip_pact_namespace(subagent_type) not in COST_CAP_EXEMPT
+
+
+def _apply_cost_cap(decision: str, reason: str | None, rule: str | None, tool_input: dict,
+                    input_data: dict) -> tuple[str, str | None, str | None]:
+    """(10) The session cost cap on a spawn (1)-(9) did not refuse (_is_capped_spawn): a DENY past
+    the cap; a note (shown as WARN additional context) when the cap cannot be enforced;
+    otherwise the decision unchanged. Never raises: a fault here is a note, not a refusal."""
+    if decision == "DENY" or not _is_capped_spawn(tool_input):
+        return decision, reason, rule
+    try:
+        from shared import cost_cap
+        verdict = cost_cap.check(input_data, pact_context.get_session_dir(), project_dir() or None)
+        action, message, note_rule = verdict.action, verdict.message, cost_cap.NOTE_ID
+    except Exception as error:  # noqa: BLE001 - fail open, loudly (shared/cost_cap.py)
+        action, note_rule = "note", "cost_cap_unenforced"
+        message = (f"PACT cost cap: the cap could not be checked ({type(error).__name__}), so "
+                   "this dispatch goes ahead.")
+    if action == "deny":
+        return "DENY", message, "session_cost_cap"
+    if action != "note":
+        return decision, reason, rule
+    if decision == "WARN":
+        return "WARN", f"{reason}\n\n{message}", rule
+    return "WARN", message, note_rule
 
 
 # ─── main ──────────────────────────────────────────────────────────────────
@@ -558,6 +677,7 @@ def main() -> None:
 
     try:
         decision, reason, rule = evaluate_dispatch(tool_input, input_data)
+        decision, reason, rule = _apply_cost_cap(decision, reason, rule, tool_input, input_data)
     except Exception as e:
         # Runtime fail-closed: a runtime exception in the rule logic is
         # the same defect class as #658 — must DENY, must include

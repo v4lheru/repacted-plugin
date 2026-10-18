@@ -5,7 +5,11 @@ Summary: Shared helpers for #662 dispatch_gate.py and task_lifecycle_gate.py.
 
 Exposes:
   - is_registered_pact_specialist(subagent_type) — registry check (one
-    of the dispatch_gate rules; rejects unregistered pact-* spawns)
+    of the dispatch_gate rules; rejects unregistered pact-* spawns): the
+    plugin's agents/pact-*.md plus the project's valid specialists
+    (shared.project_agents) unless team policy agents.project_scope is off
+  - shipped_specialists(plugin_root) / project_scan() / project_scope_allowed()
+    — the parts the dispatch gate composes its project-agent refusals from
   - is_pact_specialist_owner(owner, team_name) — bare-owner → team-config
     agentType → registry resolution (one leg of the dispatch recognition)
   - is_owner_bearing_write(tool_input) — pure structural recognition of an
@@ -55,7 +59,9 @@ _emit_load_failure_deny = partial(emit_load_failure_deny, "dispatch_helpers")
 try:
     import functools
     from pathlib import Path
+    import os
     import shared.pact_context as pact_context
+    from shared import project_agents, team_policy
     from shared.task_utils import iter_team_task_jsons
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
     _emit_load_failure_deny("module imports", _module_load_error)
@@ -95,25 +101,58 @@ def _glob_specialists(plugin_root: str) -> frozenset[str]:
         return frozenset()
 
 
+def shipped_specialists(plugin_root: str) -> frozenset[str]:
+    """The plugin's own specialist names (the agents/pact-*.md glob)."""
+    return _glob_specialists(plugin_root)
+
+
+def project_dir() -> str:
+    """The project the session runs in: the context's project_dir, else CLAUDE_PROJECT_DIR."""
+    return pact_context.get_project_dir() or os.environ.get("CLAUDE_PROJECT_DIR", "")
+
+
+def project_scope_allowed(directory: str = "") -> bool:
+    """False when the team policy of the project's work tree sets agents.project_scope off."""
+    return team_policy.project_scope(directory or None) == "allow"
+
+
+def project_scan(plugin_root: str, directory: str = "") -> "project_agents.Scan":
+    """Every agent file the host reads for the project (shared.project_agents.scan)."""
+    return project_agents.scan(directory or project_dir(), plugin_root)
+
+
+def _registry_for(plugin_root: str, directory: str) -> frozenset[str]:
+    """Shipped names plus the project's valid specialists (when policy allows). A shipped
+    name stays registered even when a project file shadows it: dispatch_gate refuses that
+    bare spawn, and every other consumer only adds checks for a registered type."""
+    shipped = _glob_specialists(plugin_root)
+    if not shipped or not directory or not project_scope_allowed(directory):
+        return shipped
+    found = project_agents.scan(directory, plugin_root)
+    return shipped | project_agents.project_specialists(shipped, found)
+
+
 @functools.lru_cache(maxsize=1)
 def _specialist_registry() -> frozenset[str]:
-    """Glob agents/pact-*.md once per hook subprocess (cached, arg-less).
+    """The registry once per hook subprocess (cached, arg-less).
 
     Hook subprocesses are short-lived (per-tool-call); the cache is rebuilt
-    on every dispatch evaluation. Resolves plugin_root from the pact_context
-    cache and delegates the glob to ``_glob_specialists``. Deliberately
-    ARG-LESS so the lru_cache holds exactly one entry per subprocess (the hot
-    dispatch path); the explicit-root path the startup notice needs pre-cache
-    goes through ``_glob_specialists`` directly, never through this cache.
-    Empty plugin_root / missing agents/ → empty registry (fail-closed).
+    on every dispatch evaluation. Resolves plugin_root and the project dir from
+    the pact_context cache. Deliberately ARG-LESS so the lru_cache holds exactly
+    one entry per subprocess (the hot dispatch path); the explicit-root path the
+    startup notice needs pre-cache goes through ``_registry_for`` directly,
+    never through this cache. Empty plugin_root / missing agents/ → empty
+    registry (fail-closed), project agents included: a project specialist never
+    registers without the plugin's own.
     """
-    return _glob_specialists(pact_context.get_plugin_root())
+    return _registry_for(pact_context.get_plugin_root(), project_dir())
 
 
 def is_registered_pact_specialist(
     subagent_type: str, plugin_root: str = ""
 ) -> bool:
-    """True iff subagent_type matches a file at ``agents/pact-*.md``.
+    """True iff subagent_type is a shipped specialist (``agents/pact-*.md``) or a
+    valid project specialist (``shared.project_agents``, policy permitting).
 
     ``plugin_root`` (#878, additive + backward-compatible): when a non-empty
     plugin_root is passed, resolve the registry against it directly via
@@ -128,7 +167,8 @@ def is_registered_pact_specialist(
     if not isinstance(subagent_type, str) or not subagent_type:
         return False
     registry = (
-        _glob_specialists(plugin_root) if plugin_root else _specialist_registry()
+        _registry_for(plugin_root, os.environ.get("CLAUDE_PROJECT_DIR", ""))
+        if plugin_root else _specialist_registry()
     )
     return subagent_type in registry
 

@@ -1,14 +1,20 @@
 """Find the LITE distiller sources under the Claude config dir (KB lite, ruling R11).
 
 Location: pact-plugin/bin/_distill/discover.py. Used by bin/repact-distill, which passes
-the list to sources.read_source(). Lite sources are text a model already wrote; raw session
-transcripts are never a source here:
+the list to sources.read_source() (segment.read_transcript() for a transcript). Lite sources
+are text a model already wrote:
   memory_inbox     <config>/agent-memory/**/MEMORY-inbox.md
   handoff          agent_handoff events in <config>/pact-sessions/<project>/<session>/
                    session-journal.jsonl (task files are not read: they are garbage-collected)
   pact_memory      the pact-memory store, read only through its own CLI (read verbs); the
                    store file is never opened here
   compact_summary  compact-summary.txt and compact-summary-<ts>.txt in a session dir
+One raw source, OFF unless the profile sets distill.transcripts to true (KB full):
+  transcript       each LEAD session transcript <config>/projects/<slug>/<session>.jsonl, read
+                   through view.py's R0 rules; teammate and subagent transcripts are counted, not
+                   read. Its project is the pact-sessions project dir holding that session id
+                   (never the slug: it spells the home path); with include globs set, a session
+                   whose project is unknown is skipped
 
 Paths and sizes only: no file is read here. Every skipped candidate is counted with a reason.
 """
@@ -24,8 +30,10 @@ KIND_MEMORY_INBOX = "memory_inbox"
 KIND_HANDOFF = "handoff"
 KIND_PACT_MEMORY = "pact_memory"
 KIND_COMPACT_SUMMARY = "compact_summary"
+KIND_TRANSCRIPT = "transcript"
 # Lower runs first: a capped run spends its budget on the best material (design note §4.2).
-PRIORITY = {KIND_MEMORY_INBOX: 1, KIND_HANDOFF: 1, KIND_PACT_MEMORY: 1, KIND_COMPACT_SUMMARY: 2}
+PRIORITY = {KIND_MEMORY_INBOX: 1, KIND_HANDOFF: 1, KIND_PACT_MEMORY: 1, KIND_COMPACT_SUMMARY: 2,
+            KIND_TRANSCRIPT: 3}
 KINDS = tuple(PRIORITY)
 
 INBOX_FILE = "MEMORY-inbox.md"
@@ -72,8 +80,9 @@ def project_allowed(project: str, include: Iterable[str], exclude: Iterable[str]
 
 
 def discover(config_dir: Path, include: Iterable[str] = (), exclude: Iterable[str] = (),
-             memory_cli: Optional[Path] = None) -> Discovery:
-    """Every lite source under `config_dir`, filtered by the project globs."""
+             memory_cli: Optional[Path] = None, transcripts: bool = False) -> Discovery:
+    """Every lite source under `config_dir`, filtered by the project globs; with
+    `transcripts`, every lead session transcript too."""
     found = Discovery()
     include, exclude = list(include), list(exclude)
     _inboxes(config_dir / "agent-memory", found)
@@ -83,6 +92,8 @@ def discover(config_dir: Path, include: Iterable[str] = (), exclude: Iterable[st
         found.sources.append(Source(KIND_PACT_MEMORY, cli, "", "pact-memory", 0.0, 0))
     else:
         found.skip("pact_memory: the pact-memory CLI is not installed")
+    if transcripts:
+        _transcripts(config_dir, include, exclude, found)
     return found
 
 
@@ -128,3 +139,38 @@ def _one_session(session_dir: Path, project: str, found: Discovery) -> None:
             found.skip(f"{KIND_COMPACT_SUMMARY}: not a regular file")
             continue
         _stat_source(KIND_COMPACT_SUMMARY, path, project, session_dir.name, found)
+
+
+def _transcripts(config_dir: Path, include: list, exclude: list, found: Discovery) -> None:
+    from _distill import view as V     # imported only when the profile turns transcripts on
+
+    projects = _session_projects(config_dir / "pact-sessions")
+    for lead, others in V.lead_transcripts(config_dir / "projects"):
+        if others:
+            found.skip(f"{KIND_TRANSCRIPT}: teammate and subagent transcripts not read (R0)", others)
+        if V.DISTILLER_SLUG in lead.parent.name:
+            found.skip("feedback: a distiller backend session")
+            continue
+        if lead.is_symlink() or not lead.is_file():
+            found.skip(f"{KIND_TRANSCRIPT}: not a regular file")
+            continue
+        project = projects.get(lead.stem, "")
+        if not project and include:
+            found.skip(f"{KIND_TRANSCRIPT}: project unknown")
+            continue
+        if not project_allowed(project, include, exclude):
+            found.skip("project excluded by distill.projects")
+            continue
+        _stat_source(KIND_TRANSCRIPT, lead, project, lead.stem, found)
+        if found.sources and found.sources[-1].path == lead \
+                and found.sources[-1].size > V.TRANSCRIPT_MAX_BYTES:
+            found.sources.pop()
+            found.skip(f"{KIND_TRANSCRIPT}: file over the size cap")
+
+
+def _session_projects(root: Path) -> dict:
+    """{session id: pact-sessions project dir name} for every session dir under `root`."""
+    if not root.is_dir():
+        return {}
+    return {session.name: project.name for project in sorted(p for p in root.iterdir() if p.is_dir())
+            for session in project.iterdir() if session.is_dir()}

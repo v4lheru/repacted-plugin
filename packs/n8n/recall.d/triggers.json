@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "about": "Recall triggers for the repacted-n8n pack: a Bash call to an n8n REST API points at n8n-ops.",
+  "skills": {
+    "n8n-ops": {
+      "why": "you are calling an n8n instance's REST API; the skill holds the write recipe, backups first, and the per-instance key files",
+      "commands": [
+        "/api/v1/(workflows|executions|credentials|data-tables|projects|tags|variables|discover)\\b",
+        "(?i)X-N8N-API-KEY"
+      ],
+      "hosts": [
+        "\\bn8n[a-z0-9-]*\\."
+      ],
+      "globs": []
+    }
+  }
+}

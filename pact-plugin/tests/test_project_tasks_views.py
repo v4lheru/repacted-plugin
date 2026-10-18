@@ -243,6 +243,55 @@ class TestConfigAndCli:
         assert result.returncode == 65, result.stderr
         assert not (repo.parent / "outside.md").exists()
 
+    @pytest.mark.parametrize("bad", [".repacted/tasks.jsonl", "./.repacted/tasks.jsonl",
+                                     ".repacted/cache/summary.json", ".git/config",
+                                     "docs/store/tasks.jsonl", ".REPACTED/tasks.jsonl"])
+    def test_a_view_path_in_the_store_or_git_dir_is_refused_and_the_log_survives(self, world, bad):
+        """A render replaces its path whole; a view aimed at the log once replaced every event with
+        Markdown and exited 0. Every spelling is refused: a symlinked directory (docs/store points
+        at .repacted) and, on a case-insensitive file system, a case variant."""
+        V, store, repo = world
+        (repo / "docs").mkdir()
+        (repo / "docs" / "store").symlink_to(repo / ".repacted", target_is_directory=True)
+        if bad.startswith(".REPACTED") and not (repo / ".REPACTED").exists():
+            pytest.skip("case-sensitive file system: .REPACTED is a different directory")
+        store.add("keep me")
+        before = (repo / ".repacted" / "tasks.jsonl").read_bytes()
+        git_config = (repo / ".git" / "config").read_bytes()
+        _configure(repo, {"views": {"backlog": bad}})
+        result = run_cli(repo, "render")
+        assert result.returncode == 65 and "must not be inside" in result.stderr, result.stderr
+        assert (repo / ".repacted" / "tasks.jsonl").read_bytes() == before
+        assert (repo / ".git" / "config").read_bytes() == git_config
+
+    @pytest.mark.parametrize("bad", [".worktrees/wt/.git", ".worktrees/wt/.repacted/tasks.jsonl",
+                                     ".worktrees/wt/.GIT", "docs/wt/.repacted/tasks.jsonl"])
+    def test_a_view_path_in_a_nested_worktree_git_file_or_store_is_refused(self, world, bad):
+        """Regression: views render in the main checkout, so a nested worktree sits inside the
+        repo. Rendering over its .git FILE broke the worktree (git status: invalid gitfile format),
+        and its own .repacted/tasks.jsonl is a task log too. Any path part named .git or .repacted
+        is refused, by any case and through a symlinked directory (docs/wt points at the worktree)."""
+        V, store, repo = world
+        worktree = repo / ".worktrees" / "wt"
+        (worktree / ".repacted").mkdir(parents=True)
+        (worktree / ".git").write_text("gitdir: /elsewhere/.git/worktrees/wt\n")
+        (worktree / ".repacted" / "tasks.jsonl").write_text("{}\n")
+        (repo / "docs").mkdir()
+        (repo / "docs" / "wt").symlink_to(worktree, target_is_directory=True)
+        before = {name: (worktree / name).read_bytes() for name in (".git", ".repacted/tasks.jsonl")}
+        _configure(repo, {"views": {"backlog": bad}})
+        result = run_cli(repo, "render")
+        assert result.returncode == 65 and "must not be inside" in result.stderr, result.stderr
+        assert {name: (worktree / name).read_bytes() for name in before} == before
+
+    def test_a_view_named_like_git_but_not_a_git_part_is_still_rendered(self, world):
+        V, store, repo = world
+        _configure(repo, {"views": {"backlog": "docs/.github-backlog.md"}})
+        store.add("keep me")
+        result = run_cli(repo, "render")
+        assert result.returncode == 0, result.stderr
+        assert (repo / "docs" / ".github-backlog.md").exists()
+
     def test_render_without_configured_views_is_a_usage_error(self, world):
         V, store, repo = world
         result = run_cli(repo, "render")

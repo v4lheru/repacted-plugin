@@ -8,6 +8,7 @@ Map (file order): _VALUE, the placeholder email tables, _reportable_email, _mixe
 _looks_like_identifier, _opaque_value, is_placeholder_value, _real_value,
 _looks_like_secret_value, the credential-line and password classifiers, _url_key_value,
 _opaque_literal, _credential_name_value, _midline_value, _code_reference, _basic_auth_value,
+_basic_header_value, _webhook_value,
 _real_token_body.
 """
 from __future__ import annotations
@@ -351,6 +352,41 @@ def _basic_auth_value(value: str) -> bool:
         return False
     user, sep, password = decoded.partition(":")
     return bool(sep and user) and decoded.isprintable() and _labelled_password_value(password)
+
+
+def _basic_header_value(value: str) -> bool:
+    """The base64 after `Authorization: Basic`. It decodes to `user:password` with a
+    password-like part, or to `<token>:` (an API key sent as the user, empty password); a blob
+    that does not decode to text is opaque and counts when mixed-case with a digit. A decoded
+    placeholder pair (user:password) is documentation."""
+    try:
+        decoded = base64.b64decode(value + "=" * (-len(value) % 4), validate=True).decode("ascii")
+    except (ValueError, UnicodeDecodeError):
+        return _mixed_charset(value)
+    if not decoded.isprintable():
+        return _mixed_charset(value)
+    user, sep, password = decoded.partition(":")
+    if not (sep and user) or is_placeholder_value(user):
+        return False
+    if not password:
+        return len(user) >= 16 and _real_token_body(user) and not _looks_like_identifier(user)
+    return _labelled_password_value(password)
+
+
+_WEBHOOK_PLACEHOLDER = re.compile(r"x{4,}|0{8,}|\.\.\.|your[_-]", re.I)
+
+
+def _webhook_value(value: str) -> bool:
+    """The secret part of a webhook URL: a letter, then a digit or both cases (a Slack token
+    can be all letters), varied characters, and no placeholder run (XXXX, 00000000, ...,
+    your_)."""
+    body = value.strip("\"'`.,;)")
+    if is_placeholder_value(body) or _WEBHOOK_PLACEHOLDER.search(body):
+        return False
+    letters = body.replace("/", "").replace("-", "").replace("_", "")
+    mixed = any(c.isdigit() for c in body) or (any(c.isupper() for c in body)
+                                               and any(c.islower() for c in body))
+    return any(c.isalpha() for c in body) and mixed and len(set(letters.lower())) > 8
 
 
 def _real_token_body(body: str) -> bool:

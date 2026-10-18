@@ -1,0 +1,21 @@
+{
+  "name": "repacted-n8n",
+  "version": "1.0.0",
+  "description": "n8n pack for rePACTed: n8n node-syntax skills, API-first n8n-ops and the pact-n8n agent",
+  "author": {
+    "name": "Uros Pesic",
+    "url": "https://github.com/v4lheru"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/v4lheru/repacted-plugin",
+  "keywords": [
+    "n8n",
+    "workflows",
+    "automation",
+    "pact",
+    "agents"
+  ],
+  "dependencies": [
+    "repacted"
+  ]
+}

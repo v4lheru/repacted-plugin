@@ -65,8 +65,9 @@ def _load_detector() -> None:
     hook runs before every Bash call. A failure here raises into main(), which denies."""
     if "secret_kind" in globals():
         return
-    global ALLOWLIST_PRAGMA, pragma_notice, scan_added_lines, secret_kind, _HUNK, _diff_path
-    from shared.scrub import (ALLOWLIST_PRAGMA, _HUNK, _diff_path, pragma_notice,
+    global ALLOWLIST_PRAGMA, pragma_covers, pragma_notice, scan_added_lines, secret_kind, _HUNK, \
+        _diff_path
+    from shared.scrub import (ALLOWLIST_PRAGMA, _HUNK, _diff_path, pragma_covers, pragma_notice,
                               scan_added_lines, secret_kind)
 
 
@@ -115,9 +116,7 @@ def _git_then(verbs: str):
 
 _UNREAD_ROUTE, _UNREAD = _git_then(_ROUTE_WORDS), _git_then(_ROUTE_WORDS + "|commit")
 MAX_NESTING = 8                                              # sh -c 'sh -c ...' levels read
-# Git subcommands before a commit that put no new working-tree content in the index (they move,
-# drop or check out content git already stores). add/stage are replayed; any other subcommand
-# (apply, stash, update-index, read-tree, an alias) denies the combined form.
+# Staging before a commit: add/stage replay, _NO_NEW_CONTENT passes, the rest deny (note).
 _STAGING = {"add", "stage"}
 _NO_NEW_CONTENT = frozenset((
     "status diff log show branch checkout switch restore reset merge pull fetch rebase "
@@ -551,8 +550,9 @@ def check_message(command: str, repo: Optional[str] = None) -> list:
 
 def check_added_secrets(patches) -> tuple:
     """(errors, skipped) over the ADDED lines of every file in `patches`, whatever its type, on the
-    shared detector. A line that itself carries the pragma is skipped (and counted: per path, the
-    most any one patch skipped, so a line both staged and in the working tree counts once)."""
+    shared detector. A line whose own pragma covers it (one value per pragma line) is skipped (and
+    counted: per path, the most any one patch skipped, so a line both staged and in the working
+    tree counts once)."""
     _load_detector()
     lines: dict = {}
     most: dict = {}
@@ -565,7 +565,8 @@ def check_added_secrets(patches) -> tuple:
     skipped = [path for path, count in most.items() for _ in range(count)]
     errors = [f"SECRET: a {kind} value is added in {path}{_at_lines(numbers)} (the {kind} secret pattern); "
               f"remove it before committing. If you believe it is a test fixture or doc example, ask the "
-              f"user to confirm the value is not real before adding `{ALLOWLIST_PRAGMA}` on that line."
+              f"user to confirm the value is not real before adding `{ALLOWLIST_PRAGMA}` on that line "
+              f"(one value per pragma line)."
               for (path, kind), numbers in lines.items()]
     return errors, skipped
 
@@ -876,6 +877,14 @@ def check_env_file_in_gitignore(commit: Optional[Commit] = None):
     )
 
 
+def _shape_spans(line: str, shapes) -> list:
+    """(start, end) of each commit-only shape match on a line that carries the pragma."""
+    if ALLOWLIST_PRAGMA not in line:
+        return []
+    return [m.span() for pattern, _ in shapes for m in re.finditer(pattern, line, re.IGNORECASE)
+            if m.end() > m.start()]
+
+
 def check_hardcoded_secrets(added: dict):
     """Check the added lines of code files for the secret shapes only this check knows."""
     errors = []
@@ -883,10 +892,12 @@ def check_hardcoded_secrets(added: dict):
 
     for f, added_in_file in added.items():
         if f.endswith(patterns()["secret_scan_extensions"]):
-            # A line carrying the pragma is skipped here too; the path and kind are reported,
-            # never the matched value.
-            lines = [(n, line) for n, line in added_in_file if ALLOWLIST_PRAGMA not in line]
-            for pattern, description in patterns()["commit_only_patterns"]:
+            # A line whose pragma covers it is skipped here too, by the same one-value rule
+            # (these shapes count as values); the path and kind are reported, never the value.
+            shapes = patterns()["commit_only_patterns"]
+            lines = [(n, line) for n, line in added_in_file
+                     if not pragma_covers(line, extra_spans=_shape_spans(line, shapes))]
+            for pattern, description in shapes:
                 numbers = [n for n, line in lines if re.search(pattern, line, re.IGNORECASE)]
                 if numbers:
                     errors.append(f"SACROSANCT VIOLATION: Potential {description} in {f}{_at_lines(numbers)}")
@@ -910,9 +921,7 @@ def main():
         command = tool_input.get("command", "")
         cwd = input_data.get("cwd")
 
-        # A git commit (plain, `git -C <path> commit`, wrapped, quoted). A command that cannot
-        # be read at all is denied; one that reads but shows no commit while naming `git commit`
-        # scans widest: the index and the whole working tree.
+        # Unread denies; read but no commit while naming `git commit` scans widest (note).
         named = re.search(r'\bgit\s+commit\b', command, re.I)
         try:
             commit = read_commit(command, cwd)

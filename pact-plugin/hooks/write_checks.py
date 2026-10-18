@@ -115,9 +115,11 @@ def commit_gate(payload: dict, ev) -> tuple[str | None, str | None]:
     ev.shadow_log({"kind": "write_gate", "use": "commit_rule", "event": "return",
                    "team": COMMITS_TEAM, "task_id": COMMITS_TASK,
                    "keys": [hashlib.sha256((message or command).encode("utf-8")).hexdigest()[:12]]})
+    from shared.team_policy import refusal_note
     return ("Commit returned: the message breaks the commit rule (one sentence, no "
             f"body, no AI attribution, no security-tooling words): {line}. Reword it and commit "
-            "again; the same message is returned every time."), None
+            "again; the same message is returned every time."
+            + refusal_note(("modes.commit_rule", "commit_rule."))), None
 
 
 def decide(payload: dict) -> tuple[str | None, str | None]:

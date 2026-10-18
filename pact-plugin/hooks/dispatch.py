@@ -72,15 +72,10 @@ Journal rows (the dispatcher writes them after printing its result, best effort)
   cannot be named, the row (check_failure or gate_refusal) goes to
   <config>/pact-sessions/_dispatch_failures.jsonl instead (standard library only).
 
-Context cost (after the journal rows, best effort): a run whose checks put context or a
-system message in front of the model adds to <session dir>/context-cost.json, a counter
-file updated under shared/state_file's sidecar lock, never a journal row (many hooks read
-the journal whole). Per check name and per event: runs, context bytes, system bytes; per
-frame (lead, teammate): bytes. The sizes are UTF-8 bytes of each check's additionalContext
-(plain stdout where it is context) and of its systemMessage; an exit 2 counts nothing,
-since the host then reads only stderr. Counts only, never the text. bin/repact-report
-sums the file. shared/context_ledger.py keeps it, adds the per-agent rows and the
-once-per-tier advisory _advised() puts in a PreToolUse envelope.
+Then, best effort, two session-dir files, never journal rows (hooks read the journal
+whole): context-cost.json, the bytes put before the model (shared/context_ledger.py, which
+writes the advisory _advised() adds), and hook-latency.ndjson, the run's time from STARTED
+and each check's (shared/hook_latency.py).
 
 Frame memo: before its check loop, dispatch() puts an empty module FRAME_MEMO in
 sys.modules (no __file__, so _Isolation keeps it) and removes it after. shared/frame.py
@@ -98,6 +93,10 @@ checks ran prints the first refusing check's output verbatim, or nothing.
 
 from __future__ import annotations
 
+import time
+
+STARTED = time.monotonic()  # a run's latency counts from here
+
 import hashlib
 import importlib
 import io
@@ -109,7 +108,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 import traceback
 import types
 from dataclasses import dataclass, field
@@ -161,6 +159,7 @@ class Outcome:
     discarded: bool = False
     rule: str = ""
     journaled: bool = False
+    elapsed_s: float = 0.0
 
 
 @dataclass
@@ -858,8 +857,11 @@ def dispatch(event: str, raw: bytes, checks=None, group: Optional[str] = None) -
     memo = sys.modules[FRAME_MEMO] = types.ModuleType(FRAME_MEMO)
     memo.frames = {}
     try:
-        outcomes = [run_apart(check, raw, event) if deep else run_check(check, raw, event, tool_name)
-                    for check in select(event, checks, payload, group)]
+        outcomes = []
+        for check in select(event, checks, payload, group):
+            begun = time.monotonic()
+            outcomes.append(run_apart(check, raw, event) if deep else run_check(check, raw, event, tool_name))
+            outcomes[-1].elapsed_s = time.monotonic() - begun
     finally:
         sys.modules.pop(FRAME_MEMO, None)
     try:
@@ -876,6 +878,12 @@ def dispatch(event: str, raw: bytes, checks=None, group: Optional[str] = None) -
     except Exception:  # noqa: BLE001 - a row that cannot be written changes no decision
         pass
     record_cost(event, payload, parsed)
+    try:
+        from shared import hook_latency
+        hook_latency.record(payload, event, group, time.monotonic() - STARTED,
+                            [(o.check.name, o.elapsed_s) for o in outcomes])
+    except Exception:  # noqa: BLE001
+        pass
     return code
 
 

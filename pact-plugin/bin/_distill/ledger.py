@@ -73,6 +73,9 @@ def _append_line(path: Path, record: dict) -> None:
         os.close(fd)
 
 
+append_json_line = _append_line      # batchrun.py's batches.jsonl uses the same 0600 append
+
+
 def append_row(state_dir: Path, row: dict) -> None:
     _append_line(Path(state_dir) / LEDGER_FILE, {key: row.get(key) for key in FIELDS})
 

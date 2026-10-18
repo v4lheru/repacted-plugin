@@ -164,7 +164,8 @@ def only_changed(states: dict, check_id: str, state: str):
 def test_a_clean_world_is_green_everywhere(world):
     states = world.states("--full")
     assert {k: v["state"] for k, v in states.items()} == {k: "skip" if k == "state" else "green" for k in states}, states
-    assert len(states) == 13                     # 9 + kb (KB-CATALOG) + tasks (D10 P3) + state + profile (refactor)
+    assert len(states) == 16   # 9 + kb (KB-CATALOG) + tasks (D10 P3) + state + profile (refactor) + distill
+    #                            + policy + packs
 
 
 def test_the_kb_check_runs_right_after_the_index_check(world):

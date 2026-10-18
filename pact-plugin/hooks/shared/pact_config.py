@@ -14,8 +14,8 @@ Summary: Single source of truth for PACT_* runtime configuration options.
          os.environ.get(...).strip().lower() would have produced, and tests can
          monkeypatch os.environ without reloading the module.
 Used by: dispatch_gate.py + handoff_ordering_gate.py (get_enum -- the two
-         *_MODE reads); session_init.py (llm_options -- the SessionStart
-         injection of LLM-consumed options). Any future PACT_* consumer reuses
+         *_MODE reads); shared/cost_cap.py (get_usd -- the session cost cap);
+         session_init.py (llm_options -- the SessionStart injection of LLM-consumed options). Any future PACT_* consumer reuses
          this resolver by adding a _REGISTRY row.
 
 Config source model -- os.environ-BLIND: the resolver reads ONLY os.environ. It
@@ -25,13 +25,16 @@ process environment BEFORE the hook subprocess starts -- the hook sees one
 already-merged os.environ. Persisting a PACT_* option via settings.json's `env`
 block is therefore transparent to this resolver. (Contrast teammate_mode.py,
 which DOES read settings files, because `teammateMode` is a Claude-Code-native
-setting with no env-var projection.)
+setting with no env-var projection.) One exception, for enums only: get_enum
+then lets the work tree's team policy (.repacted/policy.json, shared/team_policy.py)
+raise the value toward "deny"; the policy can never lower it.
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 
 # ─── Registry: the single source of truth for every PACT option ────────────
@@ -84,7 +87,18 @@ _REGISTRY: Dict[str, dict] = {
         "type": "enum", "default": "deny", "invalid_fallback": "warn",
         "allowed": ("warn", "deny", "shadow"), "consumer": "hook",
     },
+    # The session cost cap in US dollars (shared/cost_cap.py, read by dispatch_gate). UNSET
+    # means no cap; a value get_usd cannot read is no cap too, and is noted, never guessed.
+    # The team policy's session.cost_cap_usd can only lower it (shared/team_policy.py).
+    "PACT_SESSION_COST_CAP_USD": {
+        "type": "usd", "default": None, "consumer": "hook",
+    },
 }
+
+# get_usd: plain ASCII decimals only. float() would also take "1_000", "1e3", "nan", "inf" and
+# non-ASCII digits, so the text is matched before it is converted.
+_USD_TEXT = re.compile(r"[0-9]{1,9}(?:\.[0-9]{1,6})?")
+USD_MAX = 1_000_000
 
 # Canonical TRUE tokens for the bool parse (case-insensitive, post-strip).
 # EXACT MEMBERSHIP: any token NOT in this set -- including "0", "2", "maybe",
@@ -125,6 +139,17 @@ def get_bool(name: str) -> bool:
 
 
 def get_enum(name: str) -> str:
+    """Resolve an enum-typed PACT option from os.environ, then let the work tree's team policy
+    raise it (shared.team_policy.tighten_option: only toward "deny", never back; total)."""
+    value = _env_enum(name)
+    try:
+        from shared import team_policy
+        return team_policy.tighten_option(name, value)
+    except Exception:  # noqa: BLE001 -- total contract: the env value stands
+        return value
+
+
+def _env_enum(name: str) -> str:
     """Resolve an enum-typed PACT option from os.environ (live, at call time).
 
     Applies the gates' existing ``.strip().lower()`` normalization, then
@@ -199,6 +224,27 @@ def get_enum(name: str) -> str:
         # still the right direction for a control that can deny; do not read
         # the reachability as an argument to switch it.
         return default
+
+
+def get_usd(name: str) -> Tuple[Optional[float], str]:
+    """Resolve a usd-typed PACT option: (dollars, "") when set to a plain decimal above 0 and at
+    most USD_MAX; (None, "") when unset or blank; (None, why) when set to anything else, which
+    the caller notes. Total: never raises.
+
+    Example: PACT_SESSION_COST_CAP_USD=25.50 -> (25.5, "")."""
+    try:
+        raw = os.environ.get(name)
+        if raw is None or not raw.strip():
+            return None, ""
+        text = raw.strip()
+        if not _USD_TEXT.fullmatch(text):
+            return None, f"{name}={ascii(raw)[:40]} is not a plain number of dollars"
+        value = float(text)
+        if not 0 < value <= USD_MAX:
+            return None, f"{name}={text} must be above 0 and at most {USD_MAX:,}"
+        return value, ""
+    except Exception:  # noqa: BLE001 -- total contract: no cap, and say so
+        return None, f"{name} could not be read"
 
 
 def llm_options() -> Dict[str, object]:

@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""repact-agent: scaffold and check the specialists a project brings itself.
+
+Location: pact-plugin/bin/repact-agent. `new` writes
+`<project>/.claude/agents/pact-<role>.md` from templates/agent.md (the teammate binding and
+project memory included) and refuses a name a shipped agent or another project file already
+has. `check` reads one file, or every agent file the project's `.claude/agents` directories
+hold, with the same reader dispatch_gate uses (hooks/shared/project_agents.py), and says for
+each whether the lead can spawn it as a PACT specialist. The project is $CLAUDE_PROJECT_DIR,
+else the current directory, unless --project names one. Doc: reference/project-agents.md.
+
+Usage: repact-agent new ROLE [--description TEXT] [--project DIR]
+       repact-agent check [FILE ...] [--project DIR]
+Exit codes: 0 written, or every file checked is fine; 1 a file or name was refused;
+2 usage error.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))   # bin -> shared, the allowed direction
+from shared import project_agents as pa  # noqa: E402
+from shared import team_policy  # noqa: E402
+from shared.dispatch_helpers import shipped_specialists  # noqa: E402
+
+EXAMPLE = 'repact-agent new mobile --description "Builds and tests the iOS and Android apps."'
+ROLE = re.compile(r"[a-z0-9]+(?:--?[a-z0-9]+)*")   # no `---`: the host would end the frontmatter there
+DESCRIPTION_MAX = 200
+TEMPLATE = PLUGIN_ROOT / "templates" / "agent.md"
+
+
+def project_root(given: str | None) -> Path:
+    return Path(given or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()).resolve()
+
+
+def _description_problem(text: str) -> str:
+    if not text or len(text) > DESCRIPTION_MAX:
+        return f"must be 1 to {DESCRIPTION_MAX} characters"
+    if any(ch in text for ch in '"\\') or not text.isprintable():
+        return "must be one printable line without double quotes or backslashes"
+    return ""
+
+
+def new(role: str, description: str, root: Path) -> int:
+    name = f"pact-{role}"
+    if not ROLE.fullmatch(role) or len(name) > pa.NAME_MAX:
+        print(f"refused: role {role!r} must be lowercase letters, digits and inner hyphens, "
+              f"and pact-<role> at most {pa.NAME_MAX} characters", file=sys.stderr)
+        return 1
+    problem = _description_problem(description)
+    if problem:
+        print(f"refused: --description {problem}", file=sys.stderr)
+        return 1
+    shipped = shipped_specialists(str(PLUGIN_ROOT))
+    verdict = pa.resolve(name, shipped, pa.scan(str(root), str(PLUGIN_ROOT)))
+    if verdict.kind in ("shipped", "shadowed") or pa.fold(name) in {pa.fold(s) for s in shipped}:
+        print(f"refused: {name} is a shipped specialist; choose another role", file=sys.stderr)
+        return 1
+    if verdict.files:
+        print(f"refused: {name} is already claimed by {', '.join(verdict.files)}",
+              file=sys.stderr)
+        return 1
+    target = root / ".claude" / "agents" / f"{name}.md"
+    title = role.replace("-", " ").title()
+    text = (TEMPLATE.read_text(encoding="utf-8").replace("{{role}}", role)
+            .replace("{{title}}", title).replace("{{description}}", description))
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     0o644)
+    except FileExistsError:
+        print(f"refused: {target} exists; edit it or remove it first", file=sys.stderr)
+        return 1
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    written = pa.read_agent_file(str(target))
+    if written.problem:
+        print(f"written but not valid ({written.problem}): {target}", file=sys.stderr)
+        return 1
+    print(f"wrote {target}\nnext: fill in its three paragraphs, then `repact-agent check`; "
+          f"the lead spawns it as subagent_type={name!r}")
+    return 0
+
+
+def _status(agent: pa.AgentFile, shipped: frozenset, found: pa.Scan) -> tuple[bool, str]:
+    """(fine, one line) for one file in the project scan."""
+    names = [n for n in agent.names if n != pa.ANY_NAME]
+    if pa.ANY_NAME in agent.names:
+        return False, f"its name cannot be read with certainty ({agent.problem}); it blocks " \
+                      "bare spawns of every shipped specialist"
+    if agent.spellable:
+        spelled = sorted(s for s in shipped if agent.claims(pa.fold(s)))
+        if spelled:
+            return False, f"its name cannot be read with certainty ({agent.problem}); it blocks " \
+                          f"bare spawns of the shipped names its frontmatter spells: " \
+                          f"{', '.join(spelled)}"
+        return True, f"its name cannot be read with certainty ({agent.problem}); it claims no " \
+                     "shipped name and is not a PACT specialist"
+    shadowed = [n for n in names if pa.fold(n) in {pa.fold(s) for s in shipped}]
+    if shadowed:
+        return False, f"claims the shipped name {shadowed[0]!r}; rename its `name:`"
+    pact_names = [n for n in names if pa.fold(n).startswith("pact-")]
+    if not pact_names:
+        return True, f"not a PACT specialist ({', '.join(names)}); the host runs it as a plain agent"
+    verdict = pa.resolve(pact_names[0], shipped, found)
+    if verdict.kind == "project":
+        return True, f"specialist {pact_names[0]!r}: the lead can spawn it"
+    return False, f"{verdict.kind}: {verdict.detail or agent.problem}"
+
+
+def check(files: list[str], root: Path) -> int:
+    shipped = shipped_specialists(str(PLUGIN_ROOT))
+    found = pa.scan(str(root), str(PLUGIN_ROOT))
+    if files:
+        wanted = {os.path.abspath(f) for f in files}
+        listed = [a for a in found.files if os.path.abspath(a.path) in wanted]
+        outside = sorted(wanted - {os.path.abspath(a.path) for a in listed})
+        listed += [pa.read_agent_file(f, os.path.islink(f)) for f in outside]
+    else:
+        listed = list(found.files)
+    fine = True
+    if team_policy.project_scope(str(root)) == "off":
+        print(f"note: the team policy {team_policy.load(str(root)).path} sets "
+              "agents.project_scope off; no project file is spawned as a specialist")
+        fine = False
+    if found.incomplete:
+        print(f"refused: the scan is incomplete ({found.incomplete}); bare spawns of shipped "
+              "specialists are refused until it is fixed")
+        fine = False
+    if not listed and not found.incomplete:
+        print(f"no agent files under {root}/.claude/agents")
+    for agent in listed:
+        ok, line = _status(agent, shipped, found)
+        fine = fine and ok
+        print(f"{'ok' if ok else 'refused'}: {agent.path}: {line}")
+    return 0 if fine else 1
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="repact-agent", description=__doc__.split("\n")[0],
+                                     epilog=f"example: {EXAMPLE}")
+    sub = parser.add_subparsers(dest="verb", required=True)
+    make = sub.add_parser("new", help="scaffold .claude/agents/pact-<role>.md",
+                          epilog=f"example: {EXAMPLE}")
+    make.add_argument("role", help="the role: pact-<role> becomes the agent's name")
+    make.add_argument("--description", default="", help="one line the lead reads when choosing")
+    make.add_argument("--project", help="the project directory (default: this one)")
+    test = sub.add_parser("check", help="check agent files", epilog="example: repact-agent check")
+    test.add_argument("files", nargs="*", help="files to check (default: every agent file)")
+    test.add_argument("--project", help="the project directory (default: this one)")
+    args = parser.parse_args(argv)
+    root = project_root(args.project)
+    if args.verb == "new":
+        description = args.description or f"Specialist for {args.role.replace('-', ' ')} work."
+        return new(args.role, description, root)
+    return check(args.files, root)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

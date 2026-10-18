@@ -34,7 +34,7 @@ from typing import Iterable, Iterator, Optional
 HOOKS_DIR = Path(__file__).resolve().parents[1]
 if str(HOOKS_DIR) not in sys.path:      # loadable by file path too
     sys.path.insert(0, str(HOOKS_DIR))
-from shared import plugin_paths, scrub  # noqa: E402
+from shared import hook_latency, plugin_paths, scrub  # noqa: E402
 from shared import amendments as amendment_rules  # noqa: E402
 from shared import transcript_activity as activity_rules  # noqa: E402
 
@@ -681,6 +681,7 @@ def build_report(lead: Path, until: Optional[datetime] = None, team: Optional[st
         "gates": gate_usage(team, min(stamps) if stamps else None, until or (max(stamps) if stamps else None)),
         "signals": transcript_signals(files, until),
         "context_cost": context_cost(session_dirs(lead.stem, every=cost_all), until),
+        "hook_latency": hook_latency.summarise(session_dirs(lead.stem, every=cost_all)),
     }
 
 
@@ -751,6 +752,7 @@ def render_report(report: dict) -> list[str]:
     lines.append(f"unflagged alarms     {s['unflagged_alarms']} in the lead's context")
     if (report.get("context_cost") or {}).get("sessions"):
         lines += render_cost(report["context_cost"])
+    lines += hook_latency.render(report.get("hook_latency") or {})
     checks = report.get("gates") or {"total": {"returned": 0, "repeats": 0, "notes": 0, "noted": 0}, "uses": {}}
     t = checks["total"]
     lines.append(f"write checks         {t['returned']} returned, {t['repeats']} repeats passed, {t['notes']} notes, {t['noted']} noted")

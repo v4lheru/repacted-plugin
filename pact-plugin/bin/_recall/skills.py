@@ -1,9 +1,12 @@
-"""Skills retriever (D9.3): T1 exact triggers from recall/triggers.json, and a lexical search
-over skill descriptions for the text moments D9c adds.
+"""Skills retriever (D9.3): T1 exact triggers from recall/triggers.json plus the recall.d
+fragments of installed skill packs (packs.py), and a lexical search over core skill
+descriptions for the text moments D9c adds.
 
 Location: pact-plugin/bin/_recall/skills.py. Read-only.
-A candidate points at the skill (`skill:repacted:<name>/SKILL.md`, D9a's id form) and its
-summary is the trigger's `why` (the pointer names the Skill tool call; D9.3).
+A candidate points at the skill (`skill:repacted:<name>/SKILL.md`, D9a's id form, or
+`skill:<pack>:<name>/SKILL.md` for a pack's) and its summary is the trigger's `why` (the pointer
+names the Skill tool call; D9.3). A pack candidate also carries `pack` and `skill`, so its
+pointer wraps the pack's text as data (merge.pointer_line).
 """
 from __future__ import annotations
 
@@ -14,7 +17,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from . import BIN_DIR, MAX_CANDIDATES, make_candidate, tokens
+from _repact_common import claude_config_dir
+
+from . import BIN_DIR, MAX_CANDIDATES, make_candidate, packs, tokens
 
 PLUGIN_ROOT = BIN_DIR.parent
 TRIGGERS = PLUGIN_ROOT / "recall" / "triggers.json"
@@ -43,14 +48,25 @@ def load_triggers(path: Optional[Path] = None) -> dict:
     return _cache["triggers"]
 
 
+def all_triggers(cwd: Optional[str] = None) -> dict:
+    """Core's triggers with every installed pack's added (packs.merge); core's own dict when
+    no pack adds one."""
+    return packs.merge(load_triggers(), claude_config_dir(), cwd)[0]
+
+
 def matched_skills(cue: dict, triggers: Optional[dict] = None) -> list[tuple[str, int]]:
-    """[(skill, number of patterns that matched)], strongest first."""
-    triggers = load_triggers() if triggers is None else triggers
-    found = []
+    """[(skill, number of patterns that matched)], strongest first. A pack's patterns see at
+    most packs.SUBJECT_MAX characters of the command, host or path (packs.bounded)."""
+    triggers = all_triggers() if triggers is None else triggers
+    bounded, found = None, []
     for name, spec in triggers.items():
-        hits = sum(1 for rx in spec["commands"] if cue["command"] and rx.search(cue["command"]))
-        hits += sum(1 for rx in spec["hosts"] for host in cue["hosts"] if rx.search(host))
-        hits += sum(1 for glob in spec["globs"] if cue["path"] and _glob(cue["path"], glob))
+        if spec.get("pack"):
+            bounded = bounded or packs.bounded(cue)
+        subject = bounded if spec.get("pack") else cue
+        command, path = subject["command"], subject["path"]
+        hits = sum(1 for rx in spec["commands"] if command and rx.search(command))
+        hits += sum(1 for rx in spec["hosts"] for host in subject["hosts"] if rx.search(host))
+        hits += sum(1 for glob in spec["globs"] if path and _glob(path, glob))
         if hits:
             found.append((name, hits))
     return sorted(found, key=lambda item: (-item[1], item[0]))
@@ -69,13 +85,24 @@ def skill_text(name: str) -> str:
 
 def t1(cue: dict, triggers: Optional[dict] = None) -> tuple[list[dict], list[str]]:
     """(candidates, withheld keys) for a T1 tool event. Deterministic: no judge (D9.3)."""
-    triggers = load_triggers() if triggers is None else triggers
+    triggers = all_triggers() if triggers is None else triggers
     candidates, withheld = [], []
     for name, hits in matched_skills(cue, triggers)[:MAX_CANDIDATES]:
-        cand, reason = make_candidate("skill", f"repacted:{name}/SKILL.md", f"repacted:{name}",
-                                      triggers[name]["why"], float(hits), skill_text(name),
-                                      f"skills/{name}/SKILL.md")
-        (candidates.append(cand) if cand else withheld.append(f"skill:repacted:{name}/SKILL.md"))
+        spec = triggers[name]
+        if spec.get("pack"):
+            text = packs.skill_text(spec)               # None: larger than SKILL_MD_MAX, withheld
+            cand, reason = (None, "too large") if text is None else make_candidate(
+                "skill", f"{name}/SKILL.md", name, spec["why"], float(hits), text,
+                f"{spec['pack']}/skills/{spec['skill']}/SKILL.md")
+            if cand:
+                cand.update(pack=spec["pack"], skill=spec["skill"])
+            item = f"skill:{name}/SKILL.md"
+        else:
+            cand, reason = make_candidate("skill", f"repacted:{name}/SKILL.md", f"repacted:{name}",
+                                          spec["why"], float(hits), skill_text(name),
+                                          f"skills/{name}/SKILL.md")
+            item = f"skill:repacted:{name}/SKILL.md"
+        (candidates.append(cand) if cand else withheld.append(item))
     return candidates, withheld
 
 

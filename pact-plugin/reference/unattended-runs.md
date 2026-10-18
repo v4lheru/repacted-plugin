@@ -27,6 +27,8 @@
 - Write questions in plain ASCII, and put a name or a path in the options, not the question text. A teammate sends its question to the team-lead.
 - `default` is refused unless the gate gave that `--ref` the verdict default; `default` and `halt` are refused while the mode is OFF.
 
+**In CI.** To run `/repacted:comPACT` unattended in GitHub Actions on an issue, stopping at a draft pull request, see [docs/recipes/unattended-ci.md](../docs/recipes/unattended-ci.md).
+
 **The morning read.** `python3 "{plugin_root}/bin/repact-unattended" list --session-dir '{session_dir}'` prints every defaulted decision, every halt, and the refused questions that have no record. Wrap-up and pause run it. Each refusal is one `gate_refusal` journal row: the gate, the class, a code and a hash per question, never the question text.
 
 ## A stalled wake is a different problem: two channels, and tmux fixes one of them

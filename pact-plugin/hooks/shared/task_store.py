@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import stat
 from dataclasses import dataclass
@@ -408,6 +409,15 @@ def _refuse_constant(token: str):
     raise ValueError(f"{token} is not JSON")
 
 
+def _finite_float(token: str) -> float:
+    """float(token), refusing a literal that overflows to inf (1e999): json never sends it to
+    parse_constant. An underflow (1e-999) is finite and reads as 0.0."""
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"{token} is out of the float range")
+    return value
+
+
 # CPython's default int digit limit (3.11+, and late 3.9/3.10 patches). Enforced here so
 # every interpreter refuses the same files, and int() never runs quadratic on a huge token.
 _INT_DIGITS_MAX = 4300
@@ -420,10 +430,12 @@ def _bounded_int(token: str) -> int:
 
 
 def _parse(text: str):
-    """`json.loads` without Python's extension: NaN, Infinity and -Infinity raise ValueError,
-    as does an integer longer than _INT_DIGITS_MAX digits. The host never writes them, and a
-    file that holds one is unreadable to a strict parser."""
-    return json.loads(text, parse_constant=_refuse_constant, parse_int=_bounded_int)
+    """`json.loads` without Python's extension: NaN, Infinity, -Infinity and a float literal
+    that overflows to inf raise ValueError, as does an integer longer than _INT_DIGITS_MAX
+    digits. The host never writes them, and a file that holds one is unreadable to a strict
+    parser."""
+    return json.loads(text, parse_constant=_refuse_constant, parse_float=_finite_float,
+                      parse_int=_bounded_int)
 
 
 def _load(path: Path) -> Optional[dict]:

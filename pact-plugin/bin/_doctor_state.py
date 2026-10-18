@@ -5,12 +5,14 @@ Used by bin/_doctor.py (run_checks) and bin/repact-doctor. Reads the table in
 docs/architecture/state-ownership.md: every owning store's writer must exist in the plugin
 (red when one is gone), a store with no files yet is noted, and a team whose task files
 vanished under a standing teams/<team>/config.json while its lead journal recorded tasks is
-amber. check_profile is the advisory line for the optional per-user profile. Split from
-_doctor.py to keep that module under its byte ceiling.
+amber. check_profile is the advisory line for the optional per-user profile; check_distill the
+line for the distill session queue; check_packs the line for skill-pack recall
+fragments. Split from _doctor.py to keep that module under its byte ceiling.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import List, Optional
@@ -135,6 +137,47 @@ def check_profile(ctx) -> "Result":
     if kb_key is None:
         return Result("profile", "user profile", "green", f"identity set in {path}; KB off (no paths.kb)")
     return Result("profile", "user profile", "green", f"identity and {kb_key} set in {path}")
+
+
+def check_distill(ctx) -> "Result":
+    """Advisory: whether transcript distill is on and how many ended sessions wait in the
+    queue; amber only when the SessionEnd enqueue swallowed an error."""
+    from shared import distill_queue as queue
+
+    distill = profile().get("distill")
+    on = isinstance(distill, dict) and distill.get("transcripts") is True
+    count, errors = queue.queued_count(), queue.error_count()
+    summary = (f"transcript distill {'on' if on else 'off'}; {count} ended session(s) queued"
+               + ("; run repact-distill run" if count else ""))
+    if errors:
+        return Result("distill", "distill queue", "amber", f"{summary}; {errors} enqueue error(s)",
+                      [f"see {queue.ERRORS_FILE} in {queue.queue_dir(create=False)} (the last "
+                       "error type); delete it once read"])
+    return Result("distill", "distill queue", "green", summary)
+
+
+def _printable(text: str) -> str:
+    """A report line fit for the terminal: control and format characters become '?'."""
+    return "".join(ch if ch.isprintable() else "?" for ch in text)
+
+
+def check_packs(ctx) -> "Result":
+    """The recall.d fragments of installed skill packs (_recall/packs.py): green (optional,
+    like the profile) with no pack, amber when a fragment was skipped or a trigger name is claimed twice (never resolved
+    silently: the claim is dropped), else green with the count of added triggers."""
+    from _recall import packs, skills
+
+    report = packs.merge(skills.load_triggers(), ctx.config_root, os.getcwd())[1]
+    if not (report.packs or report.lines()):
+        return Result("packs", "skill packs", "green",
+                      "no skill pack installed (optional: reference/recall-packs.md)")
+    names = ", ".join(report.packs) or "none loaded"
+    if report.lines():
+        return Result("packs", "skill packs", "amber",
+                      f"{len(report.conflicts)} conflict(s), {len(report.problems)} skipped ({names})",
+                      _capped([_printable(line) for line in report.lines()]
+                              + ["fragment format: reference/recall-packs.md"]))
+    return Result("packs", "skill packs", "green", f"{report.triggers} recall trigger(s) from {names}")
 
 
 def check_state(ctx) -> "Result":

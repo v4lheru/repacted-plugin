@@ -11,7 +11,8 @@ Used by: hooks/git_commit_check.py, hooks/output_secret_scan.py, hooks/egress_gu
          bin/_repact_common shim). Doc: the design notes.
 Map (file order): denylist paths, denylist_configured, normalise_title, ScrubPattern and
 SCRUB_PATTERNS, SECRET_ONLY_KINDS, _matched_value, _hit, _first_heading, _code_fingerprint,
-detector_fingerprint, credential_reason, ALLOWLIST_PRAGMA, scan_added_lines, _HUNK,
+detector_fingerprint, credential_reason, ALLOWLIST_PRAGMA, _secret_value_spans,
+_distinct_values, pragma_covers, scan_added_lines, _HUNK,
 _diff_path, pragma_notice, secret_kind, _denylist_regex, scrub_text, scrub_value, Finding,
 load_denylist, scan_text.
 """
@@ -27,11 +28,11 @@ from typing import Callable, Iterable, Optional
 from shared.plugin_paths import owner_identity
 from shared.scrub_values import (  # noqa: F401  (re-exported for the bin shim)
     GIT_SHA_LENGTH, _RESERVED_EMAIL_DOMAIN, _SECRET_KEY_WORDS,
-    _VALUE, _basic_auth_value, _code_reference, _credential_line_value,
+    _VALUE, _basic_auth_value, _basic_header_value, _code_reference, _credential_line_value,
     _credential_name_value, _labelled_password_value, _looks_like_secret_value,
     _midline_value, _not_cidr_anchor, _opaque_literal, _opaque_value, _real_token_body,
     _real_value, _reportable_email, _sql_password_value, _standalone_password,
-    _url_key_value, is_placeholder_value)
+    _url_key_value, _webhook_value, is_placeholder_value)
 
 
 DEFAULT_DENYLIST = Path("~/.config/repacted/scrub-denylist.txt")
@@ -105,6 +106,25 @@ SCRUB_PATTERNS: tuple[ScrubPattern, ...] = (
     ScrubPattern("prefixed-token", re.compile(
         r"\b(?:sbp_(?=[0-9a-f]{40}\b)|sb_secret_(?=[A-Za-z0-9_-]{20,})|(?:sk|rk)_live_(?=[A-Za-z0-9]{16,}))"
         r"(?P<v>[A-Za-z0-9_-]+)"),
+        accept=_real_token_body),
+    # Webhook URLs whose path is the credential: anyone holding one can post. A host
+    # alone, or a path of placeholders (T000/B000/XXXX), is documentation, not a hit.
+    ScrubPattern("webhook-url", re.compile(
+        r"(?i)\bhooks\.slack\.com/(?:services|workflows|triggers)/(?:[A-Za-z0-9]+/){1,3}"
+        r"(?P<v>[A-Za-z0-9]{16,})"), accept=_webhook_value),
+    ScrubPattern("webhook-url", re.compile(
+        r"(?i)\b(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/\d{15,22}/"
+        r"(?P<v>[A-Za-z0-9_-]{40,})"), accept=_webhook_value),
+    ScrubPattern("webhook-url", re.compile(
+        r"(?i)\b[A-Za-z0-9-]+\.webhook\.office\.com/(?P<v>webhookb2/[A-Za-z0-9@/_-]{40,})"),
+        accept=_webhook_value),
+    ScrubPattern("webhook-url", re.compile(
+        r"(?i)\bchat\.googleapis\.com/v1/spaces/[^\s/?]+/messages\?"
+        r"(?P<v>[^\s\"'<>`]*?\bkey=[^\s\"'<>`]{20,})"), accept=_webhook_value),
+    # A GCP service-account key file's private_key_id (40 hex): named by its key, never a bare
+    # 40-hex run (git SHAs are 40 hex too).
+    ScrubPattern("gcp-key-id", re.compile(
+        r"(?i)\bprivate_key_id[\"']?[ \t]*[:=][ \t]*[\"']?(?P<v>[0-9a-f]{40})(?![0-9a-f])"),
         accept=_real_token_body),
     # A note line that labels a value as a password, key, token or secret, the value being
     # the rest of the line (plaintext passwords have no token shape to match). A password KEY
@@ -234,6 +254,12 @@ SCRUB_PATTERNS: tuple[ScrubPattern, ...] = (
         r"|basic[ \t-]auth(?:entication)?)[*_]{0,2}[ \t]*[:=]?[*_]{0,2}[ \t]*[\"'`]?"
         r"(?P<v>" + _VALUE + r"[^\s\"'`,;()\[\]{}]{5,})"),
         accept=_real_value(_basic_auth_value)),
+    # The header form whose base64 is not a user:password pair basic-auth can read: an API key
+    # as the user with an empty password, or an opaque blob.
+    ScrubPattern("basic-auth", re.compile(
+        r"(?i)(?<![\w-])authorization[\"']?[ \t]*[:=][ \t]*[\"']?basic[ \t]+"
+        r"(?P<v>[A-Za-z0-9+/]{16,}={0,2})(?![A-Za-z0-9+/=])"),
+        accept=_real_value(_basic_header_value)),
     # A run labelled `sha256:` is a digest of the text it sits in (a generated view's render
     # hash, D10 P5), never an identifier; an unlabelled run of any length still reports.
     ScrubPattern("hex-run", re.compile(r"(?<!sha256:)\b[A-Fa-f0-9]{32,}\b"), secret=False,
@@ -358,6 +384,67 @@ def credential_reason(path: os.PathLike | str, text: str) -> Optional[str]:
 
 
 ALLOWLIST_PRAGMA = "pragma: allowlist secret"
+# A key block's first line is all a line scan sees of it (its body lines match nothing alone),
+# so a pragma there would hide the whole key: no pragma ever covers one.
+UNCOVERABLE_KINDS = frozenset(("private-key",))
+
+
+def _secret_value_spans(text: str, uncoverable: Optional[list] = None) -> list[tuple[int, int]]:
+    """(start, end) of every SECRET_ONLY_KINDS value the detector finds in text; the kind of
+    each UNCOVERABLE_KINDS hit is appended to `uncoverable` when given."""
+    spans = set()
+    for pattern in SCRUB_PATTERNS:
+        if pattern.kind not in SECRET_ONLY_KINDS:
+            continue
+        for match in pattern.regex.finditer(text):
+            if _hit(pattern, match):
+                start, end, _ = _matched_value(pattern, match)
+                spans.add((start, end))
+                if uncoverable is not None and pattern.kind in UNCOVERABLE_KINDS:
+                    uncoverable.append(pattern.kind)
+    return sorted(spans)
+
+
+def _distinct_values(spans: Iterable[tuple[int, int]]) -> int:
+    """How many values the spans mark. Two classes matching one value overlap and count once;
+    a span that holds a narrower one is dropped first, so a wide match over two tokens counts
+    as the two tokens it holds. O(n log n): walked by start from the right, a span holds a
+    narrower one exactly when some span starting at or after it ends at or before its end."""
+    by_start = sorted(set(spans), key=lambda span: (-span[0], span[1]))
+    inner, nearest_end = [], None
+    for start, end in by_start:          # every span seen so far starts at or after this one
+        if nearest_end is None or nearest_end > end:
+            inner.append((start, end))
+        nearest_end = end if nearest_end is None else min(nearest_end, end)
+    inner.reverse()
+    count, reach = 0, -1
+    for start, end in inner:
+        if start >= reach:
+            count += 1
+        reach = max(reach, end)
+    return count
+
+
+def pragma_covers(line: str, pragma: str = ALLOWLIST_PRAGMA,
+                  extra_spans: Iterable[tuple[int, int]] = ()) -> bool:
+    """True when the pragma on this line covers what the line holds: at most ONE secret value
+    (the detector's, plus extra_spans from a caller's own shapes), and the pragma text itself
+    sits outside every value. A line comment cannot say which value it vouches for, so a line
+    with two is scanned whole; the export gate binds its pragma by value hash instead.
+    A line holding an UNCOVERABLE_KINDS value (a private-key block's first line) is never covered.
+    No parser runs: a pragma inside an unrelated string literal counts like a comment."""
+    if pragma not in line:
+        return False
+    uncoverable: list = []
+    spans = _secret_value_spans(line, uncoverable) + list(extra_spans)
+    if uncoverable or _distinct_values(spans) > 1:
+        return False
+    at, size = line.find(pragma), len(pragma)
+    while at != -1:
+        if all(at + size <= start or end <= at for start, end in spans):
+            return True
+        at = line.find(pragma, at + 1)
+    return False
 
 
 def scan_added_lines(patch: str) -> tuple[list[tuple[str, str, int]], list[str]]:
@@ -365,9 +452,10 @@ def scan_added_lines(patch: str) -> tuple[list[tuple[str, str, int]], list[str]]
 
     hits are (path, kind, line) for each added line whose value is in a secret class, where line
     is its number in the new file (from the hunk header); skipped holds one path per added line
-    that WOULD hit but itself carries ALLOWLIST_PRAGMA. The pragma counts only on the matched
-    line: a pragma on a neighbouring line covers nothing. Lines added to /dev/null (a deletion)
-    are not read. Inside a hunk every `+` line is content, even one that starts `++ `.
+    that WOULD hit but itself carries ALLOWLIST_PRAGMA covering it (pragma_covers: one value per
+    pragma line). The pragma counts only on the matched line: a pragma on a neighbouring line
+    covers nothing. Lines added to /dev/null (a deletion) are not read. Inside a hunk every `+`
+    line is content, even one that starts `++ `.
     Values never leave this function.
     Used by the commit check and the push scan, so both agree on what a secret line is."""
     hits: list[tuple[str, str, int]] = []
@@ -382,7 +470,7 @@ def scan_added_lines(patch: str) -> tuple[list[tuple[str, str, int]], list[str]]
                 new_left -= 1
                 kind = secret_kind(line[1:]) if path else None
                 if kind:
-                    (skipped.append(path) if ALLOWLIST_PRAGMA in line else hits.append((path, kind, number)))
+                    (skipped.append(path) if pragma_covers(line[1:]) else hits.append((path, kind, number)))
                 number += 1
             elif line.startswith("-"):
                 old_left -= 1
@@ -400,7 +488,7 @@ def scan_added_lines(patch: str) -> tuple[list[tuple[str, str, int]], list[str]]
         elif path and line.startswith("+"):                    # a hunk without a header: still read
             kind = secret_kind(line[1:])
             if kind:
-                (skipped.append(path) if ALLOWLIST_PRAGMA in line else hits.append((path, kind, 0)))
+                (skipped.append(path) if pragma_covers(line[1:]) else hits.append((path, kind, 0)))
     return hits, skipped
 
 

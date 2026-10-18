@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from shared import team_policy
 from shared.amendments import ALIASES
 from shared.clock import utc_now_iso
 from shared.ledger import parse_ledger_lines
@@ -35,13 +36,14 @@ RUN_PIDS = re.compile(r"\b(?:logs?|runs?)\b[\s:#]*(\d{4,7}(?:\s*(?:,|/|&|and)\s*
 # ---------------------------------------------------------------------------
 
 def load_constants() -> dict:
-    """bin/checks.json: the check modes and the commit rule's words. {} when unreadable or not
-    a JSON object."""
+    """bin/checks.json: the check modes and the commit rule's words, tightened by the work
+    tree's team policy (shared.team_policy: a mode only toward blocking, deny words only added).
+    {} when unreadable or not a JSON object and no policy applies."""
     try:
         constants = json.loads(CHECKS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
-    return constants if isinstance(constants, dict) else {}
+        constants = {}
+    return team_policy.tighten_constants(constants if isinstance(constants, dict) else {})
 
 
 MODES = ("off", "shadow", "advisory", "gate")

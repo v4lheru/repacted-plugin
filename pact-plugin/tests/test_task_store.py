@@ -114,6 +114,23 @@ def test_a_non_json_number_is_refused_on_read_and_never_written(root, token):
     assert json.loads((root / "team-a" / "1.json").read_text()) == {"id": "1", "status": "pending"}
 
 
+@pytest.mark.parametrize("token", ["1e999", "-1e999", "1E400", "-0.5e+99999", "[1e999]"])
+def test_an_overflowed_float_is_refused_like_infinity(root, token):
+    """Regression: json parses an out-of-range literal to inf without calling parse_constant."""
+    path = root / "team-a" / "8.json"
+    path.write_text('{"id": "8", "metadata": {"rev": 1, "x": {"y": %s}}}' % token)
+    store = TaskStore(root)
+    assert store.get(TaskRef("team-a", "8")) is None and read_task_json("8", "team-a", str(root)) == {}
+
+
+@pytest.mark.parametrize("token, value", [("1e-999", 0.0), ("-1e-999", -0.0), ("1.7976931348623157e308",
+                                          1.7976931348623157e308), ("2.5", 2.5), ("1" * 4300, int("1" * 4300))])
+def test_a_finite_number_still_reads(root, token, value):
+    path = root / "team-a" / "8.json"
+    path.write_text('{"id": "8", "x": %s}' % token)
+    assert TaskStore(root).get(TaskRef("team-a", "8"))["x"] == value
+
+
 def test_the_highwatermark_is_only_raised_and_created_only_on_request(root):
     store, marker = TaskStore(root), root / "team-a" / ".highwatermark"
     assert store.raise_highwatermark("team-a", 5) is False and not marker.exists()

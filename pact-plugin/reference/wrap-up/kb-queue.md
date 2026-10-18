@@ -23,10 +23,15 @@ A `[proposer: distill]` item was written by a model: its title, claim and keys p
 
 An item marked `[held: <reasons>; the user decides]` is a distill item the post-check held (a
 proper noun, an imperative, injection phrasing or a redaction marker). You may reject it or defer
-it. You cannot accept or edit it: the gate refuses unless the user types the item id at their own
-terminal, and no flag or variable skips that. Leave it queued. When any are held, the queue's last
+it. You may not accept or edit it: the gate refuses unless the user types the item id at their own
+terminal (stdin and stderr). That check stops you on the ordinary path, not a command wrapped in a
+pseudo-terminal (script, expect, screen, tmux), so never wrap it; a guard rule refuses that too, as
+a brake on habit, not a boundary. Leave it queued. When any are held, the queue's last
 line starts `held for the user:` with the count and the command. Put that line, as printed, in your
 wrap-up report to the user. Decisions on held items never count toward the distill auto-accept bar.
+The user's own terminal needs no Claude Code session id: with none set, any decision is taken only
+at an interactive terminal (stdin and stderr) after the user retypes the item id (a `--batch` page:
+the page number), and its record says `via: terminal`. Without a terminal it is refused.
 
 ## 2. The blind check (only when at least one item is new)
 
@@ -68,8 +73,23 @@ Record each decision (the log it writes is the measurement for the auto-accept b
 python3 "{plugin_root}/bin/vault-note" drain --decide <id> accepted --by <your name> --blind CLAUDE_WRONG
 python3 "{plugin_root}/bin/vault-note" drain --decide <id> edited --by <your name> --blind UNSURE --edit fix.json
 python3 "{plugin_root}/bin/vault-note" drain --decide <id> rejected --by <your name> --blind CLAUDE_KNOWS
-python3 "{plugin_root}/bin/vault-note" drain --decide <id> deferred --by <your name> --blind UNSURE
+python3 "{plugin_root}/bin/vault-note" drain --decide <id> deferred --by <your name> --blind UNSURE --reason "<why it waits>"
 ```
+
+With many items, decide a page of 20 in one pass. `drain --batch [--page N]` prints that page's
+cards; write the decisions as a JSON list and run:
+
+```bash
+python3 "{plugin_root}/bin/vault-note" drain --batch --page 1 --decisions page1.json --by <your name>
+```
+
+Each entry is `{"id": ..., "decision": ..., "blind": ...}`, plus `"reason"` with deferred and
+`"edit": {corrected fields}` with edited. Every entry is checked before anything is written: an id
+that is not on that page now, an id listed twice, an unknown decision or a deferral without a reason
+refuses the whole batch. Each item is then sealed exactly like a single `--decide`, and a held item
+is refused on its own (the rest still seal). `--accept-all` accepts the page's items you did not
+list, except held, `inferred`, forced-queue and this session's items, which stay queued. An
+interrupted batch keeps what it sealed; the rest stay queued.
 
 - `accepted` on a `skip` item writes nothing: it confirms the lesson is already known.
 - `edited` takes a JSON file of corrected fields; the edit is re-checked like a new proposal
@@ -87,3 +107,11 @@ applied, deferred, and the queue left.
 
 The doctor's `kb` check turns amber when an item is older than 3 days, which surfaces at
 SessionStart. A deferred item stays visible there until it is decided.
+
+## 6. Sessions queued for distilling
+
+With `distill.transcripts` set to true in the profile, every ended lead session's id waits in the
+distill queue (the SessionEnd hook writes ids only and never reads the transcript). Always run
+`python3 "{plugin_root}/bin/repact-distill" queue` and put its one line, as printed, in your wrap-up
+report: the count and the command that distills them. Do not run the distiller yourself: a real
+run sends text to a model, so the user starts it.

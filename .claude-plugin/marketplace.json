@@ -11,7 +11,7 @@
       "name": "repacted",
       "source": "./pact-plugin",
       "description": "rePACTed: a compact orchestration harness for Claude Code, forked from PACT 4.8.1",
-      "version": "1.7.2",
+      "version": "2.0.0",
       "author": {
         "name": "Uros Pesic",
         "url": "https://github.com/v4lheru"
@@ -24,6 +24,26 @@
         "development",
         "architecture",
         "testing"
+      ],
+      "license": "MIT",
+      "repository": "https://github.com/v4lheru/repacted-plugin"
+    },
+    {
+      "name": "repacted-n8n",
+      "source": "./packs/n8n",
+      "description": "n8n pack for rePACTed: n8n node-syntax skills, API-first n8n-ops and the pact-n8n agent",
+      "version": "1.0.0",
+      "author": {
+        "name": "Uros Pesic",
+        "url": "https://github.com/v4lheru"
+      },
+      "category": "development",
+      "keywords": [
+        "n8n",
+        "workflows",
+        "automation",
+        "pact",
+        "agents"
       ],
       "license": "MIT",
       "repository": "https://github.com/v4lheru/repacted-plugin"

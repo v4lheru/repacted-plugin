@@ -101,7 +101,39 @@ def configured(main: Path) -> Dict[str, str]:
         if not isinstance(rel, str) or not W._evidence.safe_relpath(rel) \
                 or not common.is_within(Path(main) / rel, Path(main)):
             raise W.Refused(f"{CONFIG_RELPATH}: the {name} view must be a path inside the repo (D26)")
+        if _in_protected_dir(Path(main), rel):
+            raise W.Refused(f"{CONFIG_RELPATH}: the {name} view must not be inside "
+                            f"{' or '.join(PROTECTED_DIRS)}: rendering it would replace the task log "
+                            "or git's own files; point it at a path such as docs/backlog.md")
     return dict(views)
+
+
+PROTECTED_DIRS = (".repacted", ".git")
+
+
+def _in_protected_dir(main: Path, rel: str) -> bool:
+    """True when the view path lands in .repacted/ (the log, its lock, config and cache) or .git/
+    by any spelling: a symlinked directory, or a case variant on a case-insensitive file system.
+    Compared by file identity, since a rendered view replaces whatever its path names. A path part
+    named .git or .repacted at any depth counts too (as written or resolved, any case): a nested
+    worktree's .git file and its own task log sit inside the main checkout."""
+    protected = [main / name for name in PROTECTED_DIRS]
+    target = (main / rel).resolve()
+    try:
+        resolved_parts = target.relative_to(main.resolve()).parts
+    except ValueError:
+        return True                                     # resolves outside the checkout
+    names = {name.casefold() for name in PROTECTED_DIRS}
+    if any(part.casefold() in names for part in (*Path(rel).parts, *resolved_parts)):
+        return True
+    for candidate in (target, *target.parents):
+        for directory in protected:
+            try:
+                if os.path.samefile(candidate, directory):
+                    return True
+            except OSError:
+                continue
+    return False
 
 
 def merge_lines(views: Dict[str, str]) -> List[str]:

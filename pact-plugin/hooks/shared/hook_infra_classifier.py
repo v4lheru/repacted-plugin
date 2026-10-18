@@ -209,20 +209,23 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # session_state: pact_context takes its two leaf names from paths.
     "session_init": frozenset({
         "_fail_closed", "amendments", "background_launch", "background_work", "claude_md_manager",
-        "coexistence", "compaction_owner", "constants", "dispatch_helpers", "failure_cause",
+        "coexistence", "commit_rules", "compaction_owner", "constants", "dispatch_helpers",
+        "failure_cause",
         "failure_log", "gh_helpers", "git_helpers", "handoff_schema", "intentional_wait",
         "journal_reader", "marker_schema", "merge_guard_common", "pact_config", "pact_context",
         "parts_ledger", "paths", "peer_context", "plugin_identity", "plugin_manifest",
         "project_scope", "session_init_common", "session_init_lead", "session_init_resume",
         "session_init_teammate", "session_journal", "session_registry", "session_resume",
         "session_state", "state_file", "summary_head", "symlinks", "task_migration", "task_store",
-        "task_utils", "teammate_mode", "transcript_activity", "unattended",
+        "task_utils", "team_policy", "teammate_mode", "transcript_activity", "unattended",
+        "project_agents",  # via dispatch_helpers: the registry reads the project's own agents
     }),  # unattended reached via the SessionStart unattended-mode block
          # (session_init -> shared.unattended.read_mode); stdlib-only, so it
          # adds no further transitive shared edges.
          # pact_config reached via the SessionStart runtime-config injection
-         # (session_init -> shared.pact_config.llm_options); stdlib-only, so it
-         # adds no further transitive shared edges.
+         # (session_init -> shared.pact_config.llm_options); its get_enum lets the
+         # team policy raise an enum, so team_policy and commit_rules (its default
+         # deny words) come with it.
          # The top-level helpers pin_caps and staleness LEFT this closure with
          # the 1.5.0 pin-gate cut.
          # marker_schema reached via the function-level bootstrap_gate import
@@ -243,14 +246,18 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # summary_head (1.5.0 D8) via compaction_owner, with its pointer readers;
          # session_journal via compaction_owner's compaction_attributed event.
     "dispatch_gate": frozenset({
-        "_fail_closed", "background_launch", "background_work", "constants", "dispatch_helpers",
-        "intentional_wait", "journal_reader", "pact_config", "pact_context", "paths",
-        "plugin_identity", "session_journal", "session_registry", "session_state", "stale_session",
-        "state_file", "task_store", "task_utils", "transcript_activity",
+        "_fail_closed", "background_launch", "background_work", "commit_rules", "constants",
+        "dispatch_helpers", "intentional_wait", "journal_reader", "pact_config", "pact_context",
+        "paths", "plugin_identity", "session_journal", "session_registry", "session_state",
+        "stale_session", "state_file", "task_store", "task_utils", "team_policy",
+        "transcript_activity",
+        "project_agents",  # via dispatch_helpers: the registry reads the project's own agents
+        "cost_cap", "plugin_paths", "session_spend",  # the session cost cap (rule 10)
     }),  # pact_config reached here via the *_MODE resolver edge
          # (dispatch_gate -> shared.pact_config.get_enum for
-         # PACT_DISPATCH_INLINE_MISSION_MODE); pact_config is stdlib-only, so it
-         # adds no further transitive shared edges.
+         # PACT_DISPATCH_INLINE_MISSION_MODE); get_enum lets the team policy raise
+         # the value (pact_config -> team_policy, which reads the default deny
+         # words from commit_rules), and the deny names it (team_policy).
          # stale_session reached here via the deny-message self-diagnosis
          # (dispatch_gate -> shared.stale_session.detect_stale_session_block);
          # its own transitive pact_context edge was already in this closure.
@@ -265,6 +272,8 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
         "plugin_identity", "session_journal", "session_registry", "session_state", "state_file",
         "task_metadata_snapshot", "task_store", "task_utils", "teachback_schema", "tool_response",
         "transcript_activity", "variety_scorer",
+        "commit_rules", "project_agents", "team_policy",  # via dispatch_helpers: the project's
+        # own agents, and the team policy that can turn them off (which reads commit_rules)
     }),  # task_metadata_snapshot reached via the lead-completion +
          # post-completion-backstop snapshot seams; its transitive edges
          # were already in this closure.
@@ -325,6 +334,8 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
         "error_output", "frame", "intentional_wait", "journal_reader", "pact_context", "paths",
         "plugin_identity", "session_journal", "session_registry", "session_state", "state_file",
         "task_store", "task_utils", "transcript_activity", "turn_end_gate", "turn_end_jobs",
+        "commit_rules", "project_agents", "team_policy",  # via dispatch_helpers: the project's
+        # own agents, and the team policy that can turn them off (which reads commit_rules)
     }),  # regenerated from the live derivation: the SubagentStop background
          # check imports turn_end_gate, which reaches background_work and
          # state_file and their helpers.
@@ -333,6 +344,8 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
         "frame", "intentional_wait", "journal_reader", "pact_context", "paths", "plugin_identity",
         "session_journal", "session_registry", "session_state", "state_file", "task_store",
         "task_utils", "transcript_activity", "turn_end_gate", "turn_end_jobs",
+        "commit_rules", "project_agents", "team_policy",  # via dispatch_helpers: the project's
+        # own agents, and the team policy that can turn them off (which reads commit_rules)
     }),  # regenerated from the live derivation.
     "merge_guard_pre": frozenset({
         "_fail_closed", "constants", "error_output", "journal_reader", "merge_guard_common",

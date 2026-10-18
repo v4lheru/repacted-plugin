@@ -45,3 +45,16 @@ def test_check_fails_on_drift_and_regeneration_keeps_the_prose(tmp_path):
     assert _gen(tmp_path).returncode == 0
     regenerated = page.read_text(encoding="utf-8")
     assert "/stale-command" not in regenerated and "Local note." in regenerated
+
+
+def test_a_rule_why_is_rendered_as_prose_like_its_explain_and_way_through(monkeypatch):
+    """Regression: a why holding `<name>` rendered raw, as an HTML tag on the page."""
+    import types
+    monkeypatch.syspath_prepend(str(PLUGIN_ROOT / "bin"))
+    import _docsgen
+    rule = types.SimpleNamespace(explain="Refused.", instead="Ask the user.",
+                                 why="A wrapper around <name> fakes a terminal.")
+    fake = types.SimpleNamespace(RULES={"process.pty_wrap": rule}, anchor=anchor)
+    monkeypatch.setattr(_docsgen, "_load_rules", lambda tree: fake)
+    page = _docsgen.render_troubleshooting(None)["troubleshooting"]
+    assert "- **Why:** A wrapper around &lt;name&gt; fakes a terminal." in page

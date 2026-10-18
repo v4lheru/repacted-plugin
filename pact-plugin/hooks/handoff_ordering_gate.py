@@ -185,16 +185,22 @@ def _describe_rev(handoff: dict) -> str:
 
 
 # The handoff key written as an object key, in text that cannot be parsed (a
-# frame, or a metadata value sent as a JSON string). Inside a JSON string
-# every quote is escaped, so text that only quotes the key never matches.
-_NAMES_HANDOFF = re.compile(r'(?<!\\)"handoff"\s*:')
+# frame, or a metadata value sent as a JSON string). Its opening quote is a real one (an
+# even run of backslashes before it): inside a JSON string every quote is escaped, so text
+# that only quotes the key never matches. Matched after _key_spelling, so an escaped
+# spelling of the key ("\u0068andoff") is the key too, even in metadata that does not parse.
+_NAMES_HANDOFF = re.compile(r'(?<!\\)(?:\\\\)*"handoff"\s*:')
+_OPENS_HANDOFF = re.compile(r'(?<!\\)(?:\\\\)*"handoff"\s*:\s*\{')
 # Unparseable frame: metadata sent as a JSON string keeps its keys behind ONE level of
 # escaping; quoted text elsewhere does not match.
 _STRING_METADATA = re.compile(
     r'(?<!\\)"metadata"\s*:\s*(?="(?:\s|\\[trn]|\\u[fF][eE][fF][fF])*\{)'
 )
-_ESCAPED_HANDOFF_OBJECT = re.compile(r'\\"handoff\\"\s*:\s*\{')
-_STRING_DECODER = json.JSONDecoder(strict=False)
+# A JSON string's body from its opening quote to the closing one, or to the end of a cut frame.
+_STRING_BODY = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)', re.S)
+_ESCAPE = re.compile(r'\\(?:u([0-9a-fA-F]{4})|(.))', re.S)
+_SIMPLE_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r",
+                   "t": "\t"}
 _HANDOFF_SHAPE_REASON = (
     "PACT handoff_ordering_gate: HANDOFF write returned, nothing was written: "
     "metadata.handoff must be an object with an integer rev. Fix: Re-send the "
@@ -211,34 +217,70 @@ def _bounded_int(token: str) -> int:
     return int(token)
 
 
+def _refuse_constant(token: str):
+    raise ValueError(f"{token} is not JSON")
+
+
+def _finite_float(token: str) -> float:
+    """float(token), refusing a literal that overflows to inf (1e999): json never sends it to
+    parse_constant."""
+    value = float(token)
+    if value in (float("inf"), float("-inf")):
+        raise ValueError(f"{token} is out of the float range")
+    return value
+
+
+def _key_spelling(text: str) -> str:
+    """text with each \\uXXXX escape written out as its character, except a quote or a
+    backslash: those shape the string, so they stay as written. A key spelled with escapes
+    then reads as the key."""
+    if "\\u" not in text:
+        return text
+
+    def write_out(escape: re.Match) -> str:
+        if escape.group(1) is None:
+            return escape.group(0)
+        char = chr(int(escape.group(1), 16))
+        return escape.group(0) if char in '"\\' else char
+    return _ESCAPE.sub(write_out, text)
+
+
+def _string_body(raw: str, start: int) -> str:
+    """The text of the JSON string opening at raw[start], one level of escaping undone. A cut
+    frame reads to its end; an escape that is not JSON stays as written."""
+    def write_out(escape: re.Match) -> str:
+        if escape.group(1) is not None:
+            return chr(int(escape.group(1), 16))
+        return _SIMPLE_ESCAPES.get(escape.group(2), escape.group(0))
+    return _ESCAPE.sub(write_out, _STRING_BODY.match(raw, start).group(1))
+
+
 def _metadata_object(metadata: object) -> dict | None:
     """The metadata object of this write (parsed out of a JSON string if needed), else None.
-    Raises ValueError for a string object that names the handoff key and cannot be parsed.
+    Raises ValueError for a string object that names the handoff key, in any spelling, and
+    cannot be parsed as strict JSON (NaN, Infinity and an overflowed float count as unparseable).
     """
     if isinstance(metadata, dict):
         return metadata
     if not isinstance(metadata, str):
         return None
     try:
-        parsed = json.loads(metadata, parse_int=_bounded_int)
+        parsed = json.loads(metadata, parse_constant=_refuse_constant, parse_float=_finite_float,
+                            parse_int=_bounded_int)
     except (ValueError, RecursionError):
-        if metadata.lstrip("\ufeff \t\r\n").startswith("{") and _NAMES_HANDOFF.search(metadata):
+        if metadata.lstrip("\ufeff \t\r\n").startswith("{") and \
+                _NAMES_HANDOFF.search(_key_spelling(metadata)):
             raise ValueError("metadata string names handoff and cannot be parsed") from None
         return None
     return parsed if isinstance(parsed, dict) else None
 
 
 def _string_metadata_names_handoff(raw: str) -> bool:
-    """True iff an unparseable frame holds metadata-as-JSON-string whose handoff key opens an
-    object (a frame cut inside the string reads the rest as its body).
+    """True iff an unparseable frame holds metadata-as-JSON-string whose handoff key, in any
+    spelling, opens an object (a frame cut inside the string reads the rest as its body).
     """
     for found in _STRING_METADATA.finditer(raw):
-        start = found.end()
-        try:
-            end = _STRING_DECODER.raw_decode(raw, start)[1]
-        except ValueError:
-            return bool(_ESCAPED_HANDOFF_OBJECT.search(raw, start))
-        if _ESCAPED_HANDOFF_OBJECT.search(raw, start, end):
+        if _OPENS_HANDOFF.search(_key_spelling(_string_body(raw, found.end()))):
             return True
     return False
 
@@ -673,7 +715,7 @@ def main() -> None:
     try:
         input_data = json.loads(raw, parse_int=_bounded_int)
     except (ValueError, RecursionError):
-        if _NAMES_HANDOFF.search(raw) or _string_metadata_names_handoff(raw):
+        if _NAMES_HANDOFF.search(_key_spelling(raw)) or _string_metadata_names_handoff(raw):
             _emit_deny(_HANDOFF_SHAPE_REASON)
         print(_SUPPRESS_OUTPUT)
         sys.exit(0)
@@ -717,7 +759,12 @@ def main() -> None:
     if variety_gap:
         if DISPATCH_VARIETY_MODE == "deny":
             # Deny (shipped default). Honoured and atomic (observed 2026-07-28): the caller must re-issue
-            # the whole write.
+            # the whole write. A team policy that raised the mode is named in the reason.
+            try:
+                from shared.team_policy import refusal_note
+                variety_gap += refusal_note(("pact_options.PACT_DISPATCH_VARIETY_MODE",))
+            except Exception:  # noqa: BLE001 - the deny stands without its note
+                pass
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",

@@ -48,6 +48,8 @@ Assess variety per [workflows.md §Variety](../protocols/workflows.md#variety) (
 
 **Persist `variety`**: `TaskUpdate(featureTaskId, metadata={"variety": {"novelty": N, "scope": N, "uncertainty": N, "risk": N, "total": N}})`. The hook journals the feature-level `variety_assessed` event; do not write it. After compaction, recover it with `python3 "{plugin_root}/hooks/shared/session_journal.py" read-last --session-dir '{session_dir}' --type variety_assessed --exclude-scope dispatch` (without the exclusion a per-dispatch mirror comes back as the feature assessment); fall back to the feature task file's `metadata.variety` (`TaskGet` does NOT surface metadata). No variety data means hard gates cannot be evaluated, so phases run.
 
+**Cost preview**: before each phase's first dispatch, print the line of `python3 "{plugin_root}/bin/repact-cost" --preview <N>` (N specialists) to the user as it is.
+
 > ⚠️ **Heredoc-stdin contract for journal events**: every journal write uses `--stdin <<'JSON' ... JSON` (quoted delimiter) so substituted values pass through unexpanded; substitute only JSON-valid strings (escape `\"`, `\\`, control characters).
 
 > **Task-log boundary write** — starting the feature is a transition you WITNESSED: mark its project task `active`, linked to the feature task, WITHOUT asking, via the command, once per ref the feature owns (HANDOFFs owe `handoff.refs` per ref); report the write or refusal and carry on.

@@ -32,6 +32,7 @@ List each sub-task's files; sequence or split overlaps (first agent's convention
    python3 "{plugin_root}/bin/repact-task" start <ref> --ptask {team_name}/<task id>
    ```
 5. **Repo notes** — read the repo's `.claude/pact-dispatch-notes.md` if present; put the lines that apply in each brief.
+6. **Cost preview** — print the line of `python3 "{plugin_root}/bin/repact-cost" --preview <N>` (N specialists) to the user as it is.
 
 ## Teachback-Gated Dispatch
 

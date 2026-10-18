@@ -48,8 +48,9 @@ KEY_PHRASE = re.compile(r"^[a-z0-9][a-z0-9.+#/_-]*(?: [a-z0-9][a-z0-9.+#/_-]*){1
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MD_NOISE = re.compile(r"[*_`>#\[\]]")
 CREDENTIAL_PATH = "kb-gate"
-ID_RE = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
+ID_RE = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}", re.ASCII)      # no unicode digit lookalikes
 DECIDER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._@-]{0,63}$")
+AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", re.ASCII)  # _iso's shape
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # A rendered bullet's own label ("- **Why:** "), stripped so a whole-line class sees the value.
 LABEL_PREFIX = re.compile(r"^[ \t]*(?:[-*+>][ \t]+)*(?:[*_]{1,2}[^*_\n]{1,40}?[*_]{1,2}[ \t]*)?")
@@ -598,30 +599,15 @@ def pending(vault: Path) -> list[dict]:
     return scan_queue(vault)["items"]
 
 
-def queue_health(vault: Path, moment: Optional[datetime.datetime] = None) -> dict:
-    moment = moment or now_utc()
-    state = scan_queue(vault)
-    ages = []
-    for item in state["items"]:
-        try:
-            created = datetime.datetime.strptime(item["created"], "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=datetime.timezone.utc)
-        except (KeyError, ValueError):
-            continue
-        ages.append((moment - created).total_seconds() / 86400)
-    oldest = max(ages) if ages else 0.0
-    corrupt = len(state["corrupt"]) + len(state["unsealed"])
-    return {"count": len(ages), "oldest_days": round(oldest, 1), "stale": oldest > STALE_DAYS,
-            "corrupt": corrupt, "corrupt_files": state["corrupt"] + state["unsealed"]}
-
-
 # ---------------------------------------------------------------------------------------------
 # propose / decide / apply
 # ---------------------------------------------------------------------------------------------
 
 def caller() -> dict:
-    """Who is running this command, from the environment only (never from a proposal's JSON)."""
-    session = next((os.environ[name] for name in SESSION_ENV if os.environ.get(name)), None)
+    """Who is running this command, from the environment only (never from a proposal's JSON).
+    A blank or whitespace-only session id counts as none."""
+    session = next((os.environ[name].strip() for name in SESSION_ENV
+                    if os.environ.get(name, "").strip()), None)
     return {"session": session, "agent": os.environ.get(AGENT_ENV) or None}
 
 
@@ -681,7 +667,8 @@ def propose(vault: Path, raw, moment: Optional[datetime.datetime] = None, *,
         return {"status": "auto-applied" if done else "auto-accepted", "id": item["id"], "action": item["action"],
                 "target": item["target"], "apply_error": failures[0]["error"] if failures else None}
     audit = state["on"] and not (no_auto or never)     # a forced-queue item is no audit sample
-    item = _new_item_file(vault, make, (), lambda it: dict(it, audit_sample=True) if audit else it)
+    item = _new_item_file(vault, make, (), lambda it: dict(it, no_auto=no_auto, **({"audit_sample": True}
+                                                                                    if audit else {})))
     return {"status": "queued", "id": item["id"], "action": item["action"], "target": item["target"],
             "audit_sample": audit, "candidates": routed["routing"]["candidates"]}
 

@@ -14,6 +14,7 @@
   "distill": {
     "enabled": false,
     "backend": "claude-cli",
+    "batch": false,
     "model": "sonnet",
     "effort": "medium",
     "caps": {
@@ -25,6 +26,7 @@
       "include": [],
       "exclude": []
     },
+    "transcripts": false,
     "pricing_source": null
   }
 }

@@ -23,9 +23,9 @@ as the systemMessage the user sees, e.g.
 and the tasks line, which the lead reads, as additionalContext.
 
 The cache is one per install, and the doctor reads the repo of the directory it ran in. Its
-repo-bound lines (a backlog's USER-OWNED actions, the release position and gates) are shown only
-when the cache's repo is the main checkout of this session's cwd, so one project's backlog never
-reaches another's session. Open user-action task items are the user's, whatever the repo.
+repo-bound lines (a backlog's USER-OWNED actions, the release position and gates, the team
+policy) are shown only when the cache's repo is the main checkout of this session's cwd, so one
+project's backlog never reaches another's session. Open user-action task items are the user's, whatever the repo.
 Fail-open: any error prints suppressOutput and exits 0. Stdlib only, no plugin imports (a cold
 import of the shared module costs more than this whole hook).
 
@@ -65,7 +65,7 @@ CACHE_NAME = "doctor.json"
 REFRESH_AFTER = datetime.timedelta(hours=1)    # a --quick refresh costs ~5 s of niced, detached CPU
 STALE_AFTER = datetime.timedelta(hours=12)     # older than this, the line says so and lists no actions
 CLOSED_STATUSES = ("completed", "deleted")     # equal to shared/user_actions' (pinned by a test)
-REPO_CHECKS = ("release", "gates")             # read from the doctor's repo, so shown only in it
+REPO_CHECKS = ("release", "gates", "policy")   # read from the doctor's repo, so shown only in it
 TASK_ITEM = re.compile(r"^#(?P<id>[^\s/]+) .*\((?P<team>[^()/]+)\)$")  # _doctor._alert_tasks' item shape
 NO_REFRESH_ENV = "REPACT_DOCTOR_NO_REFRESH"
 QUIET_SOURCES = {"compact"}

@@ -6,6 +6,7 @@
   "models": {
     "haiku": {"input_per_mtok": null, "output_per_mtok": null},
     "sonnet": {"input_per_mtok": null, "output_per_mtok": null},
-    "opus": {"input_per_mtok": null, "output_per_mtok": null}
+    "opus": {"input_per_mtok": null, "output_per_mtok": null},
+    "claude-opus-5-5": {"input_per_mtok": null, "output_per_mtok": null}
   }
 }

@@ -445,3 +445,138 @@ class TestCost:
             timings.append((time.perf_counter() - start) * 1000)
         p95 = statistics.quantiles(timings, n=20)[-1]
         assert p95 < 20, f"p95 {p95:.3f} ms"
+
+
+# --- a pseudo-terminal wrapper around a human-only KB step --------------------------------
+
+PTY_REFUSED = [
+    # the review's probe (p6.sh): an agent feeding the retyped id through script
+    "(sleep 3; printf 'ID\\n') | script -q /dev/null repact-distill promote --repo .",
+    "script -q /dev/null python3 bin/repact-distill promote --repo /work/app --by alice",
+    "printf 'ID\\n' | /usr/bin/script -qc 'python3 bin/vault-note drain --batch d.json' /dev/null",
+    "sudo -u me unbuffer -p python3 bin/vault-note drain --decide ID accepted --by alice",
+    "nice -n 19 expect -c 'spawn kb-note drain --decide ID edited --by alice; send ID\\r; interact'",
+    "expect <<'EOF'\nspawn python3 bin/vault-note drain --batch d.json\nsend \"ID\\r\"\nEOF",
+    "socat - EXEC:'repact-distill promote --repo .',pty,setsid",
+    "python3 -c \"import pty; pty.spawn(['repact-distill', 'promote', '--repo', '.'])\"",
+    "python3 -c 'import pexpect; pexpect.spawn(\"vault-note drain --batch d.json\")'",
+]
+PTY_ALLOWED = [
+    "repact-distill promote --dry-run --repo .",
+    "python3 bin/vault-note drain --decide ID rejected --by alice",
+    "script -q /dev/null make test",                                     # a wrapper, no KB step
+    "git commit -m 'Make vault-note drain refuse what we expect from a script'",
+    "grep -n 'expect' bin/vault-note && grep -n drain bin/vault-note",
+    "cat scripts/release.sh; repact-distill promote --dry-run",
+]
+
+
+# kbdrev L1 (task 186): spellings the first list missed. Probe F sealed an item through screen -X stuff.
+PTY_REFUSED_WIDER = [
+    "screen -dmS kb python3 bin/vault-note drain --decide ID accepted --by alice",
+    "screen -S kb -p 0 -X stuff 'vault-note drain --decide ID accepted --by alice\\n'",
+    "tmux new -d 'vault-note drain --decide ID accepted --by alice'",
+    "tmux send-keys -t kb 'kb-note decide ID accepted --by alice' Enter",
+    "tmux ls; vault-note drain --decide ID accepted --by alice",            # amend_1: any tmux beside the step
+    "/opt/homebrew/bin/tmux new-session -d repact-distill promote --repo .",
+    "nice -n 19 dtach -n /tmp/kb.sock python3 bin/vault-note drain --batch d.json",
+    "abduco -c kb repact-distill promote --repo .",
+    "byobu new-session -d 'vault-note drain --batch d.json'",
+    "zellij run -- vault-note drain --decide ID accepted --by alice",
+    "perl -MIO::Pty -e 'my $p = IO::Pty->new' ; vault-note drain --decide ID accepted",
+    "perl -e 'use IO::Tty; exec q(kb-note), q(decide)'",
+    "python3 -c 'import posix; m, s = posix.openpty()' && vault-note drain --batch d.json",
+    "python3 -c \"__import__('pty').spawn(['vault-note', 'drain', '--batch', 'd.json'])\"",
+    "python3 -c '__import__(\"pty\").fork()'; repact-distill promote --repo .",
+    "python3 -c \"import importlib; importlib.import_module('pty')\"; vault-note drain --batch d.json",
+    "ruby -e 'PTY.spawn(\"vault-note drain --batch d.json\")'",
+]
+# Near-misses that stay allowed: the wrapper or the module name with no human KB step in the command.
+PTY_NEAR_MISSES = [
+    "tmux ls",
+    "screen -ls",
+    "cat screen.txt && vault-note drain --decide ID rejected --by alice",
+    "echo IO::Pty | wc -c",
+    "grep -n tmux bin/vault-note && grep -n drain bin/vault-note",
+    "python3 -c 'import os; print(os.getpid())'; vault-note drain --decide ID rejected --by alice",
+    "dtach --help",
+]
+
+
+# Literal spellings that once escaped, and the allowed rows' near-misses that must stay refused
+# (a deciding flag, abbreviated or typed in a later argument; --batch paging, whose page retype is
+# a decision; --dry-run in another simple command; a decide verb).
+PTY_REFUSED_G2 = [
+    "/usr/bin/env tmux new -d 'python3 /p/bin/vault-note drain --decide k1 accepted --by u'",
+    "python3 -c 'from os import openpty; m, s = openpty()' && vault-note drain --decide ID accepted",
+    "python3 -c 'from posix import forkpty; forkpty()'; repact-distill promote --repo .",
+    "tmux new -d 'python3 /p/bin/Vault-Note drain --decide k1 accepted --by u'",
+    "/usr/bin/TMUX new -d 'vault-note drain --decide k1 accepted --by u'",
+    "ruby -rpty -e 'PTY.spawn \"vault-note drain --decide ID accepted --by alice\"'",
+    "tmux ls && vault-note drain --decid ID accepted --by alice",
+    "tmux ls && vault-note drain --acc --batch --page 1",
+    "tmux send-keys -t s 'python3 /p/bin/vault-note drain' ' --decide k1 accepted' Enter",
+    "tmux ls; vault-note drain --batch",
+    "tmux ls; vault-note drain --blind-brief --batch --page 1",
+    "tmux ls; repact-distill promote --repo . --by u; echo --dry-run",
+    "tmux ls && repact-distill promote --dry --repo .",
+    "tmux ls; kb-note decide ID accepted --by alice",
+]
+# A command that names no human step, and the forms an agent may run, which code
+# proves never prompt for or record a decision (the line that proves it is beside each row).
+PTY_ALLOWED_G2 = [
+    "ls docs/kb-notes && grep -rn decided . && tmux ls",                  # no step: kb-notes, decided
+    "tmux ls; python3 /p/bin/vault-note drain --blind-brief",   # bin/_kb/drain.py cmd_drain prints, returns
+    "tmux ls && python3 /p/bin/repact-distill promote --dry-run",  # bin/_distill/promote.py run skips _gate_real_run
+    "tmux ls && repact-distill promote --repo . --dry-run",       # (no gate, returns before writing)
+    "tmux ls; python3 /p/bin/vault-note drain",                  # bin/_kb/drain.py cmd_drain queue_lines
+    "tmux ls; vault-note drain --by alice 2>/dev/null",           # the same list form
+]
+# Near-misses: the new spellings with no human step, and env-by-path with no wrapper.
+PTY_NEAR_MISSES_G2 = [
+    "/usr/bin/env python3 -c 'print(1)'; vault-note drain --decide ID rejected --by alice",
+    "grep -rn openpty docs/ && /usr/bin/env tmux ls",
+    "ruby -e 'PTY.spawn \"ls\"'",
+]
+
+
+# The team audience's stage and push are human steps like promote; their dry runs are not.
+PTY_REFUSED_TEAM = [
+    "(sleep 3; printf 'ID\\n') | script -q /dev/null repact-distill team push --team-repo ~/kb --by a",
+    "tmux ls; python3 /p/bin/repact-distill team stage --team-repo . --by alice",
+    "expect -c 'spawn repact-distill team push --by alice; send ID\\r; interact'",
+    # --dry-run inside a quoted value or a comment is not a dry run.
+    "tmux ls && repact-distill team push --team-repo 'x --dry-run' --by alice",
+    "tmux ls && repact-distill team push --team-repo . --by alice # --dry-run",
+    "tmux ls && repact-distill promote --repo \"x --dry-run\" --by alice",
+    # --dry-run as a redirection target is a file name, not an argument.
+    "script -q /dev/null repact-distill team push --team-repo ~/kb --by a > --dry-run",
+    "tmux ls; repact-distill team push --by a <<< --dry-run",
+    "tmux ls; repact-distill team stage --by a << --dry-run",
+    "tmux ls; repact-distill promote --repo . --by a 2>--dry-run",
+    "tmux ls; repact-distill promote --repo . --by a >>--dry-run",
+]
+PTY_ALLOWED_TEAM = [
+    "tmux ls && repact-distill team push --dry-run --team-repo .",
+    "tmux ls; python3 /p/bin/repact-distill team stage --team-repo . --dry-run",
+    "tmux ls; repact-distill team push --team-repo . --dry-run>/dev/null 2>&1",  # still an argument
+    "repact-distill team push --team-repo . --by alice",                 # no wrapper
+]
+
+
+@pytest.mark.parametrize("command", PTY_REFUSED + PTY_REFUSED_WIDER + PTY_REFUSED_G2 + PTY_REFUSED_TEAM)
+def test_a_pty_wrapped_human_kb_step_is_refused_with_its_rule(command):
+    output = guard.decide(bash(command))
+    assert output is not None
+    assert f"[rule: {guard.PTY_RULE_ID}]" in output["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("command", PTY_ALLOWED + PTY_NEAR_MISSES + PTY_ALLOWED_G2
+                         + PTY_NEAR_MISSES_G2 + PTY_ALLOWED_TEAM)
+def test_the_ordinary_path_and_unrelated_wrappers_are_allowed(command):
+    assert not is_denied(command)
+
+
+def test_the_pty_refusal_reaches_stderr_with_exit_2():
+    result = run_hook(bash(PTY_REFUSED[0]))
+    assert result.returncode == 2 and guard.PTY_RULE_ID in result.stderr

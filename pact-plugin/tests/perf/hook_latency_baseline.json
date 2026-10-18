@@ -1,0 +1,182 @@
+{
+ "calibration_ms": 5.92,
+ "checks": {
+  "PostToolUse:amendment_relay": {
+   "p50_ms": 1.18,
+   "p95_ms": 1.4,
+   "runs": 60
+  },
+  "PostToolUse:merge_guard_post": {
+   "p50_ms": 14.16,
+   "p95_ms": 15.48,
+   "runs": 30
+  },
+  "PostToolUse:output_secret_scan": {
+   "p50_ms": 32.4,
+   "p95_ms": 36.63,
+   "runs": 30
+  },
+  "PostToolUse:run_ledger": {
+   "p50_ms": 6.28,
+   "p95_ms": 7.08,
+   "runs": 30
+  },
+  "PostToolUse:track_files": {
+   "p50_ms": 3.28,
+   "p95_ms": 3.69,
+   "runs": 60
+  },
+  "PreToolUse:acceptance_flags": {
+   "p50_ms": 0.41,
+   "p95_ms": 0.55,
+   "runs": 30
+  },
+  "PreToolUse:amendment_gate": {
+   "p50_ms": 2.18,
+   "p95_ms": 2.43,
+   "runs": 30
+  },
+  "PreToolUse:background_test_gate": {
+   "p50_ms": 0.27,
+   "p95_ms": 0.33,
+   "runs": 30
+  },
+  "PreToolUse:bootstrap_gate": {
+   "p50_ms": 3.45,
+   "p95_ms": 4.06,
+   "runs": 60
+  },
+  "PreToolUse:docker_lock_gate": {
+   "p50_ms": 1.59,
+   "p95_ms": 1.81,
+   "runs": 30
+  },
+  "PreToolUse:egress_guard": {
+   "p50_ms": 4.28,
+   "p95_ms": 4.72,
+   "runs": 30
+  },
+  "PreToolUse:env_guard": {
+   "p50_ms": 4.46,
+   "p95_ms": 6.02,
+   "runs": 60
+  },
+  "PreToolUse:git_commit_check": {
+   "p50_ms": 33.92,
+   "p95_ms": 37.02,
+   "runs": 30
+  },
+  "PreToolUse:handoff_ordering_gate": {
+   "p50_ms": 9.44,
+   "p95_ms": 11.05,
+   "runs": 30
+  },
+  "PreToolUse:merge_guard_pre": {
+   "p50_ms": 11.56,
+   "p95_ms": 12.64,
+   "runs": 30
+  },
+  "PreToolUse:process_table_guard": {
+   "p50_ms": 2.7,
+   "p95_ms": 3.0,
+   "runs": 30
+  },
+  "PreToolUse:task_claim_gate": {
+   "p50_ms": 4.17,
+   "p95_ms": 4.53,
+   "runs": 90
+  },
+  "PreToolUse:wait_filler_gate": {
+   "p50_ms": 0.83,
+   "p95_ms": 0.95,
+   "runs": 30
+  },
+  "PreToolUse:worktree_guard": {
+   "p50_ms": 1.1,
+   "p95_ms": 1.15,
+   "runs": 60
+  },
+  "PreToolUse:write_checks": {
+   "p50_ms": 17.0,
+   "p95_ms": 18.23,
+   "runs": 60
+  },
+  "Stop:stop_background_gate": {
+   "p50_ms": 0.63,
+   "p95_ms": 0.73,
+   "runs": 30
+  },
+  "UserPromptSubmit:bootstrap_marker_writer": {
+   "p50_ms": 4.48,
+   "p95_ms": 4.95,
+   "runs": 30
+  },
+  "UserPromptSubmit:bootstrap_prompt_gate": {
+   "p50_ms": 2.84,
+   "p95_ms": 3.21,
+   "runs": 30
+  },
+  "UserPromptSubmit:journal_emitter": {
+   "p50_ms": 5.64,
+   "p95_ms": 6.04,
+   "runs": 30
+  },
+  "UserPromptSubmit:missed_wake_scan": {
+   "p50_ms": 4.6,
+   "p95_ms": 4.98,
+   "runs": 30
+  }
+ },
+ "machine": "Darwin arm64",
+ "python": "3.14.8",
+ "recorded": "2026-10-18T00:10:19Z",
+ "runs": 30,
+ "v": 1,
+ "walls": {
+  "post-bash": {
+   "p50_ms": 110.75,
+   "p95_ms": 118.41,
+   "runs": 30
+  },
+  "post-edit": {
+   "p50_ms": 50.77,
+   "p95_ms": 54.62,
+   "runs": 30
+  },
+  "pre-bash": {
+   "p50_ms": 139.01,
+   "p95_ms": 150.04,
+   "runs": 30
+  },
+  "pre-edit": {
+   "p50_ms": 53.23,
+   "p95_ms": 58.82,
+   "runs": 30
+  },
+  "pre-read": {
+   "p50_ms": 56.15,
+   "p95_ms": 61.96,
+   "runs": 30
+  },
+  "pre-taskupdate": {
+   "p50_ms": 80.98,
+   "p95_ms": 91.35,
+   "runs": 30
+  },
+  "pre-write": {
+   "p50_ms": 52.95,
+   "p95_ms": 54.49,
+   "runs": 30
+  },
+  "prompt": {
+   "p50_ms": 66.99,
+   "p95_ms": 70.29,
+   "runs": 30
+  },
+  "stop": {
+   "p50_ms": 46.35,
+   "p95_ms": 50.34,
+   "runs": 30
+  }
+ }
+}

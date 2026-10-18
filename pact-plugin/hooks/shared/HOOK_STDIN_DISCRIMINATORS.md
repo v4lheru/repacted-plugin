@@ -111,6 +111,7 @@ empty.
 | TaskCompleted | `agent_type` | lead spelling | `pact-<specialist>` | — | lead: **no** · teammate: **yes** (also `teammate_name`) | lead: yes · teammate: no |
 | PreCompact | none for an in-process teammate | lead spelling | in-process: lead spelling · separate-process: `pact-<specialist>` (inferred) | — | no | not read |
 | PostCompact | `agent_type` (none for an in-process teammate) | lead spelling | in-process: lead spelling · separate-process: `pact-<specialist>` (inferred) | — | no | lead: yes · in-process: yes (the lead's journal) · separate-process: no |
+| SessionEnd (inferred, not captured) | `agent_type` | lead spelling, or absent in a plain session | separate-process: `pact-<specialist>` (inferred from SessionStart) · in-process: no SessionEnd of its own (its end is SubagentStop) | absent | no | not read (hooks/distill_enqueue.py keys on `agent_type` and a `subagents/` transcript parent) |
 
 PostCompact capture provenance: live append-only hook dump, 2026-08-26, lead
 manual `/compact` in the in-process dogfood session (PACT 4.6.44). The committed

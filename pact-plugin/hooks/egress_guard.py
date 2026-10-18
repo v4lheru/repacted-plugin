@@ -32,6 +32,11 @@ Summary: PreToolUse(mcp__.*|WebFetch|Artifact|Bash) hook that denies a credentia
          through `env-get FILE KEY -- <cmd>` never appears in tool input, so that path works.
 Used by: hooks.json PreToolUse entry. Tested by tests/test_egress_guard.py.
 
+Team policy (.repacted/policy.json, shared/team_policy.py): `egress.allow_pragma: false` makes
+every pragma line scanned, and `egress.network_programs` adds programs whose commands are
+scanned like curl's (the whole command; their upload arguments are not parsed). A deny then
+names the policy file and the key.
+
 Fail-closed for egress only: if the detector raises on an egress input, the call is denied.
 A Bash command with no network client never loads the detector at all.
 
@@ -120,23 +125,27 @@ def strings_in(value):
             yield from strings_in(item)
 
 
-def without_pragma_lines(text: str, skipped: list) -> str:
-    if PRAGMA not in text:
+def without_pragma_lines(text: str, skipped: list, allow_pragma: bool = True) -> str:
+    """The text without the lines its pragma covers (shared.scrub.pragma_covers: one secret
+    value per pragma line), each counted; unchanged when a team policy set egress.allow_pragma
+    to false (every line is then scanned)."""
+    if not allow_pragma or PRAGMA not in text:
         return text
+    from shared.scrub import pragma_covers
     kept = []
     for line in text.split("\n"):
-        if PRAGMA in line:
+        if PRAGMA in line and pragma_covers(line, PRAGMA):
             skipped.append(1)
         else:
             kept.append(line)
     return "\n".join(kept)
 
 
-def first_kind(texts, skipped: list | None = None) -> str | None:
+def first_kind(texts, skipped: list | None = None, allow_pragma: bool = True) -> str | None:
     skipped = [] if skipped is None else skipped
     for text in texts:
-        for candidate in (without_pragma_lines(text, skipped),
-                          without_pragma_lines(unescaped(text), [])):
+        for candidate in (without_pragma_lines(text, skipped, allow_pragma),
+                          without_pragma_lines(unescaped(text), [], allow_pragma)):
             kind = detect(candidate)
             if kind:
                 return kind
@@ -166,7 +175,9 @@ def artifact_texts(tool_input: dict, cwd: str):
                 yield file_text(path, cwd)
 
 
-def network_clients(parts: list[list[str]]) -> set[str]:
+def network_clients(parts: list[list[str]], extra: frozenset = frozenset()) -> set[str]:
+    """The network programs the command runs; `extra` adds a team policy's programs."""
+    programs = NETWORK_PROGRAMS | extra
     found = set()
     for words in parts:
         command = strip_prefix(words)
@@ -174,11 +185,11 @@ def network_clients(parts: list[list[str]]) -> set[str]:
         runs = [command] + [strip_prefix(words[i + 1:]) for i, word in enumerate(words[:-1])
                             if word in egress_uploads.FIND_EXEC]
         found |= {run[0].rsplit("/", 1)[-1] for run in runs
-                  if run and run[0].rsplit("/", 1)[-1] in NETWORK_PROGRAMS}
+                  if run and run[0].rsplit("/", 1)[-1] in programs}
         # A client run by a word the shared runner table does not know (strace -f curl,
         # proxychains curl): egress_uploads reads it from the client word on.
         found |= {word.split("=", 1)[-1].rsplit("/", 1)[-1] for word in words
-                  if word.split("=", 1)[-1].rsplit("/", 1)[-1] in NETWORK_PROGRAMS}
+                  if word.split("=", 1)[-1].rsplit("/", 1)[-1] in programs}
     return found
 
 
@@ -284,20 +295,46 @@ def _found(where: str, kind: str) -> dict:
                  f"this machine; {FIX}.")
 
 
+def policy_settings(cwd: str) -> tuple[bool, frozenset]:
+    """(egress.allow_pragma, egress.network_programs) after the work tree's team policy, which
+    can only switch the pragma off and add programs. A policy that cannot be read changes
+    nothing: (True, frozenset())."""
+    try:
+        from shared import team_policy
+        return team_policy.egress_settings(cwd)
+    except Exception:   # noqa: BLE001 - the guard's own rules still run in full
+        return True, frozenset()
+
+
 def decide(payload: dict) -> dict | None:
-    """The hook's output for one payload: a deny object, or None to allow."""
+    """The hook's output for one payload: a deny object, or None to allow. A deny names the
+    team policy when the policy changed this guard (shared.team_policy.refusal_note)."""
+    output = _decide(payload)
+    specific = (output or {}).get("hookSpecificOutput", {})
+    if specific.get("permissionDecision") == "deny":
+        try:
+            from shared import team_policy
+            specific["permissionDecisionReason"] += team_policy.refusal_note(("egress.",),
+                                                                            payload.get("cwd"))
+        except Exception:   # noqa: BLE001 - the deny stands without its note
+            pass
+    return output
+
+
+def _decide(payload: dict) -> dict | None:
     tool = payload.get("tool_name")
     tool_input = payload.get("tool_input")
     if not isinstance(tool, str) or not isinstance(tool_input, dict):
         return None
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
+    allow_pragma, extra_programs = policy_settings(cwd)
     files: list[tuple[str, str]] = []
     if tool == "Bash":
         command = tool_input.get("command")
         if not isinstance(command, str):
             return None
         parts = segments(command)
-        clients = network_clients(parts)
+        clients = network_clients(parts, extra_programs)
         if not clients or (clients <= URL_CLIENTS and bash_only_loopback(command)):
             return None
         try:
@@ -326,7 +363,7 @@ def decide(payload: dict) -> dict | None:
         return None
     skipped: list = []
     try:
-        kind = first_kind(texts, skipped)
+        kind = first_kind(texts, skipped, allow_pragma)
     except Exception as error:   # noqa: BLE001 - fail closed: this input is leaving the machine
         return _deny(f"Blocked: the credential check on this {where} failed "
                      f"({type(error).__name__}), so it was not sent; {FIX}.")
@@ -334,7 +371,7 @@ def decide(payload: dict) -> dict | None:
         return _found(where, kind)
     for path, text in files:
         try:
-            kind = first_kind([text], skipped)
+            kind = first_kind([text], skipped, allow_pragma)
         except Exception as error:   # noqa: BLE001 - fail closed, as above
             return _deny(f"Blocked: the credential check on {path} failed ({type(error).__name__}), "
                          f"so it was not uploaded; {FIX}.")

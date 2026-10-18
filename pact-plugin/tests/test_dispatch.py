@@ -64,6 +64,7 @@ REGISTRATIONS_BEFORE = [
     ('SubagentStart', None, 'hooks/peer_inject.py', False),
     ('SessionEnd', None, 'hooks/session_end.py', True),
     ('SessionEnd', None, 'hooks/session_ledger.py', False),
+    ('SessionEnd', None, 'hooks/distill_enqueue.py', False),  # registered after the dispatcher
     ('TaskCompleted', None, 'hooks/agent_handoff_emitter.py', False),
     ('TeammateIdle', None, 'hooks/teammate_idle.py', False),
     ('PostToolUse', 'Edit|Write|Bash', 'hooks/track_files.py', False),

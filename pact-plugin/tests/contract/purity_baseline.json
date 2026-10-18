@@ -3,24 +3,66 @@
  "version": 1,
  "refreshes": [
   {
-   "date": "2026-10-17",
+   "date": "2026-10-18",
    "mode": "public",
    "reason": "derived for the public tree: the private rows whose shipped file still has the hit in its public text, at the public line, plus the reviewed public-only rows",
    "delta": {
     "secret/api-key": 8,
     "secret/aws-key": 2,
-    "secret/bearer-token": 2,
-    "secret/credential-name": 1,
+    "secret/bearer-token": 3,
+    "secret/credential-name": 2,
     "secret/github-token": 2,
     "secret/jwt": 1,
-    "secret/password-in-url": 3,
-    "secret/password-inline": 10,
+    "secret/password-in-url": 6,
+    "secret/password-inline": 11,
     "secret/private-key": 3,
-    "secret/secret-assignment": 58
+    "secret/secret-assignment": 63
    }
   }
  ],
  "entries": [
+  {
+   "path": "packs/n8n/skills/n8n-code-javascript/DATA_ACCESS.md",
+   "line": 535,
+   "class": "secret/secret-assignment",
+   "id": "5022fb782c925007",
+   "scope": "core"
+  },
+  {
+   "path": "packs/n8n/skills/n8n-code-python/STANDARD_LIBRARY.md",
+   "line": 423,
+   "class": "secret/password-inline",
+   "id": "77e64b7873ab4e17",
+   "scope": "core"
+  },
+  {
+   "path": "packs/n8n/skills/n8n-code-python/STANDARD_LIBRARY.md",
+   "line": 423,
+   "class": "secret/secret-assignment",
+   "id": "abf2be6196aa85f7",
+   "scope": "core"
+  },
+  {
+   "path": "packs/n8n/skills/n8n-expression-syntax/EXAMPLES.md",
+   "line": 410,
+   "class": "secret/credential-name",
+   "id": "47d1cb3dd4ef8121",
+   "scope": "core"
+  },
+  {
+   "path": "packs/n8n/skills/n8n-expression-syntax/EXAMPLES.md",
+   "line": 410,
+   "class": "secret/secret-assignment",
+   "id": "7030bffb689482b8",
+   "scope": "core"
+  },
+  {
+   "path": "packs/n8n/skills/n8n-validation-expert/FALSE_POSITIVES.md",
+   "line": 514,
+   "class": "secret/bearer-token",
+   "id": "7d546b84fd58f590",
+   "scope": "core"
+  },
   {
    "path": "pact-plugin/examples/toy/fixtures/fake-credentials.conf",
    "line": 3,
@@ -232,6 +274,41 @@
    "scope": "test"
   },
   {
+   "path": "pact-plugin/tests/test_distill_promote.py",
+   "line": 158,
+   "class": "secret/password-in-url",
+   "id": "9faae7f698f4b4b6",
+   "scope": "test"
+  },
+  {
+   "path": "pact-plugin/tests/test_distill_promote.py",
+   "line": 193,
+   "class": "secret/password-in-url",
+   "id": "3da4053fad2b162f",
+   "scope": "test"
+  },
+  {
+   "path": "pact-plugin/tests/test_distill_promote.py",
+   "line": 194,
+   "class": "secret/secret-assignment",
+   "id": "6aacf4e0b4d0a027",
+   "scope": "test"
+  },
+  {
+   "path": "pact-plugin/tests/test_distill_promote.py",
+   "line": 200,
+   "class": "secret/secret-assignment",
+   "id": "1abfe56237fe4f54",
+   "scope": "test"
+  },
+  {
+   "path": "pact-plugin/tests/test_distill_promote.py",
+   "line": 220,
+   "class": "secret/password-in-url",
+   "id": "446bfd26ba88b0be",
+   "scope": "test"
+  },
+  {
    "path": "pact-plugin/tests/test_git_commit_check.py",
    "line": 568,
    "class": "secret/secret-assignment",
@@ -247,28 +324,28 @@
   },
   {
    "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 258,
+   "line": 259,
    "class": "secret/bearer-token",
    "id": "74202588a7d6ca55",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 258,
+   "line": 259,
    "class": "secret/password-inline",
    "id": "b0ec2e46b7bb94b6",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 258,
+   "line": 259,
    "class": "secret/secret-assignment",
    "id": "a8228de532a8808c",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 259,
+   "line": 260,
    "class": "secret/private-key",
    "id": "30568d6d3b0c3fc3",
    "scope": "test"

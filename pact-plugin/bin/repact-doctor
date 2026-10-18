@@ -10,6 +10,8 @@ and prints one SessionStart line when anything is not green, or nothing at all.
   repact-doctor --full     every check, the slow ones included
   repact-doctor --quick    the fast checks only; the slow ones keep their cached result
                            (what the SessionStart line starts in the background when stale)
+  repact-doctor --policy   the team policy only: every value it can tighten, its effective
+                           value and source, and what in the policy was ignored; no check runs
 
 Checks, one line each (GREEN, AMBER, RED, or SKIP when it cannot run here):
   1 links            the agent and protocol links resolve, share one root, and match the launcher
@@ -29,6 +31,8 @@ Checks, one line each (GREEN, AMBER, RED, or SKIP when it cannot run here):
  11 state ownership  every store in docs/architecture/state-ownership.md has its writer in the
                      plugin; a team whose task files vanished under a standing config.json while
                      its journal recorded tasks
+ 12 team policy      the work tree's .repacted/policy.json: what it tightens and, AMBER, what in
+                     it was ignored (a value that would loosen, a malformed or untrusted file)
 
 Then two notes that are never a check state: `mode:` (guards-only, or full with the Agent Teams
 flag on) and the host line against reference/compat.json (an untested host is a note).
@@ -58,6 +62,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _doctor  # noqa: E402
 import _doctor_host  # noqa: E402
+import _doctor_policy  # noqa: E402
 import _doctor_state  # noqa: E402
 
 EXIT_OK, EXIT_AMBER, EXIT_RED, EXIT_USAGE = 0, 1, 2, 64
@@ -91,9 +96,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--quiet", action="store_true", help="write the cache, print nothing")
     parser.add_argument("--clear", choices=("task-store",),
                         help="remove this session's task-store HALT marker and exit; no check runs")
+    parser.add_argument("--policy", action="store_true",
+                        help="print the team policy's effective values and what it ignored; no check runs")
     args = parser.parse_args(argv)
     if args.clear:
         return _clear_task_store(parser)
+    if args.policy:
+        print("\n".join(_doctor_policy.render(Path(__file__).resolve().parents[1])))
+        return EXIT_OK
 
     data_dir = _doctor.plugin_data_dir()
     lock = _doctor.try_run_lock(data_dir)

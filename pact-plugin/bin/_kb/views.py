@@ -2,14 +2,17 @@
 <= 5-line card).
 
 Location: pact-plugin/bin/_kb/views.py. Used by bin/vault-note's `queue` and
-`drain --blind-brief`; split from _kb/gate.py (which it reads, never the other way round).
+`drain --blind-brief`, _kb/drain.py's batch page and _doctor.py (queue_health); split from
+_kb/gate.py (which it reads, never the other way round).
 A card names a machine proposer (`[proposer: distill]`) so a reviewer knows the lesson was
 model-extracted, and shows that model-written text (title, claim, keys) only inside the data
 wrapper (_kb/datawrap.py), as recall does; a human item's card is unchanged.
 """
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
+from typing import Optional
 
 from _kb import datawrap as W
 from _kb import gate as G
@@ -68,12 +71,30 @@ def card(item: dict) -> list[str]:
     return lines[:5]
 
 
+def queue_health(vault: Path, moment: Optional[datetime.datetime] = None) -> dict:
+    """Queue count, oldest age and the untrusted files (the doctor's kb check and `queue`)."""
+    moment = moment or G.now_utc()
+    state = G.scan_queue(vault)
+    ages = []
+    for item in state["items"]:
+        try:
+            created = datetime.datetime.strptime(item["created"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc)
+        except (KeyError, ValueError):
+            continue
+        ages.append((moment - created).total_seconds() / 86400)
+    oldest = max(ages) if ages else 0.0
+    corrupt = len(state["corrupt"]) + len(state["unsealed"])
+    return {"count": len(ages), "oldest_days": round(oldest, 1), "stale": oldest > G.STALE_DAYS,
+            "corrupt": corrupt, "corrupt_files": state["corrupt"] + state["unsealed"]}
+
+
 def queue_lines(vault: Path) -> list[str]:
     """`vault-note queue`: every card, the corrupt files, then one summary line with the bars, and
     one line for the user when held distill items wait."""
     items = G.pending(vault)
     lines = [line for item in items for line in card(item)]
-    health = G.queue_health(vault)
+    health = queue_health(vault)
     lines += [f"CORRUPT {name}  (unreadable, or not written by the gate: inspect it; it is never decided or applied)"
               for name in health["corrupt_files"]]
     bars = "; ".join(f"{who + ' bar' if who else 'bar'}: " + ", ".join(
