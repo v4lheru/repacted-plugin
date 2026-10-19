@@ -532,7 +532,7 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 
 - **Rule:** A fix or a feature task has no failing tcount run, since dispatch and before its first passing run on the current inputs, of a test file that passing run covers.
 - **Why:** The ledger keeps commands, not test ids, so a red run counts for a file its command names; it shows a red run existed, not that the intended assertion failed. A refactor, config or docs task does not need one; a missing or unknown kind is judged as a feature.
-- **Way through:** Run the new test with tcount before the fix (name its file or node id in the command) and see it fail, then fix and run it again.
+- **Way through:** Run the new test with tcount before the fix (name its file or node id in the command) and see it fail, then fix and run it again. If a passing run on these files came first: make a temporary revert commit of the fix, run the named test with tcount and see it fail, restore the fix, then ask the lead for a waiver: `repact accept <id> --waive "<reason naming that red run>"`. The waiver does not check the run; unattended, it parks the task for the owner.
 
 <a id="evidence-needs-human"></a>
 ### `evidence.needs_human`
