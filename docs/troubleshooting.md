@@ -552,8 +552,8 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 ### `task_log.close_unaccepted`
 
 - **Rule:** In an autopilot run or unattended mode a task-log row closes only when every platform task linked to it is completed with a stored HANDOFF and evidence; this row has a linked task that is not, a link to another team's task, or no linked task at all.
-- **Why:** Run 3 closed rows on a commit while their tasks were pending with no HANDOFF; the row is judged from its own links, so a new autopilot run changes nothing.
-- **Way through:** Accept each linked platform task with `repact accept`, or close with --waive "&lt;reason&gt;"; the waiver is logged.
+- **Why:** A row was once closed on a commit while its tasks were still pending with no HANDOFF; the row is judged from its own links, so a new autopilot run changes nothing.
+- **Way through:** Accept each linked platform task with `repact accept`, or close with --waive "&lt;reason&gt;": attended, the row closes and the waiver is logged; unattended, the waiver parks the row for the owner (`repact decide` lists it).
 
 <a id="task-log-parked-for-owner"></a>
 ### `task_log.parked_for_owner`
