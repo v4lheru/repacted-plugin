@@ -49,7 +49,7 @@ It returns on any write to the task file (a [wake](../glossary.md#wake)) and pri
 
 Before it waits, the teammate writes a [wait marker](../glossary.md#wait-marker), so anyone can see why it is idle, and clears it when the wait ends. Filler calls such as a bare `sleep 30` or `true` are refused. Wait on the task file instead.
 
-`repact-wait`, `repact-status` and `pact-which-team` work only with Agent Teams; with subagents they say so and exit.
+`repact-status` and `pact-which-team` work only with Agent Teams; with subagents they say so and exit. A subagent never needs `repact-wait`.
 
 ## The session journal
 
