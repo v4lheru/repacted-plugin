@@ -524,7 +524,7 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 ### `evidence.selection_mismatch`
 
 - **Rule:** A pinned acceptance criterion has passing runs on the current inputs, but none selects the same tests as its command (the same runner, options and targets).
-- **Why:** A narrower run (another file, a -k filter) does not show the criterion holds (Astra F1).
+- **Why:** A narrower run (another file, a -k filter) does not show the criterion holds.
 - **Way through:** Run the criterion's command exactly as pinned, under tcount, in the worktree; output-only flags such as -q may differ.
 
 <a id="evidence-red-first-missing"></a>
@@ -559,7 +559,7 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 ### `task_log.parked_for_owner`
 
 - **Rule:** The row was parked for the owner by an unattended run, and closing, dropping, reopening or restarting it (or changing its status, tags or note) answers the owner's question, so only the owner at their own terminal may do it.
-- **Why:** An unattended lead could otherwise drop or close the row and hide the question it parked for the owner (review R2 L4).
+- **Why:** An unattended lead could otherwise drop or close the row and hide the question it parked for the owner.
 - **Way through:** Leave the row for the owner and go on with other work; the owner runs `repact decide <ref> <verb> ...` in their own terminal and retypes the ref.
 
 <a id="acceptance-pin"></a>
@@ -608,11 +608,18 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 - **Why:** `repact dispatch`, `submit`, `accept`, `reject` and `amend` do the task bookkeeping in one checked write each; a command refuses before it writes, so a refusal leaves the task as it was.
 - **Way through:** Hand in your own work with `repact submit <id>` and ask the lead to run the command; to search for the phrase, use the Grep tool rather than Bash.
 
+<a id="ops-frame-guard-verb-unseen"></a>
+### `ops_frame_guard.verb_unseen`
+
+- **Rule:** `repact` or _repact_ops.py runs under xargs, parallel or find -exec with no operation written after it, so the runner supplies words the check cannot see and it was refused in every frame.
+- **Why:** A verb fed on stdin hid a lead command from the frame check, so a coder could accept its own task.
+- **Way through:** Type the operation and its task id out, for example `repact accept 5`.
+
 <a id="ops-frame-guard-lead-submit"></a>
 ### `ops_frame_guard.lead_submit`
 
 - **Rule:** `repact submit` hands in a coder's teachback or HANDOFF, and this Bash call runs in the lead's own frame, so it was refused whatever `--as` says.
-- **Why:** The lead could otherwise store a coder's teachback or HANDOFF itself and then accept its own words (review R2 L1).
+- **Why:** The lead could otherwise store a coder's teachback or HANDOFF itself and then accept its own words.
 - **Way through:** Accept, reject or amend the task instead; the dispatched coder submits its own work, and a HANDOFF a subagent returned is relayed by the SubagentStop backstop.
 
 <a id="ops-lead-only"></a>
@@ -661,7 +668,7 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 ### `ops.not_own_session`
 
 - **Rule:** Inside a Claude Code session the workflow commands act on that session alone, and the --session-dir, --session-id or --team given names another one (or, at a terminal with no session id, a dir that is not a session dir), so nothing was written.
-- **Why:** Unattended mode is read from the session dir, so a made-up dir could make an unattended waiver look attended (review R2 M1, L5).
+- **Why:** Unattended mode is read from the session dir, so a made-up dir could make an unattended waiver look attended.
 - **Way through:** Run the command without --session-dir, --session-id and --team so it finds this session itself; another session's tasks are that session's to change.
 
 <a id="ops-write-failed"></a>
@@ -675,7 +682,7 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 ### `unattended.off_owner_only`
 
 - **Rule:** Turning unattended mode off answers every question an unattended run parked, so it is the owner's, at their own terminal, and this call came from inside a Claude Code session or without an interactive terminal.
-- **Why:** The session stays unattended until it ends or the owner turns it off, so one command from inside the run cannot make its waivers look attended (review R2 M1).
+- **Why:** The session stays unattended until it ends or the owner turns it off, so one command from inside the run cannot make its waivers look attended.
 - **Way through:** Leave the mode on and go on with other work; the owner runs `repact-unattended off --session-dir <dir>` in their own terminal and types off.
 
 ## Notes, not refusals
