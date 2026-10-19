@@ -116,7 +116,9 @@ Keep that folder: the plugin runs from it.
 
 **Agent Teams.** To run specialists as Agent Teams (an experimental Claude Code feature), use `/repacted:init --repo --teams`. Ask Claude to run `repact-doctor` and look for the `execution:` line: `subagents (default)` or `teams (REPACT_EXECUTION=teams)`.
 
-**Specialists will not spawn?** If a spawn is refused with `no task dispatched`, the lead must first run the `repact dispatch` command the refusal prints. More in [troubleshooting](docs/troubleshooting.md#if-specialist-agents-will-not-spawn).
+### If specialist agents will not spawn
+
+If a spawn is refused with `no task dispatched`, the lead must first run the `repact dispatch` command the refusal prints. More in [troubleshooting](docs/troubleshooting.md#if-specialist-agents-will-not-spawn).
 
 </details>
 
@@ -192,6 +194,7 @@ Hooks run on every tool call. On a recent Mac (Apple silicon, Python 3.14, 30 re
 
 </details>
 
+<a name="uninstall"></a>
 <details>
 <summary><b>Uninstall</b></summary>
 
