@@ -241,7 +241,7 @@ rePACTed stands on **[PACT-Plugin](https://github.com/Synaptic-Labs-AI/PACT-Plug
 - **[MJ Wojcik](https://github.com/michael-wojcik)**, PACT's most active contributor by far.
 - Everyone else who contributed to PACT.
 
-rePACTed is an independent fork of PACT v4.8.1 (commit `0cd9e88b`). It is maintained by [Uros Pesic](https://github.com/v4lheru) and is not affiliated with or endorsed by Synaptic Labs. PACT's MIT license is kept unchanged in [LICENSE](LICENSE); see [NOTICE](pact-plugin/NOTICE.md).
+rePACTed is an independent fork of PACT v4.8.1 (commit `0cd9e88b`). It is maintained by [v4lheru](https://github.com/v4lheru) and is not affiliated with or endorsed by Synaptic Labs. PACT's MIT license is kept unchanged in [LICENSE](LICENSE); see [NOTICE](pact-plugin/NOTICE.md).
 
 ## Contributing, security, license
 
