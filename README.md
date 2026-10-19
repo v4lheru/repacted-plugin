@@ -26,7 +26,7 @@ You describe the work. A **lead** sizes it and hands the pieces to **specialists
 ## How it works
 
 ```mermaid
-flowchart LR
+flowchart TD
     you(["🧑 You<br/>describe the work"]) --> lead{"🎯 Lead<br/>scores novelty, scope,<br/>uncertainty and risk"}
 
     lead -->|small fix| compact["⚡ comPACT<br/>one specialist"]
@@ -38,7 +38,7 @@ flowchart LR
     orch --> team
 
     subgraph team ["👥 Specialists, each in its own git worktree"]
-        direction TB
+        direction LR
         prep["🔎 preparer"]
         arch["📐 architect"]
         code["💻 backend · frontend<br/>database · devops"]
