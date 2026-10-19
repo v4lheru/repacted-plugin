@@ -5,7 +5,7 @@ ledger (hooks/session_ledger.py) uses it now; D5 DOCTOR switches its own list to
 at merge, so "what is waiting on the user" has one definition.
 
 A task is an OPEN USER ACTION when it is not closed (completed or deleted) and either its
-subject starts with ALERT, HALT, BLOCKER or RELEASE GATE as a whole word, or its
+subject starts with STOP, ALERT, HALT, BLOCKER or RELEASE GATE as a whole word, or its
 metadata.type is "algedonic".
 """
 
@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 
 CLOSED_STATUSES = frozenset({"completed", "deleted"})
-SUBJECT_PREFIX = re.compile(r"^\s*(ALERT|HALT|BLOCKER|RELEASE GATE)\b")
+SUBJECT_PREFIX = re.compile(r"^\s*(STOP|ALERT|HALT|BLOCKER|RELEASE GATE)\b")
 SUBJECT_MAX = 120
 
 

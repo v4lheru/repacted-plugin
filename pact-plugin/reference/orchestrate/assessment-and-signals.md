@@ -21,7 +21,7 @@ When transitioning to S4 mode, pause and ask: "Are we still building the right t
 
 ## Responding to Algedonic Signals
 
-For algedonic signal handling (HALT/ALERT responses, algedonic vs imPACT distinction), see [algedonic.md](../../protocols/algedonic.md).
+For algedonic signal handling (HALT/ALERT responses, signal vs blocker triage distinction), see [stop-signals.md](../../protocols/stop-signals.md).
 
 ---
 
@@ -131,7 +131,7 @@ When an agent reports a blocker or algedonic signal via `SendMessage`:
 
 **Progress signal assessment**: When progress monitoring was requested, assess incoming progress signals against the agent state model (converging/exploring/stuck) in [workflows.md §Agent State Model](../../protocols/workflows.md#agent-state-model). Intervene if an agent appears stuck or shifts from converging to exploring.
 
-**HALT handling**: On HALT signal, immediately stop all running teammates using the [Lead-Side HALT Fan-Out](../../protocols/algedonic.md#lead-side-halt-fan-out) idiom (one `SendMessage` per in-progress teammate by name) before presenting to user.
+**HALT handling**: On HALT signal, immediately stop all running teammates using the [Lead-Side HALT Fan-Out](../../protocols/stop-signals.md#stopping-every-teammate) idiom (one `SendMessage` per in-progress teammate by name) before presenting to user.
 
 ### Blocker Recovery: Message the Teammate, or Spawn Fresh
 
@@ -148,7 +148,7 @@ After you resolve a blocker, message the teammate by name. Spawn fresh if the te
 | Teammate hit the `maxTurns` limit | Fresh spawn | The teammate was probably in a loop |
 | Teammate shut down for lifecycle cleanup | Fresh spawn | It holds no context |
 
-**Pattern**: `repact-amend next <task id> --kind ruling --text "Blocker resolved: {details}. Continue your task."` prints the key, the object and the wake line. Write the object with `TaskUpdate`, read its stored line (`Amendment amend_<n> stored on #<id> (owner <o>): digest <d>.`), then send the wake line. The teammate reads the ruling with `repact-payload <id> --key amend`.
+**Pattern**: `repact amend <task id> --kind ruling --text "Blocker resolved: {details}. Continue your task."` stores the next `amend_<n>` on the task and prints the wake line; `repact amend <task id> --next` names the key first. Send the wake line. The teammate reads the ruling with `repact inspect <id> --key amend_<n>`.
 
 ⚠️ **Write the amendment so that it works alone.** The teammate can hold none of its earlier context. Put the full resolution and what the teammate must do into the amendment text. A self-contained text is correct in the two cases. One that points back at earlier context gives the teammate nothing, and the result looks like a teammate that ignored you.
 

@@ -4,11 +4,11 @@ argument-hint: [e.g., add user authentication with JWT]
 ---
 Create a comprehensive implementation plan for: $ARGUMENTS
 
-**This is PLANNING ONLY** — no code changes, no git branches, no implementation. For variety 11-14 (4-10: comPACT or orchestrate; 15-16: a research spike). On demand: [consultation-and-synthesis.md](../reference/plan-mode/consultation-and-synthesis.md) (Phases 1-2) and [plan-document.md](../reference/plan-mode/plan-document.md) (Phase 3).
+**This is PLANNING ONLY** — no code changes, no implementation branches, no implementation. For variety 11-14 (4-10: comPACT or orchestrate; 15-16: a research spike). On demand: [consultation-and-synthesis.md](../reference/plan-mode/consultation-and-synthesis.md) (Phases 1-2) and [plan-document.md](../reference/plan-mode/plan-document.md) (Phase 3).
 
 ## Task Hierarchy
 
-Planning task "Plan: {feature}" (`in_progress`), blocked by one consultation pair per specialist; completed with `metadata.artifact` = the plan path.
+Planning task "Plan: {feature}" (`in_progress`) while one consultation task per specialist (from `repact dispatch`) runs; completed with `metadata.artifact` = the plan path.
 
 ## Your Workflow
 
@@ -59,22 +59,9 @@ Do NOT implement anything — planning consultation only.
 
 A missing response is data: flag it under "Limitations" or "Open Questions"; do NOT re-invoke.
 
-### Teachback-Gated Dispatch
+**Dispatch each consultant**: write the template above (plus its per-domain questions) to a mission file, then `repact dispatch --name {specialist-name} --agent pact-{specialist-type} --subject "{specialist}: plan consultation for {feature}" --kind docs --worktree <a linked worktree of the repo> --brief-file <mission file> --variety N,S,U,R`, then the `Agent(...)` call it prints (persona §11). Consultants only read the worktree. From the main checkout, give the first consultant `--branch plan/{feature-slug}` instead and the rest `--worktree` on the tree it made. The op writes the task, the brief and the `variety_assessed` event; the teachback restates the consultation scope.
 
-Each consultant dispatch creates **two tasks**, not one:
-
-- **Task A** — TEACHBACK gate. `subject = "{specialist}: TEACHBACK for plan consultation on {feature}"`, owner = consultant. Description: lightweight understanding-confirm of the consultation scope.
-- **Task B** — primary consultation. `subject = "{specialist}: plan consultation for {feature}"`, owner = consultant, `blockedBy = [<Task A id>]`.
-
-Both are created BEFORE the `Agent(...)` spawn call. The consultant claims A, submits teachback metadata, idles on `awaiting_lead_completion`. You review and accept via the two-call atomic pair: `TaskUpdate(A, status="completed")` FIRST, then the one-line wake to the consultant — see [Teachback Review](../protocols/completion.md#teachback-review) for the rationale. On accept, the consultant wakes to claim B and produce the consultation HANDOFF. The consultant writes the HANDOFF and signals stage-ready, then idles — **you (the lead) complete Task B**, not the consultant. Lead-side completion is what reliably journals the consultation HANDOFF; a consultant self-completing their own Task B can leave the HANDOFF unrecorded.
-
-Read reference/dispatch/teachback-gated-dispatch.md before your first dispatch this session. The consultant's mission fields follow; everything else is there.
-
-**Dispatch each consultant** — for each consultant, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch) with `name="{specialist-name}"`, `subagent_type="pact-{specialist-type}"`:
-
-1. Task A (subject `"{specialist}: TEACHBACK for plan consultation on {feature}"`), then Task B (subject `"{specialist}: plan consultation for {feature}"`). Task B's `metadata` carries the per-dispatch variety stamp (4-rationale schema); the wiring write is denied without it. Task B's `description` is "PLANNING CONSULTATION ONLY — No implementation.\n\nFIRST claim this task (`TaskUpdate` status=in_progress) before beginning the consultation — pre-assigned to you but still pending; you flip it, not the lead.\n\nTask: {task description}\n\n[full template content from above]\n\nIf upstream context is referenced, read the upstream task file first — `TaskGet` does NOT surface metadata."
-2. Wire them (`addBlocks` / `addBlockedBy`). The `variety_assessed` dispatch event is emitted by the hook from Task B's stamp; do not write it.
-3. Spawn the consultants with the canonical dispatch form, in parallel up to the cap.
+With several consultants, dispatch each, then all their `Agent` calls in one response. Accept each consultation with `repact accept <id>`; one that misses the brief gets `repact reject <id> --reason "<text>"`; read a stored HANDOFF with `repact inspect <id> --key handoff`.
 
 ### Phase 2: Orchestrator Synthesis
 

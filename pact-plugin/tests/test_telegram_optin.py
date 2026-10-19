@@ -50,7 +50,7 @@ def test_missing_deps_start_is_one_quiet_line_through_the_stable_link(tmp_path):
     assert result.returncode == 1
     assert "Traceback" not in result.stderr
     assert result.stderr.strip().count("\n") == 0
-    assert "/repacted:telegram-setup" in result.stderr
+    assert "/repacted:init telegram" in result.stderr
 
 
 def test_deps_in_private_dir_are_found(tmp_path):

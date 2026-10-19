@@ -50,17 +50,14 @@ python3 invocation) exits non-blocking, does not emit a systemMessage,
 and does not propagate a blocking exit-2. This subsumes plan R1b.
 """
 import ast
-import io
 import json
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 # F2: the single shared writable-journal sentinel (SSOT in fixtures.emitter),
 # imported rather than re-literalled. tests/ is on sys.path via conftest.
-from fixtures.emitter import WRITABLE_TEST_JOURNAL
 from helpers import effective_hooks_config  # noqa: E402
 
 
@@ -97,6 +94,10 @@ _LIVELOCK_SAFE_MARKER = "# livelock-safe:"
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+# The reviewed TaskCompleted handlers: the HANDOFF emitter, and the workflow-state
+# projection, which writes workflow-state.json and no journal row.
+
 
 def _load_hooks_json() -> dict:
     """Read hooks.json from the on-disk source (not a cached copy)."""
@@ -247,32 +248,6 @@ class TestLayer1a_ASTSinkScan:
             + "\n".join(f"  - {f}" for f in failures)
         )
 
-    def test_agent_handoff_emitter_has_zero_sinks_except_fallback(self):
-        """The emitter architecturally MUST be a pure journal-writer
-        (architect §2.7). Only permitted sink: the single fallback-field
-        `sys.stderr.write` for missing task_id/task_subject, which is
-        per-architect §2.7 carve-out (fires at most once, does not block).
-
-        This test pins the carve-out count exactly — any additional sink
-        is a regression.
-        """
-        source = (_HOOKS_DIR / "agent_handoff_emitter.py").read_text(encoding="utf-8")
-        sinks = _scan_ast_for_emission_sinks(source)
-        # The one documented carve-out: one `print(..., file=sys.stderr)`
-        # for fallback-field reporting. ast detects it as a sys.stderr
-        # reference via the `file=` keyword. Count by line numbers.
-        allowed = [s for s in sinks if "stderr" in s]
-        # Architect §2.7 allows 0 or 1 stderr sinks (the fallback path).
-        assert len(allowed) <= 1, (
-            f"emitter gained a new stderr sink beyond the architect §2.7 "
-            f"fallback-field carve-out: {sinks}"
-        )
-        assert not any(
-            "systemMessage" in s or "exit(2)" in s for s in sinks
-        ), (
-            f"emitter gained a systemMessage or blocking-exit sink; "
-            f"violates architect §2.7 zero-emission invariant: {sinks}"
-        )
 
     def test_teammate_idle_opts_out_via_docstring_marker(self):
         """teammate_idle is the lone TeammateIdle hook post-#538. It has
@@ -307,40 +282,6 @@ class TestLayer1a_ASTSinkScan:
 # Layer 2 — Runtime 10×-fire harness (emitter)
 # ---------------------------------------------------------------------------
 
-def _run_emitter(stdin_payload, task_data, append_calls, tmp_home, monkeypatch):
-    """Invoke agent_handoff_emitter.main() with patched deps, counting
-    append_event calls. Returns the SystemExit code."""
-    monkeypatch.setenv("HOME", str(tmp_home))
-    from agent_handoff_emitter import main
-
-    def _append_spy(event):
-        append_calls.append(event)
-        return True
-
-    # #917: model a WRITABLE-journal b1 process so the marker-claim
-    # writability gate passes (append_event is spied, so the path is never
-    # written — any truthy value satisfies the gate). The journal-unwritable
-    # defer path is covered in test_handoff_writability_parity.py.
-    # The marker team_name now resolves from the SESSION CONTEXT (not stdin) —
-    # model the context session_init would have persisted, sourcing team_name
-    # from the stdin payload so the marker stays scoped to teams/<team_name>/.
-    _ctx = {
-        "team_name": stdin_payload.get("team_name", ""),
-        "session_id": "",
-        "project_dir": "",
-        "plugin_root": "",
-        "started_at": "",
-    }
-    with patch("agent_handoff_emitter.read_task_json", return_value=task_data), \
-         patch("agent_handoff_emitter.append_event", side_effect=_append_spy), \
-         patch("agent_handoff_emitter.get_journal_path",
-               return_value=WRITABLE_TEST_JOURNAL), \
-         patch("agent_handoff_emitter.pact_context.get_pact_context",
-               return_value=_ctx), \
-         patch("sys.stdin", io.StringIO(json.dumps(stdin_payload))):
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-    return exc_info.value.code
 
 
 _REASON_MATRIX = [
@@ -356,88 +297,6 @@ _REASON_MATRIX = [
 ]
 
 
-class TestLayer2_RuntimeEmissionBounds:
-    """Fire the emitter 10× with a reason-axis matrix and assert bounded
-    emission. Each (reason, status) pair should produce at most ONE
-    journal event per (team, task_id)."""
-
-    @pytest.mark.parametrize("reason", _REASON_MATRIX)
-    def test_ten_fires_same_completed_task_produce_at_most_one_event(
-        self, reason, tmp_path, monkeypatch
-    ):
-        calls: list[dict] = []
-        task_data = {
-            "status": "completed",
-            "owner": "test-agent",
-            "metadata": {
-                "handoff": {"produced": [], "decisions": [], "uncertainty": [],
-                           "integration": [], "open_questions": []},
-                "intentional_wait": {"reason": reason, "expected_resolver": "lead"},
-            },
-        }
-        payload = {
-            "task_id": f"layer2-{abs(hash(reason)) % 10_000}",
-            "task_subject": "layer2 probe",
-            "teammate_name": "test-agent",
-            "team_name": "pact-layer2",
-        }
-        for _ in range(10):
-            _run_emitter(payload, task_data, calls, tmp_path, monkeypatch)
-        assert len(calls) <= 1, (
-            f"emitter fired >1 event across 10 invocations for same "
-            f"(team, task_id) under reason={reason!r}. O_EXCL marker "
-            f"failed to dedupe."
-        )
-        assert len(calls) == 1, (
-            "expected exactly 1 event on a completed task across 10 fires"
-        )
-
-    @pytest.mark.parametrize("reason", _REASON_MATRIX)
-    def test_ten_fires_metadata_only_in_progress_produce_zero_events(
-        self, reason, tmp_path, monkeypatch
-    ):
-        """#528 regression shape — metadata-only TaskUpdate with status
-        in_progress must NOT create a marker and must NOT emit, across
-        any wait-reason."""
-        calls: list[dict] = []
-        task_data = {
-            "status": "in_progress",
-            "owner": "test-agent",
-            "metadata": {
-                "intentional_wait": {"reason": reason, "expected_resolver": "lead"},
-            },
-        }
-        payload = {
-            "task_id": f"l2inprog-{abs(hash(reason)) % 10_000}",
-            "task_subject": "layer2 in_progress probe",
-            "teammate_name": "test-agent",
-            "team_name": "pact-layer2",
-        }
-        for _ in range(10):
-            _run_emitter(payload, task_data, calls, tmp_path, monkeypatch)
-        assert calls == [], (
-            f"emitter fired on an in_progress task across 10 invocations "
-            f"under reason={reason!r}. #528 regression shape."
-        )
-
-    def test_blocker_type_produces_zero_events_across_10_fires(
-        self, tmp_path, monkeypatch
-    ):
-        calls: list[dict] = []
-        task_data = {
-            "status": "completed",
-            "owner": "database-engineer",
-            "metadata": {"type": "blocker"},
-        }
-        payload = {
-            "task_id": "blk-layer2",
-            "task_subject": "BLOCKER",
-            "teammate_name": "database-engineer",
-            "team_name": "pact-layer2",
-        }
-        for _ in range(10):
-            _run_emitter(payload, task_data, calls, tmp_path, monkeypatch)
-        assert calls == [], "signal-task bypass must hold under 10× fire"
 
 
 # ---------------------------------------------------------------------------
@@ -510,25 +369,6 @@ class TestLayer3_HooksJsonInvariants:
             f"runtime error on the platform firing the event."
         )
 
-    def test_taskcompleted_binds_only_to_agent_handoff_emitter(self):
-        """TaskCompleted is the platform's native hook for terminal-status
-        completions. One journal-writer binds to it:
-          - agent_handoff_emitter.py (writes agent_handoff events)
-
-        agent_handoff is HANDOFF-gated. Adding another TaskCompleted handler
-        requires explicit design review.
-        """
-        hooks_config = _load_hooks_json()
-        paths = _hook_script_paths_for_event(hooks_config, "TaskCompleted")
-        basenames = sorted(p.name for p in paths)
-        expected = sorted([
-            "agent_handoff_emitter.py",
-        ])
-        assert basenames == expected, (
-            f"TaskCompleted must bind only to agent_handoff_emitter.py; "
-            f"actual: {basenames}. Adding another TaskCompleted handler "
-            f"requires explicit design review."
-        )
 
     def test_teammateidle_binds_only_to_teammate_idle(self):
         hooks_config = _load_hooks_json()
@@ -589,46 +429,6 @@ class TestLayer4_CounterTestByRevert:
     phantom-green (module-load breakage failing everything).
     """
 
-    def test_reverting_taskcompleted_binding_flips_layer3_taskcompleted_test(self):
-        """Target: TestLayer3_HooksJsonInvariants::test_taskcompleted_binds_only_to_agent_handoff_emitter.
-
-        Revert shape: re-add handoff_gate.py as a second TaskCompleted
-        binding (which the Layer 3 invariant forbids). Expected: the
-        mutated config produces a basenames list that does NOT match
-        the canonical single-emitter binding, so the Layer 3 assertion
-        would fail. Mutation injects a duplicate command block rather
-        than renaming the existing emitter — preserves the legitimate
-        binding while introducing the forbidden second.
-        """
-        config = effective_hooks_config()
-        # In-memory revert: append a second handler binding to the
-        # TaskCompleted block. Pre-revert there is 1 binding; post-
-        # revert there are 2.
-        tc_blocks = config.get("hooks", {}).get("TaskCompleted", [])
-        assert tc_blocks, "fixture pre-condition failed: TaskCompleted block missing"
-        tc_blocks[0].setdefault("hooks", []).append({
-            "type": "command",
-            "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/handoff_gate.py"',
-        })
-        paths = _hook_script_paths_for_event(config, "TaskCompleted")
-        basenames = sorted(p.name for p in paths)
-        # Counter-test setup assertion: the revert mutation produced
-        # the expected 2-handler list.
-        assert basenames == sorted([
-            "agent_handoff_emitter.py",
-            "handoff_gate.py",
-        ]), (
-            "counter-test setup failed — expected the revert mutation "
-            f"to produce 2 bindings; got {basenames}"
-        )
-        # Discriminative assertion: the Layer 3 invariant MUST fail here.
-        canonical_binding = sorted([
-            "agent_handoff_emitter.py",
-        ])
-        assert basenames != canonical_binding, (
-            "Layer 3 TaskCompleted invariant did not flip on revert — "
-            "counter-test is NOT discriminative. Test is phantom-green."
-        )
 
     def test_reverting_stop_binding_flips_layer3_stop_binding_test(self, monkeypatch):
         """Target: TestLayer3_HooksJsonInvariants::test_stop_binds_only_stop_background_gate.
@@ -828,53 +628,6 @@ class TestLayer4_CounterTestByRevert:
         script.write_text(body, encoding="utf-8")
         _assert_target_fails_on(target, r"print\(decision: block\)")
 
-    def test_reverting_emitter_status_gate_flips_runtime_in_progress_test(
-        self, tmp_path, monkeypatch
-    ):
-        """Target: TestLayer2_RuntimeEmissionBounds::test_ten_fires_metadata_only_in_progress_produce_zero_events.
-
-        Revert shape: patch the emitter's `read_task_json` to return
-        status=completed even on an "in_progress" event — simulates the
-        missing status-gate. Assert the event fires.
-        """
-        from agent_handoff_emitter import main
-
-        # Force the patched read to return completed — this is the
-        # pre-fix (#528) shape where the emitter trusted the TaskCompleted
-        # event name as the transition signal.
-        completed_task = {
-            "status": "completed",  # the regression — would-be in_progress
-            "owner": "test-agent",
-            "metadata": {"handoff": {"produced": [], "decisions": [],
-                                     "uncertainty": [], "integration": [],
-                                     "open_questions": []}},
-        }
-        calls: list[dict] = []
-        monkeypatch.setenv("HOME", str(tmp_path))
-        payload = {
-            "task_id": "counter-status",
-            "task_subject": "in_progress event with reverted gate",
-            "teammate_name": "test-agent",
-            "team_name": "pact-counter",
-        }
-        # #917: writable-journal b1 process (the gate is orthogonal to the
-        # status-gate this counter-test targets; append_event is spied).
-        with patch("agent_handoff_emitter.read_task_json", return_value=completed_task), \
-             patch("agent_handoff_emitter.append_event",
-                   side_effect=lambda e: (calls.append(e), True)[1]), \
-             patch("agent_handoff_emitter.get_journal_path",
-                   return_value=WRITABLE_TEST_JOURNAL), \
-             patch("sys.stdin", io.StringIO(json.dumps(payload))):
-            with pytest.raises(SystemExit):
-                main()
-        # With the reverted gate (completed disk-status), the event DOES
-        # emit — proving Layer 2's test_ten_fires_metadata_only_in_progress
-        # is load-bearing on the disk-status gate.
-        assert len(calls) == 1, (
-            "reverting the status gate to always-completed did NOT flip "
-            "the emitter's emission — Layer 2 in_progress test may be "
-            "phantom-green."
-        )
 
 
 # ---------------------------------------------------------------------------

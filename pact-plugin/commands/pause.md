@@ -1,9 +1,12 @@
 ---
-description: Pause the session, save its memory and state, and stop the helper agents
+description: Pause the session, or checkpoint it mid-task before /compact, saving memory and state and stopping the helper agents
+argument-hint: "[checkpoint]"
 ---
 # PACT Pause Protocol
 
 Pause for later resumption: the **memory-critical subset of wrap-up**. It consolidates and persists state; no worktree cleanup, no task deletion. Full cleanup is [wrap-up.md](wrap-up.md). Pause runs when the user picks "Pause work for now" in `/repacted:peer-review`, `/repacted:comPACT` or `/repacted:wrap-up`.
+
+**Checkpoint mode** (`$ARGUMENTS` is `checkpoint`): save state mid-workstream, stop the helper agents, then `/compact` and carry on; the workstream continues. Load [reference/pause/checkpoint.md](../reference/pause/checkpoint.md) and run it as written instead of the steps below.
 
 ## When to Use
 
@@ -23,7 +26,7 @@ TaskUpdate(taskId, owner="secretary")
 
 ### 2. Documentation Sync
 
-Run `/repacted:pin-memory` (no arguments).
+Run the pin scan with no content: load [reference/init/pin.md](../reference/init/pin.md) and run it as written.
 
 ### 3. Orchestration Retrospective
 

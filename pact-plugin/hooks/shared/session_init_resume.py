@@ -18,7 +18,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from shared import compaction_owner, summary_head
+from shared import compaction_owner, summary_head, workflow_state
 from shared.constants import BOOTSTRAP_MARKER_NAME
 from shared.pact_context import _build_session_path as build_session_path, project_slug
 from shared.claude_md_manager import file_lock, resolve_project_claude_md_path
@@ -636,7 +636,7 @@ def compact_directive(
     # guidance; keep concrete task-resumption bullets for the
     # orchestrator's next actions.
     # Refresh-awareness (presentation-only): an unspent
-    # session_refreshed event means /repacted:refresh stopped the
+    # session_refreshed event means /repacted:pause checkpoint stopped the
     # teammates before this compact — a SendMessage to a stopped
     # teammate's name silently RESUMES its stale pre-refresh
     # transcript, so the "Re-engage secretary" instruction must
@@ -648,7 +648,7 @@ def compact_directive(
     refresh_pending = frame_is_lead and has_unspent_refresh(session_dir)
     if refresh_pending:
         _secretary_clause = (
-            "Teammates were shut down by /repacted:refresh. Do NOT "
+            "Teammates were shut down by /repacted:pause checkpoint. Do NOT "
             "message any pre-refresh teammate name (a send "
             "RESUMES its stale transcript). Run /repacted:bootstrap "
             "first; spawn a fresh secretary only when memory is needed."
@@ -736,10 +736,17 @@ def compact_directive(
         f'take that task from its re-attached copy or from your summary. '
         f'{_secretary_clause}'
     ))
+    # The hooks' workflow-state.json, when fresh, is the one screen of state
+    # (shared/workflow_state.py). Missing, stale, or a refresh that stopped the
+    # teammates it lists: the checkpoint below and the steps above stay.
+    _screen = workflow_state.context_screen(session_dir) \
+        if frame_is_lead and not refresh_pending else None
+    if _screen:
+        context_parts.append(_screen)
     # Secondary-layer (#444): append POST-COMPACTION CHECKPOINT block
     # when tasks in_progress. Consumes the hoisted `tasks` variable
     # (single source of truth).
-    if tasks:
+    elif tasks:
         _in_progress = [
             t for t in tasks
             if t.get("status") == "in_progress"

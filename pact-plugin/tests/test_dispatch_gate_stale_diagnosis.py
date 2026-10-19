@@ -59,6 +59,7 @@ from test_dispatch_gate import (  # noqa: E402 — sibling harness reuse
 # LIVE constant rather than a copy of it, and so this file keeps working under a
 # revert of any change that only touches the cause enumeration.
 from dispatch_gate import _STALE_REALIGN_HINT  # noqa: E402
+from test_dispatch_gate import teams_mode  # noqa: E402,F401  # autouse: rules (6)-(8b) need teams
 
 # A marker substring unique to the augmentation — asserting on it proves the
 # net-new self-diagnosis text is present without coupling to exact wording.
@@ -249,7 +250,7 @@ def test_no_task_assigned_deny_augmented_on_stale_mismatch(
     mode_label, lead_id, tmp_path, monkeypatch, capsys
 ):
     """ENABLE leg: a stale recorded-vs-live session_id mismatch augments the
-    rule-⑧ 'no Task assigned' deny with the self-diagnosis, in BOTH modes."""
+    rule-⑧ 'no task dispatched' deny with the self-diagnosis, in BOTH modes."""
     # Seed a team with a task owned by SOMEONE ELSE so has_task_assigned(name)
     # is False → rule ⑧ DENY fires for _NAME.
     plugin_root = _full_setup(
@@ -264,7 +265,7 @@ def test_no_task_assigned_deny_augmented_on_stale_mismatch(
 
     assert code == 2, f"[{mode_label}] decision must still be DENY (exit 2)"
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason, f"[{mode_label}] original deny preserved"
+    assert "no task dispatched" in reason, f"[{mode_label}] original deny preserved"
     assert _AUGMENT_MARKER in reason, f"[{mode_label}] self-diagnosis augmented"
     assert _REALIGN_MARKER in reason, f"[{mode_label}] re-align steps present"
 
@@ -291,7 +292,7 @@ def test_no_task_assigned_deny_unaugmented_when_no_mismatch(
 
     assert code == 2, f"[{mode_label}] decision unchanged (DENY)"
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason
+    assert "no task dispatched" in reason
     assert _AUGMENT_MARKER not in reason, f"[{mode_label}] NOT augmented (healthy)"
     assert _REALIGN_MARKER not in reason
 
@@ -440,7 +441,7 @@ def test_detector_exception_falls_back_to_original_message(
 
     assert code == 2, f"[{mode_label}] deny still fires despite detector raise"
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason, f"[{mode_label}] original message preserved"
+    assert "no task dispatched" in reason, f"[{mode_label}] original message preserved"
     assert _AUGMENT_MARKER not in reason, f"[{mode_label}] no partial augmentation"
 
 
@@ -586,7 +587,7 @@ def test_gate_site_claude_md_absent_falls_back_to_original_message(
 
     assert code == 2, "decision unchanged (DENY) when CLAUDE.md absent"
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason, "original deny preserved"
+    assert "no task dispatched" in reason, "original deny preserved"
     assert _AUGMENT_MARKER not in reason, "no augmentation without a CLAUDE.md to compare"
     assert _REALIGN_MARKER not in reason
 
@@ -607,7 +608,7 @@ def test_gate_site_unset_project_dir_falls_back_to_original_message(
 
     assert code == 2
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason
+    assert "no task dispatched" in reason
     assert _AUGMENT_MARKER not in reason
 
 
@@ -643,7 +644,7 @@ def test_gate_site_bad_session_id_falls_back_to_original_message(
 
     assert code == 2, "decision unchanged (DENY) under a bad session_id"
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason, "original deny preserved"
+    assert "no task dispatched" in reason, "original deny preserved"
     assert _AUGMENT_MARKER not in reason, (
         "a bad/sentinel session_id must NOT be compared or interpolated → "
         "no augmentation"

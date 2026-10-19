@@ -1,11 +1,12 @@
 """
 Location: pact-plugin/hooks/shell/env/search.py
 Summary: Recursive-search verdicts: dumps_environment, grep/rg filters, recursive_search,
-         first_protected_file and the search roots, the git names-only cut.
+         first_protected_file and the search roots, the git names-only cut, and the
+         protected words an egress client sends (_sent_words).
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: _deny, _PRINTS, SCRATCH_HINT, _named_message, _file_keys, dumps_environment, _positionals, _option_values, _option_positions, _standing_excludes, _GrepFilters, _grep_is_recursive, _pattern_by_option, recursive_search, _sees_hidden, _excluded, _included, _skipped, _TooLarge, first_protected_file, _search_roots, _recurse_verdict, _cut_lists_names_only, _git_verdict.
+Map: _deny, _PRINTS, SCRATCH_HINT, _named_message, _file_keys, dumps_environment, _positionals, _option_values, _option_positions, _standing_excludes, _GrepFilters, _grep_is_recursive, _pattern_by_option, recursive_search, _sees_hidden, _excluded, _included, _skipped, _TooLarge, first_protected_file, BRACE_ROOTS, _glob_walk, _search_roots, _recurse_verdict, _cut_lists_names_only, _git_verdict, _SENDS, _REMOTE, _sent_words.
 """
 
 from __future__ import annotations
@@ -14,8 +15,8 @@ import fnmatch
 import glob as globbing
 import os
 import re
-from shell.env.names import (CLASS_SAMPLES, _POSIX_CLASSES, _absolute, _python_glob, file_is_protected, is_protected_name, token_protected)
-from shell.env.programs import (GIT_PATCH_OPTIONS, GIT_SAFE, GREP_PROGRAMS, RG_PROGRAMS, SUGGESTION, WALK_LIMIT, WALK_SKIP_DIRS, _DUMP_RUNNERS, _GIT_VALUE_OPTIONS, _GREP_VALUE_OPTIONS, _RG_VALUE_OPTIONS, rule_of)
+from shell.env.names import (CLASS_SAMPLES, _POSIX_CLASSES, _absolute, _brace_expansions, _python_glob, file_is_protected, is_protected_name, mentions_class, token_protected)
+from shell.env.programs import (CLOUD_COPIES, CREDENTIAL_SUGGESTION, GIT_PATCH_OPTIONS, GIT_SAFE, GREP_PROGRAMS, IDENTITY_OPTIONS, LITERAL_FIELD_OPTIONS, RG_PROGRAMS, SUGGESTION, WALK_LIMIT, WALK_SKIP_DIRS, rule_of, _DUMP_RUNNERS, _GIT_VALUE_OPTIONS, _GREP_VALUE_OPTIONS, _RG_VALUE_OPTIONS)
 from shell.env.script import (_SUB_MARK)
 
 def _deny(reason: str) -> dict:
@@ -36,6 +37,12 @@ SCRATCH_HINT = (" A dummy or scratch file is read freely under a name outside th
 
 
 def _named_message(path: str, what: str = _PRINTS) -> str:
+    """The deny for a named protected file. A name outside the .env class is a credential
+    file (names.is_credential_path): env-get does not apply to it, so the way through is
+    to hand its path to the program that uses it."""
+    if not mentions_class(path):
+        what = what.replace("(a .env-class file)", "(a credential file)")
+        return f"Blocked: this would {what.format(path=path)}; {CREDENTIAL_SUGGESTION}."
     return (f"Blocked: this would {what.format(path=path)}; {SUGGESTION}."
             + (SCRATCH_HINT if what is _PRINTS else ""))
 
@@ -290,6 +297,10 @@ def first_protected_file(roots: list[str], cwd: str, excludes: list[str], hidden
     for root in roots:
         top = _absolute(root, cwd)
         if top is None or not os.path.isdir(top):
+            name = os.path.basename(top or "")     # a file a glob root matched (_search_roots)
+            if top and (is_protected_name(name) or os.path.islink(top)) \
+                    and file_is_protected(name, top) and not _skipped(name, excludes, list(includes)):
+                return root
             continue
         for directory, dirs, files in os.walk(top):
             dirs[:] = [d for d in dirs if d not in WALK_SKIP_DIRS and (hidden or not d.startswith("."))
@@ -308,25 +319,77 @@ def first_protected_file(roots: list[str], cwd: str, excludes: list[str], hidden
     return None
 
 
+BRACE_ROOTS = 16                                   # words one brace-list root may expand to
+
+
+def _glob_walk(pattern: str) -> list[str]:
+    """What an absolute glob holding `**` matches, `**` standing for any number of
+    directories (zsh, bash globstar; without globstar bash reads it as `*`, which matches
+    less). A dotfile matches too, as under dotglob or GLOB_DOTS. .git and node_modules are
+    not entered (see first_protected_file). Raises _TooLarge past WALK_LIMIT entries."""
+    parts = pattern.split("/")
+    first = next(i for i, part in enumerate(parts) if any(char in part for char in "*?["))
+    found, seen = [], [0]
+
+    def visit(path: str, rest: list[str]) -> None:
+        if not rest:
+            found.append(path)
+            return
+        part, tail = rest[0], rest[1:]
+        if not any(char in part for char in "*?["):
+            if os.path.lexists(os.path.join(path, part)):
+                visit(os.path.join(path, part), tail)
+            return
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
+            return
+        seen[0] += len(entries)
+        if seen[0] > WALK_LIMIT:
+            raise _TooLarge
+        if part == "**":
+            visit(path, tail)                          # no directory at all
+        for entry in entries:
+            if part == "**" and entry.is_dir(follow_symlinks=False) \
+                    and entry.name not in WALK_SKIP_DIRS:
+                visit(entry.path, rest)                # one directory more
+            elif part == "**" and not tail or part != "**" \
+                    and fnmatch.fnmatchcase(entry.name, _python_glob(part)):
+                visit(entry.path, tail)
+
+    visit("/".join(parts[:first]) or "/", parts[first:])
+    return sorted(set(found))
+
+
 def _search_roots(roots: list[str], cwd: str | None) -> list[str] | None:
     """The roots of a recursive search as the shell hands them over: $HOME and $PWD spelled,
-    a glob replaced by what it matches. None when one cannot be known here: a relative root
-    where the directory is not known, any other variable, a substitution, a brace list, **,
-    ~- or ~+, a glob that matches nothing here. An unknown root is an unchecked tree, never
-    a clean one."""
+    a brace list expanded (kept as written too: quoted, the shell passes it so), a glob
+    replaced by what it matches, `**` by a bounded walk (_glob_walk raises _TooLarge). None
+    when one cannot be known here: a relative root where the directory is not known, any
+    other variable, a substitution, ~- or ~+, a brace list of more than BRACE_ROOTS words or
+    with a non-ASCII letter (a lookalike), a glob that matches nothing here. An unknown root
+    is an unchecked tree, never a clean one."""
     found: list[str] = []
     for root in roots:
         for name, value in (("HOME", os.path.expanduser("~")), ("PWD", cwd)):
             if value is not None:               # not $PWD:h or $PWD[1,3]: zsh rewrites those
                 root = re.sub(rf"\$(?:\{{{name}\}}|{name}(?![\w:\[]))", lambda _: value, root)
+        listed = _brace_expansions(root) if "$" not in root else [root]
+        if listed != [root]:
+            more = _search_roots(listed, cwd) \
+                if len(listed) <= BRACE_ROOTS and root.isascii() else None
+            if more is None:
+                return None
+            found += more + [root]
+            continue
         path = _absolute(root, cwd)
-        if path is None or os.path.expanduser(root).startswith("~") or "**" in root \
+        if path is None or os.path.expanduser(root).startswith("~") \
                 or any(mark in root for mark in ("$", "`", "{", _SUB_MARK)):
             return None
         if any(char in root for char in "*?[") and not os.path.isdir(path):
             # No match here may be a match in the shell (a glob form Python lacks).
             matches = [] if any(mark in root for mark in _POSIX_CLASSES) \
-                else globbing.glob(_python_glob(path))
+                else _glob_walk(path) if "**" in root else globbing.glob(_python_glob(path))
             if not matches:
                 return None
             found += matches
@@ -350,19 +413,20 @@ def _recurse_verdict(program: str, args: list[str], cwd: str | None) -> str | No
     if any(arg.startswith("$") for arg in args):
         how += (", written out in the command (flags held in a shell variable reach the "
                 "search as one word under zsh)")
-    roots = _search_roots(roots, cwd)
-    if roots is None:
-        return ("Blocked: this recursive search starts from a path that is not known here (a "
-                "relative path where the directory was changed by more than a plain "
-                "`cd <path>`, or a root the shell computes: a variable, a substitution, a "
-                "brace list, **), so it cannot be checked for .env-class files; write the "
-                "search root out as a plain path (absolute, or relative after a plain "
-                f"`cd <path> &&`), or {how}.")
     try:
-        found = first_protected_file(roots, cwd, excludes, hidden, includes, skip_dirs)
+        roots = _search_roots(roots, cwd)
+        found = None if roots is None else \
+            first_protected_file(roots, cwd, excludes, hidden, includes, skip_dirs)
     except _TooLarge:
         return (f"Blocked: this recursive search covers more than {WALK_LIMIT} entries, too "
                 f"many to check for .env-class files; {how}.")
+    if roots is None:
+        return ("Blocked: this recursive search starts from a path that is not known here (a "
+                "relative path where the directory was changed by more than a plain "
+                "`cd <path>`, or a root the shell computes from a substitution, `read` or a "
+                "loop over anything but plain words), so it cannot be checked for .env-class "
+                "files; write the paths that value holds out in the command (absolute, or "
+                f"relative after a plain `cd <path> &&`), or {how}.")
     if found is None:
         return None
     return (f"Blocked: this recursive search would read {found} (.env class) and print its "
@@ -398,3 +462,32 @@ def _git_verdict(args: list[str]) -> bool:
     if sub == "log":
         return not any(arg in GIT_PATCH_OPTIONS or arg.startswith("--word-diff") for arg in args)
     return False
+
+
+_SENDS = "send {path} (a .env-class file) off the machine"
+_REMOTE = re.compile(r"[a-z][\w+.-]*://|[\w-]+:(?!//)", re.I)
+
+
+def _sent_words(program: str, args: list[str], cwd: str | None) -> list[str]:
+    """The protected words an egress client would send. Not sent: the value of an option
+    the client reads to authenticate (scp -i ~/.ssh/id_rsa, curl --key client.key) when it
+    is a credential file rather than a .env-class one; the text of gh/glab api -f, sent as
+    written even when it starts with @; the local destination of
+    a cloud copy whose source is remote (aws s3 cp s3://b/x ./creds), a download."""
+    identity = IDENTITY_OPTIONS.get(program, frozenset())
+    held = set()
+    for i, word in enumerate(args):
+        option, glued, value = word.partition("=")
+        if word in identity and i + 1 < len(args) and not mentions_class(args[i + 1]):
+            held.add(i + 1)
+        elif glued and option in identity and not mentions_class(value):
+            held.add(i)
+        elif program in ("gh", "glab") and (word in LITERAL_FIELD_OPTIONS and i + 1 < len(args)):
+            held.add(i + 1)
+        elif program in ("gh", "glab") and glued and option in LITERAL_FIELD_OPTIONS:
+            held.add(i)
+    plain = [i for i, word in enumerate(args) if not word.startswith("-")]
+    if plain and set(args[i] for i in plain) & CLOUD_COPIES.get(program, frozenset()) and any(
+            _REMOTE.match(args[i]) for i in plain[:-1]) and not _REMOTE.match(args[plain[-1]]):
+        held.add(plain[-1])
+    return [word for i, word in enumerate(args) if i not in held and token_protected(word, cwd)]

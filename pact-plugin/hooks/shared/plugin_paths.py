@@ -4,9 +4,9 @@ Summary: Where the plugin keeps its data: plugin root, the config dir, the plugi
          (mode 700), the run ledger and check-log paths, the read-only profile, and the
          TaskStore handle for a config root.
 Used by: hooks/docker_lock_gate.py, hooks/session_ledger.py, bin/_doctor*.py, bin/_replay.py,
-         bin/repact-lock, bin/_recall/*, shared/evidence/* and the bin/_repact_common shim.
-Map (file order): PLUGIN_DATA_DIRNAME, DATA_DIR_MODE, plugin_root, claude_config_dir,
-task_store, data_dirname, default_data_dir, plugin_data_dir, data_subdir, ledger_path, checks_dir, profile_path, profile,
+         bin/repact-lock, bin/_recall/*, shared/check_modes.py, shared/task_files.py and the bin/_repact_common shim.
+Map (file order): PLUGIN_DATA_DIRNAME, DATA_DIR_MODE, plugin_root, plugin_name, claude_config_dir,
+task_store, data_dirname, default_data_dir, _exported_data_dir, plugin_data_dir, data_subdir, ledger_path, checks_dir, profile_path, profile,
 owner_identity.
 """
 from __future__ import annotations
@@ -22,11 +22,22 @@ from .paths import get_claude_config_dir
 
 PLUGIN_DATA_DIRNAME = "repacted-repacted"   # data_dirname()'s fallback outside an install
 DATA_DIR_MODE = 0o700
+EXPORTED_DATA_ENV = "REPACTED_PLUGIN_DATA"        # the hooks' data dir, exported to the Bash tool
 
 
 def plugin_root() -> Path:
     """The plugin root (the parent of bin/ and hooks/; this module sits in hooks/shared/)."""
     return Path(__file__).resolve().parents[2]
+
+
+def plugin_name() -> str:
+    """The plugin's name from its own .claude-plugin/plugin.json ("repacted" when unreadable): the
+    prefix the harness gives this plugin's agents, e.g. "repacted:pact-backend-coder"."""
+    try:
+        name = json.loads((plugin_root() / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return "repacted"
+    return name if isinstance(name, str) and name.replace("-", "").replace("_", "").isalnum() else "repacted"
 
 
 def claude_config_dir() -> Path:
@@ -63,13 +74,25 @@ def default_data_dir() -> Path:
     return claude_config_dir() / "plugins" / "data" / data_dirname()
 
 
-def plugin_data_dir(create: bool = True) -> Path:
-    """$CLAUDE_PLUGIN_DATA when the harness sets it, else the loader's default location.
+def _exported_data_dir() -> Optional[Path]:
+    """$REPACTED_PLUGIN_DATA when it is an absolute path, else None (a relative one would name a
+    different directory from every cwd)."""
+    value = os.environ.get(EXPORTED_DATA_ENV)
+    path = Path(value).expanduser() if value else None
+    return path if path is not None and path.is_absolute() else None
 
-    The fallback matters for commands run outside a hook (a Bash call, a test, a script).
+
+def plugin_data_dir(create: bool = True) -> Path:
+    """$CLAUDE_PLUGIN_DATA when the harness sets it (a hook), else $REPACTED_PLUGIN_DATA (a Bash
+    tool: SessionStart exports the hooks' value through $CLAUDE_ENV_FILE), else the loader's
+    default location.
+
+    The export matters under `claude -p --plugin-dir`, where hooks get <name>-inline but the
+    default is <name>-<marketplace>: without it tcount and the run-ledger hook wrote two ledgers.
+    The default still serves a test, a script or the user's own terminal.
     """
     env_value = os.environ.get("CLAUDE_PLUGIN_DATA")
-    path = Path(env_value).expanduser() if env_value else default_data_dir()
+    path = Path(env_value).expanduser() if env_value else (_exported_data_dir() or default_data_dir())
     if create:
         path.mkdir(parents=True, exist_ok=True, mode=DATA_DIR_MODE)
     return path

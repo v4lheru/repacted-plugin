@@ -58,6 +58,8 @@ UNION_LINE = ".repacted/tasks.jsonl merge=union"
 IGNORE_LINES = (".repacted/tasks.lock", ".repacted/cache/")
 TAG_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 PTASK_RE = re.compile(r"^[A-Za-z0-9_.-]+/\d+$")
+PARKED_TAG = "parked"                   # a row parked for a human; repact decide lists it
+PARKED_NOTE = "parked for a human: "
 DECISION_RE = re.compile(r"^D\d+[a-z]?$")
 LEGACY_RE = re.compile(r"^[0-9a-f]{4}$")      # a legacy pact-backlog item id
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")       # never a glob pattern or a path
@@ -365,43 +367,50 @@ class Store:
         """Replay and validate under the lock, then append. `build(state)` returns the events
         (without v/eid/ts/by/base) or raises Refused."""
         with self._locked():
-            parsed = self._parse()
-            state = PT.replay(parsed.events, parsed.corrupt)
-            drafts = build(state)
-            if not drafts:
-                return []
-            latest = max((event["ts"] for event in parsed.events), default=None)
-            bases = {ref: task["last_eid"] for ref, task in state.tasks.items()}
-            lines, written = [], []
-            for draft in drafts:
-                ts = _stamp(latest)
-                latest = ts
-                event = {"v": PT.SCHEMA_VERSION, "eid": _eid(ts), "ts": ts, "by": self.by, **draft}
-                if bases.get(draft["t"]):
-                    event["base"] = bases[draft["t"]]
-                problem = PT.event_problem(event)
-                if problem:
-                    raise Refused(f"the event would not parse ({problem}); nothing written")
-                line = (json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
-                if len(line) > MAX_LINE_BYTES:
-                    longest = max(draft, key=lambda key: len(json.dumps(draft[key])))
-                    raise Refused(f"the event is {len(line)} bytes; the limit is {MAX_LINE_BYTES} "
-                                  f"(longest field: {longest})")
-                bases[draft["t"]] = event["eid"]
-                lines.append(line)
-                written.append(event)
-            hold = float(os.environ.get("REPACT_TASKS_TEST_HOLD_S") or 0)
-            if hold > 0:
-                time.sleep(hold)
-            fd = os.open(self.log, os.O_WRONLY | os.O_APPEND)
-            try:
-                if not parsed.ends_with_newline:
-                    os.write(fd, b"\n")
-                for line in lines:
-                    os.write(fd, line)
-            finally:
-                os.close(fd)
-        self.refresh_cache()
+            written = self.append_locked(build)
+        if written:
+            self.refresh_cache()
+        return written
+
+    def append_locked(self, build: Callable) -> List[dict]:
+        """_commit's body, for a caller that already holds `_locked()` (the ledger writes its own
+        file and the log's proposed tasks under one lock). The caller refreshes the cache."""
+        parsed = self._parse()
+        state = PT.replay(parsed.events, parsed.corrupt)
+        drafts = build(state)
+        if not drafts:
+            return []
+        latest = max((event["ts"] for event in parsed.events), default=None)
+        bases = {ref: task["last_eid"] for ref, task in state.tasks.items()}
+        lines, written = [], []
+        for draft in drafts:
+            ts = _stamp(latest)
+            latest = ts
+            event = {"v": PT.SCHEMA_VERSION, "eid": _eid(ts), "ts": ts, "by": self.by, **draft}
+            if bases.get(draft["t"]):
+                event["base"] = bases[draft["t"]]
+            problem = PT.event_problem(event)
+            if problem:
+                raise Refused(f"the event would not parse ({problem}); nothing written")
+            line = (json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+            if len(line) > MAX_LINE_BYTES:
+                longest = max(draft, key=lambda key: len(json.dumps(draft[key])))
+                raise Refused(f"the event is {len(line)} bytes; the limit is {MAX_LINE_BYTES} "
+                              f"(longest field: {longest})")
+            bases[draft["t"]] = event["eid"]
+            lines.append(line)
+            written.append(event)
+        hold = float(os.environ.get("REPACT_TASKS_TEST_HOLD_S") or 0)
+        if hold > 0:
+            time.sleep(hold)
+        fd = os.open(self.log, os.O_WRONLY | os.O_APPEND)
+        try:
+            if not parsed.ends_with_newline:
+                os.write(fd, b"\n")
+            for line in lines:
+                os.write(fd, line)
+        finally:
+            os.close(fd)
         return written
 
     def refresh_cache(self) -> Optional[str]:
@@ -565,9 +574,11 @@ class Store:
             create["owner"] = task["owner"]
         return [create, {"op": "link_add", "t": new, "kind": "reference", "target": f"task:{ref}"}]
 
-    def done(self, ref: str, evidence: Iterable[str], remaining: Optional[str] = None) -> Optional[str]:
+    def done(self, ref: str, evidence: Iterable[str], remaining: Optional[str] = None,
+             waiver: Optional[dict] = None) -> Optional[str]:
         """Close `ref` on verified evidence. With `remaining`, a title, the part not done becomes
-        a new planned task in the same locked append; its ref is returned."""
+        a new planned task in the same locked append; its ref is returned. A `waiver`
+        ({why, by, at}, the close gate's attended waiver) is kept on the done row."""
         targets = list(evidence)
         if not targets:
             raise Refused(f"done needs evidence: `repact-task done {ref} --evidence commit:<sha>`")
@@ -590,7 +601,7 @@ class Store:
             if not any(item["verified"] for item in results):
                 raise Refused("no verified evidence; " + "; ".join(
                     f"unverified: {item['target']} ({reasons[item['target']]})" for item in results))
-            events = [{"op": "done", "t": ref, "evidence": results}]
+            events = [{"op": "done", "t": ref, "evidence": results, **({"waiver": waiver} if waiver else {})}]
             if remaining is not None:
                 twin = open_twin(state, remaining)
                 if twin:
@@ -642,26 +653,49 @@ class Store:
         if not isinstance(ptask, str) or not PTASK_RE.match(ptask):
             raise Refused("a ptask is <team>/<task id>")
 
-    def accept(self, ref: str, ptask: str, rev: int, evidence: Iterable[str]) -> bool:
+    def accept(self, ref: str, ptask: str, rev: int, evidence: Iterable[str],
+               waiver: Optional[dict] = None) -> bool:
         """Record the lead's acceptance of the platform task `ptask` at revision `rev`. Every
         target first passes the link rules (D26 and the kind), then git verification; the accept
-        is verified when any item verifies, which closes the task. Idempotent on (ptask, rev):
-        returns False, writing nothing, when that accept is already recorded."""
+        is verified when any item verifies, which closes the task. An attended `waiver`
+        ({why, by, at}, metadata.evidence_waiver) closes it too and stays on the row.
+        Idempotent on (ptask, rev): returns False, writing nothing, when that accept is already
+        recorded."""
         self._check_ptask(ptask)
         items = self._evidence_items(list(evidence))
         verified = any(item["verified"] for item in items)
+        closes = verified or bool(waiver)
 
         def build(state):
             task = _task(state, ref)
             if any(row["ptask"] == ptask and row["rev"] == rev for row in task["accepts"]):
                 return []
-            if verified:
+            if closes:
                 children = sorted(child for child, row in state.tasks.items()
                                   if row["parent"] == ref and row["status"] not in PT.SETTLED)
                 if children:
                     raise Refused(f"{ref} has open children: {', '.join(children)}")
             return [{"op": "accept", "t": ref, "ptask": ptask, "rev": rev, "verified": verified,
-                     "evidence": items}]
+                     "evidence": items, **({"waiver": waiver} if waiver else {})}]
+
+        return bool(self._commit(build))
+
+    def park(self, ref: str, why: str) -> bool:
+        """Park an open `ref` for a human: status blocked, the `parked` tag and
+        a note that names why, in one locked append. Returns False, writing nothing, for a
+        settled row or one already parked with the same note."""
+        note = _field_value("note", (PARKED_NOTE + " ".join(str(why).split()))[:PT.NOTE_MAX])
+        check_text(note)
+
+        def build(state):
+            task = _task(state, ref)
+            if task["status"] in PT.SETTLED or (task["status"] == "blocked" and task["note"] == note
+                                                 and PARKED_TAG in task["tags"]):
+                return []
+            tags = task["tags"] if PARKED_TAG in task["tags"] else [*task["tags"], PARKED_TAG]
+            return [{"op": "set", "t": ref, "field": "status", "value": "blocked"},
+                    {"op": "set", "t": ref, "field": "tags", "value": tags},
+                    {"op": "set", "t": ref, "field": "note", "value": note}]
 
         return bool(self._commit(build))
 

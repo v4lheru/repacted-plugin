@@ -5,8 +5,13 @@ Rules, cheapest first, short-circuit on the first non-ALLOW: (1) SOLO_EXEMPT car
 (2) non-pact-* carve-out, (3) name present, (4) name length/NFKC/regex/reserved,
 (5) plugin agents/ + specialist registry (shipped agents, then the project's own:
 shared/project_agents.py), (6) session team from the SSOT (never the
-platform-ignored team_name arg), (7) member-name uniqueness, (8) task assigned,
-(9) inline-mission heuristic (PACT_DISPATCH_INLINE_MISSION_MODE warn|deny|shadow), then
+platform-ignored team_name arg), (7) member-name uniqueness, (8) a task dispatched to the name
+(metadata.dispatch.name, written by `repact dispatch`),
+(8b) team-config-absent advisory. Rule (6)'s teammate refusal, (7) and (8b) are Agent Teams
+rules: in subagents mode (shared/execution.py) there is no team on disk and no teammate, so
+they are skipped; (6) still needs the session team, which (8) uses as a path segment.
+(9) inline-mission heuristic (PACT_DISPATCH_INLINE_MISSION_MODE warn|deny|shadow; the brief
+prompt dispatch prints is exempt), then
 (10) the session cost cap on a spawn (1)-(9) let through, of any type but COST_CAP_EXEMPT
 (shared/cost_cap.py; a spend that cannot be read lets the spawn through with a
 once-per-session note, never a silent pass).
@@ -52,6 +57,7 @@ try:
         project_scope_allowed,
         shipped_specialists,
     )
+    from shared.ops.brief import BRIEF_PROMPT
     from shared.session_journal import append_event_checked, make_event
     from shared.paths import get_claude_config_dir
     from shared.stale_session import detect_stale_session_block
@@ -298,6 +304,16 @@ def _project_refusal(subagent_type: str, verdict) -> tuple[str, str, str]:
             f"({detail}). [rule: {PROJECT_AGENT_INVALID_RULE}]", "project_agent_invalid")
 
 
+def _teams_mode() -> bool:
+    """True when the session runs Agent Teams (shared/execution.py). Anything that fails
+    reads as teams, which keeps every rule, as before the mode existed."""
+    try:
+        from shared import execution
+        return execution.current(pact_context.get_session_dir()) == execution.TEAMS
+    except Exception:  # noqa: BLE001 - an unreadable mode keeps the Teams rules
+        return True
+
+
 def evaluate_dispatch(
     tool_input: dict, input_data: dict | None = None,
 ) -> tuple[str, str | None, str | None]:
@@ -389,8 +405,9 @@ def evaluate_dispatch(
 
     # (6) Session team from the SSOT; empty fails closed because (7)/(8) use it as a path segment.
     session_team = pact_context.get_team_name()
+    teams = _teams_mode()
     if not session_team:
-        if (isinstance(input_data, dict)
+        if (teams and isinstance(input_data, dict)
                 and pact_context.classify_session_role(input_data) == "teammate"
                 and _resolves_a_registered_team(input_data)):
             return ("DENY", _TEAMMATE_SPAWN_REFUSAL, "team_name_unavailable")
@@ -407,7 +424,7 @@ def evaluate_dispatch(
 
     # ⑦ Name uniqueness against live team members (resolved via the SSOT
     # session team, not the platform-ignored spawn arg).
-    members = _team_member_names(session_team)
+    members = _team_member_names(session_team) if teams else set()
     if name in members:
         return ("DENY",
                 f"PACT dispatch_gate: name {name!r} is already a live "
@@ -415,23 +432,25 @@ def evaluate_dispatch(
                 "(append a numeric suffix or role-descriptor variant).",
                 "name_not_unique")
 
-    # ⑧ Task assignment — TaskCreate must precede Agent spawn so the
-    # teammate has work on arrival (resolved via the SSOT session team).
+    # ⑧ Task assignment: `repact dispatch` must precede the spawn, so the agent has a
+    # dispatched task on arrival (metadata.dispatch.name; resolved via the SSOT session team).
     if not has_task_assigned(session_team, name):
         return ("DENY",
-                f"PACT dispatch_gate: no Task assigned to owner={name!r} "
-                f"in team {session_team!r}. Create Task A (teachback) + "
-                "Task B (work) before spawn so the teammate has work on "
-                "arrival.",
+                f"PACT dispatch_gate: no task dispatched to name={name!r} "
+                f"in team {session_team!r}. Run `repact dispatch --name {name} ...` "
+                "first and make the Agent call it prints.",
                 "no_task_assigned")
 
     # (8b) The team is not on disk: the teammate will have no Task tools. Advisory, never a deny
     # (the spawn still works as a prompt-briefed agent), and it replaces (9): here the mission
     # belongs in the prompt.
-    if _team_config_absent(session_team):
+    if teams and _team_config_absent(session_team):
         return ("WARN", _team_config_absent_advisory(session_team, name), TEAM_CONFIG_ABSENT_RULE)
 
-    # (9) Inline-mission heuristic; shadow mode journals and allows.
+    # (9) Inline-mission heuristic; shadow mode journals and allows. The prompt
+    # `repact dispatch` prints (the mission is in the brief file) is exempt.
+    if BRIEF_PROMPT.fullmatch(prompt):
+        return ("ALLOW", None, None)
     if (len(prompt) > PROMPT_MAX_LENGTH
             or not any(phrase in prompt for phrase in TASK_REFERENCE_PHRASES)):
         msg = (f"PACT dispatch_gate: prompt is long ({len(prompt)} "
@@ -563,7 +582,7 @@ def _augment_deny_with_stale_diagnosis(
 # rewording (the opening qualifier, the cause-(1) wording and the absolute URL are load-bearing).
 _CAUSE_ENUMERATION = (
     "\n\n"
-    "DIAGNOSIS — this gate did not OBSERVE a task assigned to this owner.\n"
+    "DIAGNOSIS — this gate did not OBSERVE a task dispatched to this name.\n"
     "That is not the same as one not existing.\n"
     "\n"
     "The instruction above resolves cause (1) ONLY. Under (2), (3) and (4)\n"
@@ -579,8 +598,8 @@ _CAUSE_ENUMERATION = (
     "If listing the task store reports a PERMISSIONS ERROR, you are in case (4).\n"
     "\n"
     "KNOWN CAUSES:\n"
-    " (1) No task exists for this owner — never created, or created and since\n"
-    "     cleared. Create the teachback task + the work task, then re-dispatch.\n"
+    " (1) No task was dispatched to this name — `repact dispatch` was not run,\n"
+    "     or its task was since cleared. Run it, then make the Agent call it prints.\n"
     " (2) This session's recorded team no longer matches the live one, so this\n"
     "     gate reads a different task store than the one the task tools write.\n"
     "     Recovery: set team_name in the OLD session's pact-session-context.json\n"

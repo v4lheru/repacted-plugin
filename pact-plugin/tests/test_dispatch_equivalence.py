@@ -199,7 +199,9 @@ def _env(root: Path, extra: dict | None = None, step=None) -> dict:
     return {**extra, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(root),
             "CLAUDE_CONFIG_DIR": str(root / ".claude"), "CLAUDE_PROJECT_DIR": str(project),
             "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
-            "REPACT_DOCTOR_NO_REFRESH": "1"}
+            "REPACT_DOCTOR_NO_REFRESH": "1",
+            # Teams mode: the separate hooks know no mode, so every check must run to compare.
+            "REPACT_EXECUTION": "teams", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"}
 
 
 def _stdin(payload, root: Path) -> bytes:

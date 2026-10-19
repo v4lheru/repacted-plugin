@@ -62,22 +62,16 @@ from fixtures import plugin_data  # noqa: E402
 
 # These copy names from shared modules at first import; loading them here keeps a test patch from being copied.
 # tests/test_conftest_import_guard.py derives which modules need a line here.
-import agent_handoff_emitter  # noqa: E402, F401
 import bootstrap_gate  # noqa: E402, F401
 import bootstrap_marker_writer  # noqa: E402, F401
 import file_tracker  # noqa: E402, F401
 import merge_guard_post  # noqa: E402, F401
 import merge_guard_pre  # noqa: E402, F401
 import missed_wake_scan  # noqa: E402, F401
-import postcompact_archive  # noqa: E402, F401
 import session_end  # noqa: E402, F401
 import session_init  # noqa: E402, F401
 import shared.background_work  # noqa: E402, F401
-import shared.evidence  # noqa: E402, F401
-import shared.evidence.check  # noqa: E402, F401
-import shared.evidence.files  # noqa: E402, F401
-import shared.evidence.ledger  # noqa: E402, F401
-import shared.evidence.notes  # noqa: E402, F401
+import shared.check_modes  # noqa: E402, F401
 import shared.failure_log  # noqa: E402, F401
 import shared.prompt_kind  # noqa: E402, F401
 import shared.session_init_common  # noqa: E402, F401
@@ -85,13 +79,10 @@ import shared.session_init_lead  # noqa: E402, F401
 import shared.session_init_resume  # noqa: E402, F401
 import shared.session_init_teammate  # noqa: E402, F401
 import shared.session_resume  # noqa: E402, F401
-import shared.stored_line  # noqa: E402, F401
-import shared.task_metadata_snapshot  # noqa: E402, F401
 import shared.task_utils  # noqa: E402, F401
-import task_lifecycle_gate  # noqa: E402, F401
+import shared.team_name  # noqa: E402, F401
 import teammate_idle  # noqa: E402, F401
 import track_files  # noqa: E402, F401
-import validate_handoff  # noqa: E402, F401
 
 
 # Name of the environment variable that relocates the PACT memory store.
@@ -164,6 +155,11 @@ def pytest_configure(config):
     # missing root instead; a test with an explicit env sets its own.
     os.environ["REPACT_SCRATCH_ROOT"] = os.path.join(
         tempfile.mkdtemp(prefix="pact-scratch-suite-"), "root")
+
+    # `repact` SHIM FLOOR, same reasoning. Every SessionStart writes ~/.local/bin/repact
+    # (shared/repact_shim.py); a spawned hook child that inherits the real HOME and config dir
+    # would write it into the real home. tests/test_repact_shim.py clears this per test.
+    os.environ["PACT_REPACT_SHIM"] = "0"
 
     # CLOCK-SHIFT CENSUS. Inert unless PACT_TEST_CLOCK_SHIFT_SECONDS is set; the
     # sweep command is in tests/clock_shift/clock_shift_shim.py.
@@ -549,6 +545,10 @@ def _isolate_plugin_data_to_tmp(tmp_path, tmp_path_factory, monkeypatch):
     """
     before = plugin_data.snapshot(plugin_data.LIVE_REGISTRIES)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    # A suite started from a session's Bash tool inherits SessionStart's export of the LIVE data dir
+    # (shared.plugin_paths: read after CLAUDE_PLUGIN_DATA); a test that removes CLAUDE_PLUGIN_DATA to
+    # reach the default must not land there.
+    monkeypatch.delenv("REPACTED_PLUGIN_DATA", raising=False)
     yield
     leaked = plugin_data.leaked(before, (tmp_path_factory.getbasetemp(),))
     assert not leaked, (

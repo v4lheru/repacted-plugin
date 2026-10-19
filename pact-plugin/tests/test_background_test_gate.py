@@ -62,7 +62,9 @@ NOT_TEST_RUNS = [
 
 def _env(tmp_path: Path) -> dict:
     return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path),
-            "CLAUDE_CONFIG_DIR": str(tmp_path / ".claude"), "CLAUDE_PROJECT_DIR": str(tmp_path)}
+            "CLAUDE_CONFIG_DIR": str(tmp_path / ".claude"), "CLAUDE_PROJECT_DIR": str(tmp_path),
+            # A Teams-only gate (shared/execution.py): the dispatcher runs it in teams mode.
+            "REPACT_EXECUTION": "teams", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"}
 
 
 def _payload(command, agent_type=TEAMMATE, background=True) -> dict:

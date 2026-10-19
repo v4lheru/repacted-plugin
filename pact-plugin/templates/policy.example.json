@@ -1,8 +1,7 @@
 {
   "version": 1,
   "modes": {
-    "commit_rule": "gate",
-    "amendment_gate": "enforce"
+    "commit_rule": "gate"
   },
   "commit_rule": {
     "deny_words": ["internal-only", "do-not-ship"]

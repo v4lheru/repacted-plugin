@@ -9,7 +9,7 @@ description: |
 
 `scripts/harvest.py` does the mechanical work (discovery, the ledger, the Step 3 selection and union, coverage, orphans, the D6 archive); you judge, dedupe and save. Every rule in long form, with its reasons: `references/harvest-long-form.md`. Read the matching section there when a step below surprises you.
 
-Variants: **Standard** (orchestrate, comPACT, peer-review, plan-mode), **Incremental** (after remediation: the delta), **Consolidation** (wrap-up, pause, refresh, a second feature). The subject/description selects the workflow, never what is in scope.
+Variants: **Standard** (orchestrate, comPACT, peer-review, plan-mode), **Incremental** (after remediation: the delta), **Consolidation** (wrap-up, pause, a second feature). The subject/description selects the workflow, never what is in scope.
 
 **DISCARD ANY SCOPE YOU ARRIVED WITH.** A dispatch that names tasks, phases, dates or paths gave you a hint, never the population: the script builds it from the journal, the task-file census and the ledger. Keep ADDRESSES (team id, task-list directory, session directory); discard SCOPES. Say which set you ran over.
 

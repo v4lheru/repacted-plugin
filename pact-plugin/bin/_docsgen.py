@@ -52,8 +52,8 @@ PAGES: Dict[str, Tuple[str, str, str, Tuple[str, ...]]] = {
                "`/repacted:init`; every key is optional.", ("options", "profile")),
     "rules": ("docs/reference/rules.md", "Rule ids",
               "A refused tool call ends in `[rule: <id>]`. Each id below links to its entry "
-              "in troubleshooting, which says why and what to do instead. `repact-explain` "
-              "prints the same for the last refusals of a session.", ("rules",)),
+              "in troubleshooting, which says why and what to do instead. `repact inspect "
+              "--refusals` prints the same for the last refusals of a session.", ("rules",)),
     "compat": ("docs/reference/compat.md", "Tested hosts",
                "Where the plugin suite has passed. An untested host is a note from "
                "`repact-doctor`, never a refusal.", ("compat",)),
@@ -61,7 +61,7 @@ PAGES: Dict[str, Tuple[str, str, str, Tuple[str, ...]]] = {
                         "A refused tool call ends in `<check>: <reason> → <instead> "
                         "[rule: <id>]`: what was refused, what to do instead, and the rule. "
                         "Find the id below; the anchor is the id with its dots and underscores "
-                        "replaced by dashes. `repact-explain --last` shows the most recent "
+                        "replaced by dashes. `repact inspect --refusals last` shows the most recent "
                         "refusal of the session.", ("troubleshooting",)),
 }
 
@@ -84,6 +84,10 @@ FAMILIES: Tuple[Tuple[str, str, str], ...] = (
     ("process", "Process listings",
      "A listing that prints full command lines would also print any token passed as an "
      "argument to a running process, so only listings by pid and name are allowed."),
+    ("egress", "Credentials leaving the session",
+     "A credential written into a command that sends or stores it outside the session (a "
+     "remote URL, an upload) would leave the session in plain text, so the command is "
+     "refused."),
     ("mg", "Approvals for hard-to-undo operations",
      "Merges, closes, force-pushes, deletes and pushes to main are hard to undo, so each one "
      "needs the user's approval for that exact command; a command that hides its shape "
@@ -95,6 +99,21 @@ FAMILIES: Tuple[Tuple[str, str, str], ...] = (
     ("budget", "Session spend",
      "A session can carry a cost cap; past it no new specialist is spawned, so the spend of a "
      "session stays within what its user or team set."),
+    ("settings", "Settings and the running plugin",
+     "Settings decide which hooks run and what is allowed without asking, so an agent that "
+     "could write them could turn every other check off; only the user changes them."),
+    ("evidence", "HANDOFF evidence for code tasks",
+     "A code task is accepted on a recorded test run, not on a claim: the HANDOFF must quote a "
+     "passing tcount run of the task that still matches its code, and a regression test must "
+     "have failed before it passed."),
+    ("git", "Git state every worktree shares",
+     "Some git state is one per repository, not per worktree: the stash stack is shared by "
+     "every worktree and session, so a form that takes the top entry can take another "
+     "session's work."),
+    ("ops", "Workflow commands",
+     "`repact dispatch`, `submit`, `accept`, `reject` and `amend` do the task bookkeeping in "
+     "one checked write each; a command refuses before it writes, so a refusal leaves the "
+     "task as it was."),
     ("inert", "Notes, not refusals",
      "The merge guard records why it read this text as data on an allowed command; nothing "
      "was refused."),
@@ -155,9 +174,13 @@ def rule_family(rule_id: str) -> str:
         return "error"
     if rule_id.startswith("mg.inert."):
         return "inert"
-    for prefix, family in (("env.", "env"), ("process.", "process"), ("mg.", "mg"),
+    for prefix, family in (("env.", "env"), ("process.", "process"), ("egress.", "egress"), ("mg.", "mg"),
+                           ("evidence.", "evidence"), ("acceptance.", "evidence"), ("task_log.", "evidence"),
                            ("dispatch.", "session"), ("dispatch_gate.project_", "agents"),
-                           ("dispatch_gate.session_cost", "budget")):
+                           ("dispatch_gate.session_cost", "budget"),
+                           ("settings.", "settings"), ("git_commit_check.shared_", "git"),
+                           ("ops.", "ops"), ("ops_frame_guard.", "ops"), ("task_write.", "ops"),
+                           ("unattended.", "ops")):
         if rule_id.startswith(prefix):
             return family
     if rule_id == "team_config_absent":

@@ -3,10 +3,9 @@ Location: pact-plugin/hooks/shared/actor.py
 Summary: The one authority policy over a hook frame's identity. `resolve_actor` reads the
 Frame (shared/frame.py, the memoised identity resolver) and classifies its trust SOURCE;
 the predicates the gates branch on live here, once, and `unknown` holds no authority.
-Used by: task_lifecycle_gate (may_complete, audit_verdict_mode), handoff_ordering_gate
-(sees_handoff_disk_line), evidence_gate (bridge_writes), missed_wake_scan and the doctor
-line (lead_surfacing), dispatch_registry.CheckContext.actor (one resolution per native
-check). Contract test: tests/contract/test_lead_predicate_sole_access.py pins
+Used by: missed_wake_scan and the doctor line (lead_surfacing), ops_frame_guard
+(runs_lead_ops), dispatch_registry.CheckContext.actor (one resolution per native check).
+Contract test: tests/contract/test_lead_predicate_sole_access.py pins
 `pact_context.is_lead(` out of the gates; tests/test_actor.py holds the forgeries.
 
 Sources, first match wins:
@@ -21,9 +20,8 @@ Sources, first match wins:
   unknown   everything else.
 
 Authority is `is_lead`, true only for the host and lead sources. Unknown is least
-privileged: it holds no lead verb, and a completion of an owned task by an actor nobody
-can name, or that only a registry row names, is disputed like a self-completion. A host
-teammate is disputed only on its own task.
+privileged, except that an unmarked frame nobody names runs the lead's operations
+(`runs_lead_ops`): it is the session's own.
 """
 
 from __future__ import annotations
@@ -35,9 +33,6 @@ from . import frame as frame_module
 
 Source = Literal["host", "lead", "registry", "unknown"]
 
-RECOVER = "RECOVER"
-MIRROR = "MIRROR"
-
 
 @dataclass(frozen=True)
 class Actor:
@@ -48,38 +43,22 @@ class Actor:
     source: Source
     is_lead: bool          # True only when source in ("host", "lead")
     team: str
+    marked: bool = False   # the frame carries an agent_id or an agent_type
 
     # -- the predicates the gates call (unknown and registry hold no authority) --------
-
-    def may_complete(self, owner: Any) -> bool:
-        """Whether completing a task owned by `owner` stands unchallenged. The lead: always.
-        A host-named teammate: unless `owner` is itself. Registry and unknown: never for an
-        owned task (least privileged). The caller applies the carve-outs
-        (intentional_wait.is_self_complete_exempt)."""
-        if self.is_lead:
-            return True
-        if not isinstance(owner, str) or not owner:
-            return True
-        if self.source == "host":
-            return owner != self.name
-        return False
-
-    def audit_verdict_mode(self) -> str:
-        """RECOVER (the lead's audit_summary write is routed to lead_close_note, the
-        auditor's authored value kept) or MIRROR (the author's verdict is snapshotted)."""
-        return RECOVER if self.is_lead else MIRROR
-
-    def sees_handoff_disk_line(self) -> bool:
-        """The 'HANDOFF on disk: rev N' / 'NO HANDOFF ON DISK' line after a completion."""
-        return self.is_lead
-
-    def bridge_writes(self) -> bool:
-        """Whether this frame's acceptance or rejection reaches the project task log."""
-        return self.is_lead
 
     def lead_surfacing(self) -> bool:
         """Lead-only context lines (missed-wake scan, doctor brief)."""
         return self.is_lead
+
+    def runs_lead_ops(self) -> bool:
+        """Whether this frame may run the lead's `repact` operations (dispatch, accept, reject,
+        amend). The lead: yes. A frame the host or the registry names as an agent, or one that
+        carries an agent_id or agent_type at all: no. A frame with no agent mark that nothing
+        names is the session's own (a known limit: a subagent whose host passes no frame)."""
+        if self.is_lead:
+            return True
+        return self.source == "unknown" and not self.marked
 
 
 UNKNOWN = Actor(agent_id="", name="", source="unknown", is_lead=False, team="")
@@ -131,14 +110,16 @@ def resolve_actor(payload: Any, team: Optional[str] = None) -> Actor:
     except Exception:
         team = ""
     pure_lead = _pure_lead(payload)
+    marked = bool(frame.has_agent_type or payload.get("agent_id") not in (None, ""))
     name = _trustworthy_name(payload, team) if team else None
     if name or pure_lead:
         return Actor(agent_id=agent_id, name=name or "lead", source="host",
-                     is_lead=pure_lead, team=team)
-    if not frame.has_agent_type and not agent_id and frame.is_lead:
+                     is_lead=pure_lead, team=team, marked=marked)
+    if not marked and frame.is_lead:
         return Actor(agent_id="", name="lead", source="lead", is_lead=True, team=team)
     registered = _registry_member(frame, team) if team else ""
     if registered:
         return Actor(agent_id=agent_id, name=registered, source="registry",
-                     is_lead=False, team=team)
-    return Actor(agent_id=agent_id, name="", source="unknown", is_lead=False, team=team)
+                     is_lead=False, team=team, marked=marked)
+    return Actor(agent_id=agent_id, name="", source="unknown", is_lead=False, team=team,
+                 marked=marked)

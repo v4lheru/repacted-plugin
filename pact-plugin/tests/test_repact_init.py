@@ -20,6 +20,7 @@ CLI = PLUGIN / "bin" / "repact-init"
 SEED = json.loads((PLUGIN / "templates" / "user-settings.example.json").read_text())
 TEAMS_FLAG = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 TODO_FLAG = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
+EXECUTION = "REPACT_EXECUTION"
 ATTR_LINE = ".repacted/tasks.jsonl merge=union"
 
 
@@ -57,14 +58,14 @@ def test_diff_backup_and_apply(env):
     target.write_text('{"model": "opus"}\n')
     dry = run(env, "--dry-run")
     assert dry.returncode == 0 and "dry run, nothing written" in dry.stdout
-    assert any(line.startswith("+") and TEAMS_FLAG in line for line in dry.stdout.splitlines())
+    assert any(line.startswith("+") and TODO_FLAG in line for line in dry.stdout.splitlines())
     assert json.loads(target.read_text()) == {"model": "opus"} and not backups(target)
     unconfirmed = run(env)
     assert unconfirmed.returncode == 3 and json.loads(target.read_text()) == {"model": "opus"}
     applied = run(env, "--yes")
     assert applied.returncode == 0, applied.stderr
     data = json.loads(target.read_text())
-    assert data["env"][TEAMS_FLAG] == "1" and data["model"] == "opus"
+    assert data["env"][TODO_FLAG] == "1" and data["model"] == "opus"
     assert [json.loads(b.read_text()) for b in backups(target)] == [{"model": "opus"}]
 
 
@@ -76,17 +77,28 @@ def test_second_run_nothing_to_do(env):
     assert settings(env).read_text() == before and not backups(settings(env))
 
 
-def test_task_tools_flag_added_beside_teams_and_kept_when_set(env):
-    """F5: the diff adds CLAUDE_CODE_ENABLE_TODO_TOOLS next to the Agent Teams flag; a value the
-    user already set (any value) is left alone, so a run with both set has nothing to do."""
+def test_task_tools_flag_added_and_kept_when_set(env):
+    """The diff adds CLAUDE_CODE_ENABLE_TODO_TOOLS, and no longer the Agent
+    Teams flag by default; a value the user already set is left alone, so a run with it set has
+    nothing to do."""
     dry = run(env, "--dry-run")
     added = [line for line in dry.stdout.splitlines() if line.startswith("+")]
-    assert any(TODO_FLAG in line for line in added) and any(TEAMS_FLAG in line for line in added)
-    settings(env).write_text(json.dumps({"env": {TODO_FLAG: "0", TEAMS_FLAG: "1"},
+    assert any(TODO_FLAG in line for line in added)
+    assert not any(TEAMS_FLAG in line or EXECUTION in line for line in added)
+    settings(env).write_text(json.dumps({"env": {TODO_FLAG: "0"},
                                          "permissions": SEED["permissions"]}))
     again = run(env, "--yes")
     assert again.returncode == 0 and "nothing to do" in again.stdout
     assert json.loads(settings(env).read_text())["env"][TODO_FLAG] == "0"
+
+
+def test_teams_writes_the_flag_and_the_mode_beside_each_other(env):
+    """/repacted:init --teams: the Agent Teams flag and REPACT_EXECUTION=teams in the user env."""
+    assert run(env, "--yes", "--teams").returncode == 0
+    data = json.loads(settings(env).read_text())
+    assert data["env"][TEAMS_FLAG] == "1" and data["env"][EXECUTION] == "teams"
+    assert data["env"][TODO_FLAG] == "1"
+    assert "nothing to do" in run(env, "--yes", "--teams").stdout
 
 
 def test_doctor_line_names_the_state_not_counts(tmp_path, monkeypatch, capsys):
@@ -118,10 +130,10 @@ def test_merge_keeps_user_keys_and_values(env):
             "permissions": {"allow": ["Bash(ls)", SEED["permissions"]["allow"][0]],
                             "deny": ["Read(./secrets)"]}}
     settings(env).write_text(json.dumps(mine, indent=4))
-    result = run(env, "--yes")
+    result = run(env, "--yes", "--teams")
     assert result.returncode == 0 and f'settings.json: env.{TEAMS_FLAG} = "0"' in result.stdout
     data = json.loads(settings(env).read_text())
-    assert data["env"] == {TEAMS_FLAG: "0", "OTHER": "x", TODO_FLAG: "1"}
+    assert data["env"] == {TEAMS_FLAG: "0", "OTHER": "x", TODO_FLAG: "1", EXECUTION: "teams"}
     assert data["hooks"] == {"Stop": []}
     allow = data["permissions"]["allow"]
     assert allow[:2] == mine["permissions"]["allow"] and len(allow) == len(set(allow))

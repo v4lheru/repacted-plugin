@@ -401,7 +401,7 @@ async def tool_telegram_notify(
     if not _ctx.configured or _ctx.client is None:
         return (
             "pact-telegram is not configured. "
-            "Run /repacted:telegram-setup to set up the Telegram bridge."
+            "Run /repacted:init telegram to set up the Telegram bridge."
         )
 
     # Rate limiting: max NOTIFY_RATE_LIMIT messages per minute
@@ -459,7 +459,7 @@ async def tool_telegram_ask(
     if not _ctx.configured or _ctx.client is None:
         return (
             "pact-telegram is not configured. "
-            "Run /repacted:telegram-setup to set up the Telegram bridge."
+            "Run /repacted:init telegram to set up the Telegram bridge."
         )
 
     # Validate options
@@ -546,7 +546,7 @@ async def tool_telegram_check_replies(
     if not _ctx.configured:
         return (
             "pact-telegram is not configured. "
-            "Run /repacted:telegram-setup to set up the Telegram bridge."
+            "Run /repacted:init telegram to set up the Telegram bridge."
         )
 
     queue_depth_before = len(_ctx.reply_queue)
@@ -576,7 +576,7 @@ async def tool_telegram_status() -> str:
     if not _ctx.configured:
         return (
             "pact-telegram status: NOT CONFIGURED\n"
-            "Run /repacted:telegram-setup to configure the Telegram bridge."
+            "Run /repacted:init telegram to configure the Telegram bridge."
         )
 
     config = _ctx.config or {}

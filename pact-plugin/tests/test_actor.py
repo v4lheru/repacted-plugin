@@ -15,7 +15,6 @@ import pytest
 
 import dispatch_registry as registry
 import docker_lock_gate
-import task_claim_gate
 from shared import session_registry
 from shared.actor import UNKNOWN, resolve_actor
 
@@ -75,14 +74,6 @@ def test_a_resumed_plain_lead_is_the_lead_by_the_plugins_own_record(world):
     assert resolve_actor({"session_id": OTHER_SID}).source == "unknown"
 
 
-def test_a_registry_row_is_a_label_without_authority(world, monkeypatch):
-    _register(monkeypatch, OTHER_SID, f"{MEMBER}@{TEAM}")
-    actor = resolve_actor({"session_id": OTHER_SID})
-    assert (actor.source, actor.name, actor.is_lead) == ("registry", MEMBER, False)
-    assert actor.may_complete(MEMBER) is False and actor.may_complete("other") is False
-    assert actor.may_complete("") is True            # an unowned task is nobody's
-    assert actor.audit_verdict_mode() == "MIRROR"
-    assert not (actor.sees_handoff_disk_line() or actor.bridge_writes() or actor.lead_surfacing())
 
 
 # --- forgeries ----------------------------------------------------------------------------------
@@ -114,27 +105,10 @@ def test_a_non_dict_payload_is_unknown():
 
 # --- the predicate table ------------------------------------------------------------------------
 
-def test_the_lead_holds_every_verb(world):
-    for payload in ({"session_id": LEAD_SID}, {"agent_type": LEAD_TYPE, "session_id": OTHER_SID}):
-        actor = resolve_actor(payload)
-        assert actor.may_complete(MEMBER) and actor.audit_verdict_mode() == "RECOVER"
-        assert actor.sees_handoff_disk_line() and actor.bridge_writes() and actor.lead_surfacing()
 
 
-def test_a_host_named_teammate_may_not_complete_its_own_task(world):
-    actor = resolve_actor({"agent_type": MEMBER, "agent_id": f"a{MEMBER}-{HEX}",
-                           "session_id": LEAD_SID})
-    assert actor.may_complete(MEMBER) is False
-    assert actor.may_complete("someone-else") and actor.may_complete(None)
-    assert actor.audit_verdict_mode() == "MIRROR"
-    assert not (actor.sees_handoff_disk_line() or actor.bridge_writes() or actor.lead_surfacing())
 
 
-def test_unknown_is_least_privileged(world):
-    actor = resolve_actor({"agent_id": "garbage", "session_id": LEAD_SID})
-    assert actor.may_complete(MEMBER) is False and actor.may_complete("") is True
-    assert actor.audit_verdict_mode() == "MIRROR"
-    assert not (actor.sees_handoff_disk_line() or actor.bridge_writes() or actor.lead_surfacing())
 
 
 # --- the dispatcher hands one resolution per check ----------------------------------------------
@@ -149,16 +123,6 @@ def test_check_context_resolves_the_actor_once(world):
 
 # --- the gates whose branch moved to the shared predicate ---------------------------------------
 
-def test_task_claim_gate_no_ops_for_a_lead_launched_without_agent(world, monkeypatch):
-    (world / "tasks" / TEAM / "B.json").write_text(json.dumps(
-        {"id": "B", "subject": "coder: implement", "owner": MEMBER, "status": "pending",
-         "blockedBy": []}))
-    monkeypatch.setattr(task_claim_gate, "registry_resolve", lambda sid: f"{MEMBER}@{TEAM}")
-    assert task_claim_gate._evaluate({"tool_name": "Edit", "session_id": LEAD_SID}) is None
-    # The in-process teammate on the same session still gets the generic nudge.
-    nudge = task_claim_gate._evaluate(
-        {"tool_name": "Edit", "session_id": LEAD_SID, "agent_type": MEMBER})
-    assert nudge == task_claim_gate._GENERIC_CLAIM_NUDGE
 
 
 def test_docker_lock_names_a_lead_launched_without_agent(world):
@@ -166,3 +130,16 @@ def test_docker_lock_names_a_lead_launched_without_agent(world):
         == f"team-lead@{TEAM}"
     assert docker_lock_gate.resolve_caller(
         {"tool_name": "Bash", "session_id": LEAD_SID, "agent_type": MEMBER}) == f"{MEMBER}@{TEAM}"
+
+
+def test_only_the_lead_or_an_unmarked_frame_runs_lead_ops(world, monkeypatch):
+    for payload in ({"session_id": LEAD_SID}, {"agent_type": LEAD_TYPE, "session_id": OTHER_SID}):
+        actor = resolve_actor(payload)
+        assert actor.runs_lead_ops() and actor.lead_surfacing()
+    teammate = resolve_actor({"agent_type": MEMBER, "agent_id": f"a{MEMBER}-{HEX}", "session_id": LEAD_SID})
+    garbage = resolve_actor({"agent_id": "garbage", "session_id": LEAD_SID})
+    _register(monkeypatch, OTHER_SID, f"{MEMBER}@{TEAM}")
+    registry = resolve_actor({"session_id": OTHER_SID})
+    assert registry.source == "registry"
+    for actor in (teammate, garbage, registry):
+        assert not (actor.runs_lead_ops() or actor.lead_surfacing())

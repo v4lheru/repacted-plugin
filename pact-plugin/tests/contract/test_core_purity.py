@@ -128,7 +128,11 @@ class TestModes:
 class TestRatchet:
     def test_a_removed_hit_is_stale_until_the_baseline_shrinks(self, texts, baseline):
         ctx = _ctx(mode="public")
-        entry = next(e for e in baseline if P.evaluated(e["class"], ctx))
+        # An entry whose id occurs once in its file: one dangling name on three lines has no
+        # single line to remove.
+        ids = [(e["path"], e["id"]) for e in baseline]
+        entry = next(e for e in baseline
+                     if P.evaluated(e["class"], ctx) and ids.count((e["path"], e["id"])) == 1)
         # Locate the line by the entry's IDENTITY, not its recorded line number: an entry keeps
         # matching after its line moves (edits above it), so the recorded number can be stale.
         (line_no,) = {h.line for h in P.scan_file(entry["path"], texts[entry["path"]], ctx) if h.id == entry["id"]}

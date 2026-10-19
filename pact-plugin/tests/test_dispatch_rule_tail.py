@@ -5,7 +5,7 @@ combine() prefixes `<check>: ` and suffixes `[rule: <id>]` on the reason the hos
 carries the id as `rule` and the old channel as `channel`. A script names its id with a
 `[rule: <id>]` tail; a native check in Result.rule; a check that names none gets
 `<check>.<channel>`. Hostile: a tail that is not a dotted id is text, not an id. The
-contract rows pin every id the plugin emits to shared/rules.py, and `repact-explain`
+contract rows pin every id the plugin emits to shared/rules.py, and `repact inspect --refusals`
 over a written journal prints the sentence.
 """
 
@@ -15,7 +15,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -30,7 +29,7 @@ from shell.merge import arms
 SHELL_TABLES = (programs.RULES, arms.RULE_IDS, arms.MASK_RULE_IDS)
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-CLI = PLUGIN_ROOT / "bin" / "repact-explain"
+CLI = PLUGIN_ROOT / "bin" / "repact"
 
 
 def _deny(reason: str) -> bytes:
@@ -150,7 +149,7 @@ def test_every_rule_has_one_sentence_and_a_doc_anchor():
         assert re.fullmatch(r"docs/[A-Za-z0-9_/.-]+\.md#[a-z0-9-]+", rule.doc), rule_id
 
 
-# --- repact-explain over a written journal -------------------------------------------------------
+# --- repact inspect --refusals over a written journal -------------------------------------------------------
 
 def _journal(tmp_path, rows):
     session_dir = tmp_path / "sess"
@@ -161,7 +160,7 @@ def _journal(tmp_path, rows):
 
 
 def _explain(*args):
-    return subprocess.run([sys.executable, str(CLI), *args], capture_output=True, text=True,
+    return subprocess.run(["bash", str(CLI), "inspect", "--refusals", *args], capture_output=True, text=True,
                           env={**os.environ, "CLAUDE_CODE_SESSION_ID": ""}, timeout=30)
 
 

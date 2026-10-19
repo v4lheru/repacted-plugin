@@ -1,6 +1,6 @@
 # rePACTed plugin
 
-This folder is the plugin that `/plugin install repacted@repacted` installs (version 2.0.0). Setup and a first run are in the repository [README](https://github.com/v4lheru/repacted-plugin#readme) and the [quickstart](https://github.com/v4lheru/repacted-plugin/blob/main/docs/quickstart.md).
+This folder is the plugin that `/plugin install repacted@repacted` installs (version 2.1.0). Setup and a first run are in the repository [README](https://github.com/v4lheru/repacted-plugin#readme) and the [quickstart](https://github.com/v4lheru/repacted-plugin/blob/main/docs/quickstart.md).
 
 ## What is here
 
@@ -10,13 +10,13 @@ This folder is the plugin that `/plugin install repacted@repacted` installs (ver
 | `agents/` | The lead and the specialist agents. |
 | `commands/` | The `/repacted:...` commands, such as `init`, `comPACT` and `orchestrate`. |
 | `skills/` | Skills that agents load for a kind of work. |
-| `bin/` | Command-line tools such as `repact-doctor`, `repact-explain` and `env-get`. |
+| `bin/` | Command-line tools such as `repact` (with `repact inspect` and `repact decide`), `repact-doctor` and `env-get`. |
 | `protocols/`, `reference/`, `templates/` | Shared rules and reference files that agents read. |
-| `telegram/` | The optional Telegram bridge. It is off until you run `/repacted:telegram-setup`. |
+| `telegram/` | The optional Telegram bridge. It is off until you run `/repacted:init telegram`. |
 
 ## Check your install
 
-Ask Claude to run `repact-doctor`. It prints one line per check, then `mode: guards-only (Agent Teams flag off)` or `mode: full (Agent Teams on)`. If teammates will not spawn, see [If specialist agents will not spawn](https://github.com/v4lheru/repacted-plugin#if-specialist-agents-will-not-spawn).
+Ask Claude to run `repact-doctor`. It prints one line per check, including `execution: subagents (default)`, or `execution: teams` when you turned Agent Teams on. If teammates will not spawn, see [If specialist agents will not spawn](https://github.com/v4lheru/repacted-plugin#if-specialist-agents-will-not-spawn).
 
 ## License
 

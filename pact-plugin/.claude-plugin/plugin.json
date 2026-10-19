@@ -1,6 +1,6 @@
 {
   "name": "repacted",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "rePACTed: a lead agent that plans, builds, tests and reviews your work with a team of specialists, every step tracked as a task",
   "author": {
     "name": "Uros Pesic",
@@ -24,19 +24,18 @@
     "./commands/bootstrap.md",
     "./commands/init.md",
     "./commands/demo.md",
+    "./commands/work.md",
+    "./commands/inspect.md",
+    "./commands/decide.md",
+    "./commands/resume.md",
     "./commands/orchestrate.md",
     "./commands/comPACT.md",
     "./commands/rePACT.md",
-    "./commands/imPACT.md",
     "./commands/peer-review.md",
     "./commands/plan-mode.md",
     "./commands/wrap-up.md",
     "./commands/pause.md",
-    "./commands/refresh.md",
-    "./commands/next.md",
-    "./commands/pin-memory.md",
-    "./commands/telegram-setup.md",
-    "./commands/prune-memory.md"
+    "./commands/autopilot.md"
   ],
   "agents": [
     "./agents/pact-architect.md",

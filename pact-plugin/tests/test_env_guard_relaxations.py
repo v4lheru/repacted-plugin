@@ -612,6 +612,7 @@ ROOT_ALLOW = [
     'grep -rn KEY "$PWD"/src', "grep -rn KEY ${PWD}/src", 'cd src && grep -rn KEY "$PWD"',
     "grep -rn KEY sr*", "grep -rn KEY src", 'grep -rln KEY "$PWD"',
     f'grep -rn KEY "$PWD" {EXCLUDES}', "rg KEY d*",                   # rg skips hidden files
+    "grep -rn KEY src/**",                     # a `**` glob is walked, src is clean
 ]
 ROOT_DENY = [
     'grep -rn KEY "$PWD"', "grep -rn KEY ${PWD}", 'grep -rn KEY "${PWD}/dirty"',
@@ -621,7 +622,7 @@ ROOT_DENY = [
     "rg --hidden KEY `pwd`", 'grep -rn KEY "$UNSET_ROOT"', 'grep -rn KEY "$PWDX/src"',
     "grep -rn KEY ~+/dirty", "cd src && grep -rn KEY ~-",
     "grep -rn KEY d*", "grep -rn KEY ./*/", "grep -rn KEY dirt?", "grep -rn KEY d[ie]*",
-    "grep -rn KEY {dirty,src}", "grep -rn KEY src/**", "cd dirty && grep -rn KEY ../d*",
+    "grep -rn KEY {dirty,src}", "cd dirty && grep -rn KEY ../d*",
     'cd "$ELSEWHERE" && grep -rn KEY d*', "R=.; grep -rn KEY $R", 'R=dirty; grep -rn KEY "$R"',
 ]
 

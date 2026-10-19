@@ -10,12 +10,13 @@ Summary: The team policy: `.repacted/policy.json`, committed at the root of a wo
          policy off: that switch would be the loosening route. Work trees nest (a submodule, a
          vendored repository, an empty `.git`), so the policies of every enclosing work tree
          apply together, the stricter value winning: reading more can never loosen.
-Used by: shared/evidence/ledger.py load_constants (modes, commit_rule.deny_words),
+Used by: shared/check_modes.py load_constants (modes, commit_rule.deny_words),
          shared/pact_config.py get_enum (pact_options), hooks/egress_guard.py (egress),
          shared/dispatch_helpers.py project_scope_allowed (agents.project_scope),
-         shared/cost_cap.py (session.cost_cap_usd, via session_cost_cap), the
-         refusals of write_checks.py, amendment_gate.py, dispatch_gate.py,
-         handoff_ordering_gate.py and egress_guard.py (refusal_note), and bin/_doctor_policy.py
+         shared/cost_cap.py (session.cost_cap_usd, via session_cost_cap),
+         shared/execution.py (execution, an opt-in outside the tighten-only rule), the
+         refusals of write_checks.py, dispatch_gate.py
+         and egress_guard.py (refusal_note), and bin/_doctor_policy.py
          (the doctor line and `repact-doctor --policy`).
 Doc: reference/config.md, section "Team policy".
 
@@ -48,17 +49,14 @@ NOTE_MAX = 500             # characters of a whole refusal note
 
 # Check modes in bin/checks.json "modes": each check's own words, ranked from open to blocking,
 # and the mode its reader falls back to when the user's word cannot be read. The shipped modes
-# repeat ledger.DEFAULT_MODES and hooks/amendment_gate.py; tests/test_team_policy.py pins both.
+# repeat check_modes.DEFAULT_MODES; tests/test_team_policy.py pins them. amendment_gate,
+# ref_dispositions and rejection_shape were retired in 2.1.0: a policy naming one is noted.
 MODE_RANK = {"off": 0, "shadow": 1, "advisory": 2, "note": 2, "gate": 3, "enforce": 3}
 _GATE_PAIR = {"gate": "enforce", "enforce": "gate"}   # the one alias the readers share
 _USE_MODES = ("off", "shadow", "advisory", "gate")
 CHECK_MODES: Dict[str, Tuple[Tuple[str, ...], str]] = {
-    "handoff_evidence": (_USE_MODES, "advisory"),
-    "uncertainty_disposition": (_USE_MODES, "advisory"),
+    "handoff_evidence": (_USE_MODES, "gate"),
     "commit_rule": (_USE_MODES, "gate"),
-    "amendment_gate": (("off", "shadow", "note", "enforce"), "shadow"),
-    "ref_dispositions": (("off", "note", "enforce"), "enforce"),
-    "rejection_shape": (("off", "note", "enforce"), "enforce"),
 }
 # PACT_* enum options (shared/pact_config.py) a policy may raise, ranked from open to blocking.
 OPTION_ORDER = ("shadow", "warn", "deny")
@@ -67,6 +65,8 @@ OPTIONS = ("PACT_DISPATCH_INLINE_MISSION_MODE", "PACT_DISPATCH_VARIETY_MODE")
 RESERVED: Tuple[str, ...] = ()
 # session.cost_cap_usd: dollars, above 0 and at most this (pact_config.USD_MAX says the same).
 MAX_COST_CAP_USD = 1_000_000
+# execution: the one value a policy may set (shared/execution.py).
+EXECUTION_TEAMS = "teams"
 # agents.project_scope, ranked from blocking to open: a policy can only move it to "off".
 AGENT_SCOPES = ("off", "allow")
 PROGRAM_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-")
@@ -151,6 +151,7 @@ _STRICTER: Dict[str, Callable] = {
     "allow_pragma": lambda a, b: a and b,
     "project_scope": lambda a, b: "off" if "off" in (a, b) else a,
     "cost_cap_usd": min,
+    "execution": lambda a, b: a,
 }
 
 
@@ -418,6 +419,16 @@ def _read_session(document: dict, policy: Policy) -> None:
         policy.values["cost_cap_usd"] = float(raw)
 
 
+def _read_execution(document: dict, policy: Policy) -> None:
+    """`"execution": "teams"`: the one opt-in a policy holds. It chooses how work runs, not how
+    strictly it is checked, so it is outside the tighten-only rule; only the literal is read."""
+    raw = document.get("execution")
+    if raw != EXECUTION_TEAMS:
+        policy.ignored.append(f"execution {_shown(raw)}: only \"{EXECUTION_TEAMS}\" is read")
+        return
+    policy.values["execution"] = raw
+
+
 SECTIONS: Dict[str, Callable[[dict, Policy], None]] = {
     "version": _read_version,
     "modes": _read_modes,
@@ -426,6 +437,7 @@ SECTIONS: Dict[str, Callable[[dict, Policy], None]] = {
     "egress": _read_egress,
     "agents": _read_agents,
     "session": _read_session,
+    "execution": _read_execution,
 }
 
 
@@ -536,6 +548,14 @@ def project_scope(cwd: Optional[str] = None) -> str:
         policy.raised["agents.project_scope"] = "off (this machine: allow)"
         return "off"
     return "allow"
+
+
+def execution(cwd: Optional[str] = None) -> Optional[str]:
+    """"teams" when the policy asks for Agent Teams, else None. Never raises."""
+    try:
+        return load(cwd).values.get("execution")
+    except Exception:   # noqa: BLE001 - a policy that cannot be read asks for nothing
+        return None
 
 
 def session_cost_cap(user: Optional[float], cwd: Optional[str] = None

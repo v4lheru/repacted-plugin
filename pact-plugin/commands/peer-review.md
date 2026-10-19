@@ -10,13 +10,13 @@ Review the current work: $ARGUMENTS
 
 Detail on demand: [review-detail.md](../reference/peer-review/review-detail.md) (load at step 1 when the reviewer set isn't obvious) and [minor-future-gate.md](../reference/peer-review/minor-future-gate.md) (load at step 4 whenever a Minor or Future finding exists).
 
-## Task Hierarchy
+## Tasks
 
-Review task "Review: {feature}" (`in_progress`) blocked by the reviewer tasks; remediation tasks per cycle; a "User: review minor issues" step task; an "Awaiting merge decision" approval task; complete the review task with `metadata.artifact` = PR URL. Synchronous user steps go straight from `pending` to `completed`.
+Your own tasks: the review task "Review: {feature}" (`in_progress`), a "User: review minor issues" step task and an "Awaiting merge decision" task; complete the review task with `metadata.artifact` = the PR URL. Synchronous user steps go straight from `pending` to `completed`. Reviewers and fixers get their work tasks from `repact dispatch`.
 
-## Remediation Task State
+## Remediation
 
-The review stays `in_progress` until merge-ready; fresh tasks per cycle; re-review is **verify-only** (only the remediation diff, by the reviewer who found the issues, or read by you when there was one reviewer and the diff is small; verify a reported "new issue" against the file before dispatching a fix). After 2 failed cycles: a BLOCKER task `addBlockedBy` the review → `/repacted:imPACT` (block, never complete or delete). Persist `TaskUpdate(reviewTaskId, metadata={"remediation_cycle_count": N})`, incremented at each cycle start.
+The review stays `in_progress` until merge-ready; each cycle dispatches fresh fixers; re-review is **verify-only** (only the remediation diff, by the reviewer who found the issues, or read by you when there was one reviewer and the diff is small; check a reported "new issue" against the file before dispatching a fix). After 2 failed cycles: a BLOCKER task `addBlockedBy` the review → [blocker triage](../reference/decide/blocker-triage.md) (block, never complete or delete). Persist `TaskUpdate(reviewTaskId, metadata={"remediation_cycle_count": N})`, incremented at each cycle start.
 
 **Post-remediation incremental harvest** (only when remediation changed something): Ensure the secretary first: see the on-demand secretary step in [bootstrap.md](bootstrap.md#step-2--on-demand-secretary) (TaskCreate → TaskUpdate(owner="secretary") → spawn if absent → SendMessage).
 
@@ -33,37 +33,24 @@ TaskUpdate(taskId, owner="secretary")
 
 > ⚠️ **MANDATORY, with several reviewers too**: never send the fix task to a reviewer, and do NOT stop a reviewer with open findings: its findings go to the code's author or a fresh coder, and it verifies the fix (persona §11). Add coders only for parallel independent fixes.
 
-> **Worktree scope reminder**: When dispatching a fixer, include the worktree path and `CLAUDE.md` scope note in the fix task: "As a teammate, do NOT write a `CLAUDE.md` file in a project directory or a home directory. This covers each route to that write, not only an `Edit` or a `Write` you issue: if a script you run, a command you invoke, or a save path you trigger writes the file, that write is yours. This applies with or without a worktree. The orchestrator manages those files. If your task mentions updating `CLAUDE.md`, flag it in your HANDOFF instead."
-
-> **Remediation stage-ready wait**: Fixers stage remediation changes and notify the team-lead, then wait for the team-lead to commit the fix. Instruct the fixer to SET the `intentional_wait` task metadata (reason `awaiting_amendment_review`, resolver `lead`) before the stage-ready notify so TeammateIdle hooks do not nag through the fix→commit→re-review cycle; CLEAR on the commit `amend_<n>` (kind `commit`). See `skills/teammate/references/teammate-waiting.md` §Intentional Waiting for the SET/CLEAR contract.
+> **Fixer missions** carry the `CLAUDE.md` rule: "Do NOT write a `CLAUDE.md` file anywhere, by any route (a script, command or save path you trigger counts); if your task asks for one, flag it in your HANDOFF." The fixer hands in with `repact submit`; you accept, then commit the fix before the re-review.
 
 ---
 
 **PR Review Workflow**
 
-**Session team**: The `{team_name}` team is provisioned automatically by the platform; reviewers are dispatched into it, never into a team you create.
-
 Dispatch **ONE reviewer** by default, of the type that fits the PR's main risk. Dispatch several in parallel only when the user asks or the risk score is 3 or more: then **pact-architect**, **pact-test-engineer**, and the domain coder for the PR's main domain; add **pact-security-engineer** for auth, input handling, endpoints, serialization, crypto or security config, and **pact-qa-engineer** for UI changes with a runnable dev server.
 
-### Teachback-Gated Dispatch
+### Dispatch
 
-Each reviewer dispatch creates **two tasks**: Task A (`"{reviewer-type}: TEACHBACK for review of {feature}"`, which states the review angle before the diff is read) and Task B (`"{reviewer-type}: review {feature}"`, `blockedBy = [<Task A id>]`), both BEFORE the `Agent(...)` spawn. Accept: `TaskUpdate(A, status="completed")` FIRST, then the one-line wake to the reviewer.
+Each reviewer: `repact dispatch --name {reviewer-name} --agent pact-{reviewer-type} --subject "review {feature}" --kind docs --worktree <the PR's worktree> --brief-file <mission file> --variety N,S,U,R`, then the `Agent(...)` call it prints (persona §11). The teachback states the review angle before the diff is read. Mission:
 
-Read reference/dispatch/teachback-gated-dispatch.md before your first dispatch this session. Below are only the reviewer's mission fields.
-
----
-
-**Dispatch reviewers** — for each reviewer, follow the steps for [Teachback-Gated Dispatch](#teachback-gated-dispatch) with `name="{reviewer-name}"`, `subagent_type="pact-{reviewer-type}"`:
-
-- Task A subject: `"{reviewer-type}: TEACHBACK for review of {feature}"`.
-- Task B subject: `"{reviewer-type}: review {feature}"`, `description="Review this PR. Focus: [domain-specific review criteria]…"`.
+- "Review this PR. Focus: [domain-specific review criteria]…"
 - Copy check, when the PR adds text an end user will read: read each new user-facing string as the reader the brief names; flag jargon and anything over the length cap.
 - <!-- ANCHOR-STABLE: REVIEWER-MEMORY-CHANNEL -->
-   Before dispatching, compare each reviewer's `subagent_type` against the builder's. Persistent agent-memory is keyed by agent TYPE, so a reviewer of the same type loads at spawn the same store the builder has been writing to — its index arrives in context whether or not the reviewer opens a file, and it is pulled on creation rather than pushed mid-session, which is why no ordering avoids it and the harvest hold below does not reach it. Where the types match, state that limitation in the reviewer's `metadata.handoff` instead of claiming independence. Where a cross-check must be decisive, dispatch it to a DIFFERENT type, and leave the secretary query out of that dispatch — pact-memory is shared per project, so a type swap alone does not close it.
+   Before dispatching, compare each reviewer's `subagent_type` against the builder's. Persistent agent-memory is keyed by agent TYPE, so a reviewer of the same type loads at spawn the same store the builder has been writing to — its index arrives in context whether or not the reviewer opens a file, and it is pulled on creation rather than pushed mid-session, which is why no ordering avoids it and the harvest hold below does not reach it. Where the types match, have the reviewer state that limitation in its HANDOFF instead of claiming independence. Where a cross-check must be decisive, dispatch it to a DIFFERENT type, and leave the secretary query out of that dispatch — pact-memory is shared per project, so a type swap alone does not close it.
 
-- The hook journals the `variety_assessed` dispatch event from Task B's stamp; do not write it.
-
-With several reviewers, spawn them in parallel (multiple `Agent` calls in one response).
+With several reviewers, dispatch each, then all their `Agent` calls in one response. Accept each review with `repact accept <id>`; a review that misses the brief gets `repact reject <id> --reason "<text>"`.
 
 After dispatching all reviewers, write a `review_dispatch` event:
 ```bash
@@ -129,7 +116,7 @@ JSON
 JSON
        ```
      - After all fixes complete, re-run review to verify fixes only (see Verify-Only Re-Review above)
-     - **Termination**: If blocking items persist after 2 fix-verify cycles → escalate via `/repacted:imPACT`
+     - **Termination**: If blocking items persist after 2 fix-verify cycles → escalate via [blocker triage](../reference/decide/blocker-triage.md)
    - **Minor + Future**: load [minor-future-gate.md](../reference/peer-review/minor-future-gate.md) and follow it (greedy-fix mode when the PACT Runtime Config says `PR greedy-fix: ON`, else the per-finding gate). Greedy never merges, closes or pushes.
 
 5. State merge readiness (only after ALL blocking fixes complete AND minor/future item handling is done AND every reviewer `open_questions` entry carries a disposition in the review doc): "Ready to merge" or "Changes requested: [specifics]"
@@ -153,7 +140,7 @@ JSON
 
    Calibration runs unconditionally after all reviewers complete. Skip only for trivial single-file PRs.
 
-   **Verify agent task completion**: After each reviewer completes, check their task status via `TaskList`. If still "in_progress", mark it completed: `TaskUpdate(taskId, status="completed")`.
+   **Every reviewer task accepted**: `repact inspect` lists any still open; close each with `repact accept <id>`, never with `TaskUpdate`.
 
 7. ⚠️ **Merge Authorization Checkpoint**
 

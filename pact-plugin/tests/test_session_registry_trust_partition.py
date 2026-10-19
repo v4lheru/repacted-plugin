@@ -5,7 +5,7 @@ suite (test_session_registry.py) cannot express:
 
   * TRUST PARTITION (load-bearing security): the registry is LABELING-ONLY. The
     authority surfaces — trustworthy_actor_name (dispatch_helpers) + the
-    self-completion path (task_lifecycle_gate) — MUST NOT import or call the
+    completion and caller checks (task_write_guard, ops_frame_guard) — MUST NOT import or call the
     registry resolver. The registry value is self-asserted/forgeable; feeding it
     to a who-acted/is-allowed check re-opens the confused-deputy hole that the
     harness-managed agent_id signal closes. Enforced by an AST no-import test
@@ -38,11 +38,12 @@ HOOKS_DIR = Path(__file__).parent.parent / "hooks"
 
 # The authority surfaces that MUST NOT consume the registry resolver. Keyed by
 # the file (relative to hooks/) whose import graph is scanned. dispatch_helpers
-# hosts trustworthy_actor_name; task_lifecycle_gate hosts the self-completion
-# advisory that consumes it.
+# hosts trustworthy_actor_name; task_write_guard refuses a completion and ops_frame_guard
+# judges the caller of an op, both from the host payload.
 _AUTHORITY_FILES = (
     "shared/dispatch_helpers.py",
-    "task_lifecycle_gate.py",
+    "task_write_guard.py",
+    "ops_frame_guard.py",
 )
 
 _REGISTRY_MODULE_TOKENS = ("session_registry",)
@@ -110,7 +111,6 @@ _ALLOWED_REGISTRY_IMPORTERS = frozenset({
     "shared/pact_context.py",
     "shared/session_init_teammate.py",
     "session_end.py",
-    "task_claim_gate.py",
     "shared/background_work.py",
     # Frame.registry_name: the docker lock's caller label for a separate-process
     # teammate. Frame.actor (the authority signal) never reads it.

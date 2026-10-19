@@ -34,8 +34,8 @@ Checks, one line each (GREEN, AMBER, RED, or SKIP when it cannot run here):
  12 team policy      the work tree's .repacted/policy.json: what it tightens and, AMBER, what in
                      it was ignored (a value that would loosen, a malformed or untrusted file)
 
-Then two notes that are never a check state: `mode:` (guards-only, or full with the Agent Teams
-flag on) and the host line against reference/compat.json (an untested host is a note).
+Then two notes that are never a check state: `execution:` (subagents or teams, and why) and the
+host line against reference/compat.json (an untested host is a note).
 
   repact-doctor --clear task-store
                      remove this session's task-store HALT marker (hooks/task_store_probe.py

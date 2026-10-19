@@ -1,32 +1,40 @@
 """The acceptance bridge: platform task acceptance -> the project task log (D10 P2; design §5).
 
-Location: pact-plugin/hooks/shared/task_log/bridge.py. Called by hooks/evidence_gate.py on every
-PostToolUse(TaskUpdate) (`handle`), by `repact-task sync` and every repact-task read command
+Location: pact-plugin/hooks/shared/task_log/bridge.py. Called by shared/ops/sides.py for
+the lead's own `repact dispatch`, `accept` and `reject` (`apply`; since 2.1.0, when the TaskUpdate
+hook that called `handle` was deleted), by `repact-task sync` and every repact-task read command
 (`sync`), and by hooks/session_ledger.py's detached SessionEnd child (`sync_quietly`).
 
-What it does, only in the LEAD's frame (the caller passes `lead`, from pact_context.is_lead on the
-payload's agent_type; measured on Claude Code 2.1.283, #180 a1_capture_result):
-  - project_task or refs in the lead's own TaskUpdate/TaskCreate metadata -> bind: link
+What it does, only for the LEAD (only the lead can run those commands):
+  - project_task or refs in the lead's own dispatch metadata -> bind: link
     ptask:<team>/<id> (project_task is also marked active). Only these links, and `start --ptask`,
     bind a ref; a ref a teammate writes into metadata is reported at acceptance, never closed;
-  - the task completed (statusChange to completed) -> for EVERY project task bound to the
+  - the task accepted -> for EVERY project task bound to the
     platform task: journal a lead-acceptance record, THEN `Store.accept` with the evidence: the
     HANDOFF's `evidence` object, else the run ledger's newest parsed record for (team, task id),
-    else none (recorded unverified: "accepted without evidence"). Which refs close is the
+    else none (recorded unverified: "accepted without evidence"; with unattended mode on, none
+    leaves the row open instead and the autopilot run log keeps why, `hold`, never for a row that
+    is already closed; an attended metadata.evidence_waiver closes it with the row's `waiver`
+    field). Which refs close is the
     HANDOFF's `refs` dispositions (hooks/shared/ref_dispositions.py): `done` closes; partial,
     deferred and dropped stay open and are reported to the lead (`report`). A task with ONE ref
     and no dispositions closes it, as before; several refs and no dispositions close nothing.
+    A task of a feature with more than one task (acceptance.statuses.integrated "waiting") closes
+    nothing at its acceptance: `integrate`, called by `repact accept --feature` once the merged
+    tree passes, closes its rows with the merged head commit as evidence.
   - handoff_rejection written                -> journal the record, then `Store.reject` at its revision.
+  - metadata.parked written (`park`)          -> every bound open row is parked for a human.
 
 `completion_view` is the read side the views use: for the repo's sessions, the open project
 tasks whose linked platform task is completed (`next` never recommends one; `fsck` lists them)
 and the ones a completed platform task merely names in its text.
 
-Attribution fails CLOSED, hook errors fail OPEN (amend_1): a frame that is not the lead's, an owner
-whose name equals the frame's agent_type (amend_4), a teachback-exempt owner or a signal task writes
-nothing. `sync` writes an accept only for a ptask with a lead-acceptance journal record and no store
+Attribution fails CLOSED, errors fail OPEN. `sync` writes an accept only for a ptask with a lead-acceptance journal record and no store
 event, and lists every other linked completion as not attributable. Only structured fields (ids,
-shas, file names) are copied, never HANDOFF prose (§9).
+shas, file names) are copied into the task log, never HANDOFF prose. The one exception is the
+ledger: every lead acceptance, bound or not, appends the HANDOFF's known
+limits, decisions and remaining items to `.repacted/ledger.jsonl` through ledger.record, and
+`backfill` does the same for earlier acceptances (`repact-task ledger --backfill`).
 """
 from __future__ import annotations
 
@@ -40,7 +48,8 @@ HOOKS_DIR = Path(__file__).resolve().parents[2]
 if str(HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(HOOKS_DIR))
 
-from shared import evidence as ev  # noqa: E402
+from shared import task_files as ev  # noqa: E402
+from shared.plugin_paths import claude_config_dir, task_store  # noqa: E402
 from shared.task_log import write as W  # noqa: E402
 from shared import ref_dispositions as RD  # noqa: E402
 
@@ -53,25 +62,6 @@ LINK_KEY = "project_task"
 # ---------------------------------------------------------------------------------------------
 # what the update did
 # ---------------------------------------------------------------------------------------------
-
-def triggers(tool_input: dict, tool_response) -> List[str]:
-    """Which bridge actions this TaskUpdate asks for, in the order they run: link, reject, accept.
-
-    A completion counts only when the platform reports the transition itself
-    (tool_response.statusChange.to == "completed"), so a repeated completion is not an acceptance.
-    `link` is a project_task or refs in this write's OWN metadata (TaskUpdate or TaskCreate)."""
-    found = []
-    metadata = tool_input.get("metadata") if isinstance(tool_input.get("metadata"), dict) else {}
-    if RD.metadata_refs(metadata):
-        found.append("link")
-    if metadata.get(REJECTION_KEY):
-        found.append("reject")
-    change = tool_response.get("statusChange") if isinstance(tool_response, dict) else None
-    if tool_input.get("status") == "completed" and isinstance(change, dict) \
-            and change.get("to") == "completed":
-        found.append("accept")
-    return found
-
 
 def _revision(value) -> Optional[int]:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else None
@@ -97,13 +87,6 @@ def excluded(task: dict, team: str) -> bool:
     """A teachback-exempt owner (the secretary) or a signal task never closes a project task."""
     from shared.intentional_wait import is_self_complete_exempt
     return bool(is_self_complete_exempt(task, team))
-
-
-def owner_guard_holds(payload: dict, task: dict) -> bool:
-    """False when the frame's agent_type IS the task owner's name: a lead never owns the Task B it
-    accepts, and an in-process teammate's agent_type is its own name (amend_4)."""
-    agent_type, owner = payload.get("agent_type"), task.get("owner")
-    return not (isinstance(agent_type, str) and isinstance(owner, str) and agent_type == owner)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -160,14 +143,42 @@ def _valid(main: Path, targets: Iterable[str]) -> List[str]:
     return kept
 
 
-def collect_evidence(main: Path, team: str, task_id: str, metadata: dict) -> List[str]:
+def _accepted_targets(metadata: dict) -> List[str]:
+    """The log of each run the acceptance record names (metadata.acceptance.runs: the passing runs
+    on the accepted tree, written by repact accept from the evidence check): a `claude -p`
+    teammate's runs carry no team or task, so an honestly relayed task has no ledger row of its
+    own."""
+    stems = (metadata.get("acceptance") or {}).get("runs") if isinstance(metadata.get("acceptance"), dict) else None
+    if not isinstance(stems, list) or not stems:
+        return []
+    from shared import acceptance as AC
+    runs = AC.ledger_runs() or []
+    targets = []
+    for stem in reversed(stems):
+        for row in AC.runs_for(str(stem), runs):
+            name = Path(row["log_path"]).name if isinstance(row.get("log_path"), str) else ""
+            if W.run_name_ok(name) and f"run:{name}" not in targets:
+                targets.append(f"run:{name}")
+    return targets[:3]
+
+
+def collect_evidence(main: Path, team: str, task_id: str, metadata: dict,
+                     task: Optional[dict] = None) -> List[str]:
+    """The HANDOFF's evidence object, else the run ledger's row of this task, else (given the task)
+    the runs its acceptance record names; [] when none verifies."""
     handoff = metadata.get("handoff") if isinstance(metadata.get("handoff"), dict) else {}
     evidence = handoff.get("evidence")
     if isinstance(evidence, dict):
         targets = _valid(main, _object_targets(evidence))
         if targets:
             return targets
-    return _valid(main, _ledger_targets(team, task_id))
+    targets = _valid(main, _ledger_targets(team, task_id))
+    if targets or not isinstance(task, dict):
+        return targets
+    try:
+        return _valid(main, _accepted_targets(metadata))
+    except Exception:  # noqa: BLE001 - a ledger read that fails finds no evidence (the row stays open)
+        return []
 
 
 # ---------------------------------------------------------------------------------------------
@@ -182,9 +193,32 @@ def _journal():
 def session_dir_of(session_id) -> Optional[Path]:
     if not isinstance(session_id, str) or not session_id:
         return None
-    for context in (ev.claude_config_dir() / "pact-sessions").glob(f"*/{session_id}/pact-session-context.json"):
+    for context in (claude_config_dir() / "pact-sessions").glob(f"*/{session_id}/pact-session-context.json"):
         return context.parent
     return None
+
+
+HOLD_WHY = "no evidence (no HANDOFF evidence object, no recorded run) in an unattended run: left open"
+
+
+def unattended(session_id) -> bool:
+    """Unattended mode for the session as the evidence controls read it (shared/unattended.controls_on:
+    REPACT_UNATTENDED or the flag says on, and a bad flag reads ON)."""
+    from shared.unattended import controls_on
+    session_dir = session_dir_of(session_id)
+    return bool(controls_on(str(session_dir) if session_dir else "").on)
+
+
+def hold(session_id, ref: str, ptask: str) -> bool:
+    """Keep why `ref` stayed open in the session's current autopilot run, so `record done`
+    leaves it open and the report names the reason (shared/autopilot_run.evidence_holds)."""
+    from shared import autopilot_run as R
+    session_dir = session_dir_of(session_id)
+    run = R.current_run(R.read_rows(str(session_dir))) if session_dir else None
+    if run is None:
+        return False
+    return R.append(str(session_dir), {"kind": "evidence_hold", "run": run["start"].get("id"), "ref": ref,
+                                       "ptask": ptask, "why": HOLD_WHY})
 
 
 def journal(session_id, ptask: str, op: str, rev: int, ref: str, main: Path) -> bool:
@@ -227,8 +261,29 @@ def bind(store, ptask: str, written: dict) -> None:
                 store.start(ref, ptask=ptask)
             else:
                 store.link(ref, "reference", f"ptask:{ptask}")
+            drop_dangling(store, state.tasks[ref], ptask)
         except W.Refused:
             pass
+
+
+def drop_dangling(store, task: dict, ptask: str) -> List[str]:
+    """Remove the row's links to the same task id as `ptask` under a team with no task dir (a
+    lead under `claude -p` linked session-<8>/<id> while the platform keeps the task under the full session
+    id), so one row never carries a live link and a dead twin. Returns the targets removed."""
+    bound_id = ptask.rpartition("/")[2]
+    removed = []
+    for link in list(task.get("links") or []):
+        target = link.get("target") if isinstance(link, dict) else None
+        if link.get("kind") != "reference" or not isinstance(target, str) or not target.startswith("ptask:"):
+            continue
+        team, _, task_id = target[len("ptask:"):].partition("/")
+        if task_id != bound_id or target == f"ptask:{ptask}":
+            continue
+        path = ev.task_path(team, task_id) if ev.PATH_SEGMENT.fullmatch(team or "-") and task_id else None
+        if path is not None and not path.is_file() and not path.parent.is_dir():
+            store.link(task["ref"], "reference", target, remove=True)
+            removed.append(target)
+    return removed
 
 
 def to_close(refs: List[str], metadata: dict) -> Tuple[List[str], List[Tuple[str, Optional[str]]]]:
@@ -243,55 +298,23 @@ def to_close(refs: List[str], metadata: dict) -> Tuple[List[str], List[Tuple[str
     return close, [(ref, given.get(ref)) for ref in refs if ref not in close]
 
 
-last_report: dict = {}       # what the last handle() accepted: {task_id, closed, open, refused, unbound}
+last_report: dict = {}       # what the last apply() accepted: {task_id, closed, open, refused, unbound}
 
 
-def _created_id(tool_response) -> str:
-    """The id a TaskCreate just made (tool_response.task.id), as journal_emitter reads it."""
-    task = tool_response.get("task") if isinstance(tool_response, dict) else None
-    return str(task.get("id") or "") if isinstance(task, dict) else ""
-
-
-def handle(payload: dict, lead: bool) -> Optional[str]:
-    """Apply one PostToolUse(TaskUpdate or TaskCreate). Returns what it did (for tests and logs),
-    or None. On an acceptance `last_report` holds what closed, what stayed open, what the store
-    refused and what was named but not bound, for the lead's acceptance line (acceptance_line).
-    A refusal on one ref is recorded and the next ref still closes; any other store error raises,
-    the hook swallows it (fail open), and sync repairs the miss."""
+def apply(store, team: str, task_id: str, task: dict, written: dict, actions: List[str],
+          session_id) -> Optional[str]:
+    """The bridge actions ("link", "reject", "accept", in that order) for one platform task,
+    after the caller has settled who may act: shared/ops/accept|reject|dispatch for
+    `repact accept|reject|dispatch` (the lead's own command; it writes the task file itself, so
+    no TaskUpdate fires). `written` is the metadata the act wrote, which wins over the file's.
+    Returns what it did (for tests and logs); on an acceptance `last_report` holds what closed,
+    what stayed open, what the store refused and what was named but not bound. A refusal on one
+    ref is recorded and the next ref still closes; any other store error raises, the op's side
+    runner swallows it (fail open), and sync repairs the miss. A task owned by the secretary or
+    a signal task never links or closes a project task ("excluded")."""
     last_report.clear()
-    tool_name = payload.get("tool_name")
-    if tool_name not in ("TaskUpdate", "TaskCreate"):
-        return None
-    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
-    tool_response = payload.get("tool_response")
-    if tool_name == "TaskCreate":
-        actions = ["link"] if "link" in triggers(tool_input, None) else []
-        task_id = _created_id(tool_response)
-    else:
-        actions = triggers(tool_input, tool_response)
-        task_id = str(tool_input.get("taskId") or "")
-    if not actions or not task_id:
-        return None
-    if not lead:
-        return "not-the-lead"
-    cwd = payload.get("cwd")
-    if not isinstance(cwd, str) or not cwd:
-        return "no-cwd"
-    try:
-        # a repo without a task log stops here
-        store = W.Store.locate(cwd, by=W.with_team("bridge", payload.get("session_id") or ""))
-    except W.NoLog:
-        return "no-log"
-    team = ev.resolve_team(payload.get("session_id"), task_id)
-    task = ev.load_task(ev.task_path(team, task_id)) if team else None
-    if task is None:
-        return "no-task"
-    if not owner_guard_holds(payload, task):
-        return "owner-guard"
     if excluded(task, team):
         return "excluded"
-    # The task file can persist after this hook runs, so the update's own metadata wins (amend_5).
-    written = tool_input.get("metadata") if isinstance(tool_input.get("metadata"), dict) else {}
     metadata = dict(task.get("metadata") if isinstance(task.get("metadata"), dict) else {})
     metadata.update(written)
     ptask = f"{team}/{task_id}"
@@ -299,6 +322,9 @@ def handle(payload: dict, lead: bool) -> Optional[str]:
     if "link" in actions:
         bind(store, ptask, written)         # the lead's own write only, never the merged file
         done.append("linked")
+    if "accept" in actions:                 # bound or not, an accepted HANDOFF feeds the ledger
+        last_report.update({"task_id": task_id,
+                            "ledger": record_ledger(store, ptask, acceptance_rev(metadata), metadata)})
     refs = linked_refs(store.state(), team, task_id)
     unbound = unbound_refs(store.state(), refs, metadata)
     if not refs and not ("accept" in actions and unbound):
@@ -306,26 +332,126 @@ def handle(payload: dict, lead: bool) -> Optional[str]:
     if "reject" in actions:
         rev = rejection_rev(metadata)
         for ref in refs:
-            journal(payload.get("session_id"), ptask, "reject", rev, ref, store.main)
+            journal(session_id, ptask, "reject", rev, ref, store.main)
             store.reject(ref, ptask, rev)
         done.append("rejected")
     if "accept" in actions:
-        rev = acceptance_rev(metadata)
         close, kept = to_close(refs, metadata)
-        evidence = collect_evidence(store.main, team, task_id, metadata) if close else []
-        closed, refused = [], []
-        for ref in close:
-            journal(payload.get("session_id"), ptask, "accept", rev, ref, store.main)
-            try:
-                store.accept(ref, ptask, rev, evidence)
-            except W.Refused as err:        # one ref's refusal never costs the others (F15)
-                refused.append((ref, str(err)))
-                continue
-            closed.append(ref)
+        waiting = waits_for_feature(metadata)
+        if waiting:                         # a feature's rows close only on integrated
+            kept = [(ref, waiting) for ref in close] + kept
+            close = []
+        evidence = collect_evidence(store.main, team, task_id, metadata, task=task) if close else []
+        closed, refused = _close(store, ptask, close, kept, acceptance_rev(metadata), evidence,
+                                 waiver_of(metadata), session_id)
         last_report.update({"task_id": task_id, "closed": closed, "open": kept,
                             "refused": refused, "unbound": unbound})
         done.append("accepted" if closed else "kept-open")
     return "+".join(done) or None
+
+
+def _close(store, ptask: str, close: List[str], kept: list, rev: int, evidence: List[str],
+           waiver: Optional[dict], session_id) -> Tuple[List[str], list]:
+    """Journal and record the lead's acceptance of each ref in `close`: (closed, refused). With no
+    evidence and no waiver in an unattended session every ref is held open instead (appended to
+    `kept`), with no journal record, so sync never closes it later."""
+    held = HOLD_WHY if close and not evidence and not waiver and unattended(session_id) else None
+    closed, refused = [], []
+    settled = store.state().tasks
+    for ref in close:
+        if held:
+            kept.append((ref, held))
+            if settled.get(ref, {}).get("status") not in W.PT.SETTLED:
+                hold(session_id, ref, ptask)    # never a hold after the row's close
+            continue
+        journal(session_id, ptask, "accept", rev, ref, store.main)
+        try:
+            store.accept(ref, ptask, rev, evidence, waiver=waiver)
+        except W.Refused as err:            # one ref's refusal never costs the others
+            refused.append((ref, str(err)))
+            continue
+        closed.append(ref)
+    return closed, refused
+
+
+def waits_for_feature(metadata: dict) -> Optional[str]:
+    """Why the task's rows stay open after its acceptance: its feature has more than one task, so
+    they close when `repact accept --feature` passes on the merged tree (acceptance.statuses
+    .integrated is "waiting"). None otherwise."""
+    record = metadata.get("acceptance") if isinstance(metadata.get("acceptance"), dict) else {}
+    integrated = (record.get("statuses") or {}).get("integrated") if isinstance(record.get("statuses"), dict) else None
+    if isinstance(integrated, dict) and integrated.get("state") == "waiting":
+        return str(integrated.get("line") or "waits for the feature's integration")[:300]
+    return None
+
+
+def integrate(store, team: str, task_id: str, task: dict, evidence: List[str], session_id) -> dict:
+    """Close the rows bound to one task of a feature that `repact accept --feature` has just
+    integrated, with the merged tree's evidence (its head commit and the runs on
+    it) ahead of the task's own. Which refs close is the HANDOFF's dispositions, as at accept.
+    Returns the report acceptance_line reads."""
+    if excluded(task, team):
+        return {}
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    ptask = f"{team}/{task_id}"
+    close, kept = to_close(linked_refs(store.state(), team, task_id), metadata)
+    found = _valid(store.main, evidence)
+    found += [item for item in collect_evidence(store.main, team, task_id, metadata, task=task) if item not in found]
+    closed, refused = _close(store, ptask, close, kept, acceptance_rev(metadata), found,
+                             waiver_of(metadata), session_id)
+    return {"task_id": task_id, "closed": closed, "open": kept, "refused": refused, "unbound": []}
+
+
+def log_report(store, team: str, task_id: str) -> dict:
+    """What the task log holds now for the rows bound to the task, in the shape acceptance_line
+    reads: the done ones as closed, the rest open with their status (the receipt's line)."""
+    state = store.state()
+    refs = linked_refs(state, team, task_id)
+    closed = [ref for ref in refs if state.tasks.get(ref, {}).get("status") == "done"]
+    kept = [(ref, f"status {state.tasks.get(ref, {}).get('status')}") for ref in refs if ref not in closed]
+    return {"task_id": task_id, "closed": closed, "open": kept}
+
+
+def waiver_of(metadata: dict) -> Optional[dict]:
+    """The row's `waiver` from an attended metadata.evidence_waiver ({why, by, at}), else None."""
+    given = metadata.get("evidence_waiver")
+    if not isinstance(given, dict) or given.get("attended") is not True:
+        return None
+    waiver = {key: given.get(key) for key in ("why", "by", "at")}
+    return waiver if all(isinstance(value, str) and value.strip() for value in waiver.values()) else None
+
+
+def park(store, team: str, task_id: str, why: str) -> List[str]:
+    """Park every open task-log row bound to the platform task for a human (an
+    unattended `repact accept --waive`, or the rejection limit). Returns the refs parked."""
+    parked = []
+    for ref in linked_refs(store.state(), team, task_id):
+        try:
+            if store.park(ref, why):
+                parked.append(ref)
+        except W.Refused:
+            continue
+    return parked
+
+
+def record_ledger(store, ptask: str, rev: int, metadata: dict) -> dict:
+    """Append the accepted HANDOFF's known limits, decisions and remaining items to the project
+    ledger (hooks/shared/task_log/ledger.py). A ledger failure never costs the acceptance: it is
+    swallowed here and `repact-task ledger --backfill` repairs the miss."""
+    try:
+        from shared.task_log import ledger
+        return ledger.record(store, ptask, rev, metadata.get("handoff"))
+    except (W.TaskError, OSError, ValueError):
+        return {}
+
+
+def _ledger_part(ledger: dict) -> Optional[str]:
+    limits, decisions = ledger.get("limits") or [], ledger.get("decisions") or []
+    proposed = ledger.get("proposed") or []
+    parts = [f"{len(limits)} known limit(s)"] if limits else []
+    parts += ["decisions " + ", ".join(decisions)] if decisions else []
+    parts += ["proposed for the user from its remaining items: " + ", ".join(proposed)] if proposed else []
+    return "ledger: " + ", ".join(parts) if parts else None
 
 
 def acceptance_line(report: dict) -> Optional[str]:
@@ -334,7 +460,8 @@ def acceptance_line(report: dict) -> Optional[str]:
     the open ones. None when the acceptance carried no project task."""
     closed, kept = report.get("closed") or [], report.get("open") or []
     refused, unbound = report.get("refused") or [], report.get("unbound") or []
-    if not (closed or kept or refused or unbound):
+    ledger = _ledger_part(report.get("ledger") or {})
+    if not (closed or kept or refused or unbound or ledger):
         return None
     parts = []
     if closed:
@@ -346,6 +473,8 @@ def acceptance_line(report: dict) -> Optional[str]:
         parts.append("refused: " + ", ".join(f"{ref} ({reason})" for ref, reason in refused))
     if unbound:
         parts.append("named in metadata but not bound by the lead, left as is: " + ", ".join(unbound))
+    if ledger:
+        parts.append(ledger)
     line = f"Project tasks on #{report.get('task_id')}: " + "; ".join(parts) + "."
     if kept or refused or unbound:
         line += (" Settle each: `repact-task done <ref> --evidence commit:<sha> [--remaining \"<title>\"]`, "
@@ -375,7 +504,7 @@ def _slugs(main: Path) -> List[str]:
 
 
 def _session_dirs(main: Path) -> List[Path]:
-    root = ev.claude_config_dir() / "pact-sessions"
+    root = claude_config_dir() / "pact-sessions"
     dirs = []
     for slug in _slugs(main):
         base = root / slug
@@ -413,7 +542,7 @@ def _platform_tasks(session_dirs: List[Path]) -> Dict[str, dict]:
         team = _team_of(session_dir)
         if not team:
             continue
-        sources = [ev.task_store().team_dir(team), session_dir / "tasks-archive"]
+        sources = [task_store().team_dir(team), session_dir / "tasks-archive"]
         for source in (s for s in sources if s is not None):
             for path in sorted(source.glob("*.json")) if source.is_dir() else []:
                 task = ev.load_task(path)
@@ -453,7 +582,7 @@ def sync(start, check: bool = False) -> dict:
             else:
                 team, task_id = ptask.split("/", 1)
                 metadata = (task or {}).get("metadata") or {}
-                wrote = store.accept(ref, ptask, rev, collect_evidence(main, team, task_id, metadata))
+                wrote = store.accept(ref, ptask, rev, collect_evidence(main, team, task_id, metadata, task=task))
         except W.TaskError as err:
             report["refused"].append(f"{label}: {err}")
             return
@@ -531,6 +660,40 @@ def completion_view(start, platform: Optional[Dict[str, dict]] = None, state=Non
             if ref in state.tasks and ref not in refs and state.tasks[ref]["status"] not in PT.SETTLED:
                 mentioned.setdefault(ref, []).append(ptask)
     return {"linked": linked, "mentioned": mentioned}
+
+
+def backfill(start, team: Optional[str] = None) -> dict:
+    """`repact-task ledger --backfill`: feed the ledger from every completed platform task of this
+    repo's teams (or of `team` alone), as the bridge would have at each acceptance. Idempotent:
+    the ledger skips an item it already holds. Teams come from the repo's session dirs, then
+    each team's task dir and its archive (_platform_tasks). A completed task is the lead's
+    acceptance, since a teammate cannot complete its own task. NoLog when the repo has none."""
+    from shared.task_log import ledger
+    store = W.Store.locate(start, by=W.with_team("ledger"))
+    if team is not None:
+        directory = task_store().team_dir(team)
+        tasks = {f"{team}/{path.stem}": dict(task, _team=team)
+                 for path in (sorted(directory.glob("*.json")) if directory and directory.is_dir() else [])
+                 for task in [ev.load_task(path)] if task is not None}
+    else:
+        tasks = _platform_tasks(_session_dirs(store.main))
+    totals = {"tasks": 0, "limits": 0, "decisions": 0, "proposed": 0}
+
+    def order(ptask: str):
+        tail = ptask.rsplit("/", 1)[-1]
+        return (ptask.rsplit("/", 1)[0], int(tail) if tail.isdigit() else 0, ptask)
+
+    for ptask in sorted(tasks, key=order):
+        task = tasks[ptask]
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        if task.get("status") != "completed" or not isinstance(metadata.get("handoff"), dict) \
+                or excluded(task, task["_team"]):
+            continue
+        report = ledger.record(store, ptask, acceptance_rev(metadata), metadata["handoff"])
+        totals["tasks"] += 1
+        for key in ("limits", "decisions", "proposed"):
+            totals[key] += len(report[key])
+    return totals
 
 
 def sync_quietly(start) -> None:

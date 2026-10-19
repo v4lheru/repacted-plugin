@@ -38,6 +38,7 @@ from shared.pact_context import (
 from shared.paths import get_claude_config_dir
 from shared.plugin_manifest import format_plugin_banner
 from shared.project_scope import WORKTREE_IDENTITY_FILE, _rev_parse_path
+from shared.repact_shim import ensure_shim
 from shared.symlinks import SYMLINKS_VERIFIED_MESSAGE, setup_plugin_symlinks
 
 # The secretary spawns on demand (build plan §3 SECRETARY), and the session
@@ -349,12 +350,33 @@ def _persist_project_dir_env(project_dir: str) -> None:
     OSError AND UnicodeError (a non-UTF-8 env file) both fail open locally
     rather than escaping into main()'s outer net and degrading the frame.
     """
+    if not os.environ.get("CLAUDE_PROJECT_DIR"):
+        return
+    _append_env_export("CLAUDE_PROJECT_DIR", project_dir)
+
+
+def _persist_plugin_data_env() -> None:
+    """Append `export REPACTED_PLUGIN_DATA=<$CLAUDE_PLUGIN_DATA>` to CLAUDE_ENV_FILE.
+
+    The harness gives hooks CLAUDE_PLUGIN_DATA but the Bash tool none, so under
+    `claude -p --plugin-dir` (hooks: <name>-inline) tcount and the other bin tools
+    fell back to <name>-<marketplace> and wrote a second run ledger.
+    shared.plugin_paths.plugin_data_dir() reads this export after CLAUDE_PLUGIN_DATA.
+    Our own name, not CLAUDE_PLUGIN_DATA: that one would reach every other plugin's
+    Bash tools too. Shown live: the export reaches the Bash tool and a subagent's Bash
+    under `claude -p`. Only an absolute value is exported; same contract as above.
+    """
+    value = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if value:
+        _append_env_export("REPACTED_PLUGIN_DATA", value)
+
+
+def _append_env_export(name: str, value: str) -> None:
+    """Append `export NAME=<quoted value>` to $CLAUDE_ENV_FILE once; never raises."""
     env_file = os.environ.get("CLAUDE_ENV_FILE")
-    if not env_file or not os.environ.get("CLAUDE_PROJECT_DIR"):
+    if not env_file or not os.path.isabs(value):
         return
-    if not os.path.isabs(project_dir):
-        return
-    line = f"export CLAUDE_PROJECT_DIR={shlex.quote(project_dir)}"
+    line = f"export {name}={shlex.quote(value)}"
     try:
         try:
             existing = Path(env_file).read_text(encoding="utf-8")
@@ -445,6 +467,15 @@ def mark_notice_told(session_dir: str, system_messages: list) -> None:
         pass
 
 
+def _teams_asked(project_dir: str) -> bool:
+    """True unless the execution rules say subagents; an error counts as teams (emit)."""
+    try:
+        from shared import execution
+        return execution.decide(cwd=project_dir or None)["mode"] == execution.TEAMS
+    except Exception:  # noqa: BLE001 - uncertainty keeps the notice
+        return True
+
+
 def launch_notices(
     input_data: dict, project_dir: str, source: str, is_context_reset: bool,
     system_messages: list,
@@ -484,7 +515,9 @@ def launch_notices(
     # Once per session: `unattended-notice.told` in the session dir records the mode the
     # notice was given for; a resume of the same session with the same mode says nothing,
     # a changed mode says it again. main() writes the marker after the dir exists.
-    if source in ("startup", "resume") and not notice_told(input_data, project_dir):
+    # Teams only: a subagents session has no teammates to stall.
+    if (source in ("startup", "resume") and _teams_asked(project_dir)
+            and not notice_told(input_data, project_dir)):
         try:
             from shared.teammate_mode import should_emit_inprocess_notice
             if should_emit_inprocess_notice():
@@ -564,6 +597,17 @@ def refresh_environment(
     elif symlink_result:
         # A LINK MOVED. Report it on each source, with the caveat beside it.
         context_parts.append(f"{symlink_result}. {_SYMLINK_REPOINT_NOTICE}")
+
+    # 1b. The `repact` command on PATH (shared/repact_shim.py): written once, refreshed only
+    # when the template changes, never over a file that is not ours. A created or removed shim
+    # is told to the user; a failed write only on a launch, so a compact stays quiet.
+    try:
+        shim_note = ensure_shim(Path.home(), get_claude_config_dir(), os.environ)
+    except Exception as err:  # noqa: BLE001 - never block session start on the shim
+        shim_note = (f"repact command not written: {err.__class__.__name__}: {err}"
+                     if source in ("startup", "resume") else None)
+    if shim_note:
+        system_messages.append(shim_note)
 
     # 3. Ensure project has CLAUDE.md with memory sections
     project_md_msg = ensure_project_memory_md()

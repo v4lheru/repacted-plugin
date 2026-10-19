@@ -5,14 +5,14 @@
 Before invoking agents in parallel, prevent conflicts rather than resolve them:
 
 1. **Identify conflicts:** shared files (merge risk), shared interfaces (contract disagreement), shared state (schemas, config, environment). `TaskList` shows what in-progress agents hold.
-2. **Sequence or bound:** sequence the work or assign clear file/component boundaries; with no conflict, dispatch in parallel. Persist `TaskUpdate(codePhaseTaskId, metadata={"s2_boundaries": {"<agent>": ["<paths>"]}})`.
+2. **Sequence or bound:** sequence the work or assign clear file/component boundaries, and write each agent's boundary into its brief; with no conflict, dispatch in parallel. Record the boundaries in the journal's `s2_state_seeded` event so a compaction keeps them.
 3. **Set resolution authority:** technical disagreements → the architect arbitrates; naming and style → the first agent's choice becomes standard for the batch; resource contention → the lead allocates; a single-instance resource (a Docker daemon, a port) → `repact-lock acquire <name> --owner <you> --wait <seconds>`.
 
-Emit `**S2 Pre-Parallel Check**: shared files / shared interfaces / conventions / anticipated conflicts` when analysing parallel work.
+Write `**Coordination check**: shared files / shared interfaces / conventions / anticipated conflicts` when analysing parallel work.
 
-**Conventions.** Extract the first agent's conventions (naming, structure, API style) and put them in later prompts ("Follow conventions established: {list}"). For simultaneous starts, pre-define them, or run one agent first; if agents finish together with no first convention, alphabetical domain order (backend, database, frontend) wins. Persist `metadata.established_conventions` on the CODE phase task. After compaction, read the journal's `s2_state_seeded` event, falling back to the phase task file ([Recovery Steps](recovery.md#recovery-steps)). All parallel agents use the project's terms and the standard handoff structure ([Phase Transitions](workflows.md#phase-transitions)).
+**Conventions.** Extract the first agent's conventions (naming, structure, API style) and put them in later prompts ("Follow conventions established: {list}"). For simultaneous starts, pre-define them, or run one agent first; if agents finish together with no first convention, alphabetical domain order (backend, database, frontend) wins. After compaction, read the journal's `s2_state_seeded` event for the boundaries ([Recovery Steps](recovery.md#recovery-steps)). All parallel agents use the project's terms and the standard handoff structure ([Phase Transitions](workflows.md#phase-transitions)).
 
-**Parallelize by default.** Run QDCL and require a justification for sequential dispatch; 4+ items means multiple agents, no exceptions. "Related" is not "dependent", and "one agent can handle it", "they're small" or "coordination overhead" are rationalizations, not reasons. Valid reasons to sequence: a file modified by both, one agent's output feeding another, or an undefined shared interface (define it first). Guard against over-parallelization with S2 coordination; time-box the analysis to about a minute and default to parallel when unclear. Conflicts are recoverable; lost time is not.
+**Parallelize by default.** Run QDCL and require a justification for sequential dispatch; 4+ items means multiple agents, no exceptions. "Related" is not "dependent", and "one agent can handle it", "they're small" or "coordination overhead" are rationalizations, not reasons. Valid reasons to sequence: a file modified by both, one agent's output feeding another, or an undefined shared interface (define it first). Guard against over-parallelization with the coordination check; time-box the analysis to about a minute and default to parallel when unclear. Conflicts are recoverable; lost time is not.
 
 **After each specialist completes:** extract its decisions, conventions and interfaces, and propagate them to later and still-running agents.
 
@@ -24,30 +24,15 @@ When dispatching an agent after others have already modified files, check the te
 
 ## Task Hierarchy
 
-```
-Feature task (lead)
-├── Phase tasks: PREPARE, ARCHITECT, CODE, TEST (lead)
-│   └── Agent tasks (specialists claim; the lead completes)
-└── Review task
-```
-
-| Transition | Actor | Condition |
-|---|---|---|
-| `pending → in_progress` (claim) | Teammate | owns the task; `blockedBy` empty |
-| `in_progress → in_progress` (metadata) | Teammate | writes `metadata.handoff` / `metadata.teachback_submit` |
-| `in_progress → in_progress` (rejection) | Lead | rejection metadata, then the wake |
-| `in_progress → completed` | **LEAD ONLY** on teammate-owned tasks | paired with the wake; carve-outs per [Completion Authority](completion.md#completion-authority) |
-| `pending → completed` (skip) | Lead | phase skip with `metadata.skipped = true` |
-
-`in_progress` also covers "done, awaiting review": the HANDOFF is stored and the teammate idles on `awaiting_lead_completion`. Every dispatch is a Task A (teachback) + Task B (work) pair, Task A created FIRST, with `blockedBy=[A]` ([Teachback Review](completion.md#teachback-review)). Express dependencies with `addBlockedBy` (CODE blocked by ARCHITECT; agent tasks blocked by their phase). Agent tasks carry `phase`, `domain`, `feature` and the `handoff` in metadata.
+A feature has phase tasks (PREPARE, ARCHITECT, CODE, TEST) and a review task, all the lead's; `repact dispatch` creates each agent task under its phase. Who moves a task, and how, is in [Completion Authority](completion.md#completion-authority): the coder claims and `repact submit`s, the lead `repact accept`s or `repact reject`s, and a skipped phase is completed with `metadata.skipped = true`. `in_progress` also covers "done, awaiting review". Express dependencies with `addBlockedBy` (CODE blocked by ARCHITECT; agent tasks blocked by their phase).
 
 **Scoped work:** prefix subjects with `[scope:{scope_id}]` and put `scope_id` in metadata (the Task API cannot filter by scope, so filter on metadata). Scope tasks are created in ATOMIZE; CONSOLIDATE is blocked by every scope task, and TEST by CONSOLIDATE ([Scoped Phases](workflows.md#scoped-phases)).
 
 ## Stall Detection
 
-A teammate is stalled when it goes idle, or its process ends, without a completion message or blocker via `SendMessage`, while its task is `in_progress`. Check at every signal point (after dispatch, on TeammateIdle, on `SendMessage` receipt). **Exception:** an idle that crosses a directive you just sent in either order, or a task with a live `intentional_wait`: those idles are delivery-ordering artifacts, not stalls. Read the task file ([Crossed-Wake Idles](completion.md#crossed-wake-idles)); escalate only on task-file-mtime plus sustained-silence. Stuck (from the [Agent State Model](workflows.md#agent-state-model)) is the early warning; a stall is the endpoint.
+A teammate is stalled when it goes idle, or its process ends, without a completion message or blocker via `SendMessage`, while its task is `in_progress`. Check at every signal point (after dispatch, on TeammateIdle, on `SendMessage` receipt). **Exception:** an idle that crosses a directive you just sent in either order, or a task with a live `intentional_wait`: those idles are delivery-ordering artifacts, not stalls. Read the task file ([Agent Teams only](completion.md#agent-teams-only)); escalate only on task-file-mtime plus sustained-silence. Stuck (from the [Agent State Model](workflows.md#agent-state-model)) is the early warning; a stall is the endpoint.
 
-**Recovery:** read the task status and any partial metadata or message; mark the task `completed` with `{"stalled": true, "reason": "..."}`; decide whether the work can continue; spawn a new teammate with the partial output; if the stall repeats after 1 retry, emit ALERT META-BLOCK. Prevent it by telling agents: "If an error prevents completion, `SendMessage` what you completed and store a partial HANDOFF rather than failing silently."
+**Recovery:** read the task status and any partial metadata or message; mark the task `completed` with `{"stalled": true, "reason": "..."}`; decide whether the work can continue; spawn a new teammate with the partial output; if the stall repeats after 1 retry, send ALERT META-BLOCK. Prevent it by telling agents: "If an error prevents completion, `SendMessage` what you completed and store a partial HANDOFF rather than failing silently."
 
 **Non-happy-path termination** always uses `completed` plus metadata (`{"stalled": true, ...}`, `{"failed": true, ...}` or `{"blocked": true, "blocker_task": "..."}`); no `failed` status exists.
 
@@ -69,11 +54,11 @@ Checked items (`- [x]`) are resolved.
 
 ## Concurrent Audit
 
-The Concurrent Audit Protocol: a `pact-auditor` observes during CODE, complementing TEST and peer review. Cybernetic basis: concurrent observation has more variety than post-hoc review, so drift is caught before it compounds.
+The Concurrent Audit Protocol: a `pact-auditor` observes during CODE, complementing TEST and peer review. Watching while the code is written catches drift before it compounds, which a review afterwards cannot.
 
 ### Dispatch Conditions
 
-Dispatched alongside coders by default; to skip, output on its own line: `> **Auditor skipped**: [justification]`. Mandatory, unless the default agent cap (2 at once) is full, at variety ≥ 7, 3+ parallel coders, security-sensitive code (auth, crypto, user input) or a history of architecture drift. Valid skips: a single coder on a familiar pattern, variety reassessed below 7, a user request, or that full cap, where the ONE reviewer's post-artifact audit replaces it.
+Dispatched alongside coders by default; to skip, output on its own line: `> **Auditor skipped**: [justification]`. Mandatory, unless the default agent cap (2 at once) is full, at complexity ≥ 7, 3+ parallel coders, security-sensitive code (auth, crypto, user input) or a history of architecture drift. Valid skips: a single coder on a familiar pattern, complexity reassessed below 7, a user request, or that full cap, where the ONE reviewer's post-artifact audit replaces it.
 
 ### Hybrid Observation Model
 
@@ -125,10 +110,10 @@ Action: none (GREEN) / route to test (YELLOW) / intervene (RED)
 
 ### Signal Levels
 
-GREEN = on track (silence during cycles is implicit GREEN). YELLOW = minor drift or a convention gap (no reference exists → YELLOW, never RED); the lead routes it to TEST. RED = a violation, requirement misunderstanding or security concern; the lead must intervene with the coder. Verify a RED with a targeted question when practical. A viability threat bypasses signals and becomes a full algedonic signal ([Signals](algedonic.md#signals)). References in priority order: `docs/architecture/`, `docs/plans/`, the dispatch, existing codebase conventions.
+GREEN = on track (silence during cycles is implicit GREEN). YELLOW = minor drift or a convention gap (no reference exists → YELLOW, never RED); the lead routes it to TEST. RED = a violation, requirement misunderstanding or security concern; the lead must intervene with the coder. Verify a RED with a targeted question when practical. A threat to the work as a whole skips these levels and becomes a stop signal ([Signals](stop-signals.md#signals)). References in priority order: `docs/architecture/`, `docs/plans/`, the dispatch, existing codebase conventions.
 
 ### Completion Lifecycle
 
 The auditor task has `metadata.completion_type = "signal"`; the auditor stores `metadata.audit_summary` (`{"signal": "GREEN", "findings": [{"level", "scope", "finding"}], "observation_cycles": N, "files_reviewed": N}`) and self-completes.
 
-**Lead side:** the auditor is non-blocking. Absence of `audit_summary` is not a verdict (not GREEN, not RED, not "no findings") nor a promise of one. Before dispatching TEST, confirm a summary exists or an audit against the committed artifact is dispatched; otherwise put the SHA on the auditor's task (`amend_<n>`, kind `commit`) and wake it. Never write a verdict on inferred silence. If you overwrite an auditor verdict, the lifecycle gate preserves the original in `metadata.audit_summary_authored`, moves yours to `metadata.lead_close_note` and emits an `audit_summary_overwrite` advisory (escalated when the verdict is lowered). To read a verdict, prefer `audit_summary_authored` over `audit_summary`.
+**Lead side:** the auditor is non-blocking. Absence of `audit_summary` is not a verdict (not GREEN, not RED, not "no findings") nor a promise of one. Before dispatching TEST, confirm a summary exists or an audit against the committed artifact is dispatched; otherwise put the SHA on the auditor's task (`amend_<n>`, kind `commit`) and wake it. Never write a verdict on inferred silence. Never overwrite an auditor's `audit_summary`: put your own note in `metadata.lead_close_note`.

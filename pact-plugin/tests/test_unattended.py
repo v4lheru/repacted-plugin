@@ -678,11 +678,12 @@ def test_the_command_switches_records_and_lists(root):
     assert any("task 35: Merge it [31m now" in line for line in lines)
     assert any("not recorded: 1 refused question(s)" in line and open_ref in line for line in lines)
 
+    # off is the owner's at their own terminal: no terminal here, so refused
     off = run_command(env, session_dir, "off", REPACT_UNATTENDED="1")
-    assert off.returncode == 0 and off.stdout.startswith("unattended: OFF (flag)")
-    assert run_gate(env, {"questions": [question()]}, REPACT_UNATTENDED="1").returncode == 0
+    assert off.returncode == 3 and "[rule: unattended.off_owner_only]" in off.stderr
+    assert u.read_mode(str(session_dir)).on and u.controls_on(str(session_dir)).on
     assert [(row["state"], row["cause"]) for row in journal(session_dir)
-            if row["type"] == "unattended_mode"] == [("on", "command"), ("off", "command")]
+            if row["type"] == "unattended_mode"] == [("on", "command")]
 
 
 def test_the_command_needs_a_session_directory(root, tmp_path):

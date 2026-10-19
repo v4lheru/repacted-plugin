@@ -13,9 +13,9 @@ Summary: Single source of truth for PACT_* runtime configuration options.
          load (the dispatch/handoff gates) sees exactly the value a direct
          os.environ.get(...).strip().lower() would have produced, and tests can
          monkeypatch os.environ without reloading the module.
-Used by: dispatch_gate.py + handoff_ordering_gate.py (get_enum -- the two
-         *_MODE reads); shared/cost_cap.py (get_usd -- the session cost cap);
-         session_init.py (llm_options -- the SessionStart injection of LLM-consumed options). Any future PACT_* consumer reuses
+Used by: dispatch_gate.py (get_enum -- the *_MODE read); shared/cost_cap.py (get_usd -- the session cost cap);
+         session_init.py (llm_options -- the SessionStart injection of LLM-consumed options);
+         shared/repact_shim.py (PACT_REPACT_SHIM, same bool parse). Any future PACT_* consumer reuses
          this resolver by adding a _REGISTRY row.
 
 Config source model -- os.environ-BLIND: the resolver reads ONLY os.environ. It
@@ -92,6 +92,12 @@ _REGISTRY: Dict[str, dict] = {
     # The team policy's session.cost_cap_usd can only lower it (shared/team_policy.py).
     "PACT_SESSION_COST_CAP_USD": {
         "type": "usd", "default": None, "consumer": "hook",
+    },
+    # The `repact` shim at ~/.local/bin/repact (shared/repact_shim.py, written at SessionStart).
+    # Default ON; off makes the next session start delete our own shim and write nothing. The
+    # doctor also reads it from settings.json's env block (a plain terminal has no merged env).
+    "PACT_REPACT_SHIM": {
+        "type": "bool", "default": True, "consumer": "hook",
     },
 }
 

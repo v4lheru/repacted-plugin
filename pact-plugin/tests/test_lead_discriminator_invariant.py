@@ -84,7 +84,6 @@ MIGRATED_HOOKS: tuple[str, ...] = (
     "bootstrap_gate.py",        # Class-B DENY
     "bootstrap_prompt_gate.py", # Class-B inject
     "bootstrap_marker_writer.py",  # Class-B marker write
-    "evidence_gate.py",         # D10 acceptance bridge: only the lead's acceptance closes a project task
 )
 
 
@@ -145,9 +144,10 @@ _SANCTIONED_RESOLVE_AGENT_NAME_SITES: frozenset[tuple[str, str]] = frozenset({
 _SANCTIONED_AGENT_ID_LABEL_SITES: frozenset[tuple[str, str]] = frozenset({
     ("run_ledger.py", "_attribution_agent_id"),
     ("amendment_relay.py", "_actor_agent_id"),
-    # Identity confidence for the auto-claim: an agent_id on a separate-process
-    # session marks a frame the registry row does not name (T-d79f0e31).
-    ("task_claim_gate.py", "_frame_agent_id"),
+    # Tighten-only: an agent_id makes a settings write "deny"; its absence grants
+    # nothing and falls through to resolve_actor().is_lead (agent_type), so
+    # presence never makes a frame the lead (settings protection).
+    ("settings_guard.py", "_frame_agent_id"),
 })
 
 
@@ -399,18 +399,17 @@ class TestPositiveLeg:
 
     def test_migrated_set_is_the_full_class_a_and_class_b_surface(self):
         """Documentation-in-code: the migrated set is exactly the 7 hooks the
-        plan enumerates (2 Class-A + 5 Class-B), plus evidence_gate.py, whose
-        D10 acceptance bridge closes a project task only on the lead's
-        acceptance (repacted D10 P2, #180 amend_1). Pinning the cardinality
+        plan enumerates (2 Class-A + 5 Class-B); the old evidence hook, whose
+        acceptance bridge was the sixth, was removed in 2.1.0 (the
+        bridge now runs inside `repact accept`). Pinning the cardinality
         means a future edit that drops a hook from the positive leg is a
         deliberate, reviewed change — not a silent omission that would weaken
         the leg.
         """
-        assert len(MIGRATED_HOOKS) == 6, (
-            f"MIGRATED_HOOKS has {len(MIGRATED_HOOKS)} entries; expected 6 "
-            f"(session_init + postcompact_archive + 3 Class-B gates + the D10 "
-            f"acceptance bridge in evidence_gate; the two pin gates went with "
-            f"the 1.5.0 cut). If the migrated surface "
+        assert len(MIGRATED_HOOKS) == 5, (
+            f"MIGRATED_HOOKS has {len(MIGRATED_HOOKS)} entries; expected 5 "
+            f"(session_init + postcompact_archive + 3 Class-B gates; the two pin "
+            f"gates went with the 1.5.0 cut and the evidence hook with 2.1.0). If the migrated surface "
             f"genuinely changed, update this count with a documented reason."
         )
 

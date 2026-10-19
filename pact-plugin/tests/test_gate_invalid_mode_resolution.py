@@ -33,7 +33,6 @@ would break if they vanished). Mirrors test_pact_config_gate_migration.
 import contextlib
 import importlib
 import io
-import json
 import os
 import sys
 
@@ -57,7 +56,6 @@ VARIETY_ENV = "PACT_DISPATCH_VARIETY_MODE"
 # a parametrisation, it is one arm run twice.
 _GATES = [
     ("dispatch_gate", INLINE_ENV, "INLINE_MISSION_MODE", "warn", "warn"),
-    ("handoff_ordering_gate", VARIETY_ENV, "DISPATCH_VARIETY_MODE", "deny", "warn"),
 ]
 
 
@@ -68,7 +66,7 @@ def _restore_gate_modules():
     yield
     for env in (INLINE_ENV, VARIETY_ENV):
         os.environ.pop(env, None)
-    for mod_name in ("dispatch_gate", "handoff_ordering_gate"):
+    for mod_name in ("dispatch_gate",):
         module = sys.modules.get(mod_name)
         if module is not None:
             importlib.reload(module)
@@ -127,17 +125,6 @@ class TestInvalidModeResolvesToTheDeclaredFallback:
             f"shipped posture, not an unparseable request."
         )
 
-    def test_the_two_options_actually_DIFFER_on_unset(self):
-        """NON-VACUITY FOR THE PAIRING. If both rows ever declared the same
-        unset default, every assertion in this class would hold with the rows
-        swapped, and the parametrisation would be decoration. This asserts the
-        table itself still discriminates."""
-        unset_defaults = {row[3] for row in _GATES}
-        assert len(unset_defaults) == len(_GATES), (
-            "the _GATES rows no longer differ on their unset default, so the "
-            "parametrised assertions above can no longer tell the two options "
-            "apart -- restore a discriminating column or drop the claim"
-        )
 
     @pytest.mark.parametrize(
         "module_name,env_name,const_name,unset_default,invalid_fallback", _GATES)
@@ -169,25 +156,3 @@ class TestInvalidModeStdoutStaysClean:
     gate never denies; that question is settled by the mode constant asserted
     above, and the dispatch-variety gate's answer to it is now 'it does'."""
 
-    def test_handoff_gate_main_stdout_is_uncorrupted_under_invalid_mode(
-        self, monkeypatch
-    ):
-        monkeypatch.setenv(VARIETY_ENV, "banana")
-        gate = importlib.import_module("handoff_ordering_gate")
-        with contextlib.redirect_stderr(io.StringIO()):
-            importlib.reload(gate)  # "banana" -> the option's declared default
-        benign = {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {}}
-        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(benign)))
-        out_buf = io.StringIO()
-        with contextlib.redirect_stdout(out_buf), pytest.raises(SystemExit) as exc:
-            gate.main()
-        assert exc.value.code == 0, (
-            "a frame the gate has no opinion about must pass through at exit 0, "
-            "whatever the resolved mode"
-        )
-        stdout = out_buf.getvalue().strip()
-        parsed = json.loads(stdout)  # must be valid JSON (stderr WARN did not leak in)
-        assert "permissionDecision" not in json.dumps(parsed), (
-            "a pass-through frame must not carry a permissionDecision, and the "
-            "additive stderr WARN must not surface in the stdout payload"
-        )

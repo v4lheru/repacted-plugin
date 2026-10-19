@@ -207,24 +207,6 @@ def test_a_coder_is_never_exempt_in_any_spelling(tmp_path, agent_type):
     assert is_self_complete_exempt({"owner": "backend-coder", "metadata": {}}, team, teams_dir) is False
 
 
-@pytest.mark.parametrize("agent_type", CODER_SPELLINGS)
-def test_specialist_owner_resolves_every_spelling(tmp_path, monkeypatch, agent_type):
-    import shared.dispatch_helpers as dispatch_helpers
-    import shared.pact_context as pact_context
-    from shared.dispatch_helpers import is_pact_specialist_owner
-
-    plugin_root = tmp_path / "plugin"
-    (plugin_root / "agents").mkdir(parents=True)
-    (plugin_root / "agents" / "pact-backend-coder.md").write_text("---\nname: pact-backend-coder\n---\n")
-    monkeypatch.setattr(pact_context, "get_plugin_root", lambda: str(plugin_root))
-    dispatch_helpers._specialist_registry.cache_clear()
-    team, teams_dir = _team(tmp_path, [{"name": "backend-coder", "agentType": agent_type},
-                                       {"name": "explorer", "agentType": "general-purpose"}])
-    try:
-        assert is_pact_specialist_owner("backend-coder", team, teams_dir) is True
-        assert is_pact_specialist_owner("explorer", team, teams_dir) is False
-    finally:
-        dispatch_helpers._specialist_registry.cache_clear()
 
 
 @pytest.mark.parametrize("own_type", CODER_SPELLINGS)

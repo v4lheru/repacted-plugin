@@ -12,13 +12,13 @@ Summary: The one line a writer gets about its own metadata.handoff or metadata.t
          amend_<n> stored on #<id> (owner <o>): digest <d>". The digest is what the one-line
          wake carries. WHAT and written_key are NOT extended for these: three gates read
          written_key as "a gated payload write".
-Used by: hooks/evidence_gate.py (PostToolUse: after_write on the task file read back) and the
-         three PreToolUse checks that refuse such a write, which append refused() to their reason
-         (hooks/write_checks.py, hooks/amendment_gate.py, hooks/handoff_ordering_gate.py).
+Used by: shared/amendments.py, shared/payload_digest.py, shared/handoff_schema.py and
+         shared/protocol_descriptor.py. refused() and after_write() lost their hook callers
+         when 2.1.0 moved the writes onto the `repact` commands.
          Pure logic: no I/O. Every value it prints comes from a tool call or a task file, so
          each is bounded and printed on one line. The stored line carries the digest of the
          object on disk (shared/payload_digest.py): the notify names it instead of repeating
-         the payload, and bin/repact-payload prints the same digest for the lead (1.5.0, D2).
+         the payload, and `repact inspect <id> --key` prints the same digest for the lead.
 """
 
 from __future__ import annotations

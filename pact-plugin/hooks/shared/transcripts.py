@@ -514,7 +514,7 @@ def _jsonl(path: Path) -> Iterator[dict]:
             yield event
 
 
-CHECK_USES = ("handoff_evidence", "uncertainty_disposition", "amendment_gate", "commit_rule")
+CHECK_USES = ("handoff_evidence", "amendment_gate", "commit_rule")
 
 
 def gate_usage(team: Optional[str], since: Optional[datetime], until: Optional[datetime]) -> dict:
@@ -573,7 +573,7 @@ def _count(value) -> int:
 def context_cost(dirs: Iterable[Path], until: Optional[datetime] = None) -> dict:
     """Bytes the hooks put in front of the model (each session's context-cost.json, from
     hooks/dispatch.py) and bytes of each stored teachback_submit and handoff (metadata_write
-    journal rows, from hooks/journal_emitter.py), per session, per check, per frame and per
+    journal rows, which journals from before 2.1.0 carry), per session, per check, per frame and per
     writing agent. `until` filters the journal rows only: the counter file has no times."""
     sessions: dict = {}
     starts: dict = {}

@@ -140,13 +140,6 @@ class TestHookErrorJson:
         parsed = json.loads(result)
         assert parsed["systemMessage"] == f"PACT hook warning (test_hook): {msg}"
 
-    def test_hook_name_appears_in_output(self):
-        """The hook_name parameter should appear in the systemMessage."""
-        from shared.error_output import hook_error_json
-
-        result = hook_error_json("validate_handoff", RuntimeError("err"))
-        parsed = json.loads(result)
-        assert "validate_handoff" in parsed["systemMessage"]
 
     def test_nested_exception_message(self):
         """Nested exception str() should produce a readable message."""
@@ -224,31 +217,6 @@ def _assert_error_json(captured_out: str, hook_name: str):
     assert "PACT hook warning" in parsed["systemMessage"]
 
 
-class TestValidateHandoffErrorOutput:
-    """validate_handoff.py exception handler produces JSON on stdout."""
-
-    def test_exception_outputs_json_with_system_message(self, capsys):
-        from validate_handoff import main
-
-        with patch("sys.stdin", side_effect=RuntimeError("test error")):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        _assert_error_json(captured.out, "validate_handoff")
-
-    def test_exception_preserves_stderr(self, capsys):
-        """stderr should contain the hook name and error info."""
-        from validate_handoff import main
-
-        with patch("sys.stdin", side_effect=RuntimeError("test error")):
-            with pytest.raises(SystemExit):
-                main()
-
-        captured = capsys.readouterr()
-        assert "validate_handoff" in captured.err
-        assert len(captured.err) > 0
 
 
 class TestSessionEndErrorOutput:
@@ -734,52 +702,6 @@ class TestSessionEndSuppressOutput:
         assert "suppressOutput" not in parsed
 
 
-class TestAgentHandoffEmitterSuppressOutput:
-    """agent_handoff_emitter.py bare exit paths output _SUPPRESS_OUTPUT (#538)."""
-
-    def test_invalid_json_suppress(self, capsys):
-        """JSONDecodeError path outputs suppressOutput."""
-        from agent_handoff_emitter import main
-
-        with patch("sys.stdin", io.StringIO("not json")):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        _assert_suppress_output(captured.out)
-
-    def test_success_path_suppress(self, tmp_path, monkeypatch, capsys):
-        """All gates passed, journal entry written -> suppressOutput."""
-        monkeypatch.setenv("HOME", str(tmp_path))
-        from agent_handoff_emitter import main
-
-        input_data = json.dumps({
-            "task_id": "1",
-            "task_subject": "CODE: test",
-            "teammate_name": "coder",
-            "team_name": "pact-test",
-        })
-        task_data = {
-            "status": "completed",
-            "owner": "coder",
-            "metadata": {
-                "handoff": {
-                    "produced": "x", "decisions": "x",
-                    "uncertainty": "x", "integration": "x",
-                    "open_questions": "x",
-                },
-            },
-        }
-        with patch("agent_handoff_emitter.read_task_json", return_value=task_data), \
-             patch("agent_handoff_emitter.append_event"), \
-             patch("sys.stdin", io.StringIO(input_data)):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        _assert_suppress_output(captured.out)
 
 
 class TestTeammateIdleSuppressOutput:
@@ -878,47 +800,6 @@ class TestTeammateIdleSuppressOutput:
         assert "suppressOutput" not in parsed
 
 
-class TestValidateHandoffSuppressOutput:
-    """validate_handoff.py bare exit paths output _SUPPRESS_OUTPUT (#316)."""
-
-    def test_invalid_json_suppress(self, capsys):
-        """JSONDecodeError path outputs suppressOutput."""
-        from validate_handoff import main
-
-        with patch("sys.stdin", io.StringIO("bad json")):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        _assert_suppress_output(captured.out)
-
-    def test_non_pact_agent_suppress(self, capsys):
-        """Non-PACT agent outputs suppressOutput."""
-        from validate_handoff import main
-
-        input_data = json.dumps({"agent_id": "custom-agent", "transcript": "hello"})
-        with patch("sys.stdin", io.StringIO(input_data)):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        _assert_suppress_output(captured.out)
-
-    def test_error_path_uses_hook_error_json(self, capsys):
-        """Exception path outputs hook_error_json, NOT suppressOutput."""
-        from validate_handoff import main
-
-        with patch("sys.stdin", side_effect=RuntimeError("boom")):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        parsed = json.loads(captured.out.strip())
-        assert "systemMessage" in parsed
-        assert "suppressOutput" not in parsed
 
 
 class TestPeerInjectSuppressOutput:

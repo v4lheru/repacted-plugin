@@ -2,6 +2,19 @@
 
 Release notes for rePACTed, newest first. Entries start at the first public release.
 
+## 2.1.0 (2026-10-19)
+
+A simpler team that is stricter about what counts as done. Upgrade steps and known limits are in the release notes.
+
+- Four commands for you: `repact work`, `repact inspect`, `repact decide` and `repact resume`, with matching slash commands.
+- Specialists run as background subagents by default; Agent Teams is optional.
+- Each workflow step is one `repact` command (`dispatch`, `submit`, `accept`, `reject`, `amend`) that is safe to run again.
+- Work is accepted only on a recorded passing test run of the current files, with a failing run first for fixes and new behaviour, and with the acceptance criteria's exact commands.
+- `repact inspect <task id>` prints a change receipt; `repact accept --feature` accepts a feature on its merged tree.
+- Autopilot works through the task log on its own; an unattended waiver parks the task for you instead of closing it.
+- Task files, session state and Claude Code's settings are protected from direct writes by agents.
+- Renamed and removed commands and tools are listed in the release notes.
+
 ## 2.0.0 (2026-10-18)
 
 Knowledge base, team features, skill packs and unattended comPACT in CI. Known limits are in the release notes.

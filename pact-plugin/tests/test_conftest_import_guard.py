@@ -176,7 +176,7 @@ def census():
 def test_the_census_sees_a_known_patch_and_a_known_importer(census):
     patched, importers, (lines, loaded) = census
     assert ("pact_context", "get_team_name") in patched
-    assert ("pact_context", "is_lead") in patched  # patched through a hook's attribute
+    assert ("background_work", "frame_team_and_name") in patched  # patched as teammate_idle.frame_team_and_name
     assert "shared.background_work" in importers
     assert "shared.background_work" in lines
     # shared/__init__.py imports nothing (the layering pass), so a shared module that copies a

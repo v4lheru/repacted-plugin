@@ -26,16 +26,6 @@
    "p95_ms": 3.69,
    "runs": 60
   },
-  "PreToolUse:acceptance_flags": {
-   "p50_ms": 0.41,
-   "p95_ms": 0.55,
-   "runs": 30
-  },
-  "PreToolUse:amendment_gate": {
-   "p50_ms": 2.18,
-   "p95_ms": 2.43,
-   "runs": 30
-  },
   "PreToolUse:background_test_gate": {
    "p50_ms": 0.27,
    "p95_ms": 0.33,
@@ -66,11 +56,6 @@
    "p95_ms": 37.02,
    "runs": 30
   },
-  "PreToolUse:handoff_ordering_gate": {
-   "p50_ms": 9.44,
-   "p95_ms": 11.05,
-   "runs": 30
-  },
   "PreToolUse:merge_guard_pre": {
    "p50_ms": 11.56,
    "p95_ms": 12.64,
@@ -80,11 +65,6 @@
    "p50_ms": 2.7,
    "p95_ms": 3.0,
    "runs": 30
-  },
-  "PreToolUse:task_claim_gate": {
-   "p50_ms": 4.17,
-   "p95_ms": 4.53,
-   "runs": 90
   },
   "PreToolUse:wait_filler_gate": {
    "p50_ms": 0.83,
@@ -114,11 +94,6 @@
   "UserPromptSubmit:bootstrap_prompt_gate": {
    "p50_ms": 2.84,
    "p95_ms": 3.21,
-   "runs": 30
-  },
-  "UserPromptSubmit:journal_emitter": {
-   "p50_ms": 5.64,
-   "p95_ms": 6.04,
    "runs": 30
   },
   "UserPromptSubmit:missed_wake_scan": {

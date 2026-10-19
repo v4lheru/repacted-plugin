@@ -71,7 +71,7 @@ def test_a_change_prints_one_line_of_keys_and_never_a_value(home):
     assert proc.returncode == 0, err
     lines = out.splitlines()
     # the reader, never the value
-    assert lines[1:] == [f"next: repact-payload 5 --team {TEAM} --key rejection"]
+    assert lines[1:] == [f"next: repact inspect 5 --team {TEAM} --key rejection"]
     assert (f"#5 changed: status completed (was in_progress); blockedBy 4; metadata added: "
             "handoff_rejection; changed: intentional_wait; removed: old") in lines[0]
     assert "SECRET-VALUE" not in out + err
@@ -146,21 +146,16 @@ def test_an_unknown_until_condition_is_a_usage_error(home, value):
     assert run("5", "--until", value, "--timeout", "0.3")[0] == 2
 
 
-SKILL = PLUGIN / "skills" / "teammate" / "SKILL.md"
+WAITING = PLUGIN / "skills" / "teammate" / "references" / "teammate-waiting.md"
 
 
 def test_the_post_accept_run_drops_until_so_it_cannot_spin():
-    text = SKILL.read_text(encoding="utf-8")
+    text = WAITING.read_text(encoding="utf-8")
     assert "HANDOFF accepted: run plain `repact-wait <task id>` (no `--until`) once more" in text
 
 
-def test_both_rejection_steps_bump_revision_number_so_until_rejection_goes_stale():
-    text = SKILL.read_text(encoding="utf-8")
-    assert text.count("`metadata.revision_number` +1") == 2
-
-
 # ─── CH-3: the next: line ────────────────────────────────────────────────────
-READ = f"next: repact-payload 5 --team {TEAM} --key "
+READ = f"next: repact inspect 5 --team {TEAM} --key "
 MARKER = "MARKER-VALUE-91c7"
 OPEN = {"reason": MARKER, "corrections": [MARKER], "revision_number": 1}
 
@@ -194,7 +189,7 @@ def test_the_next_line_names_a_team_the_caller_passed(home):
     write_task(home, "5", {"amend_1": {"text": MARKER}}, status="completed", team=OTHER)
     code, out, _ = run("5", "--team", OTHER, "--until", "completed")
     assert code == 0
-    assert out.splitlines()[1:] == [f"next: repact-payload 5 --team {OTHER} --key amend"]
+    assert out.splitlines()[1:] == [f"next: repact inspect 5 --team {OTHER} --key amend"]
 
 
 def test_the_help_example_shows_the_three_condition_form():

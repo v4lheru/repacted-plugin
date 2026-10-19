@@ -16,6 +16,11 @@ _ALLOW_OUTPUT = json.dumps({"suppressOutput": True})
 
 SUGGESTION = ("use `env-get FILE KEY -- <cmd>` to pass a value to a command, "
               "or `env-get --keys FILE` to list its key names")
+# A credential file (names.is_credential_path) is no KEY=value file: env-get does not
+# apply, and nothing needs its bytes in the transcript.
+CREDENTIAL_SUGGESTION = ("pass its path to the program that uses it (`ssh -i`, `kubectl "
+                         "--kubeconfig`, `AWS_SHARED_CREDENTIALS_FILE`) instead of printing, "
+                         "copying or sending it; a public key (*.pub) stays readable")
 DUMP_MESSAGE = ("Blocked: this prints every environment variable, which can include "
                 "credentials; print the one variable you need by name, or " + SUGGESTION + ".")
 PARSE_MESSAGE = ("Blocked: this command mentions a .env-class name and could not be parsed "
@@ -51,7 +56,28 @@ SILENT_STDIN = frozenset({"wc", "test", "[", "[[", "true", ":", "read", "mapfile
 PRINTERS = frozenset({"echo", "printf", "print"})
 # Programs that send a file operand off the machine.
 EGRESS_PROGRAMS = frozenset({"curl", "wget", "http", "https", "xh", "scp", "sftp", "rsync",
-                             "nc", "ncat", "ftp", "pbcopy"})
+                             "nc", "ncat", "ftp", "pbcopy", "gh", "glab", "aws", "gsutil",
+                             "gcloud", "az", "azcopy", "rclone", "s3cmd"})
+# Option values a client reads to authenticate or verify, never sends: a credential file
+# named there is in use, not leaving (scp -i ~/.ssh/id_rsa, curl --key client.key).
+_SSH_IDENTITY = frozenset({"-i", "-F", "-o"})
+IDENTITY_OPTIONS = {
+    "scp": _SSH_IDENTITY, "sftp": _SSH_IDENTITY, "rsync": frozenset(),
+    "curl": frozenset({"--key", "--cert", "-E", "--cacert", "--capath", "--proxy-key",
+                       "--proxy-cert", "--proxy-cacert"}),
+    "wget": frozenset({"--private-key", "--certificate", "--ca-certificate"}),
+    "gcloud": frozenset({"--key-file", "--cred-file"}),
+}
+# Cloud copy subcommands: their last operand is the destination, a local file when the
+# source is remote (a download, nothing leaves).
+CLOUD_COPIES = {
+    "aws": frozenset({"cp", "mv", "sync"}), "gsutil": frozenset({"cp", "mv", "rsync"}),
+    "gcloud": frozenset({"cp", "mv", "rsync"}), "s3cmd": frozenset({"get", "sync"}),
+    "rclone": frozenset({"copy", "copyto", "sync", "move", "moveto"}),
+    "azcopy": frozenset({"copy", "cp", "sync"}),
+}
+# gh/glab api options whose value is sent as literal text, even when it starts with @.
+LITERAL_FIELD_OPTIONS = frozenset({"-f", "--raw-field"})
 LOADERS = frozenset({"source", "."})
 # find lists names; these actions hand each match to a program or write it out.
 FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0",
@@ -90,6 +116,8 @@ WALK_SKIP_DIRS = frozenset({".git", "node_modules"})
 # (RULE_MARKS, first match wins); a message no marker matches gets no tail, and
 # tests/test_shell_rule_ids.py fails on any deny without one.
 RULES = {
+    "env.send.file": "A command would send a .env-class or credential file off the machine.",
+    "env.read.credential": "A command or tool would print or copy a credential file (ssh key, cloud or kube credential).",
     "env.read.operand": "A command names a .env-class file as an operand a reader would print.",
     "env.read.computed": "A command would print a file whose name the shell computes and that can be .env-class.",
     "env.read.loaded": "A command would print or send a value it loaded from a .env-class file.",
@@ -111,9 +139,11 @@ RULES = {
     "env.git.expanded": "A git command is named by a shell expansion or alias.",
 }
 RULE_MARKS = (
+    ("env.send.file", "off the machine;"),
     ("env.read.computed", "(a name the shell computes"),
     ("env.read.loaded", "a value the same command loaded from"),
     ("env.read.loop", "this loop would print lines"),
+    ("env.read.credential", "(a credential file)"),
     ("env.read.operand", "Blocked: this would print the contents of"),
     ("env.unreadable", "which this check cannot be sure it reads"),
     ("env.dump.environment", "this prints every environment variable"),

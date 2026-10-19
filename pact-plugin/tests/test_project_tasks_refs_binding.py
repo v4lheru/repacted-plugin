@@ -1,29 +1,26 @@
 """
-The second high-risk review (task #139) of the 1.5.0 ref gate and the multi-ref bridge: F2, F12-F15.
+The ref gate and the multi-ref bridge at their boundary: who may close a ref, how a disposition
+reads, and one ref's refusal beside another's close.
+(The HANDOFF gate rows were removed in 2.1.0: the carried-refs check is `repact submit`'s,
+tests/test_ops_flow.py.)
 
-  F2  only refs the LEAD bound close: the log's ptask: links, written by `start --ptask` or by the
-      lead's own TaskUpdate/TaskCreate metadata (bridge.bind). A ref a teammate writes into
+  - only refs the LEAD bound close: the log's ptask: links, written by `start --ptask` or by the
+      lead's own dispatch metadata (bridge.bind). A ref a teammate writes into
       metadata.refs is reported at acceptance and never closed.
-  F12 a disposition is read in any case after NFKC, with `:`, a spaced dash or a full stop;
+  - a disposition is read in any case after NFKC, with `:`, a spaced dash or a full stop;
       `complete` reads as `done`.
-  F13 a ref the log already settled is not demanded.
-  F14 clearing refs in the HANDOFF write itself does not shed them.
-  F15 one ref's refusal does not stop the next ref closing, and the lead is told both.
+  - one ref's refusal does not stop the next ref closing, and the lead is told both.
 Boundaries: lookalike letters, zero-width joins, fullwidth, mixed-type ref lists, null, empty, huge.
 """
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 
 import pytest
 
-from project_tasks_support import GIT_ENV, load
-from test_project_tasks_bridge import (LEAD_TYPE, SID, TASK_B, World, frame, lead_accepts, run_hook,
-                                       teammate_frame)
-from test_project_tasks_refs import GATE, HANDOFF, PTASK, RULES, denied, gate_write
+from project_tasks_support import load
+from test_project_tasks_bridge import (LEAD_TYPE, TASK_B, World, frame, lead_accepts, run_hook)
+from test_project_tasks_refs import HANDOFF, PTASK, RULES
 
 RD = load("ref_dispositions_binding_under_test", RULES)
 
@@ -67,10 +64,6 @@ class TestBinding:
         assert state.tasks[world.ref]["status"] == "done"
         assert f"not bound by the lead, left as is: {unrelated}" in line_of(result)
 
-    def test_a_teammate_project_task_write_does_not_bind(self, world):
-        run_hook(teammate_frame(world, metadata={"project_task": world.ref, "refs": [world.ref]}))
-        assert not bound(world, world.ref)
-
     def test_the_leads_refs_write_binds_and_the_acceptance_closes_them(self, world):
         second = world.store.add("Second part")
         world.task(status="in_progress")
@@ -84,14 +77,8 @@ class TestBinding:
 
     def test_the_leads_task_create_binds_its_dispatch_refs(self, world):
         world.task(status="pending")
-        result = run_hook(create_frame(world, {"project_task": world.ref, "refs": [world.ref]}))
+        run_hook(create_frame(world, {"project_task": world.ref, "refs": [world.ref]}))
         assert bound(world, world.ref) and world.project_task()["status"] == "active"
-        assert result.stdout.strip() == ""
-
-    def test_a_teammate_task_create_binds_nothing(self, world):
-        world.task(status="pending", owner="")
-        run_hook(create_frame(world, {"refs": [world.ref]}, agent_type="coder", agent_id="a0123456789abcdef"))
-        assert not bound(world, world.ref)
 
     def test_a_mixed_type_ref_list_binds_only_well_formed_refs_the_log_holds(self, world):
         world.task(status="in_progress")
@@ -145,61 +132,3 @@ def test_one_refused_ref_does_not_stop_the_next_and_the_lead_hears_both(world):
 ])
 def test_the_disposition_grammar(value, expected):
     assert RD.verb(value) == expected
-
-
-@pytest.mark.parametrize("value", ["Done: tests pass", "DONE", "done.", "done - tests pass", "complete: x"])
-def test_case_and_punctuation_variants_pass_the_gate(world, value):
-    world.store.start(world.ref, ptask=PTASK)
-    world.task(status="in_progress")
-    assert not denied(gate_write(world, {**HANDOFF, "refs": {world.ref: value}}))
-
-
-def test_a_lookalike_done_is_returned(world):
-    world.store.start(world.ref, ptask=PTASK)
-    world.task(status="in_progress")
-    assert denied(gate_write(world, {**HANDOFF, "refs": {world.ref: "d\u043ene"}}))
-
-
-# ---------------------------------------------------------------------------------------------
-# F13, F14: what the gate demands
-# ---------------------------------------------------------------------------------------------
-
-@pytest.mark.parametrize("settle", ["drop", "done"])
-def test_a_settled_ref_is_not_demanded(world, settle):
-    world.store.start(world.ref, ptask=PTASK)
-    if settle == "drop":
-        world.store.drop(world.ref)
-    else:
-        world.store.done(world.ref, [f"commit:{world.head}"])
-    world.task(status="in_progress")
-    assert not denied(gate_write(world, dict(HANDOFF)))
-
-
-@pytest.mark.parametrize("cleared", [None, [], "", {}])
-def test_clearing_refs_in_the_handoff_write_does_not_escape(world, cleared):
-    other = world.store.add("Carried by metadata only")
-    world.task(status="in_progress", refs=[other])
-    payload = {"tool_name": "TaskUpdate", "session_id": SID, "cwd": str(world.repo), "agent_type": "coder",
-               "agent_id": "a0123456789abcdef",
-               "tool_input": {"taskId": TASK_B, "metadata": {"handoff": dict(HANDOFF), "refs": cleared,
-                                                             "project_task": cleared}}}
-    result = subprocess.run([sys.executable, str(GATE)], input=json.dumps(payload), capture_output=True,
-                            text=True, env={**os.environ, **GIT_ENV}, timeout=60)
-    assert denied(result)
-
-
-def test_a_correct_multi_ref_handoff_passes(world):
-    second = world.store.add("Second part")
-    for ref in (world.ref, second):
-        world.store.start(ref, ptask=PTASK)
-    world.task(status="in_progress", refs=[second])
-    assert not denied(gate_write(world, {**HANDOFF, "refs": {world.ref: "done", second: "deferred: owner"}}))
-
-
-def test_a_huge_ref_list_is_returned_with_a_capped_reason(world):
-    many = [f"T-{n:08x}" for n in range(500)]
-    world.task(status="in_progress", refs=many)
-    result = gate_write(world, dict(HANDOFF))
-    assert denied(result)
-    reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "... and 480 more" in reason and reason.count("\n") < 40

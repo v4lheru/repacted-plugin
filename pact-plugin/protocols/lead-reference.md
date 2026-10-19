@@ -31,13 +31,13 @@ echo "TIMED OUT after 30 minutes — still pending:"; printf '%s\n' "$OUT"; exit
 - Handing a watch over: get confirmation it runs; a check that nothing runs cannot tell "nobody is coming" from "starting up".
 - An in-process teammate is not re-invoked by its own background job: it splits the work or hands you the watch (teammate-waiting §Wait Discipline for Self-Started Work).
 - **Teammate waits.** When the task store drained, read the session journal, branch state, and filesystem mtimes; an mtime is a last-change time, not a liveness signal, and `missed_wake_scan` is the existing fallback machinery. The wait's fields: teammate skill §Waiting and waking. `wait_stale` (30 min) marks a flag stale; `missed_wake_scan` re-surfaces `awaiting_lead_completion` waits past it, `peer` waits once two or more owners are each past 30 min from `covers_since` (else `since`), and background-launch waits with no valid `covers_since`; inspect other stale waits yourself. Past 30 min the teammate should re-SET with a fresh `since` and `covers_since` carried forward unchanged. A re-SET that moves or drops `covers_since` has widened what the wait covers: ask. Never SET `intentional_wait` on your own task.
-- **Tools**: `repact-status` shows each teammate busy or idle, its last tool and its context size; `repact-report` prints the session's spend, wakes and rejections; `repact-doctor` runs the health checks and lists open user actions.
+- **Tools**: `repact inspect` shows where work stands (`repact inspect <id>` is one task's change receipt); `repact decide` lists what waits on the user; `repact-report`, spend, wakes and rejections; `repact-doctor` runs the health checks. Agent Teams only: `repact-status` shows each teammate idle or not, last tool, context.
 
 ## Dispatch Tables
 
 | Situation | Action |
 |---|---|
-| Idle teammate, same domain AND a small context (`repact-status` shows `ctx`) | Put the delta in a new task's description; send only the wake naming its id |
+| Agent Teams: idle teammate, same domain AND a small context (`repact-status` shows `ctx`) | `repact dispatch` the delta as a new task; send only the wake naming its id |
 | Anything else (the default) | Spawn fresh, with a brief linking the prior HANDOFF |
 | Reviewer found issues, now needs a fixer | The code's author if it is still running, else a fresh coder; never a reviewer, with one reviewer or several (it verifies the fix) |
 
@@ -45,19 +45,19 @@ A fresh agent per task is the default (LEAN-DEFAULTS: most spend is agents re-re
 
 **First-spawn verification (HARD-RULE)**: read this on a spawn that fails or a teammate missing task tools, before any re-spawn. Lacking `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet` yourself means the host withholds them: tell the user (README "If specialist agents will not spawn"); don't re-spawn. A teammate missing `TaskList`, `TaskUpdate` or `SendMessage` means a malformed spawn (`Task(...)` instead of `Agent(...)`, or no `name=`/`team_name=`): HARD STOP, fix, re-spawn; never "make do".
 
-**Amending a dispatched task**: `repact-amend next <task>` prints the next free `amend_<n>` and its metadata object `{"text", "at", "from": "team-lead", "kind": "ruling|correction|premise|addendum|note"}`. Write it with one `TaskUpdate` (one top-level key per amendment, never a list), then `SendMessage` the owner only if `repact-status` shows it idle.
+**Amending a dispatched task**: `repact amend <id> --text "..." --kind ruling|correction|premise|addendum|note|scope|halt` writes the next `amend_<n>` and prints the line that reaches the coder (`--next` shows the key and writes nothing). Under Agent Teams, `SendMessage` that wake line only if `repact-status` shows the owner idle; a busy one sees the amendment after its next tool call.
 
 **Tool signals**: trust a tool's behaviour, then its parameter list, then its prose. A gate demanding a parameter proves the parameter exists.
 
-**Shutdown**: stop each agent once its task is accepted and nothing of its awaits verification; a reviewer with open findings stays until they are verified (persona §11). `TaskStop` terminates: it sends no `shutdown_request`, and the team config survives it. The secretary, once spawned, serves the session until pause, refresh or wrap-up stops it.
+**Shutdown**: stop each agent once its task is accepted and nothing of its awaits verification; a reviewer with open findings stays until they are verified (persona §11). `TaskStop` terminates: it sends no `shutdown_request`, and the team config survives it. The secretary, once spawned, serves the session until pause (a checkpoint included) or wrap-up stops it.
 
-**Tracking**: a blocker is `TaskCreate(subject="BLOCKER: ...", metadata={"type": "blocker"})` + `addBlockedBy` on the agent's task; an algedonic signal is `metadata={"type": "algedonic", "level", "category"}` blocking the phase (ALERT) or feature (HALT) task; `metadata.type` is required. A downstream task names its upstream task ids; read a HANDOFF with `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.handoff`. `agent_handoff_emitter.py` skips journal emission for `metadata.type` blocker/algedonic, and `shared/task_utils.py` and `shared/session_resume.py` sort signal tasks by the same literal.
+**Tracking**: a blocker is `TaskCreate(subject="BLOCKER: ...", metadata={"type": "blocker"})` + `addBlockedBy` on the agent's task; a stop signal is `metadata={"type": "algedonic", "level", "category"}` (the type keeps its old name) blocking the phase (alert) or feature (stop) task ([stop-signals.md](stop-signals.md)); `metadata.type` is required. A downstream task names its upstream task ids; read a HANDOFF with `repact inspect <id> --key handoff`. The journal, `shared/task_utils.py` and `shared/session_resume.py` treat both types as signal tasks, not work.
 
 **Roster**: `pact-preparer`, `pact-architect`, `pact-backend-coder`, `pact-frontend-coder`, `pact-database-engineer`, `pact-devops-engineer`, `pact-test-engineer`, `pact-security-engineer`, `pact-qa-engineer`, `pact-auditor` (concurrent CODE observer), `pact-secretary`.
 
-**PR review**: ONE reviewer by default; several in parallel only when the user asks or risk ≥ 3 (`pact-architect`, `pact-test-engineer`, the domain coders), plus `pact-security-engineer` for auth, input, APIs or crypto and `pact-qa-engineer` for user-facing change; synthesize in `docs/review/`, then `/repacted:pin-memory`.
+**PR review**: ONE reviewer by default; several in parallel only when the user asks or risk ≥ 3 (`pact-architect`, `pact-test-engineer`, the domain coders), plus `pact-security-engineer` for auth, input, APIs or crypto and `pact-qa-engineer` for user-facing change; synthesize in `docs/review/`, then pin what must stay in memory with `/repacted:init pin`.
 
-**Recommended Agent Prompting Structure** (Task B): **CONTEXT** (phase, upstream task ids, peers); **MISSION** (what, and how done is known); **INSTRUCTIONS** (steps, skills, a TEACHBACK first); **GUIDELINES** (constraints; the secretary answers queries directly; for complex work "Include reasoning_chain in your HANDOFF").
+**Recommended brief structure** (the `--brief-file` of `repact dispatch`): **CONTEXT** (phase, upstream task ids, peers); **MISSION** (what, and how done is known); **INSTRUCTIONS** (steps, skills); **GUIDELINES** (constraints; the secretary answers queries directly; for complex work "Include reasoning_chain in your HANDOFF").
 
 ## Method Reconstruction Examples
 
@@ -77,7 +77,7 @@ Create a secretary task naming `pact-handoff-harvest` (idempotent):
 - After a planning consultation → Standard Harvest (`plan-mode`)
 - During wrap-up → Consolidation Harvest (`wrap-up`) (propagation decided per branch)
 - At session pause → Consolidation Harvest (`pause`)
-- At a context refresh → Consolidation Harvest (`refresh`)
+- At a pause checkpoint → Consolidation Harvest (`pause`)
 - After a second feature in one session → Consolidation Harvest (`orchestrate`) — propagates
 
 Ad-hoc: `SendMessage(to="secretary", message="[team-lead→secretary] Save: {what and why}")`; a history question is the same call with `Query: {question}`.
@@ -101,21 +101,11 @@ The rules below govern how messages delivered via this tool actually behave.
 - Agents read queued messages in FIFO order on reaching idle.
 - No cancellation primitive exists — a follow-up message cannot supersede a queued earlier one.
 - The only mid-turn interrupt mechanism is user-side (Escape). Agent-to-agent `SendMessage` has no equivalent.
-- `SendMessage` requires a specific `to=` recipient name. There is no broadcast addressing mode; reaching multiple teammates means iterating and sending one message per recipient (see [Lead-Side HALT Fan-Out](algedonic.md#lead-side-halt-fan-out) for the canonical pattern).
+- `SendMessage` requires a specific `to=` recipient name. There is no broadcast addressing mode; reaching multiple teammates means iterating and sending one message per recipient (see [Stopping every teammate](stop-signals.md#stopping-every-teammate)).
 
-### Lead-Side Discipline — Verify Before Dispatching
+The lead's check before sending is in the persona §1; the teammate's is in `skills/teammate/references/teammate-messaging.md`.
 
-> Moved: see agents/pact-orchestrator.md §1.
-
-#### Pre-Send Self-Check
-
-> Moved: see agents/pact-orchestrator.md §1 (lead) and skills/teammate/references/teammate-messaging.md §Pre-Send Self-Check (teammate).
-
-### Teammate-Side Discipline — Verify Before Acting + Assume Eventually-Seen
-
-> Moved: see skills/teammate/references/teammate-messaging.md.
-
-### Algedonic-Signal Latency Caveat
-- A HALT is an `amend_<n>` (kind `halt`): a busy teammate gets it after its next tool call.
-- For immediate halt of in-flight teammate work, user-side manual interrupt is required.
-- The team-lead's responsibility to "surface immediately" means at the team-lead's next idle, not at arbitrary real-time.
+### Stop-signal latency
+- A stop is an `amend_<n>` (kind `halt`): a busy teammate gets it after its next tool call.
+- To stop in-flight teammate work at once, the user interrupts by hand.
+- The lead's duty to "surface immediately" means at the lead's next idle, not at an arbitrary moment.

@@ -1,20 +1,13 @@
 {
   "_notes": [
-    "Modes and words of the write-time checks (hooks/shared/evidence/, hooks/write_checks.py, hooks/amendment_gate.py). None asks a model. Change a mode here with no code change: 'off' runs nothing, 'shadow' logs only, 'advisory' notes, 'gate' returns. Mode words are read without regard to case and 'enforce' reads 'gate'; when this file cannot be read, is malformed or names no known mode, each check uses its shipped mode (hooks/shared/evidence/ledger.py DEFAULT_MODES) and one note line goes to stderr.",
-    "handoff_evidence = 'advisory': a HANDOFF item with a parsed count that is NO-RUN, MISMATCH or EXIT is never returned: the HANDOFF is stored, the writer gets one note line and the lead gets the item lines at acceptance. 'off' turns the run-count check off.",
-    "uncertainty_disposition = 'advisory': an uncertainty item with no leading 'fixed:', 'known-limit:' or 'not-applicable:' (after an optional bullet and severity tag), one item per line, is stored; the writer gets one line and the lead the item lines at acceptance.",
-    "amendment_gate = 'note': an amend_<n> with no disposition in handoff.amendments is a note, never a return. 'enforce' returns each key once; 'shadow' logs only.",
+    "Modes and words of the write-time checks (hooks/shared/evidence_check.py, hooks/write_checks.py). None asks a model. Change a mode here with no code change: 'off' runs nothing, 'shadow' logs only, 'advisory' notes, 'gate' returns. Mode words are read without regard to case and 'enforce' reads 'gate'; when this file cannot be read, is malformed or names no known mode, each check uses its shipped mode (hooks/shared/check_modes.py DEFAULT_MODES) and one note line goes to stderr.",
+    "handoff_evidence = 'gate': `repact accept` refuses a task while the evidence check (hooks/shared/evidence_check.py, which reads the dispatch record and the run ledger, never the HANDOFF text) finds a problem: no passing tcount run since dispatch when the inputs changed (evidence.no_run), input files changed after the run (evidence.stale_run), a pinned acceptance criterion with no run of the same test selection on the current inputs (evidence.selection_mismatch), a fix or feature with no failing run first (evidence.red_first_missing), or a case it cannot judge (evidence.needs_human). Any other mode turns each problem into a note.",
     "commit_rule = 'off' (the shipped default): no commit message is checked. 'gate' returns, every time, a commit message with AI attribution, a body, more than one sentence or a word from commit_rule.deny_words (hooks/shared/commit_rules.py); an empty deny_words list checks no words. Every return is logged (checks/shadow.jsonl, kind write_gate) and counted by repact-report.",
-    "ref_dispositions = 'enforce': a HANDOFF write on a team task that carries project tasks (ptask: links written by `repact-task start --ptask`, or metadata.project_task / metadata.refs) is returned every time until handoff.refs disposes of each ('done: <evidence>', 'partial: <what is left>', 'deferred: <why>', 'dropped: <why>'); the acceptance bridge closes the 'done' ones and reports the rest. A ref the task only names in its text is a note. 'note' never returns; 'off' runs nothing.",
-    "rejection_shape = 'enforce': a TaskUpdate that writes a key ending in _rejection is returned unless the key is handoff_rejection or teachback_rejection and the value is {reason, corrections, since, revision_number, rev} or null (hooks/amendment_gate.py, rules in hooks/shared/amendments.py rejection_shape_problem). It does not follow amendment_gate's mode. 'note' never returns; 'off' skips it; a missing or unknown word reads as enforce."
+    "amendment_gate, ref_dispositions and rejection_shape were retired in 2.1.0 with the hooks that read them: `repact submit` refuses a HANDOFF that leaves an amend_<n> or a carried project task undisposed, and `repact reject` writes the rejection's shape, whatever this file says. A policy or checks.json that still names them is noted and ignored."
   ],
   "modes": {
-    "handoff_evidence": "advisory",
-    "uncertainty_disposition": "advisory",
-    "amendment_gate": "note",
-    "commit_rule": "off",
-    "ref_dispositions": "enforce",
-    "rejection_shape": "enforce"
+    "handoff_evidence": "gate",
+    "commit_rule": "off"
   },
   "commit_rule": {
     "deny_words": []

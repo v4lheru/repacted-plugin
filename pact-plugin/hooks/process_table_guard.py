@@ -2,7 +2,8 @@
 """
 Location: pact-plugin/hooks/process_table_guard.py
 Summary: PreToolUse(Bash) hook. Denies a process-table read that prints command lines
-         (pgrep -f/-a, ps with no -o list or with a command column, pstree, top -c, a read
+         (pgrep -f/-a, ps with no -o list or with a command column, pstree, top -c, procs,
+         htop, btop, a read
          of /proc/<pid>/cmdline or environ, sysctl kern.procargs*), because a token passed as an argument to any running process
          then lands in the transcript. The deny message names the safe form, so the
          caller repairs in the same turn. A second rule (process.pty_wrap) denies a command
@@ -275,6 +276,12 @@ def top_shows_command_lines(args: list[str]) -> bool:
                for word in args)
 
 
+# These print every process with its full command line by default (htop and btop on a
+# terminal, procs on any output); only a version or help request prints none.
+FULL_SCREEN_LISTERS = frozenset({"procs", "htop", "btop", "btm", "glances", "atop"})
+_INFO_ONLY = frozenset({"--version", "-V", "--help", "-h"})
+
+
 def segment_is_listing(words: list[str]) -> bool:
     if any(reads_process_argv_file(word) for word in words):
         return True
@@ -293,6 +300,8 @@ def segment_is_listing(words: list[str]) -> bool:
         return True                                     # the Homebrew build prints args
     if program == "top":
         return top_shows_command_lines(args)
+    if program in FULL_SCREEN_LISTERS:
+        return not (len(args) == 1 and args[0] in _INFO_ONLY)
     if program == "sysctl":
         return any(word.startswith("kern.procargs") for word in args)
     return False

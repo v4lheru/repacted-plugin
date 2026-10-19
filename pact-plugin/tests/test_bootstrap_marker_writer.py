@@ -2366,7 +2366,8 @@ class TestPostToolUseSubprocessIntegration:
 
 class TestHooksJsonDualRegistration:
     """§10.7 — assert the registration delta is exactly as designed: the writer
-    is registered under PostToolUse with matcher 'Agent', AND its
+    is registered under PostToolUse with matcher 'Agent|TaskCreate|TaskUpdate'
+    (the task events are the -p trigger), AND its
     UserPromptSubmit registration is retained. (The ordering no-touch pin lives
     in test_hooks_json.py per §7.2; this corroborates the new block from the
     writer test's perspective.)"""
@@ -2381,14 +2382,15 @@ class TestHooksJsonDualRegistration:
         ptu_blocks = config["hooks"].get("PostToolUse", [])
         agent_writer_blocks = [
             block for block in ptu_blocks
-            if block.get("matcher") == "Agent"
+            if block.get("matcher") == "Agent|TaskCreate|TaskUpdate"
             and any(
                 "bootstrap_marker_writer.py" in h.get("command", "")
                 for h in block.get("hooks", [])
             )
         ]
         assert len(agent_writer_blocks) == 1, (
-            "exactly one PostToolUse block with matcher 'Agent' must register "
+            "exactly one PostToolUse block with matcher 'Agent|TaskCreate|TaskUpdate' "
+            "must register "
             f"bootstrap_marker_writer.py; found {len(agent_writer_blocks)}."
         )
         # Registered synchronously (no async) — the marker must be written

@@ -51,7 +51,7 @@ def main() -> None:
     if missing:
         print(
             f"pact-telegram: not set up (missing {', '.join(missing)}); "
-            f"run /repacted:telegram-setup or pip install {' '.join(missing)}",
+            f"run /repacted:init telegram or pip install {' '.join(missing)}",
             file=sys.stderr,
         )
         sys.exit(1)

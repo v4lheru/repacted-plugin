@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" UserPromptSubmit",
-            "timeout": 150
+            "timeout": 120
           }
         ]
       }
@@ -81,7 +81,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PreToolUse Bash",
-            "timeout": 630
+            "timeout": 585
           }
         ]
       },
@@ -106,32 +106,22 @@
         ]
       },
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PreToolUse Edit,Write",
-            "timeout": 150
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PreToolUse Edit,Write,MultiEdit,NotebookEdit",
+            "timeout": 45
           }
         ]
       },
       {
-        "matcher": "MultiEdit|NotebookEdit",
+        "matcher": "TaskUpdate|TaskCreate",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PreToolUse MultiEdit,NotebookEdit",
-            "timeout": 90
-          }
-        ]
-      },
-      {
-        "matcher": "TaskUpdate",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PreToolUse TaskUpdate",
-            "timeout": 270
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PreToolUse TaskUpdate,TaskCreate",
+            "timeout": 45
           }
         ]
       },
@@ -146,7 +136,7 @@
         ]
       },
       {
-        "matcher": "^(?!(?:Agent|Task|Read|Bash|NotebookRead|Grep|WebFetch|Artifact|Edit|Write|MultiEdit|NotebookEdit|TaskUpdate|AskUserQuestion)$)(?:.*?(?:mcp__.*|WebFetch|Artifact|Bash))",
+        "matcher": "^(?!(?:Agent|Task|Read|Bash|NotebookRead|Grep|WebFetch|Artifact|Edit|Write|MultiEdit|NotebookEdit|TaskUpdate|TaskCreate|AskUserQuestion)$)(?:.*?(?:mcp__.*|WebFetch|Artifact|Bash))",
         "hooks": [
           {
             "type": "command",
@@ -162,7 +152,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" SubagentStop",
-            "timeout": 90
+            "timeout": 150
           }
         ]
       }
@@ -205,17 +195,6 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" SessionEnd",
             "timeout": 150
-          }
-        ]
-      }
-    ],
-    "TaskCompleted": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" TaskCompleted",
-            "timeout": 90
           }
         ]
       }
@@ -268,7 +247,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PostToolUse TaskCreate",
-            "timeout": 270
+            "timeout": 150
           }
         ]
       },
@@ -278,7 +257,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PostToolUse TaskUpdate",
-            "timeout": 330
+            "timeout": 210
           }
         ]
       },
@@ -288,7 +267,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PostToolUse Agent",
-            "timeout": 150
+            "timeout": 90
           }
         ]
       },

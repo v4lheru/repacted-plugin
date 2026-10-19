@@ -4,7 +4,7 @@ Summary: SessionStart for the lead (and the unknown-role primary frame): the
     runtime config and unattended block, the session context and team
     alignment, the session_start journal anchor, the bootstrap directive
     ladder, the Current Session block, resumption, the resume claim and the
-    hook briefing.
+    hook briefing, and the execution mode.
 Used by: hooks/session_init.py
 
 Moved out of session_init.py unchanged; the step numbers in the comments are
@@ -18,7 +18,7 @@ import os
 import sys
 from typing import Optional
 
-from shared import parts_ledger, task_migration, unattended
+from shared import parts_ledger, task_migration, unattended, workflow_state
 from shared.pact_config import llm_options
 from shared.pact_context import (
     _is_unknown_or_missing_session,
@@ -100,7 +100,8 @@ def unattended_context(session_id: object, project_dir: str, source: str) -> Opt
     states them again; OFF adds nothing. The flag in the session directory wins
     over REPACT_UNATTENDED (shared/unattended.py). One journal row when the
     environment turns the mode on (startup and resume only), and one when the
-    flag cannot be read or parsed, which reads OFF.
+    flag cannot be read or parsed, which reads OFF. An environment that turns the
+    evidence controls on leaves the session's sticky marker (unattended.mark_sticky).
     """
     session_dir = (
         reconstruct_session_dir(project_dir, session_id)
@@ -115,6 +116,10 @@ def unattended_context(session_id: object, project_dir: str, source: str) -> Opt
         row = make_event("unattended_mode", state="on", cause="env")
     if row and session_dir:
         append_event(row, session_dir=session_dir)
+    if session_dir and unattended.controls_on(session_dir).cause == "env":
+        # a session launched unattended stays so: a later REPACT_UNATTENDED=0
+        # prefix on one command does not turn the evidence controls off
+        unattended.mark_sticky(session_dir, make_event("unattended_mode").get("ts", ""), "env")
     return unattended.session_rules(mode.cause) if mode.on else None
 
 
@@ -459,6 +464,13 @@ def lead_directive(
     if frame_role == "unknown":
         context_parts.insert(1, _UNKNOWN_ROLE_NOTICE)
 
+    # After a resume or a /clear, the hooks' state screen when it is fresh
+    # (shared/workflow_state.py); the compact limb places its own.
+    if source in ("resume", "clear") and frame_is_lead:
+        screen = workflow_state.context_screen(session_dir)
+        if screen:
+            context_parts.append(screen)
+
 
 SNAPSHOT_MAX_BYTES = 2500   # the previous-session summary; the cut names the full journal
 
@@ -538,7 +550,7 @@ def finish_session_start(
         context_parts.append(session_snapshot)
 
     # 8. Check for paused or refreshed work from a previous /repacted:pause
-    # or /repacted:refresh. ONE unified resolver (check_resume_state) reads
+    # or /repacted:pause checkpoint. ONE unified resolver (check_resume_state) reads
     # both event types and arbitrates newest-wins — never two parallel
     # reader paths at this seam. Lead-only (#877): mechanically this is
     # a READ (it surfaces a resume prompt, not a write), but surfacing
@@ -708,3 +720,13 @@ def finish_session_start(
         if briefing:
             parts_ledger.note("briefing", briefing)
             context_parts.append(briefing)
+
+
+def settle_execution(session_dir: str, project_dir: str) -> str:
+    """The lead's execution mode, decided once and kept in execution.json.
+    Returns the mode, or "" when it cannot be settled; never raises."""
+    try:
+        from shared import execution
+        return execution.ensure(session_dir, cwd=project_dir or None)["mode"]
+    except Exception:  # noqa: BLE001 - SessionStart must not fail on the mode
+        return ""

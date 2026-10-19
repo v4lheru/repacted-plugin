@@ -121,7 +121,8 @@ def test_clean_routes_and_nothing_to_read_ahead_are_allowed(repo):
     git(repo, "checkout", "-q", "main")
     for command in ("git merge clean", "git cherry-pick clean", "git rebase clean",
                     "git merge --abort", "git cherry-pick --quit", "git rebase --skip",
-                    "git pull", "git stash", "git revert side", "git rebase --root"):
+                    "git pull", "git stash push -m keep", "git revert side",
+                    "git rebase --root"):   # a bare `git stash` is refused by shared_stash
         allowed(run(repo, command))
 
 

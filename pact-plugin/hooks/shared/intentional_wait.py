@@ -5,16 +5,12 @@ Summary: `intentional_wait` metadata schema — the teammate-facing contract
          approval, inter-commit hold, peer reply, etc.). Also the canonical
          self-complete-exemption predicate for team-lead-side task-file inspection
          and audit tooling.
-Used by: teammate-authored metadata on Task records, team-lead inspection,
-         audit tooling, and the PostToolUse advisory gate
-         `task_lifecycle_gate.py`. The exemption predicate
-         (is_self_complete_exempt) is a pure function read by that advisory
-         gate (advisory-only — it cannot DENY; it emits a `self_completion`
-         advisory + a `completion_disputed` writeback when a non-exempt
-         teammate self-completes) as well as by team-lead instructions and
-         audit consumers. No hook BLOCKS on it; the exemption is not enforced
-         (it stays instruction-level). See skills/teammate/references/teammate-waiting.md
-         and agents/pact-orchestrator.md for the contract.
+Used by: teammate-authored metadata on Task records, team-lead inspection
+         and audit tooling. The exemption predicate (is_self_complete_exempt)
+         is read by hooks/dispatch_gate.py and hooks/shared/task_log/bridge.py
+         (a secretary or signal task never closes a project task). See
+         skills/teammate/references/teammate-waiting.md and
+         agents/pact-orchestrator.md for the contract.
 
 Contract: pure functions; never raise. Malformed flags fail loud — e.g.
 `wait_stale` returns True on any parse error so a broken flag cannot
@@ -33,8 +29,7 @@ Public surface:
   agentType is in this set.
 - TEACHBACK_EXEMPT_AGENT_TYPES — agentType tokens whose owners are
   exempt from the teachback-gated dispatch pattern (no Task A
-  teachback gate; single-task dispatch). Consumed by
-  task_lifecycle_gate.work_addblockedby_missing via is_teachback_exempt.
+  teachback gate; single-task dispatch), read through is_teachback_exempt.
   Same team-config agentType lookup as the prior constant.
 - canonical_since() — ISO-8601 UTC timestamp helper for the `since` field.
 - validate_wait(wait_metadata) — True iff the flag is well-formed.
@@ -44,11 +39,9 @@ Public surface:
   team-config-resolved agentType, or signal-task pattern).
 - is_teachback_exempt(owner, team_name="", teams_dir=None) — True iff
   the owner's team-config agentType is in TEACHBACK_EXEMPT_AGENT_TYPES.
-  Consumed by task_lifecycle_gate.work_addblockedby_missing.
 - is_self_complete_agent_type(owner, team_name="", teams_dir=None) — True
   iff the owner's team-config agentType is in
-  SELF_COMPLETE_EXEMPT_AGENT_TYPES (no signal-task surface). Consumed by
-  handoff_ordering_gate._handoff_disk_line.
+  SELF_COMPLETE_EXEMPT_AGENT_TYPES (no signal-task surface).
 """
 
 from __future__ import annotations
@@ -200,8 +193,7 @@ def _is_teachback_exempt_agent_type(
     falsely exempted via a corrupt config would skip the teachback
     round-trip the team-lead might genuinely have wanted.
 
-    Consumed by `task_lifecycle_gate.evaluate_lifecycle` via the public
-    `is_teachback_exempt` predicate.
+    Read through the public `is_teachback_exempt` predicate.
 
     NOT a hook predicate — pure helper.
 
@@ -237,10 +229,6 @@ def is_teachback_exempt(
     Resolution via `_is_teachback_exempt_agent_type(owner, team_name,
     teams_dir)`. Fail-closed on every error path.
 
-    Used by `task_lifecycle_gate.evaluate_lifecycle` to suppress the
-    `work_addblockedby_missing` advisory when the work task's owner is
-    teachback-exempt.
-
     Args:
         owner: Task owner name (matched against team-config member.name).
         team_name: Team name for config path. Empty string returns False.
@@ -259,10 +247,6 @@ def is_self_complete_agent_type(
     The agentType surface of `is_self_complete_exempt` alone, without the
     signal-task surface: a signal task carries no HANDOFF, an exempt agent
     type (the secretary) does. Fail-closed on every error path.
-
-    Used by `handoff_ordering_gate._handoff_disk_line` to give a
-    self-completing owner the HANDOFF disk-state line at its own completion
-    write.
 
     Args:
         owner: Task owner name (matched against team-config member.name).
@@ -374,21 +358,17 @@ def is_self_complete_exempt(
        surface short-circuits to False (fail-closed).
     2. By signal-task metadata: task.metadata.completion_type == "signal" AND
        task.metadata.type in {"blocker", "algedonic"}. Mirrors the inline
-       literal in agent_handoff_emitter / task_utils / session_resume.
+       literal in task_utils / session_resume.
        Independent of `team_name`.
 
     Pure function; never raises on plain dicts (PACT task representation
     via json.loads); defaults to False on missing or malformed fields
     (conservative — never silently exempt).
 
-    Read by the PostToolUse advisory gate `task_lifecycle_gate.py` (the
-    `self_completion` advisory) as well as team-lead-side task-file inspection,
-    audit tooling, and future consumers. That gate is advisory-only — it
-    cannot DENY; on a non-exempt self-completion it emits an advisory + a
-    `completion_disputed` writeback. No hook BLOCKS on it and the exemption
-    is not enforced (nothing forces an exempt teammate to self-complete —
-    that remains instruction-level), so reading it here introduces no
-    livelock-capable hook surface.
+    Read by hooks/dispatch_gate.py and hooks/shared/task_log/bridge.py (an
+    exempt or signal task never closes a project task), and by team-lead-side
+    task-file inspection and audit tooling. No hook forces an exempt teammate
+    to self-complete; that remains instruction-level.
 
     TRUST BOUNDARY: `owner` is teammate-writable via TaskUpdate(owner=...),
     BUT exemption now requires the team config to record that owner with

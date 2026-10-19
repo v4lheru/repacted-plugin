@@ -1,7 +1,7 @@
 """
 Location: pact-plugin/hooks/shared/marker_schema.py
 Summary: Shared marker schema constants, signature function and verifier
-         (is_marker_set) for the bootstrap-complete marker. Imported by both
+         (is_marker_set, session_dir_unlinked) for the bootstrap-complete marker. Imported by both
          the producer (bootstrap_marker_writer.py) and the verifier
          (bootstrap_gate.py) so a single source of truth defines the marker's
          content invariants.
@@ -66,10 +66,32 @@ def expected_marker_signature(session_id: str, plugin_root: str,
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def session_dir_unlinked(session_dir: Path) -> bool:
+    """True when no part of the session dir at or below the config dir is a symlink: its
+    resolved path is the resolved config dir joined with the part below it. A linked ancestor
+    of the config dir itself (/var -> /private/var, a linked ~/.claude) is the user's own layout
+    and stays allowed; the writer, the restamp and is_marker_set all ask this one question, so
+    a marker the writer stamps is one the gate reads. A session dir outside the
+    config dir must have no linked part at all. False on any error.
+    """
+    try:
+        absolute = session_dir.absolute()
+        resolved = session_dir.resolve(strict=False)
+        config = pact_context.get_claude_config_dir().absolute()
+        try:
+            below = absolute.relative_to(config)
+        except ValueError:
+            return resolved == absolute
+        return ".." not in below.parts and resolved == config.resolve(strict=False) / below
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def is_marker_set(session_dir: "Path | None") -> bool:
     """True iff a properly stamped bootstrap-complete marker exists for this session.
 
-    Requires: a regular file (lstat, no leaf symlink: S2), no ancestor symlink (S4), size <=
+    Requires: a regular file (lstat, no leaf symlink), no symlink at or below the config dir
+    (session_dir_unlinked), size <=
     MARKER_MAX_BYTES, exactly keys {v, sid, sig}, v == MARKER_SCHEMA_VERSION, sid ==
     session_dir.name, sig == expected_marker_signature (compare_digest). Anything else is False.
     The signature is a fingerprint against a Bash `touch`, not a MAC (all inputs are readable).
@@ -78,12 +100,8 @@ def is_marker_set(session_dir: "Path | None") -> bool:
         return False
     session_dir = Path(session_dir)
 
-    # S4: if resolve() differs from the absolute path, an ancestor is a symlink.
-    try:
-        resolved = session_dir.resolve(strict=False)
-    except OSError:
-        return False
-    if resolved != session_dir.absolute():
+    # No symlink at or below the config dir (session_dir_unlinked).
+    if not session_dir_unlinked(session_dir):
         return False
 
     marker_path = session_dir / BOOTSTRAP_MARKER_NAME

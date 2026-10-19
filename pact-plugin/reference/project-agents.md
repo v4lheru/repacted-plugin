@@ -1,6 +1,6 @@
 # Project specialists: bring your own agents
 
-A repository can ship its own PACT specialists beside the ones the plugin ships. The lead dispatches them like the shipped ones: a teachback task, a work task, the same dispatch gate and the same HANDOFF checks.
+A repository can ship its own PACT specialists beside the ones the plugin ships. The lead dispatches them like the shipped ones: one work task through `repact dispatch`, the same dispatch gate and the same HANDOFF checks.
 
 ## Make one
 

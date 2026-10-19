@@ -337,12 +337,12 @@ class TestTestsSurfaceEnforcement:
             foreign.unlink()
 
     def test_kept_ensure_loaded_seam_survives_widened_gate(self):
-        """The one reasoned keep in tests/ (an ensure-loaded monkeypatch
-        seam marked with a first-line noqa) passes the gate individually.
+        """A reasoned keep in tests/ (test_merge_guard's autouse-fixture
+        re-export, marked with a first-line noqa) passes the gate individually.
         Localizes the failure if the predicate's noqa recognition ever
         diverges from the marker convention the keep uses — the sweep
         would also fail, but this row names the reconciliation."""
-        kept = PLUGIN_ROOT / "tests" / "test_emitter_idempotency.py"
+        kept = PLUGIN_ROOT / "tests" / "test_merge_guard.py"
         assert kept.exists()
         assert _gate_check([kept]) == []
 

@@ -3,7 +3,7 @@ Location: pact-plugin/hooks/shared/merge_guard_common.py
 Summary: FAÇADE for one release: the merge guard's classifiers live in hooks/shell/merge/
          (the design notes); this module re-exports every name the
          hooks and the test suite import from here. Retired next release, with the
-         importers re-pointed in the same commit (tests/contract/budgets.json `retired`).
+         importers re-pointed in the same commit.
 Used by: merge_guard_pre.py, merge_guard_post.py, the test suite.
 """
 from __future__ import annotations

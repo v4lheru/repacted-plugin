@@ -28,6 +28,7 @@ OPENERS = frozenset({"open", "read_text", "read_bytes", "fdopen"})
 DISTILL = PLUGIN_ROOT / "bin" / "_distill"
 VIEW_USES = frozenset({"message", "parse_ts", "session_files"})
 READERS = frozenset({
+    "hooks/subagent_stop.py",
     "hooks/postcompact_archive.py", "hooks/session_ledger.py",
     "hooks/shared/compaction_owner.py", "hooks/shared/cost_cap.py",
 })

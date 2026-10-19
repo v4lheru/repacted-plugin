@@ -2,8 +2,9 @@
 """
 Location: pact-plugin/hooks/shared/peer_context.py
 Summary: Shared builder for the peer-context additionalContext block injected
-         into team members (peer list + charter cross-ref + teachback reminder
-         + completion-authority note), plus the role-marker prelude templates
+         into Agent Teams members (peer list + charter cross-ref + teachback reminder
+         + completion-authority note; peer_inject is Teams-only, so the subagent
+         default never sees it: its coder reads the brief), plus the role-marker prelude templates
          and agent-name sanitizer.
 Used by: peer_inject.py (SubagentStart: it runs at every subagent start,
          including an in-process teammate's turn starts, and builds the block
@@ -37,19 +38,18 @@ from shared.pact_context import member_agent_type, strip_pact_namespace
 # `python3 dev/protocol/render.py --write`; never edit inside the region.
 # <!-- protocol:spawn-notes -->
 _TEACHBACK_REMINDER = (
-    "\n\nTEACHBACK TIMING: write metadata.teachback_submit on Task A BEFORE any Edit/Write/Bash "
-    "call; the only shell exceptions are `date -u +%Y-%m-%dT%H:%M:%S+00:00` (the wait's `since`) "
-    "and `repact-wait` after the notify. The teachback is a gate: Task B stays blocked until "
-    "the team-lead accepts. The teammate skill holds the format."
+    "\n\nTEACHBACK TIMING: your brief (the file your spawn prompt names) holds the teachback "
+    "skeleton and the exact `repact submit <id> --teachback <file>` line. Run it before any Edit/Write/Bash "
+    "for the work; reading is fine. The teachback is a gate: when submit says the lead "
+    "reviews it, run the `repact-wait` line it prints. The teammate skill holds the rest."
 )
 
 _COMPLETION_AUTHORITY_NOTE = (
-    "\n\nCOMPLETION AUTHORITY: you do NOT mark your own tasks `completed`. Write the HANDOFF "
-    "(metadata.handoff) or the teachback to the task and stay `in_progress`; the team-lead "
-    "transitions status to `completed` on accept. On a Task A (teachback) + Task B (work) pair: "
-    "claim A, submit, SET `intentional_wait{reason=awaiting_lead_completion}`, run "
-    "`repact-wait <A id> --until completed,rejection,amend` in the foreground, and begin B only when A "
-    "is `completed` on disk."
+    "\n\nCOMPLETION AUTHORITY: you do NOT mark your own tasks `completed` and never write "
+    "the teachback or the HANDOFF with TaskUpdate. Hand in with the brief's `repact submit <id>` line; the "
+    "team-lead's `repact accept` transitions status to `completed`. After each submit, send the "
+    "team-lead one line, SET `intentional_wait{reason=awaiting_lead_completion}` and run "
+    "`repact-wait <id> --until completed,rejection,amend` in the foreground."
 )
 # <!-- /protocol -->
 
@@ -64,8 +64,8 @@ _ROLE_MARKER_TEMPLATE = "YOUR PACT ROLE: teammate ({agent_name}).\n\n"
 
 _CHARTER_CROSSREF_LINE = (
     "TEAM PROTOCOL: invoke Skill(\"repacted:teammate\") before anything else: it "
-    "registers you and holds the teachback gate, HANDOFF, waiting and messaging "
-    "rules (messaging contract: skills/teammate/references/teammate-messaging.md).\n\n"
+    "registers you, says how to hand in with `repact submit`, and points to the Teams "
+    "waiting and messaging rules (skills/teammate/references/teammate-messaging.md).\n\n"
 )
 
 # Back-compat composite — byte-identical to the pre-split single template.

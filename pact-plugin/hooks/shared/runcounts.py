@@ -43,6 +43,9 @@ _RUNNER_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     # path may hold spaces): a run not known to be pytest is read by every parser
     ("pytest", re.compile(r"""^(?:(?:'[^']*/python3?(?:\.\d+)?'|"[^"]*/python3?(?:\.\d+)?"|(?:\S*/)?python3?(?:\.\d+)?)"""
                           r"""\s+-m\s+)?pytest""" + _WORD_END)),
+    # `python -m unittest`, python bare or by path (bare `unittest` is no command)
+    ("unittest", re.compile(r"""^(?:'[^']*/python3?(?:\.\d+)?'|"[^"]*/python3?(?:\.\d+)?"|(?:\S*/)?python3?(?:\.\d+)?)"""
+                            r"""\s+-m\s+unittest""" + _WORD_END)),
     ("vitest", re.compile(r"^vitest" + _WORD_END)),
     ("jest", re.compile(r"^jest" + _WORD_END)),
     ("go", re.compile(r"^go\s+test\b")),
@@ -593,6 +596,58 @@ def _parse_pytest_all(lines: list[str]) -> Optional[Counts]:
     return total
 
 
+# unittest: "Ran 4 tests in 0.001s", a blank line, then "OK", "OK (skipped=1)",
+# "FAILED (failures=1, errors=1)" or "NO TESTS RAN" (3.12+). A direct run is read by its LAST block
+# (unittest prints its own summary last, so a block a test printed earlier is not counted); only a
+# wrapper's log sums every block, as for pytest. An unexpected success fails the run (3.11+), so it
+# counts as failed.
+_UNITTEST_RAN = re.compile(r"^Ran (\d+) tests? in [\d.]+s$")
+_UNITTEST_END = re.compile(r"^(OK|FAILED|NO TESTS RAN)(?: \(([a-z =,\d]*)\))?$")
+_UNITTEST_BUCKETS = {"failures": "failed", "errors": "errors", "skipped": "skipped",
+                     "expected failures": "skipped", "unexpected successes": "failed"}
+
+
+def _unittest_blocks(lines: list[str]) -> list[Counts]:
+    blocks, ran = [], None
+    for line in lines:
+        line = line.strip()
+        match = _UNITTEST_RAN.match(line)
+        if match:
+            ran = int(match.group(1))
+            continue
+        if ran is None or not line:
+            continue
+        end = _UNITTEST_END.match(line)
+        if end:
+            block = Counts("unittest", collected=ran)
+            for pair in filter(None, (end.group(2) or "").split(",")):
+                name, _, number = pair.strip().partition("=")
+                if name in _UNITTEST_BUCKETS and number.isdigit():
+                    bucket = _UNITTEST_BUCKETS[name]
+                    setattr(block, bucket, getattr(block, bucket) + int(number))
+            block.passed = max(ran - block.failed - block.errors - block.skipped, 0)
+            blocks.append(block)
+        ran = None
+    return blocks
+
+
+def _parse_unittest(lines: list[str]) -> Optional[Counts]:
+    blocks = _unittest_blocks(lines)
+    return blocks[-1] if blocks else None
+
+
+def _parse_unittest_all(lines: list[str]) -> Optional[Counts]:
+    blocks = _unittest_blocks(lines)
+    if not blocks:
+        return None
+    total = Counts("unittest", collected=0)
+    for block in blocks:
+        for name in ("passed", "failed", "errors", "skipped", "collected"):
+            setattr(total, name, getattr(total, name) + getattr(block, name))
+    total.projects = len(blocks) if len(blocks) > 1 else None
+    return total
+
+
 # rtk's compressed one-liners, e.g. "Pytest: 3 passed, 1 failed", "Pytest: No tests collected".
 _RTK_LINE = re.compile(r"^(Pytest|Go test|Tests|Vitest|Jest|Playwright|cargo test|Cargo test)\s*:\s*(.*)$")
 _RTK_RUNNER = {"pytest": "pytest", "go test": "go", "tests": "tests", "vitest": "vitest",
@@ -765,7 +820,7 @@ def tcount_reports(text: str) -> list[tuple[Optional[Counts], Optional[int], Opt
 
 # Order matters: tcount's own line, specific multi-line formats, rtk one-liners, then pytest.
 _PARSERS = (_parse_tcount, _parse_dotnet, _parse_jest, _parse_vitest, _parse_node, _parse_cargo,
-            _parse_playwright, _parse_mocha, _parse_go, _parse_rtk, _parse_pytest)
+            _parse_playwright, _parse_mocha, _parse_go, _parse_rtk, _parse_pytest, _parse_unittest)
 # A dotnet log carries the tests' own output, so a run known to be dotnet is read by the dotnet
 # parser only: a line a test printed ("12 passed in 0.5s") is never another runner's summary.
 # The reverse holds too: a run known to be another runner is never read as dotnet, nor as a
@@ -777,12 +832,14 @@ _OTHER_RUNNERS = frozenset(name for name, _ in _RUNNER_PATTERNS) - {"dotnet", "t
 # summed: an echoed tcount-shaped line must not win over the real summary below it.
 _WRAPPER_PARSERS = (_parse_dotnet, _parse_jest, _parse_vitest, _parse_node, _parse_cargo,
                     _parse_playwright, _parse_mocha, _parse_go, _parse_rtk, _parse_pytest_all,
-                    _parse_tcount_all)
+                    _parse_unittest_all, _parse_tcount_all)
 
 
 def _parsers_for(runner_hint: Optional[str]) -> tuple:
     if runner_hint == "dotnet":
         return (_parse_dotnet,)
+    if runner_hint == "unittest":
+        return (_parse_unittest,)
     if runner_hint in _OTHER_RUNNERS:
         return tuple(parser for parser in _PARSERS if parser not in (_parse_dotnet, _parse_tcount))
     if runner_hint in (None, "tcount"):

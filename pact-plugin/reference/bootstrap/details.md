@@ -26,7 +26,7 @@ The same three conditions apply unchanged: skip the write if the prompt said `pa
 The secretary no longer spawns at session start: it spawns on demand, per the command's
 Step 2, and the session briefing is computed by the `session_init` hook. The retired text:
 
-Spawn the session secretary using single-task dispatch — the `pact-secretary` agentType is exempt from the teachback gate. No Task A teachback round-trip.
+Spawn the session secretary using single-task dispatch — the `pact-secretary` agentType is exempt from the teachback gate. No teachback round-trip.
 
 1. `TaskCreate(subject="secretary: deliver session briefing", description="<full mission: deliver session briefing on spawn, answer memory queries during the session, process HANDOFFs at workflow boundaries; CONTEXT / MISSION / INSTRUCTIONS / GUIDELINES per the orchestrator persona §13 Recommended Agent Prompting Structure>")` — single work task. The subject names a **discrete deliverable** (the briefing), NOT the secretary's standing role; the standing duties (memory queries, HANDOFF harvest) live in the description as mission context and are tracked by their own later tasks.
 2. `TaskUpdate(task_id, owner="secretary")` — assign to the secretary; no `addBlockedBy` (no teachback gate)
@@ -39,7 +39,7 @@ Spawn the session secretary using single-task dispatch — the `pact-secretary` 
 
 The secretary delivers the session briefing at spawn, answers memory queries during the session, and processes HANDOFFs at workflow boundaries. The briefing task is a discrete deliverable: the secretary MUST self-complete it (`TaskUpdate(status="completed")`) as the final act of delivering the briefing — you do NOT complete it, and you MUST NOT expect to. Completing the task does NOT end the secretary's role; it continues as memory consultant and HANDOFF harvester for the rest of the session. Memory queries from any other agent are blocked until the secretary is alive.
 
-Spawn the secretary **only once per session** — reuse the same secretary for any subsequent memory queries or HANDOFF harvesting — AND respawn it after `/repacted:refresh`, whose shutdown stopped the previous secretary process. Post-refresh, respawning is MANDATORY BEFORE any `SendMessage` to the secretary name: a send to the stopped name resurrects its stale pre-refresh transcript instead of starting fresh.
+Spawn the secretary **only once per session** — reuse the same secretary for any subsequent memory queries or HANDOFF harvesting — AND respawn it after `/repacted:pause checkpoint`, whose shutdown stopped the previous secretary process. Post-refresh, respawning is MANDATORY BEFORE any `SendMessage` to the secretary name: a send to the stopped name resurrects its stale pre-refresh transcript instead of starting fresh.
 
 ## Session Placeholder Variables
 

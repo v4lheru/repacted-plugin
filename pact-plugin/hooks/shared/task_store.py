@@ -3,11 +3,13 @@ Location: pact-plugin/hooks/shared/task_store.py
 Summary: The one module that opens a path under `<config>/tasks/`, the host's task store.
 Used by: every hook and bin module that reads or updates a task file (the gates, the
 emitters, repact-wait, the doctor, the replay corpus builder) and by task_utils, which
-keeps re-exports of the three readers and the writer for one release.
+keeps re-exports of the three readers and the writer for one release. shared/ops/dispatch creates
+the work task of a dispatch through `create_next`.
 
 The store is a host-owned state cache: `tasks/<team>/<id>.json`, written first by the
-host and mirrored to the session journal by the hooks. Only `create` makes a task file, and
-only shared/task_migration calls it (a resume moves the earlier team's open tasks).
+host and mirrored to the session journal by the hooks. Only `create` makes a task file: the
+resume migration calls it (a resume moves the earlier team's open tasks), and `create_next`
+calls it for `repact dispatch` (shared/ops), the CLI that creates its own work task.
 Every path the adapter hands out has passed the same rules, so no caller repeats them:
 
   - the team passes is_safe_path_component (one `[A-Za-z0-9_-]+` component) and the id
@@ -25,6 +27,7 @@ Usage:
     for team in store.teams_holding("42"): ...
     store.update(TaskRef(team, "42"), mutate)  # mutate(task) -> True to write
     store.create(TaskRef(team, "42"), task)   # task_migration only; False if it exists
+    store.create_next(team, lambda id: task)  # shared/ops/dispatch: the next free id, or None
 """
 
 from __future__ import annotations
@@ -48,6 +51,8 @@ HIGHWATERMARK_NAME = ".highwatermark"
 # A fresh id has no lock holder and a dead team's lock is stale, so the migration's
 # writers wait far less than `update` does: SessionStart must not stall on 200 files.
 _MIGRATION_LOCK_WAIT = 2.0
+# How many ids create_next tries when the host keeps taking the one it picked.
+_CREATE_ATTEMPTS = 20
 # A task id is one file name the host chose: no separator, no NUL or control character,
 # not a dot name, and short enough for a file name with ".json" appended. Wider than a
 # team name (the host has written ids with spaces and non-ASCII letters) but never a path.
@@ -364,6 +369,40 @@ class TaskStore:
             return True
 
         return self._locked(path, link) and self.get(ref) == task
+
+    def largest_id(self, team: str) -> int:
+        """The largest numeric id any file of the team names: a task file or a retired copy
+        (`<id>.json.migrated*`), so a renamed id is never issued again. 0 when there is none."""
+        directory = self.team_dir(team)
+        try:
+            names = os.listdir(directory) if directory is not None else []
+        except OSError:
+            return 0
+        numbers = [int(stem) for stem in (name.split(".json", 1)[0] for name in names if ".json" in name)
+                   if stem.isascii() and stem.isdigit() and len(stem) <= 18]
+        return max(numbers, default=0)
+
+    def create_next(self, team: str, build: Callable[[str], dict]) -> Optional[str]:
+        """Create a task under the team's next free id (shared/ops/dispatch: the CLI makes its own
+        task). The id is one past both the `.highwatermark` and every id on disk; `build(id)`
+        returns the task object. The team directory is made when absent (the host makes it on
+        the lead's first TaskCreate), and the marker is raised over the id afterwards. A
+        collision (the host took the id first) moves to the next id. Returns the id, or None."""
+        directory = self.team_dir(team)
+        if directory is None:
+            return None
+        try:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError:
+            return None
+        for _attempt in range(_CREATE_ATTEMPTS):
+            number = max(self.highwatermark(team), self.largest_id(team)) + 1
+            ref = TaskRef(team, str(number))
+            task = build(ref.task_id)
+            if self.create(ref, task):
+                self.raise_highwatermark(team, number, create=True)
+                return ref.task_id
+        return None
 
     def retire(self, ref: TaskRef, digest: Optional[str] = None) -> bool:
         """Rename the task file to `<id>.json.migrated` (or `.migrated.<n>` when an earlier

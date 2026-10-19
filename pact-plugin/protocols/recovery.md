@@ -34,14 +34,10 @@ The `pact-memory` skill carries the full rule.
 
 **Journal events** (each has `v`, `type`, `ts`): `session_start` (`team`, `session_id`, `project_dir`, `worktree`, `source` ∈ startup/resume/compact/clear/unknown), `session_end` (optional `warning`), `session_paused` (`pr_number` and `pr_url` or null, `branch`, `worktree_path`, `consolidation_completed`, `team_name`, optional `resume_hint`), `session_refreshed` (`consolidation_completed`, `halt_active`, optional feature/next-phase/worktree fields), `session_refresh_consumed` (`refresh_ts`), `session_consolidated` (optional `pass`, `task_count`, `memories_saved`), `variety_assessed` (`task_id`, `variety`, optional `scope`=`dispatch`), `phase_transition` (`phase`, `status`), `checkpoint`, `agent_dispatch` (`agent`, `task_id`, `phase`), `agent_handoff` (`agent`, `task_id`, `task_subject`, `handoff`; the GC-proof HANDOFF store), `commit` (`sha`, `message`, `phase`), `s2_state_seeded` (`worktree`, `agents`, `boundaries`), `review_dispatch`, `review_finding`, `remediation`, `pr_ready`.
 
-Rebuild from ground truth: `git worktree list`, `{session_dir}/session-journal.jsonl`, `TaskList`, then in-progress task files (`TaskGet` omits metadata).
-
-**Post-compaction (mid-session):**
-1. Read the current session's journal: the full event history survives.
-2. `TaskList` for status, blocking and ownership. Task tools and `SendMessage` can come back deferred: load them with `ToolSearch` (`select:TaskUpdate,TaskCreate,TaskStop,SendMessage`) before the next accept pair, or a schema error splits it.
-3. Metadata from the task file on disk, `cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json" | jq .metadata.<key>`, while it exists (`TaskGet` does NOT surface it).
-4. The journal is authoritative when task metadata is gone.
-5. If a workflow you started is still in progress in `TaskList` and its re-attached copy is cut short or missing, read `{plugin_root}/commands/<name>.md` in full with `Read` (all pages) before continuing, where `repacted:<name>` is that workflow. Do not invoke the workflow again: that starts it over. If the file shows `$ARGUMENTS`, take the task from its re-attached copy or your compact summary.
+**Post-compaction, resume or /clear:** hooks keep `{session_dir}/workflow-state.json`; a fresh one is injected as one `[RESUME]` screen: act from it. `repact inspect` reprints it (`--json`, `--rebuild` from task files and journal); from a terminal, `repact resume` prints it and reopens the session (`--no-launch`: the screen only). With no screen (missing, or the journal moved past it):
+1. Read the session journal: it survives everything and is authoritative when task metadata is gone.
+2. `repact inspect <id>` for one task's receipt; under Agent Teams, `TaskList` for status and ownership (deferred task tools and `SendMessage`: `ToolSearch` `select:TaskUpdate,TaskCreate,TaskStop,SendMessage` first); metadata from `jq .metadata.<key> "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tasks/{team_name}/{taskId}.json"` (`TaskGet` omits it); `git worktree list`.
+3. A workflow still in progress whose re-attached copy is cut short or missing: `Read` `{plugin_root}/commands/<name>.md` in full (all pages) before continuing; never invoke it again (that restarts it). `$ARGUMENTS` in the file: take the task from the re-attached copy or your summary.
 
 **Cross-session (session start, `restore_last_session`):** read the previous journal via the `- Session dir:` line in CLAUDE.md (fallback: derive it from the Resume line and project root); group `agent_handoff` events by `(agent, task_subject)` keeping the latest; list `phase_transition` progress and `session_end` warnings; truncate decision summaries to 80 characters.
 
@@ -49,7 +45,7 @@ Rebuild from ground truth: `git worktree list`, `{session_dir}/session-journal.j
 
 **Unpaused exit (`check_unpaused_exit`):** fresh start, no paused or refreshed claim, a different previous session: its open task files, `agent_handoff` events after its last `session_consolidated`, or its `session_end` PR warning → a continue-or-start-fresh prompt.
 
-**Refreshed work (`check_resume_state`):** the latest `session_refreshed` event, retired by a `session_refresh_consumed` whose `refresh_ts` equals its `ts`; older than 48 hours → a stale prefix (never suppression); the prompt cross-checks live HALT signal tasks, which the event can never suppress.
+**Checkpointed work (`/repacted:pause checkpoint`, `check_resume_state`):** the latest `session_refreshed` event, retired by a `session_refresh_consumed` whose `refresh_ts` equals its `ts`; older than 48 hours → a stale prefix (never suppression); the prompt cross-checks live HALT signal tasks, which the event can never suppress.
 
 **Crash safety:** journal appends are POSIX `O_APPEND` JSONL; `read_events()` skips malformed lines; the journal lives in `{config_dir}/pact-sessions/`, not `teams/`, so teardown keeps it. `{config_dir}` is `$CLAUDE_CONFIG_DIR` when set and non-empty, else `$HOME/.claude`; read it off an absolute path already in your context (your plugin root is `{config_dir}/plugins/…`) and never assume `~/.claude`. Wrap-up harvests the journal to pact-memory; journals are kept 30 days (paused sessions are exempt).
 

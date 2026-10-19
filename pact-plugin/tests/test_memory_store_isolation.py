@@ -16,7 +16,7 @@ THE TWO MECHANISMS THAT LEAKED, each with a test here:
 
 WHAT MUST KEEP WORKING, and it outranks the isolation. Production entry points
 that pass no path SHOULD reach the real store: that is what `archive_pin
---index N` does, and `/repacted:prune-memory` keys its refuse-or-proceed decision
+--index N` does, and `/repacted:init prune` keys its refuse-or-proceed decision
 on it. A fix that isolates tests by making the default unreachable would refuse
 an honest user command, which damages real work rather than merely risking it.
 `TestProductionStillResolvesTheRealStore` is that guarantee.

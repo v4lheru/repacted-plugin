@@ -3,9 +3,10 @@
 
 Location: pact-plugin/bin/repact-init. Called by commands/init.md. Stdlib only.
 
-Machine part: merges templates/user-settings.example.json (the Agent Teams and task-tools flags
-and allow rules for the plugin's own bin tools) into the user settings, $CLAUDE_CONFIG_DIR/settings.json, else
-~/.claude/settings.json. Repo part (--repo): merges templates/settings.example.json (the agent
+Machine part: merges templates/user-settings.example.json (the task-tools flag and allow rules
+for the plugin's own bin tools) into the user settings, $CLAUDE_CONFIG_DIR/settings.json, else
+~/.claude/settings.json. Work runs as subagents by default; --teams also writes the Agent Teams
+flag and REPACT_EXECUTION=teams into that file's env block. Repo part (--repo): merges templates/settings.example.json (the agent
 line) into <repo>/.claude/settings.json, creates <repo>/.repacted/, and adds the task-log line to
 <repo>/.gitattributes.
 
@@ -25,6 +26,7 @@ Examples
   python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-init" --dry-run
   python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-init" --dry-run --repo
   python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-init" --yes --repo
+  python3 "${CLAUDE_PLUGIN_ROOT}/bin/repact-init" --yes --teams
 """
 from __future__ import annotations
 
@@ -47,6 +49,8 @@ sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
 from shared.paths import get_claude_config_dir  # noqa: E402
 
 USER_SEED = PLUGIN_ROOT / "templates" / "user-settings.example.json"
+# --teams: the host flag Agent Teams needs, and the execution mode that asks for it.
+TEAMS_SEED = {"env": {"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1", "REPACT_EXECUTION": "teams"}}
 REPO_SEED = PLUGIN_ROOT / "templates" / "settings.example.json"
 DOCTOR = PLUGIN_ROOT / "bin" / "repact-doctor"
 GITATTRIBUTES_LINE = ".repacted/tasks.jsonl merge=union"
@@ -150,11 +154,13 @@ def _indent_of(text: Optional[str]):
 
 
 def plan_settings(path: Path, seed_path: Path, kept: List[str],
-                  new_mode: int = 0o644) -> Optional[Change]:
-    """The merge of a seed into one settings file, None when it adds nothing. Each seed value the
-    file already sets differently is appended to `kept` as '<path>: <key> = <value> ...'."""
+                  new_mode: int = 0o644, extra: Optional[dict] = None) -> Optional[Change]:
+    """The merge of a seed (plus `extra`, merged into it) into one settings file, None when it adds
+    nothing. Each seed value the file already sets differently is appended to `kept` as
+    '<path>: <key> = <value> ...'."""
     text, mine = read_settings(path)
     seed = json.loads(seed_path.read_text(encoding="utf-8"))
+    seed = merge(seed, extra, []) if extra else seed
     notes: List[str] = []
     merged = merge(mine, seed, notes)
     kept += [f"{path}: {note}" for note in notes]
@@ -285,11 +291,15 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--repo", nargs="?", const="", default=None, metavar="PATH",
                         help="also set up a repository (default: the current one)")
     parser.add_argument("--no-doctor", action="store_true", help="skip the closing doctor run")
+    parser.add_argument("--teams", action="store_true",
+                        help="run work as Agent Teams: write the Agent Teams flag and "
+                             "REPACT_EXECUTION=teams into the user settings")
     args = parser.parse_args(argv)
     try:
         repo = repo_root(args.repo) if args.repo is not None else None
         kept: List[str] = []
-        user = plan_settings(get_claude_config_dir() / "settings.json", USER_SEED, kept, USER_MODE)
+        user = plan_settings(get_claude_config_dir() / "settings.json", USER_SEED, kept, USER_MODE,
+                             TEAMS_SEED if args.teams else None)
         changes = [user] if user is not None else []
         changes += plan_repo(repo, kept) if repo is not None else []
         print("".join(f"# kept yours: {note}\n" for note in kept), end="")

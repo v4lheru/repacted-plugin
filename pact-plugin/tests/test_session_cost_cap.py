@@ -424,9 +424,21 @@ def test_preview_states_the_median_of_past_dispatches_and_the_cap(tmp_path, monk
     assert line.endswith("estimate at list API prices, not billing.")
 
 
-def test_preview_with_too_few_dispatches_uses_the_labelled_default(tmp_path):
+def test_preview_with_few_dispatches_uses_their_median_labelled_rough(tmp_path):
     past_session(tmp_path, "past-1", [1, 2])
     line = _cost_preview.preview_line(1, SESSION, None, cwd=str(tmp_path))
-    assert f"(${_cost_preview.DEFAULT_DISPATCH_USD:.2f} each: a default: only 2 recorded" in line
+    assert "about $1.50 ($1.50 each: median of only 2 past dispatches on this machine" in line
     assert "this session so far: unknown (no transcript of this session)" in line
     assert "no session cap (PACT_SESSION_COST_CAP_USD)" in line
+
+
+def test_preview_with_no_history_says_unknown_and_never_counts_it_against_the_cap(tmp_path, monkeypatch):
+    # a made-up $4.46 per dispatch (a real coder cost about $0.10) made the
+    # autopilot lead end its run early; with nothing measured the line names no figure.
+    lead_file(tmp_path, [message("m1", ONE_MTOK_OUT)])
+    monkeypatch.setenv("PACT_SESSION_COST_CAP_USD", "21")
+    line = _cost_preview.preview_line(3, SESSION, None, cwd=str(tmp_path))
+    assert line.startswith("Cost preview: 3 dispatches, cost unknown (no recorded dispatches on "
+                           "this machine yet)"), line
+    assert "$4.46" not in line and "would pass" not in line, line
+    assert "cap $21.00 set by this machine, $1.00 left" in line

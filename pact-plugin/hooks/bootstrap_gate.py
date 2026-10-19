@@ -139,6 +139,7 @@ try:
         MARKER_SCHEMA_VERSION,
         expected_marker_signature,
         is_marker_set,
+        session_dir_unlinked,
     )
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
     # Degraded mode (#942): read-only tools defer/ask with a warning; everything else denies.
@@ -235,15 +236,18 @@ def _team_on_disk(team_name: str) -> bool:
     """Gate-local mirror of bootstrap_marker_writer._team_is_identified (the
     gate imports nothing from the writer, see TestImportDiscipline): the team
     config lists a member with a non-empty name, or, config-less, the team's
-    inboxes/ dir exists. An empty team name is never on disk."""
+    inboxes/ dir exists. An empty team name, or a symlinked team dir, config.json or
+    inboxes/, is never on disk."""
     if not team_name:
+        return False
+    team_dir = pact_context.get_claude_config_dir() / "teams" / team_name
+    if any(path.is_symlink() for path in (team_dir, team_dir / "config.json", team_dir / "inboxes")):
         return False
     for member in pact_context._iter_members(team_name):
         name = member.get("name")
         if isinstance(name, str) and name.strip():
             return True
-    teams_dir = pact_context.get_claude_config_dir() / "teams"
-    return (teams_dir / team_name / "inboxes").is_dir()
+    return (team_dir / "inboxes").is_dir()
 
 
 def _restamp_stale_marker(session_dir: Path) -> bool:
@@ -255,7 +259,7 @@ def _restamp_stale_marker(session_dir: Path) -> bool:
     signature cannot be checked. Journals and logs every re-stamp; never raises.
     """
     try:
-        if session_dir.resolve(strict=False) != session_dir.absolute():
+        if not session_dir_unlinked(session_dir):
             return False
         marker_path = session_dir / BOOTSTRAP_MARKER_NAME
         st = os.lstat(str(marker_path))

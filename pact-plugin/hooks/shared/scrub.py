@@ -7,7 +7,7 @@ Summary: The one secret detector: a pattern table (SCRUB_PATTERNS) to redact sec
          detector for caches. Imports only shared.scrub_values, so shell/ may import it.
 Used by: hooks/git_commit_check.py, hooks/output_secret_scan.py, hooks/egress_guard.py,
          hooks/env_guard.py (git egress), telegram/content_filter.py, bin/scrub-check,
-         bin/vault-find, bin/_recall/*, bin/_kb/*, shared/evidence/* (the bin ones via the
+         bin/vault-find, bin/_recall/*, bin/_kb/* (the bin ones via the
          bin/_repact_common shim). Doc: the design notes.
 Map (file order): denylist paths, denylist_configured, normalise_title, ScrubPattern and
 SCRUB_PATTERNS, SECRET_ONLY_KINDS, _matched_value, _hit, _first_heading, _code_fingerprint,

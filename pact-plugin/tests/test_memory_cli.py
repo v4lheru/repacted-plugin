@@ -3425,7 +3425,7 @@ class TestTheExitStatusSurvivesAReaderLessPipe:
     def test_a_broken_stderr_keeps_the_refusal_code_distinct(self, cli_script_path, tmp_path):
         """RED BEFORE THE FIX: exit 120, which erases the refusal code.
 
-        THE CONSUMER IS REAL. This refusal exits 2, and `/repacted:prune-memory`
+        THE CONSUMER IS REAL. This refusal exits 2, and `/repacted:init prune`
         reads that code to choose between refuse and proceed. Exit 120 is the
         finalization status of the interpreter and carries no exit code of ours,
         so a caller cannot separate a REFUSAL from a generic failure.

@@ -3,7 +3,8 @@ Location: pact-plugin/hooks/shared/unattended.py
 Summary: Unattended mode. The switch (a flag file in the session directory, else the
          REPACT_UNATTENDED environment variable) and the classifier that sorts the
          questions of one AskUserQuestion call into always-ask and default.
-Used by: hooks/unattended_gate.py, hooks/session_init.py, bin/repact-unattended.
+Used by: hooks/unattended_gate.py, hooks/session_init.py, bin/repact-unattended; controls_on by
+hooks/write_checks.py, shared/task_log/bridge.py and shared/task_log/close_gate.py.
 
 Standard library only and no import from the `shared` package. It writes no journal
 row and reaches nothing outside the session directory: the callers journal.
@@ -12,6 +13,13 @@ THE SWITCH. A well-formed flag file wins over the environment, so `repact-unatte
 off` works without a restart. No flag file: the environment decides. A flag that
 cannot be read or parsed reads OFF, also when the environment says 1. OFF is the safe
 direction: the question then reaches the terminal and nothing is chosen by default.
+
+THE CONTROLS (controls_on) read the other way round, and they are STICKY:
+once a session was unattended (the flag turned on, or the session started with
+REPACT_UNATTENDED on) a marker file (STICKY_NAME) stays in its session directory, and
+while it is there the controls read ON whatever the environment or the flag say, also
+when the flag is missing or rewritten. Only the owner's `repact-unattended off` at their
+own terminal clears it (shared/owner_terminal.py); a new session starts fresh.
 
 THE CLASSIFIER. It is lexical and it defaults only what it can show to be local and
 reversible. A question is `default` only when ALL of this holds: its fields have the
@@ -46,6 +54,7 @@ from typing import Any, Mapping, NamedTuple
 
 ENV_NAME = "REPACT_UNATTENDED"
 FLAG_NAME = "unattended.json"
+STICKY_NAME = "unattended.sticky.json"
 GATE_NAME = "unattended_gate"
 
 CLASS_ALWAYS_ASK = "always_ask"
@@ -275,8 +284,73 @@ def read_mode(session_dir: str, environ: Mapping[str, str] | None = None) -> Mod
     return Mode(False, "unset")
 
 
+def controls_on(session_dir: str, environ: Mapping[str, str] | None = None) -> Mode:
+    """Whether the evidence controls apply: ON when the environment OR the flag
+    says on, and a flag that cannot be read or parsed reads ON. read_mode is the question switch,
+    where OFF is the safe side; for the controls that keep unattended work honest, ON is.
+    A session that was unattended stays ON (the sticky marker): an environment of
+    0, a flag turned off from inside the session, or a missing flag never turns it off."""
+    value = (os.environ if environ is None else environ).get(ENV_NAME)
+    if isinstance(value, str) and value.strip().casefold() in _ENV_ON:
+        return Mode(True, "env")
+    usable = bool(session_dir) and isinstance(session_dir, str)
+    try:
+        flag = _read_flag(session_dir) if usable else None
+    except Exception:  # noqa: BLE001 - a read that cannot finish reads ON here
+        flag = Mode(False, "flag_unreadable")
+    if flag is not None and (flag.on or flag.cause in INVALID_CAUSES):
+        return Mode(True, flag.cause)
+    if usable and was_unattended(session_dir):
+        return Mode(True, "sticky")
+    return flag if flag is not None else Mode(False, "unset")
+
+
+def sticky_path(session_dir: str) -> str:
+    return os.path.join(session_dir, STICKY_NAME)
+
+
+def was_unattended(session_dir: str) -> bool:
+    """Whether the session's sticky marker is there. Any entry counts (a directory, a link, an
+    unreadable file): a marker that cannot be judged reads ON. Never raises."""
+    try:
+        os.lstat(sticky_path(session_dir))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, TypeError):
+        return True
+    return True
+
+
+def mark_sticky(session_dir: str, at: str, cause: str) -> bool:
+    """Leave the sticky marker (0o600) once; True when it is there afterwards. Never raises:
+    the callers (the flag write, the session start) must not fail on it."""
+    if not session_dir or not os.path.isdir(session_dir):
+        return False
+    if was_unattended(session_dir):
+        return True
+    body = json.dumps({"v": 1, "since": at, "cause": str(cause)[:20]}) + "\n"
+    try:
+        fd = os.open(sticky_path(session_dir), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+    except FileExistsError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def clear_sticky(session_dir: str) -> None:
+    """Remove the sticky marker: the owner's `repact-unattended off` only. Raises OSError."""
+    try:
+        os.unlink(sticky_path(session_dir))
+    except FileNotFoundError:
+        pass
+
+
 def write_flag(session_dir: str, on: bool, at: str) -> str:
-    """Write the flag atomically (0o600) and return its path. Raises OSError."""
+    """Write the flag atomically (0o600) and return its path; turning it on also leaves the
+    sticky marker. Turning it off leaves the marker (clear_sticky is the owner's). Raises OSError."""
     if not os.path.isdir(session_dir):
         raise NotADirectoryError(session_dir)
     body = json.dumps({"v": 1, "unattended": bool(on), "at": at, "by": "command"}) + "\n"
@@ -291,6 +365,8 @@ def write_flag(session_dir: str, on: bool, at: str) -> str:
         except OSError:
             pass
         raise
+    if on:
+        mark_sticky(session_dir, at, "flag")
     return flag_path(session_dir)
 
 

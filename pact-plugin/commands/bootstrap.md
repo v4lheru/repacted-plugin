@@ -4,6 +4,8 @@ description: Run at session start to reconnect the agent team and show any pause
 
 # Session-Start Ritual
 
+> **Agent Teams only.** This ritual reconnects a team, so it applies when the session runs as Agent Teams (`/repacted:init --teams`, or `"execution": "teams"` in `.repacted/policy.json`). In the default subagent mode the bootstrap hooks are off and nothing waits on it.
+
 The persona's Session-Start Ritual is the contract. Run the steps in order. Commands use `{team_name}`, `{session_dir}`, `{plugin_root}`, `{config_dir}` as literal brace-wrapped placeholders, replaced by hand; hook-delivered values win over the `CLAUDE.md` Current Session block, and `{config_dir}` is `$CLAUDE_CONFIG_DIR` if set, else `$HOME/.claude`. Detail: `reference/bootstrap/details.md`.
 
 ## Step 1 — Identify the session team
@@ -18,7 +20,7 @@ Do NOT spawn the secretary here: `session_init` computes the session briefing it
 2. `TaskUpdate(task_id, owner="secretary")`
 3. `Agent(name="secretary", team_name="{team_name}", subagent_type="pact-secretary", description="Spawn session secretary", prompt="YOUR PACT ROLE: teammate (secretary).\n\nYou are joining team {team_name}. As your FIRST action, Invoke Skill(\"repacted:teammate\") to record your identity. Then check `TaskList` for tasks assigned to you.")`
 
-The name `secretary` is load-bearing; reuse a live one. respawn it after `/repacted:refresh`, BEFORE any `SendMessage`: a send to the stopped name resurrects its stale pre-refresh transcript.
+The name `secretary` is load-bearing; reuse a live one. respawn it after `/repacted:pause checkpoint`, BEFORE any `SendMessage`: a send to the stopped name resurrects its stale pre-checkpoint transcript.
 
 ## Step 3 — Surface paused state
 

@@ -20,8 +20,6 @@ from pathlib import Path
 
 import pytest
 
-import amendment_gate
-import handoff_ordering_gate
 from shared import stored_line as rules
 from shared.payload_digest import payload_digest
 
@@ -158,52 +156,13 @@ class TestAfterWrite:
 
 
 class TestTheThreeOutcomesReadDifferently:
-    def test_allowed_and_on_disk(self, root):
-        (root["tasks"] / "7.json").write_text(json.dumps(task({"handoff": HANDOFF})))
-        code, text = run_hook(root, "evidence_gate.py", "PostToolUse", "7", {"handoff": HANDOFF})
-        assert code == 0 and text == HANDOFF_LINE
 
-    def test_allowed_and_the_file_does_not_hold_it(self, root):
-        (root["tasks"] / "7.json").write_text(json.dumps(task({})))
-        code, text = run_hook(root, "evidence_gate.py", "PostToolUse", "7", {"handoff": HANDOFF})
-        assert code == 0 and text.startswith(f"NOT STORED: the HANDOFF write on #7 {ALLOWED} the task file holds no HANDOFF")
 
-    @pytest.mark.parametrize("content", ["{not json", "", "[]"])
-    def test_allowed_and_the_task_file_cannot_be_parsed(self, root, content):
-        (root["tasks"] / "7.json").write_text(content)
-        code, text = run_hook(root, "evidence_gate.py", "PostToolUse", "7", {"handoff": HANDOFF})
-        assert code == 0 and f"{ALLOWED} the task file is missing or cannot be read. Do not notify." in text
 
-    def test_allowed_and_no_task_file_of_that_id_exists(self, root):
-        code, text = run_hook(root, "evidence_gate.py", "PostToolUse", "404", {"teachback_submit": TEACHBACK})
-        assert code == 0 and text.startswith(f"NOT STORED: the teachback write on #404 {ALLOWED}")
 
-    def test_noted_not_refused_by_the_uncertainty_check(self, root):
-        """1.4.1 U11: an undisposed uncertainty item is a note; the write is allowed, never NOT STORED."""
-        (root["tasks"] / "7.json").write_text(json.dumps(task({})))
-        handoff = dict(HANDOFF, uncertainty=["may be slow under load"])
-        code, text = run_hook(root, "write_checks.py", "PreToolUse", "7", {"handoff": handoff})
-        assert code == 0 and "1 uncertainty item(s) with no disposition (uncertainty[0])" in text
-        assert REFUSED not in text and not text.startswith(STORED)
 
-    def test_noted_not_refused_by_the_amendment_check(self, root):
-        """1.4.1 U11: the shipped amendment check is a note too."""
-        (root["tasks"] / "7.json").write_text(json.dumps(task({"amend_1": "Diff the types against the contract."})))
-        code, text = run_hook(root, "amendment_gate.py", "PreToolUse", "7", {"handoff": HANDOFF})
-        assert code == 0 and "1 amendment(s) with no disposition in handoff.amendments (amend_1)" in text
-        assert REFUSED not in text
 
-    @pytest.mark.parametrize("rev", ["final-1", 0, -1, 2**53, 1.5, True])
-    def test_refused_by_the_rev_type_check(self, rev):
-        reason = handoff_ordering_gate._evaluate_handoff_rev(
-            {"tool_name": "TaskUpdate", "tool_input": {"taskId": "7", "metadata": {"handoff": dict(HANDOFF, rev=rev)}}})
-        assert "returned, nothing was written" in reason and reason.endswith(rules.refused("handoff", "7"))
 
-    @pytest.mark.parametrize("handoff", [json.dumps(HANDOFF), [HANDOFF], "done"])
-    def test_refused_because_the_handoff_is_not_an_object(self, handoff):
-        reason = handoff_ordering_gate._evaluate_handoff_rev(
-            {"tool_name": "TaskUpdate", "tool_input": {"taskId": "7", "metadata": {"handoff": handoff}}})
-        assert reason == handoff_ordering_gate._HANDOFF_SHAPE_REASON and reason.endswith(rules.refused("handoff"))
 
     def test_the_refused_line_and_the_stored_line_cannot_be_confused(self):
         refused = rules.refused("handoff", "7")
@@ -212,22 +171,8 @@ class TestTheThreeOutcomesReadDifferently:
         assert rules.refused("teachback_submit", "7").startswith("NOT STORED: the teachback write on #7 was refused")
         assert 'only after the line "Teachback stored on #7"' in rules.refused("teachback_submit", "7")
 
-    def test_a_deny_does_not_depend_on_the_line(self, monkeypatch):
-        """With hooks/shared/stored_line.py unloadable the write is still refused, without the line."""
-        import shared
-        monkeypatch.delattr(shared, "stored_line")
-        monkeypatch.setitem(sys.modules, "shared.stored_line", None)
-        assert amendment_gate.not_stored("7") == ""
 
 
-class TestEveryOtherUpdateGetsNoLine:
-    @pytest.mark.parametrize("metadata", [{"intentional_wait": {"reason": "x"}}, {"handoff": None}, {"handoff": {}},
-                                          {"memory_saved": True}, {"amend_1": None}, {"amend_01": "text"},
-                                          {"amendment": "text"}, {"handoff_rejection": None},
-                                          {"handoff_rejection_notes": "text"}])
-    def test_no_line(self, root, metadata):
-        (root["tasks"] / "7.json").write_text(json.dumps(task({"handoff": HANDOFF})))
-        assert run_hook(root, "evidence_gate.py", "PostToolUse", "7", metadata) == (0, "")
 
 
 REJECTION = {"reason": "The gate test is missing.", "corrections": ["Add it."],
@@ -291,26 +236,4 @@ class TestDirectiveLine:
         assert line.endswith('send the wake only after the line "Rejection stored on #7".')
 
 
-class TestDirectiveLineFromTheHook:
-    def test_the_lead_gets_the_stored_line_for_a_rejection_and_an_amendment(self, root):
-        stored = task({"handoff": HANDOFF, "handoff_rejection": REJECTION, "amend_1": AMENDMENT})
-        (root["tasks"] / "7.json").write_text(json.dumps(stored))
-        code, text = run_hook(root, "evidence_gate.py", "PostToolUse", "7",
-                              {"handoff_rejection": REJECTION, "amend_1": AMENDMENT})
-        assert code == 0 and len(text.splitlines()) == 2
-        assert f"Rejection stored on #7 (owner coder-a): revision 2, digest {payload_digest(REJECTION)}" in text
-        assert f"Amendment amend_1 stored on #7 (owner coder-a): digest {payload_digest(AMENDMENT)}" in text
 
-    def test_a_directive_the_file_does_not_hold_is_not_stored(self, root):
-        (root["tasks"] / "7.json").write_text(json.dumps(task({"handoff": HANDOFF})))
-        code, text = run_hook(root, "evidence_gate.py", "PostToolUse", "7", {"amend_1": AMENDMENT})
-        assert code == 0 and text.startswith("NOT STORED: the amendment write on #7 was allowed, but")
-
-    def test_a_handoff_write_keeps_its_one_line(self, root):
-        (root["tasks"] / "7.json").write_text(json.dumps(task({"handoff": HANDOFF})))
-        assert run_hook(root, "evidence_gate.py", "PostToolUse", "7", {"handoff": HANDOFF}) == (0, HANDOFF_LINE)
-
-    def test_the_gate_returns_a_malformed_rejection_before_it_is_written(self, root):
-        (root["tasks"] / "7.json").write_text(json.dumps(task({"handoff": HANDOFF})))
-        code, text = run_hook(root, "amendment_gate.py", "PreToolUse", "7", {"handoff_rejection": {"rev": 1}})
-        assert code == 2 and text.splitlines()[-1].startswith("NOT STORED: the rejection write on #7 was refused")

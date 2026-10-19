@@ -133,7 +133,7 @@ Should show 4 entries: main directory + 3 sub-scope worktrees:
 - Contract items fulfilled
 - Any cross-scope dependencies discovered
 
-**Failure handling**: If one sub-scope fails, sibling scopes continue. The failed scope routes through `/repacted:imPACT` independently.
+**Failure handling**: If one sub-scope fails, sibling scopes continue. The failed scope routes through blocker triage (`reference/decide/blocker-triage.md`) independently.
 
 ### Step 8: Observe CONSOLIDATE Phase
 

@@ -161,8 +161,12 @@ def session(tmp_path, monkeypatch):
 
 
 def run(script, *args):
+    """repact-status is Agent Teams only, so its runs set the Teams mode and the host flag."""
+    env = dict(os.environ)
+    if script == "repact-status":
+        env.update(REPACT_EXECUTION="teams", CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="1")
     return subprocess.run([sys.executable, str(BIN / script), *args], capture_output=True, text=True,
-                          env=dict(os.environ), timeout=60)
+                          env=env, timeout=60)
 
 
 # --------------------------------------------------------------------------- reader
@@ -385,6 +389,8 @@ def _user_actions():
 @pytest.mark.parametrize("task, is_open", [
     ({"status": "pending", "subject": "ALERT: SECURITY: tokens in args"}, True),
     ({"status": "in_progress", "subject": "HALT DATA: PII in logs"}, True),
+    ({"status": "in_progress", "subject": "STOP: DATA: PII in logs"}, True),
+    ({"status": "pending", "subject": "STOPPED the build"}, False),
     ({"status": "pending", "subject": "BLOCKER: sandbox token at its limit"}, True),
     ({"status": "pending", "subject": "RELEASE GATE: benchmark a local judge"}, True),
     ({"status": "pending", "subject": "quality breach", "metadata": {"type": "algedonic"}}, True),

@@ -62,6 +62,14 @@ _TEAM = "pact-test"
 _NAME = "tester"
 
 
+@pytest.fixture(autouse=True)
+def teams_mode(monkeypatch):
+    """Rules (6)-(8b) are Agent Teams rules (shared/execution.py): these tests run them in
+    teams mode. The subagents-mode tests at the end clear it."""
+    monkeypatch.setenv("REPACT_EXECUTION", "teams")
+    monkeypatch.setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
+
+
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -160,7 +168,7 @@ def _seed_team(home: Path, team_name=_TEAM, members=(), tasks=()):
     tasks_dir.mkdir(parents=True, exist_ok=True)
     for i, (owner, status) in enumerate(tasks):
         (tasks_dir / f"task_{i}.json").write_text(
-            json.dumps({"id": str(i), "owner": owner, "status": status}),
+            json.dumps({"id": str(i), "owner": owner, "metadata": {"dispatch": {"name": owner}}, "status": status}),
             encoding="utf-8",
         )
 
@@ -653,7 +661,8 @@ def test_rule_6_tells_a_registered_teammate_to_ask_the_team_lead_in_a_fresh_proc
     )
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_")}
     env.update(HOME=str(tmp_path), CLAUDE_CONFIG_DIR=str(tmp_path / ".claude"),
-               CLAUDE_PLUGIN_ROOT=str(plugin), PYTHONPATH=str(plugin / "hooks"))
+               CLAUDE_PLUGIN_ROOT=str(plugin), PYTHONPATH=str(plugin / "hooks"),
+               CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="1")
 
     proc = subprocess.run([sys.executable, "-c", harness], input=json.dumps(frame),
                           capture_output=True, text=True, timeout=60, env=env)
@@ -676,7 +685,7 @@ def test_deny_when_no_task_for_owner(tmp_path, monkeypatch, capsys):
     code, out = _run_main(_make_input(), capsys)
     assert code == 2
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason
+    assert "no task dispatched" in reason
 
 
 def test_deny_when_task_owner_differs(tmp_path, monkeypatch, capsys):
@@ -685,7 +694,7 @@ def test_deny_when_task_owner_differs(tmp_path, monkeypatch, capsys):
     code, out = _run_main(_make_input(), capsys)
     assert code == 2
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason
+    assert "no task dispatched" in reason
 
 
 def test_deny_when_task_completed_only(tmp_path, monkeypatch, capsys):
@@ -695,7 +704,7 @@ def test_deny_when_task_completed_only(tmp_path, monkeypatch, capsys):
     _full_setup(monkeypatch, tmp_path, tasks=((_NAME, "completed"),))
     code, out = _run_main(_make_input(), capsys)
     assert code == 2
-    assert "no Task assigned" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no task dispatched" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 # =============================================================================
@@ -753,6 +762,31 @@ def test_warn_when_prompt_lacks_task_reference(tmp_path, monkeypatch, capsys):
     assert "additionalContext" in hso
     assert "prompt is long" in hso["additionalContext"] \
         or "lacks a TaskList reference" in hso["additionalContext"]
+
+
+def test_the_brief_prompt_dispatch_prints_is_not_an_inline_mission(tmp_path, monkeypatch, capsys):
+    """Rule (9) exempts `Read <session dir>/briefs/<id>.md and do what it says.`; one word
+    more and the heuristic applies again."""
+    import dispatch_gate
+
+    monkeypatch.setattr(dispatch_gate, "INLINE_MISSION_MODE", "deny")
+    _full_setup(monkeypatch, tmp_path)
+    brief = f"Read {tmp_path}/sessions/s1/briefs/7.md and do what it says."
+    code, out = _run_main(_make_input(prompt=brief), capsys)
+    assert code == 0 and "additionalContext" not in out.get("hookSpecificOutput", {})
+    code, out = _run_main(_make_input(prompt=brief + " Also refactor X."), capsys)
+    assert code == 2
+
+
+def test_an_owner_without_a_dispatch_is_no_task(tmp_path, monkeypatch, capsys):
+    """Rule (8) reads metadata.dispatch.name: a hand-made task owned by the name is not one."""
+    _full_setup(monkeypatch, tmp_path, tasks=())
+    tasks_dir = tmp_path / ".claude" / "tasks" / _TEAM
+    (tasks_dir / "task_0.json").write_text(
+        json.dumps({"id": "0", "owner": _NAME, "status": "in_progress"}), encoding="utf-8")
+    code, out = _run_main(_make_input(), capsys)
+    assert code == 2
+    assert "no task dispatched" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_warn_when_prompt_exceeds_800_chars(tmp_path, monkeypatch, capsys):
@@ -1211,7 +1245,7 @@ def test_canonical_path_satisfies_no_task_assigned(tmp_path, monkeypatch):
     canonical = tmp_path / ".claude" / "tasks" / _TEAM
     canonical.mkdir(parents=True)
     (canonical / "1.json").write_text(
-        json.dumps({"id": "1", "owner": _NAME, "status": "pending"}),
+        json.dumps({"id": "1", "owner": _NAME, "metadata": {"dispatch": {"name": _NAME}}, "status": "pending"}),
         encoding="utf-8",
     )
     legacy = tmp_path / ".claude" / "teams" / _TEAM / "tasks"
@@ -1231,7 +1265,7 @@ def test_legacy_path_alone_does_not_satisfy_no_task_assigned(tmp_path, monkeypat
     legacy = tmp_path / ".claude" / "teams" / _TEAM / "tasks"
     legacy.mkdir(parents=True)
     (legacy / "1.json").write_text(
-        json.dumps({"id": "1", "owner": _NAME, "status": "pending"}),
+        json.dumps({"id": "1", "owner": _NAME, "metadata": {"dispatch": {"name": _NAME}}, "status": "pending"}),
         encoding="utf-8",
     )
     canonical = tmp_path / ".claude" / "tasks" / _TEAM
@@ -1252,7 +1286,7 @@ def test_canonical_path_aligns_with_task_utils(tmp_path, monkeypatch):
     canonical = tmp_path / ".claude" / "tasks" / _TEAM
     canonical.mkdir(parents=True)
     (canonical / "1.json").write_text(
-        json.dumps({"id": "1", "owner": _NAME, "status": "pending"}),
+        json.dumps({"id": "1", "owner": _NAME, "metadata": {"dispatch": {"name": _NAME}}, "status": "pending"}),
         encoding="utf-8",
     )
 
@@ -1525,3 +1559,25 @@ def test_an_empty_session_team_is_still_the_rule_6_deny(tmp_path, monkeypatch, c
     _full_setup(monkeypatch, tmp_path, team_name="")
     code, out = _run_main(_make_input(), capsys)
     assert code == 2 and "team_name is unavailable" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# =============================================================================
+# subagents mode — the Agent Teams rules (6) teammate branch, (7) and (8b) are skipped
+# =============================================================================
+
+def test_subagents_mode_skips_member_uniqueness_and_the_team_file_advisory(
+        tmp_path, monkeypatch, capsys):
+    import dispatch_gate
+    monkeypatch.setenv("REPACT_EXECUTION", "subagents")
+    _full_setup(monkeypatch, tmp_path, members=(_NAME,), tasks=((_NAME, "pending"),))
+    _drop_team_config(tmp_path)
+    decision, reason, rule = dispatch_gate.evaluate_dispatch(_make_input()["tool_input"], {})
+    assert rule not in ("name_not_unique", "team_config_absent"), reason
+
+
+def test_subagents_mode_keeps_the_task_assigned_rule(tmp_path, monkeypatch, capsys):
+    import dispatch_gate
+    monkeypatch.setenv("REPACT_EXECUTION", "subagents")
+    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
+    decision, _reason, rule = dispatch_gate.evaluate_dispatch(_make_input()["tool_input"], {})
+    assert (decision, rule) == ("DENY", "no_task_assigned")

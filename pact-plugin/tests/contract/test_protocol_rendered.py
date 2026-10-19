@@ -91,10 +91,7 @@ WAKE_VERB_SLOT = "<" + "|".join(WAKE_VERBS) + ">"
 LEAD_TEMPLATE = re.compile(r"\[team-lead→<(\w+)>\] [^`\"]{0,90}")
 ID_SLOTS = ("<id>", "<A_id>")
 # Every file that teaches the wake. A carrier that loses its line fails the second test below.
-WAKE_CARRIERS = ("agents/pact-orchestrator.md", "protocols/completion.md",
-                 "reference/dispatch/teachback-gated-dispatch.md",
-                 "skills/teammate/references/teammate-waiting.md",
-                 "skills/teammate/references/teammate-handoff.md")
+WAKE_CARRIERS = ("skills/teammate/references/teammate-waiting.md",)
 # Wording of the retired second channel, lower case, matched on text with backticks and line
 # wraps removed so a re-wrap or an inline-code rendering cannot hide one.
 RETIRED_CHANNEL = ("rejection-payload", "payload verbatim", "carrying the rejection payload",
@@ -142,10 +139,12 @@ def test_no_prose_tells_the_lead_to_carry_a_value_in_a_message():
 
 def test_the_wait_and_the_readers_name_every_directive_carrier():
     assert pd.WAIT_COMMAND == "repact-wait <id> --until completed,rejection,amend"
-    assert pd.REJECTION_READER == "repact-payload <id> --key rejection"
-    assert pd.AMEND_READER == "repact-payload <id> --key amend"
+    assert pd.REJECTION_READER == "repact inspect <id> --key rejection"
+    assert pd.AMEND_READER == "repact inspect <id> --key amend_<n>"
     skill = read(PLUGIN_ROOT / "skills/teammate/SKILL.md")
-    assert skill.count(pd.WAIT_COMMAND) == 2 and pd.REJECTION_READER in skill
+    assert "repact submit" in skill and pd.REJECTION_READER in skill and pd.AMEND_READER in skill
+    waiting = read(PLUGIN_ROOT / "skills/teammate/references/teammate-waiting.md")
+    assert pd.WAIT_COMMAND in waiting  # Teams mode only: a subagent never waits
 
 
 # --- 2. descriptor vs validators ----------------------------------------------------------------

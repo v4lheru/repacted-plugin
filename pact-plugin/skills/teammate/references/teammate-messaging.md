@@ -1,6 +1,8 @@
-# Messaging (full reference)
+# Messaging (Teams mode only)
 
-Not on the happy path: the channel check, the prefix, the plain-English rule and the Pre-Send Self-Check are in [SKILL.md](../SKILL.md#pre-response-channel-check). Read this file when a message crossed or needs a correction or a resend, when you raise a BLOCKER or ALGEDONIC signal, when you chain-read an upstream task, or when you are unsure which channel a reply needs.
+**Teams mode only.** This page applies only when you run as an Agent Teams teammate (your spawn context names a team). In the default subagent mode you have no peers to message: your final message is your report, and a rejection or amendment reaches you when the lead resumes you.
+
+Read this file when a message crossed or needs a correction or a resend, when you raise a BLOCKER or a stop signal (HALT or ALERT), when you chain-read an upstream task, or when you are unsure which channel a reply needs.
 
 ## Pre-Response Channel Check (full)
 
@@ -69,10 +71,10 @@ Before every outbound `SendMessage` (to a peer or to the team-lead), run through
 4. **Could this go peer-to-peer**, instead of routing through the team-lead?
 5. **Have I verified my framing against the final output** (the doc, the HANDOFF, the diagnostic file), not an interim progress signal? Progress signals are pre-revision snapshots. *(Failure shape: a peer's mid-task progress signal flags concern X; their final HANDOFF resolves X; a message sent off the progress signal lands as obsolete.)*
 
-The response-START gate that runs before this check is [SKILL.md §Pre-Response Channel Check](../SKILL.md#pre-response-channel-check).
+The response-START gate that runs before this check is [§Pre-Response Channel Check](#pre-response-channel-check-full).
 
-### Algedonic-Signal Latency Caveat
-> See [lead-reference.md §Algedonic-Signal Latency Caveat](../../../protocols/lead-reference.md#algedonic-signal-latency-caveat): a HALT has idle-boundary latency like any message; only the user can interrupt mid-turn.
+### Stop-Signal Latency Caveat
+> See [lead-reference.md](../../../protocols/lead-reference.md#stop-signal-latency): a stop has idle-boundary latency like any message; only the user can interrupt mid-turn.
 
 ## Message Prefix Convention
 
@@ -95,7 +97,7 @@ in your task description.
 - You discover something affecting a peer's scope (breaking change, shared dependency)
 
 **Message the team-lead when:**
-- Blockers, algedonic signals, completion summaries (always)
+- Blockers, stop signals (HALT, ALERT), the one line after each submit (always)
 - Questions about scope, priorities, or requirements
 - Anything requiring a decision above your authority
 
@@ -149,7 +151,7 @@ When the team-lead requests progress monitoring in your dispatch, send brief pro
 ## Variety Signals
 
 If task complexity differs significantly from what was delegated:
-- "Simpler than expected" — Note in handoff; team-lead may simplify remaining work
+- "Simpler than expected" — Note it in the HANDOFF; team-lead may simplify remaining work
 - "More complex than expected" — Escalate if scope change >20%, or note for team-lead
 
 ## Written output
@@ -164,10 +166,10 @@ If you cannot proceed:
 2. **`SendMessage`** the blocker to the team-lead:
    ```
    SendMessage(to="team-lead",
-     message="[{sender}→team-lead] BLOCKER: {description of what is blocking you}\n\nPartial HANDOFF:\n...",
+     message="[{sender}→team-lead] BLOCKER: {description of what is blocking you}",
      summary="BLOCKER: [brief description]")
    ```
-3. Provide a partial HANDOFF with whatever work you completed
+3. Hand in what you completed with `repact submit`, each unfinished step in `open_questions` opening `remaining:`
 4. Wait for team-lead's response or new instructions
 
 A blocker report is a protocol-boundary message: re-read your task file first — an
@@ -176,20 +178,20 @@ A blocker report is a protocol-boundary message: re-read your task file first �
 Do not attempt to work around the blocker.
 
 
-## Algedonic Signals
+## Stop Signals
 
-When you detect a viability threat (security, data integrity, ethics):
+When you find a threat to the project itself (security, data integrity, ethics):
 
 1. **Stop work immediately**
 2. **`SendMessage`** the signal to the team-lead:
    ```
    SendMessage(to="team-lead",
-     message="[{sender}→team-lead] ⚠️ ALGEDONIC [HALT|ALERT]: {Category}\n\nIssue: ...\nEvidence: ...\nImpact: ...\nRecommended Action: ...\n\nPartial HANDOFF:\n...",
-     summary="ALGEDONIC [HALT|ALERT]: [category]")
+     message="[{sender}→team-lead] ⚠️ [HALT|ALERT] {Category}: ...\n\nEvidence: ...\nImpact: ...\nRecommended Action: ...",
+     summary="[HALT|ALERT] [category]")
    ```
-3. Provide a partial HANDOFF with whatever work you completed
+3. Hand in what you completed with `repact submit`
 
-These bypass normal triage. See the [algedonic protocol](../../../protocols/algedonic.md) for trigger categories and severity guidance: SECURITY or DATA is a HALT when exposure exists now or is unknown (exposure is any of: something deployed or reachable by real users; real user or customer data in any copy, a local one included; a secret committed, pushed, sent off the machine, or printed into a transcript, log or tool output), and an ALERT only when there is none.
+These bypass normal triage. See the [stop-signal protocol](../../../protocols/stop-signals.md) for trigger categories and severity guidance: SECURITY or DATA is a HALT when exposure exists now or is unknown (exposure is any of: something deployed or reachable by real users; real user or customer data in any copy, a local one included; a secret committed, pushed, sent off the machine, or printed into a transcript, log or tool output), and an ALERT only when there is none.
 
 ## Reading Upstream Context
 

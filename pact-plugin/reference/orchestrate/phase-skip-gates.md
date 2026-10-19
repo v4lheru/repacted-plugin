@@ -128,7 +128,7 @@ When a phase is skipped but a coder encounters a decision that would have been h
 |----------------|----------|--------|
 | **Minor** | Naming conventions, local file structure, error message wording | Coder decides, documents in commit message |
 | **Moderate** | Interface shape within your module, error handling pattern, internal component boundaries | Coder decides and implements, but flags decision with rationale in HANDOFF; orchestrator validates before next phase |
-| **Major** | New module needed, cross-module contract, architectural pattern affecting multiple components | Blocker → `/repacted:imPACT` → may need to run skipped phase |
+| **Major** | New module needed, cross-module contract, architectural pattern affecting multiple components | Blocker → blocker triage ([blocker-triage.md](../decide/blocker-triage.md)) → may need to run skipped phase |
 
 **Boundary heuristic**: If a decision affects files outside the current specialist's scope, treat it as Major.
 

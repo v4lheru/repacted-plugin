@@ -199,6 +199,8 @@ def script_summary(text: str) -> str:
     lines = text.split("\n")
     if lines and lines[0].startswith("#!"):
         lines = lines[1:]
+    if lines and lines[0].strip() == "''':'":  # bash/python polyglot opener
+        lines = lines[1:]
     while lines and not lines[0].strip():
         lines = lines[1:]
     if not lines:

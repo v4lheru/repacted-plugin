@@ -34,7 +34,7 @@ def _write_task(tasks_dir: Path, team: str, task_id: str, owner: str, status: st
     team_dir = tasks_dir / team
     team_dir.mkdir(parents=True, exist_ok=True)
     (team_dir / f"{task_id}.json").write_text(
-        json.dumps({"id": task_id, "owner": owner, "status": status}),
+        json.dumps({"id": task_id, "owner": owner, "metadata": {"dispatch": {"name": owner}}, "status": status}),
         encoding="utf-8",
     )
 
@@ -87,7 +87,7 @@ def test_symlink_escape_rejected_under_relocated_base(relocated_config, tmp_path
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "9.json").write_text(
-        json.dumps({"id": "9", "owner": owner, "status": "pending"}),
+        json.dumps({"id": "9", "owner": owner, "metadata": {"dispatch": {"name": owner}}, "status": "pending"}),
         encoding="utf-8",
     )
     tasks_dir = relocated_config / "tasks"

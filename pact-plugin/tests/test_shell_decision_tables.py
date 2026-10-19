@@ -10,7 +10,7 @@ Summary: The parity instrument of the shell lane (the design notes §3.8,
                                every declared flip must be observed, so a stale
                                declaration fails too.
            base_<sha8>.jsonl   a certification base's recorded calls (the loader serves
-                               them); here their integrity and size are pinned.
+                               them); here their integrity is pinned.
            closures.jsonl      every base row whose result the live module no longer
                                gives (tests/tools/closures.py): the certification files'
                                "the fix closed this" assertions as one table. A base row
@@ -35,14 +35,6 @@ TESTS = Path(__file__).resolve().parent
 DECISIONS = TESTS / "fixtures" / "shell" / "decisions"
 LIVE = DECISIONS / "live.jsonl"
 CLOSURES = DECISIONS / "closures.jsonl"
-# T1: the vendored bases (3.4 MB) become tables under this many bytes together.
-BASE_TABLES_CEILING = 300_000
-# 498 closures over 1,199 replayable base rows at capture (63,454 B, 2026-10-04).
-CLOSURES_CEILING = 100_000
-# The live table is a new instrument: 8,600 distinct commands with their decisions
-# (1,218,127 B at capture, 2026-10-04).
-LIVE_TABLE_CEILING = 1_300_000
-
 MODULES = {"merge": "shared.merge_guard_common", "env": "env_guard"}
 
 
@@ -118,15 +110,6 @@ def test_each_base_table_is_intact(sha8):
         f"{path.name} was captured from blob {header['blob_id']}, the loader pins "
         f"{loader._VENDORED[sha8][1]}")
     assert header["rows"] == len(body.splitlines())
-
-
-def test_table_bytes_under_their_ceilings():
-    bases = sum(p.stat().st_size for p in DECISIONS.glob("base_*.jsonl"))
-    assert bases <= BASE_TABLES_CEILING, f"base tables are {bases} B, ceiling {BASE_TABLES_CEILING}"
-    live = LIVE.stat().st_size
-    assert live <= LIVE_TABLE_CEILING, f"live.jsonl is {live} B, ceiling {LIVE_TABLE_CEILING}"
-    closures = CLOSURES.stat().st_size
-    assert closures <= CLOSURES_CEILING, f"closures.jsonl is {closures} B, ceiling {CLOSURES_CEILING}"
 
 
 def test_base_rows_agree_with_live_except_the_declared_closures():

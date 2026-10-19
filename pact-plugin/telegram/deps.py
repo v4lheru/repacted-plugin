@@ -1,8 +1,8 @@
 """
 Location: pact-plugin/telegram/deps.py
 Summary: Dependency checker and installer for the pact-telegram MCP server, and the
-         opt-in registration helpers behind /repacted:telegram-setup.
-Used by: __main__.py (pre-flight check), telegram-setup command (installation and
+         opt-in registration helpers behind /repacted:init telegram.
+Used by: __main__.py (pre-flight check), `/repacted:init telegram` (installation and
          registration, through `python3 -m telegram.deps <command>`).
 
 Checks whether required Python packages (mcp, httpx) are importable and
@@ -225,7 +225,7 @@ def get_optional_dependency_status() -> dict[str, bool]:
 
 
 # =============================================================================
-# Opt-in registration (the /repacted:telegram-setup command)
+# Opt-in registration (the /repacted:init telegram command)
 # =============================================================================
 
 def plugin_declares_server(plugin_root: Path = PLUGIN_ROOT) -> bool:

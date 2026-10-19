@@ -166,7 +166,7 @@ def _seed_team_store(config_root, *, team_name, lead_session_id, members=(),
     tasks_dir.mkdir(parents=True, exist_ok=True)
     for i, (owner, status) in enumerate(tasks):
         (tasks_dir / f"task_{i}.json").write_text(
-            json.dumps({"id": str(i), "owner": owner, "status": status}),
+            json.dumps({"id": str(i), "owner": owner, "metadata": {"dispatch": {"name": owner}}, "status": status}),
             encoding="utf-8",
         )
     return team_dir
@@ -372,7 +372,7 @@ def test_1509_idle_config_less_branch2_unstarved(tmp_path, monkeypatch,
     tasks_dir = config_root / "tasks" / OLD_SID
     tasks_dir.mkdir(parents=True, exist_ok=True)
     (tasks_dir / "task_0.json").write_text(
-        json.dumps({"id": "0", "owner": _NAME, "status": "pending"}),
+        json.dumps({"id": "0", "owner": _NAME, "metadata": {"dispatch": {"name": _NAME}}, "status": "pending"}),
         encoding="utf-8",
     )
     aged = 1  # epoch — far outside the 900 s window on any clock
@@ -428,7 +428,7 @@ def test_ii_two_candidates_stale_default_and_new_remedy(tmp_path, monkeypatch,
     code, out = _run_dispatch(_make_spawn(), capsys)
     assert code == 2, "ambiguous census must fail safe to a deny"
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason
+    assert "no task dispatched" in reason
     # The NEW remedy names the measured manual repoint...
     assert _CAUSE2_RECOVERY_MARKER in reason
     # ...and no inert bootstrap-ritual claim survives anywhere in the deny.
@@ -568,7 +568,7 @@ def test_v_branch2_witness_preempts_census(tmp_path, monkeypatch, capsys):
     tasks_dir = tmp_path / ".claude" / "tasks" / OLD_SID
     tasks_dir.mkdir(parents=True, exist_ok=True)
     (tasks_dir / "task_0.json").write_text(
-        json.dumps({"id": "0", "owner": _NAME, "status": "pending"}),
+        json.dumps({"id": "0", "owner": _NAME, "metadata": {"dispatch": {"name": _NAME}}, "status": "pending"}),
         encoding="utf-8",
     )
     # The census candidate that would win if ordering were inverted.
@@ -611,7 +611,7 @@ def test_vi_fresh_journal_never_aligns_to_foreign_candidate(
         "fresh journal + sole foreign candidate must NOT align (witness)"
     )
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "no Task assigned" in reason
+    assert "no task dispatched" in reason
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -913,7 +913,7 @@ class TestF1OwnershipBinding:
         code, out = _run_dispatch(_make_spawn(), capsys)
         assert code == 2, "scenario A must not align to the foreign team"
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "no Task assigned" in reason
+        assert "no task dispatched" in reason
         assert ctx_module.get_team_name() != FOREIGN_TEAM
 
     def test_f1b_deny_armed_witness_never_aligns(self, tmp_path, monkeypatch,

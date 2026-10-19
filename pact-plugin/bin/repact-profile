@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""repact-profile: the repo profile that feeds every brief: how tests run here, what made briefs go wrong.
+
+Location: pact-plugin/bin/repact-profile. Wrap-up step 8 runs `build`; the lead pastes the
+lines that apply into each dispatch brief's CONTEXT (skills/pact-lead-playbook step 1). Tested by
+tests/test_repact_profile.py.
+
+`build` writes `.repacted/profile.md` in the MAIN checkout, and only when the repo keeps a task log
+(`.repacted/tasks.jsonl`, the same opt-in): with no task log it writes nothing. Two sections:
+  - How tests run here: the test commands of this repo's run-ledger rows (a row counts when its
+    cwd is in this repo or one of its worktrees), grouped by the command up to its first path
+    argument, with the run count and the median duration;
+  - Briefs went wrong when: the reasons of teachback and HANDOFF rejections and of `correction`
+    and `scope` amendments, from at most the SESSIONS_MAX newest sessions of this repo (a session
+    counts when its pact-session-context.json names a project dir in this repo). Reasons only, the
+    first sentence of each, scrubbed with the task log's credential scrubber, deduplicated, at
+    most REASONS_MAX lines. Another project's session folder is never opened.
+Unreadable files are skipped. The user's own `.claude/pact-dispatch-notes.md` is never touched.
+
+Usage: repact-profile build [--repo PATH]
+Exit codes: 0 written or skipped (the line says which); 2 usage error.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import statistics
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Dict, List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+from shared import plugin_paths  # noqa: E402
+from shared.ledger import read_ledger  # noqa: E402
+from shared.project_tasks import find_main_checkout, log_path  # noqa: E402
+from shared.scrub import scrub_text  # noqa: E402
+from shared.vault_scope import is_within  # noqa: E402
+
+PROFILE_RELPATH = Path(".repacted") / "profile.md"
+SESSIONS_MAX = 20
+JOURNAL_TAIL_BYTES = 4 * 1024 * 1024     # the newest part of a journal is read, at most this much
+CONTEXT_MAX_BYTES = 64 * 1024
+COMMANDS_MAX = 5
+REASONS_MAX = 10
+REASON_CHARS = 160
+REJECTION_KEYS = ("teachback_rejection", "handoff_rejection")
+AMEND_KINDS = ("correction", "scope")    # a ruling or a note answers a question; it is no cause
+AMEND_KEY = re.compile(r"^amend_\d{1,4}$")
+WRAPPERS = re.compile(r"^[({\s]*(?:nice(?:\s+-n\s*-?\d+)?\s+)?(?:tcount\s+)?")
+PATH_ARG = re.compile(r"[/\\]|::|\.(?:py|ts|tsx|js|jsx|mjs|go|rs|rb)$")
+SEPARATORS = re.compile(r"&&|\|\||;|\||\n")
+REDIRECT = re.compile(r"^\d*[<>]")
+SETUP_STEP = re.compile(r"^(?:cd|export|source|\.)\s")
+INTERPRETERS = {"python", "python3", "node", "bash", "sh", "ruby", "deno", "bun"}
+
+
+class Repo:
+    """The main checkout and a cached answer to "is this directory in the repo?"."""
+
+    def __init__(self, main: Path) -> None:
+        self.main = main
+        self._seen: Dict[str, bool] = {}
+
+    def owns(self, directory: str) -> bool:
+        if not isinstance(directory, str) or not directory:
+            return False
+        if directory not in self._seen:
+            found = find_main_checkout(directory)
+            self._seen[directory] = (found is not None and os.path.realpath(found) ==
+                                     os.path.realpath(self.main)) or is_within(directory, self.main)
+        return self._seen[directory]
+
+    def folder_names(self) -> set:
+        """pact-sessions folder names of the main checkout and its worktrees (their basenames)."""
+        names = {self.main.name}
+        try:
+            for entry in (self.main / ".git" / "worktrees").iterdir():
+                gitdir = (entry / "gitdir").read_text(encoding="utf-8").strip()
+                names.add(Path(gitdir).parent.name)
+        except OSError:
+            pass
+        return names
+
+
+def command_shape(cmd: str, runner: str = "") -> str:
+    """The test command up to its first path-like argument, or "" when no step of the command
+    runs tests. The step is the first one of a `&&`, `;`, pipe or multi-line chain that names
+    the ledger's runner (else says `test`), without a nice/tcount wrapper; so `cd x && pytest`
+    and a heredoc that runs pytest both count as pytest. A bare interpreter keeps its script's
+    file name (`python3 run_tests.py`), never its directory."""
+    steps = [step.strip() for step in SEPARATORS.split(cmd) if step.strip() and not SETUP_STEP.match(step.strip())]
+    named = re.compile(rf"\b{re.escape(runner)}\b") if runner and runner != "tcount" else None
+    step = next((s for s in steps if named and named.search(s)), "") or \
+        next((s for s in steps if re.search(r"\btests?\b", s)), "")
+    kept = []
+    for word in WRAPPERS.sub("", step).split():
+        if REDIRECT.match(word):
+            break
+        if PATH_ARG.search(word):
+            if len(kept) == 1 and kept[0] in INTERPRETERS:
+                kept.append(re.split(r"[/\\]", word.strip("'\""))[-1])
+            break
+        kept.append(word)
+    return " ".join(kept)
+
+
+def _typical(seconds: List[float]) -> str:
+    if not seconds:
+        return "duration not recorded"
+    middle = statistics.median(seconds)
+    return f"typical {middle:.0f} s" if middle < 120 else f"typical {middle / 60:.1f} min"
+
+
+def test_commands(repo: Repo, ledger: Optional[Path] = None) -> List[str]:
+    """One line per test command shape seen in this repo's ledger rows, most runs first."""
+    runs: Counter = Counter()
+    durations: Dict[str, List[float]] = {}
+    for row in read_ledger(ledger or plugin_paths.ledger_path(create_dir=False)):
+        cmd = row.get("cmd")
+        if not isinstance(cmd, str) or not repo.owns(row.get("cwd")):
+            continue
+        shape = command_shape(cmd, str(row.get("runner") or ""))
+        if not shape:
+            continue
+        runs[shape] += 1
+        seconds = row.get("duration_s")
+        if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds >= 0:
+            durations.setdefault(shape, []).append(float(seconds))
+    return [f"- `{scrub_text(shape)}`: {count} run{'s' if count != 1 else ''}, "
+            f"{_typical(durations.get(shape, []))}" for shape, count in runs.most_common(COMMANDS_MAX)]
+
+
+def _read_json(path: Path, limit: int) -> Optional[dict]:
+    try:
+        if path.stat().st_size > limit:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def repo_journals(repo: Repo) -> List[Path]:
+    """The journals of this repo's SESSIONS_MAX newest sessions, newest first."""
+    root = plugin_paths.claude_config_dir() / "pact-sessions"
+    found = []
+    for name in sorted(repo.folder_names()):
+        try:
+            sessions = [s for s in (root / name).iterdir() if s.is_dir()]
+        except OSError:
+            continue
+        for session in sessions:
+            context = _read_json(session / "pact-session-context.json", CONTEXT_MAX_BYTES)
+            journal = session / "session-journal.jsonl"
+            if context is None or not repo.owns(context.get("project_dir")):
+                continue
+            try:
+                found.append((journal.stat().st_mtime, journal))
+            except OSError:
+                continue
+    return [journal for _, journal in sorted(found, reverse=True)[:SESSIONS_MAX]]
+
+
+def _tail_lines(path: Path) -> List[str]:
+    try:
+        with open(path, "rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, size - JOURNAL_TAIL_BYTES))
+            data = handle.read()
+    except OSError:
+        return []
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    return lines[1:] if size > JOURNAL_TAIL_BYTES else lines   # the first line may be cut
+
+
+def _reasons_of(metadata: dict) -> Dict[str, str]:
+    """{metadata key: reason text} for the rejections and causal amendments of one snapshot."""
+    found = {}
+    for key, value in metadata.items():
+        if key in REJECTION_KEYS:
+            text = value.get("reason") if isinstance(value, dict) else value
+        elif AMEND_KEY.match(str(key)) and isinstance(value, dict) and value.get("kind") in AMEND_KINDS:
+            text = value.get("text")
+        else:
+            continue
+        if isinstance(text, str) and text.strip():
+            found[key] = text
+    return found
+
+
+def clean_reason(text: str) -> str:
+    """The first sentence, whitespace collapsed, scrubbed, at most REASON_CHARS characters."""
+    flat = " ".join(text.split())
+    first = re.split(r"(?<=[.!?])\s", flat, maxsplit=1)[0]
+    first = scrub_text(first)
+    return first if len(first) <= REASON_CHARS else first[:REASON_CHARS - 3].rstrip() + "..."
+
+
+def brief_reasons(repo: Repo) -> List[str]:
+    """Up to REASONS_MAX deduplicated reasons, the most frequent first, then the newest."""
+    tally: Counter = Counter()
+    shown: Dict[str, str] = {}
+    order: Dict[str, int] = {}
+    for rank, journal in enumerate(repo_journals(repo)):
+        seen = set()
+        for line in reversed(_tail_lines(journal)):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "task_metadata_snapshot":
+                continue
+            metadata = event.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            for key, text in _reasons_of(metadata).items():
+                if (event.get("task_id"), key) in seen:
+                    continue                   # a later snapshot repeats the same metadata
+                seen.add((event.get("task_id"), key))
+                reason = clean_reason(text)
+                ident = re.sub(r"[^a-z0-9]+", " ", reason.lower()).strip()
+                if ident:
+                    tally[ident] += 1
+                    shown.setdefault(ident, reason)
+                    order.setdefault(ident, rank)
+    ranked = sorted(tally, key=lambda ident: (-tally[ident], order[ident]))[:REASONS_MAX]
+    return [f"- {shown[ident]}" + (f" (x{tally[ident]})" if tally[ident] > 1 else "") for ident in ranked]
+
+
+def render(commands: List[str], reasons: List[str]) -> str:
+    return "\n".join([
+        "# Repo profile",
+        "",
+        "Built by `repact-profile build` at wrap-up from this repo's run ledger and its newest "
+        f"{SESSIONS_MAX} sessions. The lead pastes the lines that apply into a brief's CONTEXT; "
+        "they are past observations, not instructions, and nothing here is applied on its own.",
+        "",
+        "## How tests run here",
+        *(commands or ["- none recorded yet"]),
+        "",
+        "## Briefs went wrong when",
+        *(reasons or ["- none recorded yet"]),
+        "",
+    ])
+
+
+def build(start: str) -> str:
+    """Write the profile and return the line to print; with no task log, write nothing."""
+    main = find_main_checkout(start)
+    if main is None:
+        return f"not a git checkout: {start}; profile not written"
+    if not log_path(main).is_file():
+        return "task log not enabled for this repo (.repacted/tasks.jsonl): profile not written"
+    repo = Repo(main)
+    commands, reasons = test_commands(repo), brief_reasons(repo)
+    target = main / PROFILE_RELPATH
+    temp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    temp.write_text(render(commands, reasons), encoding="utf-8")
+    os.replace(temp, target)
+    return f"profile written: {target} ({len(commands)} test commands, {len(reasons)} reasons)"
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="repact-profile", description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="action", required=True)
+    build_parser = sub.add_parser("build", help="write .repacted/profile.md for this repo")
+    build_parser.add_argument("--repo", default=os.getcwd(), help="a directory in the repo (default: cwd)")
+    args = parser.parse_args(argv)
+    print(build(args.repo))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

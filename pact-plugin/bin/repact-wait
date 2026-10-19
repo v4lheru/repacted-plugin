@@ -10,7 +10,7 @@ meanwhile is not delivered until the turn ends, so everything the waiter acts on
 It polls the file's stat every 2 s (no busy loop) and prints the time, the status, blockedBy and
 the metadata KEYS added, changed or removed since it started. It never prints a metadata value.
 When the task it returns on holds an open rejection or an undisposed amend_<n>, whatever --until
-named, a second line names the command that reads the value: next: repact-payload <id> --team
+named, a second line names the command that reads the value: next: repact inspect <id> --team
 <team> --key rejection (or --key amend). The team is the one this run waited on, so the reader
 opens the same file.
 
@@ -21,7 +21,7 @@ a *_rejection the teammate has not answered yet (a handoff_rejection whose rev i
 handoff.rev; else one whose revision_number is not below metadata.revision_number, default 1).
 amend: an amend_<n> key that handoff.amendments does not dispose. A stale record never holds; an
 unreadable one does (wake early rather than sleep through). The rejection test is
-hooks/shared/amendments.open_rejection, the one bin/repact-payload reads with.
+hooks/shared/amendments.open_rejection, the one `repact inspect --key` (bin/_front/payload.py) reads with.
 
 Team: --team, else this session's team that holds the task (the labelling registry's, then the
 session context's). Two such teams, or none, is never guessed: exit 2 naming the teams that hold
@@ -43,7 +43,8 @@ from typing import Optional
 BIN_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN_DIR))
 sys.path.insert(0, str(BIN_DIR.parent / "hooks"))
-from shared import evidence as ev  # noqa: E402
+from shared import task_files as ev  # noqa: E402
+from shared.plugin_paths import task_store  # noqa: E402
 from _repact_common import teammate_label  # noqa: E402
 from shared.amendments import open_rejection  # noqa: E402
 
@@ -61,7 +62,7 @@ POLL_SECONDS = 2.0
 _UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f]")
 _AMEND_KEY = re.compile(r"amend_\d+")
 CONDITIONS = ("completed", "rejection", "amend")
-READ_KEYS = ("rejection", "amend")      # the conditions whose value repact-payload --key prints
+READ_KEYS = ("rejection", "amend")      # the conditions whose value `repact inspect --key` prints
 
 
 class Parser(argparse.ArgumentParser):
@@ -114,7 +115,7 @@ def next_line(task_id: str, task: dict, team: str) -> Optional[str]:
     """The command that reads what the task holds for its owner (an open rejection, an
     undisposed amendment), or None. It names keys and ids only, never a value, and always the
     team this run waited on, so the reader cannot resolve a different one."""
-    commands = [f"repact-payload {task_id} --team {team} --key {name}"
+    commands = [f"repact inspect {task_id} --team {team} --key {name}"
                 for name in holding(task, READ_KEYS)]
     return "next: " + "; ".join(commands) if commands else None
 
@@ -130,7 +131,7 @@ def resolve(task_id: str) -> tuple[Optional[str], list[str]]:
         return session_teams[0], []
     if session_teams:
         return None, session_teams
-    return None, ev.task_store().teams_holding(task_id)
+    return None, task_store().teams_holding(task_id)
 
 
 def signature(path: Path) -> Optional[tuple]:

@@ -10,7 +10,7 @@ Summary: PostToolUse relay. A lead message reaches a busy in-process teammate on
          A "<resource>_grant" key (the lead's answer to a request for a shared resource)
          is handed over the same way, as a GRANT line, and so is an open
          handoff_rejection or teachback_rejection, as a REJECTION line that names the
-         reader (repact-payload <id> --key rejection), once per revision_number and rev.
+         reader (repact inspect <id> --key rejection), once per revision_number and rev.
 Used by: hooks.json PostToolUse entries for the tools a teammate uses mid-task
          (Bash|Edit|Write|Read|TaskUpdate|MultiEdit|NotebookEdit; 1.4.1, so Grep, Glob,
          MCP and task-list calls start no process for it), registered by EVENTS

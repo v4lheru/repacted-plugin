@@ -23,6 +23,7 @@ Security controls:
 from __future__ import annotations
 
 import logging
+import os
 import stat
 import subprocess
 import uuid
@@ -32,7 +33,19 @@ from typing import Any
 logger = logging.getLogger("pact-telegram.config")
 
 # Default config directory
-CONFIG_DIR = Path.home() / ".claude" / "pact-telegram"
+def _claude_config_dir() -> Path:
+    """$CLAUDE_CONFIG_DIR (blank = unset, a leading ~ is the home dir), else ~/.claude."""
+    raw = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
+    if not raw:
+        return Path.home() / ".claude"
+    if raw == "~":
+        return Path.home()
+    if raw.startswith("~/"):
+        return Path.home() / raw[2:]
+    return Path(raw)
+
+
+CONFIG_DIR = _claude_config_dir() / "pact-telegram"
 ENV_FILE = CONFIG_DIR / ".env"
 
 # Valid modes
@@ -232,13 +245,13 @@ def load_config(
     if not bot_token:
         raise ConfigError(
             "TELEGRAM_BOT_TOKEN is required. "
-            "Run /repacted:telegram-setup to configure."
+            "Run /repacted:init telegram to configure."
         )
 
     if not chat_id:
         raise ConfigError(
             "TELEGRAM_CHAT_ID is required. "
-            "Run /repacted:telegram-setup to configure."
+            "Run /repacted:init telegram to configure."
         )
 
     # Validate chat_id is numeric

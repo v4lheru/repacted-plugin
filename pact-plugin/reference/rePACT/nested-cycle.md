@@ -218,7 +218,7 @@ Implement the sub-component:
 
 **Session team**: the nested cycle dispatches into `{team_name}` too, the team the platform provisioned; never create one.
 
-Dispatch each specialist exactly as [orchestrate.md's Teachback-Gated Dispatch](../../commands/orchestrate.md#teachback-gated-dispatch) (Task A then Task B, the variety stamp on Task B, the canonical `Agent(...)` spawn), with two nested-cycle differences: the teammate name is scope-prefixed (`{scope-prefixed-name}`, e.g. `backend-coder-auth-scope`), and the subjects are `"{scope-prefixed-name}: TEACHBACK for {sub-task}"` and `"{scope-prefixed-name}: implement {sub-task}"`.
+Dispatch each specialist exactly as [orchestrate.md §Dispatch](../../commands/orchestrate.md#dispatch) (`repact dispatch`, then the `Agent(...)` call it prints), with two nested-cycle differences: the teammate name is scope-prefixed (`--name {scope-prefixed-name}`, e.g. `backend-coder-auth-scope`), and the subject is `--subject "{scope-prefixed-name}: implement {sub-task}"`.
 
 For multi-domain: spawn multiple specialists in parallel.
 Apply S2 coordination if parallel work.
@@ -287,7 +287,7 @@ This procedure is for **orchestrator-initiated** nested cycles.
 | Specialist discovers complexity | Uses Autonomy Charter (declares, executes, reports) |
 | Orchestrator identifies complex sub-task | Follows this procedure |
 
-The two share the P→A→C→T *shape*, not this document's task mechanics. A specialist's nested cycle is a mini-cycle inside its own work, reported through its HANDOFF — the Autonomy Charter defines no `TaskCreate`, no `TaskUpdate`, and no dispatch wiring, so do NOT create or wire Task A / Task B pairs from a specialist. Creating a nested team and wiring dispatches is the orchestrator's path, via this procedure.
+The two share the P→A→C→T *shape*, not this document's task mechanics. A specialist's nested cycle is a mini-cycle inside its own work, reported through its HANDOFF — the Autonomy Charter defines no `TaskCreate`, no `TaskUpdate`, and no dispatch wiring, so a specialist does NOT create or wire work tasks for its own mini-cycle. Creating a nested team and wiring dispatches is the orchestrator's path, via this procedure.
 
 If a specialist's sub-task genuinely needs its own dispatched teammates, that is a cross-domain escalation to the orchestrator, not a nested cycle to run in place.
 

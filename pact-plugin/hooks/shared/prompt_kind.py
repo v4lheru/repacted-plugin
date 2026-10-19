@@ -4,8 +4,8 @@ Summary: What kind of turn a lead's UserPromptSubmit opened (typed text, a teamm
     an idle notice, a task notification, a cron tick), the one `prompt_kind` journal row
     per prompt (kind, length, straggler flag, allowlisted tag: never the text), and the
     straggler line for an idle notice older than its sender's latest task change.
-Used by: hooks/journal_emitter.py (UserPromptSubmit). Moved out of missed_wake_scan.py in
-    the refactor core lane: these are journal writes and a prompt read, not a scan of waits.
+Used by: hooks/missed_wake_scan.py (UserPromptSubmit, Teams only), which calls it once per
+    prompt.
 """
 
 from __future__ import annotations

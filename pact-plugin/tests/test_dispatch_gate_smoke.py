@@ -122,6 +122,7 @@ def _seed_team(home: Path, team_name=_TEAM, members=(), tasks=()):
         (tasks_dir / f"task_{i}.json").write_text(json.dumps({
             "id": str(i),
             "owner": owner,
+            "metadata": {"dispatch": {"name": owner}},
             "status": status,
         }), encoding="utf-8")
 

@@ -531,7 +531,7 @@ EVERYDAY = [
     "git worktree add -q ../wt2 feat && git -C ../wt2 status # look", "git worktree list",
     "git worktree add --detach ../wt3 main",
     "git status # it's fine", "git log --oneline -5 | head -3 && git merge --no-edit feat",
-    "git stash && git pull --rebase && git stash pop", "git checkout feat && git merge main",
+    "git stash push -u -m wip-a && git pull --rebase", "git checkout feat && git merge main",
     "git switch feat && git merge main", f"git checkout -b fresh && {C} -m 'start fresh'",
     f"git switch -c fresh && {C} -m 'start fresh'", "git checkout feat && git pull",
     "git checkout feat && git rebase main", "git --no-pager log -3", "git am --abort",

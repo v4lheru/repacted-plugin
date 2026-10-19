@@ -13,7 +13,7 @@ The demo copies a tiny example project (`examples/toy/`, a word counter with one
    python3 "${CLAUDE_PLUGIN_ROOT}/examples/demo_setup.py"
    ```
 
-   On `refused` (the scratch directory would land inside the current repository, for example through a `TMPDIR` set inside it), show the line as printed and stop. Otherwise use the printed `demo dir` path in every later step. The copy is its own git repository outside the user's, so the demo skips worktree setup.
+   On `refused` (the scratch directory would land inside the current repository, for example through a `TMPDIR` set inside it), show the line as printed and stop. Otherwise use the printed `demo dir` path in every later step. The copy is its own git repository outside the user's, so the demo skips comPACT's worktree setup: the dispatch in step 4 makes the coder's worktree inside the copy.
 3. Show the failing test (expected: 1 failed, 4 passed):
 
    ```bash
@@ -21,11 +21,20 @@ The demo copies a tiny example project (`examples/toy/`, a word counter with one
    ```
 
 4. Run one `/repacted:comPACT` round as written in [comPACT.md](comPACT.md), with these choices:
-   - Task: `backend: make the failing test in <demo dir>/test_wordcount.py pass by fixing the bug in <demo dir>/wordcount.py. Do not edit the test. Work only inside <demo dir>.`
-   - Feature task `Fix the demo word count`, variety total 4, so a single-task dispatch: one `pact-backend-coder`, no teachback task. Auditor skipped: a one-line fix in a scratch copy.
-   - Pre-Invocation: skip the worktree (step 1) and the task-log write (step 4); use `<demo dir>` wherever the brief says worktree path.
-   - After the HANDOFF: run step 3's command again (expected: 5 passed), then commit in the scratch copy: `git -C "<demo dir>" -c user.name=demo -c user.email=demo@example.invalid commit -qam "Fix the word count."`. Skip the "What next?" question and the PR.
-5. Show the fix: `git -C "<demo dir>" show --stat --patch HEAD`.
+   - One specialist, `pact-backend-coder`. Mission file: `Make the failing test in test_wordcount.py pass by fixing the bug in wordcount.py. Do not edit the test.`
+   - Feature task `Fix the demo word count`, variety `1,1,1,1` (total 4, so the coder's teachback is accepted automatically). Auditor skipped: a one-line fix in a scratch copy.
+   - Before Dispatch: skip the task-log write (step 3); no `--ref`.
+   - Dispatch inside the scratch copy; this makes the coder's worktree there, never in the user's repository:
+
+     ```bash
+     "{plugin_root}/bin/repact" dispatch --repo "<demo dir>" --name demo-coder --agent pact-backend-coder \
+       --subject "Fix the demo word count" --brief-file <mission file> --variety 1,1,1,1 \
+       --kind fix --branch demo/fix-wordcount
+     ```
+
+     Make the `Agent(...)` call it prints, exactly. Use the worktree path it prints as `<work dir>` from here on. The coder fixes the bug, commits in `<work dir>` and hands in with `repact submit`.
+   - After the hand-in: `repact accept <task id>`. On a refusal, send the coder the line it prints and accept again once the coder has resubmitted. Then run step 3's command with `<work dir>` in place of `<demo dir>` (expected: 5 passed). Skip the commit (the coder made it), the "What next?" question and the PR.
+5. Show the fix: `git -C "<work dir>" show --stat --patch HEAD`.
 6. Print the session report (`{session_id}` is the last part of the session directory):
 
    ```bash

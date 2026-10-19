@@ -3,10 +3,10 @@ Location: pact-plugin/hooks/shared/amendments.py
 Summary: The amend_<n> metadata convention: one top-level task-metadata key per lead
          amendment, and the checks the HANDOFF gate applies to it (every amendment has a
          disposition; handoff.rev pins revisions; a rejection names the rev it reviewed).
-Used by: hooks/amendment_gate.py (PreToolUse TaskUpdate), hooks/amendment_relay.py
+Used by: hooks/shared/ops (submit, accept, reject, amend), hooks/amendment_relay.py
          (PostToolUse, imported only when a task carries an amendment not yet relayed),
-         hooks/teammate_idle.py (the unread-key re-prompt), bin/repact-amend, bin/repact-wait
-         and bin/repact-payload (open_rejection). Pure logic: stdlib only, no I/O.
+         hooks/teammate_idle.py (the unread-key re-prompt), bin/_repact_ops.py (`repact amend --next`), bin/repact-wait
+         and bin/_front/payload.py (open_rejection). Pure logic: stdlib only, no I/O.
 
 Why top-level keys and not a list: TaskUpdate merges metadata only at the top level, so a
 list would be replaced whole on every append. Separate keys cannot collide.
@@ -19,7 +19,7 @@ A rejection:   metadata["handoff_rejection"] or metadata["teachback_rejection"] 
                {"reason": str, "corrections": [str, ...], "since": "<utc>", "revision_number": int,
                 "rev": int}. rejection_shape_problem is the shape rule the gate returns a write on;
                open_rejection says whether the owner has answered it (bin/repact-wait and
-               bin/repact-payload share it); closed_on_arrival returns a write that would store
+               bin/_front/payload.py share it); closed_on_arrival returns a write that would store
                an answered one; unread_lines hands an open one to its owner.
 A wake:        wake_line(): the one line a lead sends after a directive is on disk (id and
                digest, never a value). The protocol descriptor's WAKE_LINE matches it.
@@ -50,7 +50,7 @@ ACK = "ack"
 # which the protocol descriptor prints.
 PARTIAL = "partial"
 # The word the retired directive_reflection mode used for enforce; read by amendment_gate's
-# gate_mode and the other way round by shared/evidence/ledger.py use_mode ('enforce' reads 'gate').
+# gate_mode and the other way round by shared/check_modes.py use_mode ('enforce' reads 'gate').
 ALIASES = {"gate": "enforce"}
 PREVIEW_CHARS = 100
 RELAY_TEXT_CHARS = 2000
@@ -288,7 +288,7 @@ def after_write(metadata: dict | None, update: dict) -> dict:
 
 def closed_on_arrival(key: str, value, metadata: dict) -> str | None:
     """One line naming the number to use when a rejection written under `key` would not be
-    open (open_rejection, the predicate bin/repact-wait and bin/repact-payload share) against
+    open (open_rejection, the predicate bin/repact-wait and bin/_front/payload.py share) against
     `metadata`, the task as it stands after the write (after_write): the waiter, the reader
     and the relay would all show nothing, so the wake would point at nothing. None for an
     open one, for a clear (None) and for a value rejection_shape_problem already returns."""
@@ -324,7 +324,7 @@ def rejection_line(key: str, task_id: str, record) -> str | None:
         return None
     shown_id = "".join(ch for ch in str(task_id) if ch.isalnum() or ch in "_-")[:RELAY_LABEL_CHARS] or "?"
     return (f"REJECTION {key} on #{shown_id}: {_one_line(record['reason'], REJECTION_TEXT_CHARS)}; "
-            f"run repact-payload {shown_id} --key rejection")
+            f"run repact inspect {shown_id} --key rejection")
 
 
 def wake_line(recipient: str, task_id: str, verb: str, digest: str) -> str:

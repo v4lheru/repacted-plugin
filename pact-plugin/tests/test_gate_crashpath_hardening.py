@@ -34,7 +34,6 @@ unchanged exact strings, twin byte-identity) — never a multi-GB
 allocation.
 """
 
-import inspect
 import io
 import json
 import sys
@@ -42,7 +41,6 @@ import sys
 import pytest
 
 import bootstrap_gate as bg  # noqa: E402
-import task_lifecycle_gate as tlg  # noqa: E402
 
 # Session-setup + frame helpers reused from the bg suite (the established
 # single-source idiom, mirroring test_task_lifecycle_gate_degraded.py's reuse
@@ -262,46 +260,6 @@ class TestStdinCaps:
         "session_id": "s",
     }
 
-    def test_tlg_main_over_cap_frame_fails_open_no_hang(self):
-        """tlg main()'s primary read is capped: an over-cap frame truncates
-        into the existing (json.JSONDecodeError, ValueError) except ->
-        _SUPPRESS_OUTPUT at exit 0 (input-side fail-open), and the call
-        returns promptly (no unbounded slurp / hang).
-
-        NON-VACUITY (discriminating, not just exit-0): the frame is a pact-*
-        TaskCreate missing variety. Under the capped read it truncates ->
-        JSONDecodeError -> bare suppress. Under an UNCAPPED read (item 2
-        reverted) the SAME frame parses and fires the variety-missing
-        advisory (output carries additionalContext, NOT suppress) — so the
-        `== _SUPPRESS_OUTPUT` assertion FAILS under revert. The in-bounds
-        control proves the advisory genuinely fires when the frame IS parsed
-        (so the test is not green merely because the advisory never fires).
-        """
-        cap = tlg._STDIN_READ_MAX
-        text = _over_cap_frame(cap, self._ADVISORY_BEARING_BASE)
-        # Reverted-item-2 control: the full frame is valid JSON (so the cap,
-        # not malformed input, is what truncates under the capped read).
-        assert json.loads(text)["tool_name"] == "TaskCreate"
-
-        code, out = _run_main_with_stdin(tlg, text)
-        assert code == 0
-        assert json.loads(out.strip()) == json.loads(tlg._SUPPRESS_OUTPUT), (
-            "over-cap frame must truncate to the suppress branch; an uncapped "
-            "read would parse it and fire the variety-missing advisory instead"
-        )
-
-        # In-bounds control: the SAME frame WITHOUT the over-cap pad parses
-        # and DOES fire the advisory — confirming the advisory is a real
-        # discriminator the over-cap suppress above is hiding.
-        in_bounds = json.dumps(self._ADVISORY_BEARING_BASE)
-        code2, out2 = _run_main_with_stdin(tlg, in_bounds)
-        assert code2 == 0
-        assert "additionalContext" in json.loads(out2.strip()).get(
-            "hookSpecificOutput", {}
-        ), (
-            "in-bounds control must fire the variety-missing advisory, proving "
-            "the over-cap suppress disposition is caused by the cap"
-        )
 
     def test_bg_main_over_cap_frame_fails_open_no_hang(
         self, monkeypatch, tmp_path,
@@ -381,34 +339,6 @@ class TestStdinCaps:
             sys.stdin = old_in
 
 
-class TestStdinCapTwinValues:
-
-    def test_stdin_read_max_twin_value_matches(self):
-        """The _STDIN_READ_MAX constant is twin-copied into both hooks (no
-        shared module). The two literals MUST stay equal AND equal the
-        documented 8 MB value.
-
-        NON-VACUITY: this is a value-equality pin, not a guard — a future
-        edit to one side's literal (e.g. bg bumped to 16 MB) makes the
-        equality FALSE. The ==8388608 anchor additionally catches BOTH sides
-        drifting together away from the documented value.
-        """
-        assert tlg._STDIN_READ_MAX == bg._STDIN_READ_MAX, (
-            "_STDIN_READ_MAX drift between task_lifecycle_gate.py and "
-            "bootstrap_gate.py — update both in the same commit (twin-VALUE)"
-        )
-        assert tlg._STDIN_READ_MAX == 8 * 1024 * 1024 == 8388608
-
-    def test_error_text_max_twin_value_matches(self):
-        """_ERROR_TEXT_MAX is the older twin-VALUE constant; item 4 relies on
-        it. Pin its cross-hook equality (and the documented 200) alongside
-        the new _STDIN_READ_MAX twin so both bounding caps are guarded
-        together."""
-        assert tlg._ERROR_TEXT_MAX == bg._ERROR_TEXT_MAX, (
-            "_ERROR_TEXT_MAX drift between the two hooks — update both in the "
-            "same commit (twin-VALUE)"
-        )
-        assert tlg._ERROR_TEXT_MAX == 200
 
 
 # =============================================================================
@@ -472,137 +402,8 @@ class TestStderrBrokenPipeGuards:
         floor = json.loads(out.strip())
         assert floor["hookSpecificOutput"]["permissionDecision"] == "defer"
 
-    def test_tlg_advisory_stderr_brokenpipe_preserves_exit_0(self):
-        """T3-3 (tlg:263) + T3-2 (tlg:201) together. Driving the full
-        advisory emitter with a broken stderr: the advisory's own stderr
-        line (tlg:263) raises, AND the late gate_health emit's
-        except-handler print (tlg:201) raises (the bare-context lazy import
-        fails, reaching that handler). Neither may flip exit 0 — the
-        pactGateHealth floor is honored only on exit 0.
 
-        NON-VACUITY: write_calls >= 1 confirms the broken channel was hit;
-        exit 0 + intact pactGateHealth floor confirm no leak. The dedicated
-        guard-stripped counter-test below proves a missing guard WOULD flip
-        the exit.
-        """
-        code, writes, out, escaped = _drive_with_broken_stderr(
-            tlg._emit_load_failure_advisory, "runtime", ValueError("boom")
-        )
-        assert writes >= 1, "stderr writer must have been exercised (precondition)"
-        assert escaped is None, f"a raise escaped the guard: {escaped}"
-        assert code == 0, "advisory must still reach exit 0"
-        floor = json.loads(out.strip())
-        assert floor["pactGateHealth"]["hook"] == "task_lifecycle_gate"
-        assert floor["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
 
-    def test_tlg_gate_health_journal_skip_stderr_brokenpipe_no_escape(
-        self, monkeypatch, tmp_path,
-    ):
-        """T3-1 (tlg:187). The journal-skip branch print (reached when
-        append_event returns False) raising BrokenPipeError must be swallowed
-        — _emit_gate_health_event is a best-effort -> None helper that may
-        never raise (its caller prints the floor then exits).
-
-        Driven through the real lazy import by making append_event return
-        False (a live session_journal whose append fails). NON-VACUITY:
-        write_calls >= 1 (the skip print ran AND raised) AND the helper
-        returned without escaping. Note this site is defense-in-depth: the
-        skip print sits INSIDE _emit_gate_health_event's outer
-        `except BaseException`, so removing the inner guard re-routes the
-        BrokenPipeError to that outer except (still caught — NOT an escape).
-        The inner guard is therefore explicit/documentary rather than the
-        load-bearing escape barrier; this test documents the now-explicit
-        guard and confirms the no-escape contract holds. (The genuinely
-        load-bearing T3 site — where a missing guard DOES flip the exit code
-        — is the except-handler print at tlg:201, covered by
-        test_tlg_gate_health_escape_handler_stderr_brokenpipe_no_exit_flip.)
-        """
-        import shared.session_journal as sj
-
-        monkeypatch.setattr(sj, "append_event", lambda _ev: False)
-        # is_initialized()/init may run; sandbox the config dir.
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
-        code, writes, out, escaped = _drive_with_broken_stderr(
-            tlg._emit_gate_health_event,
-            "module imports", "SomeError: detail",
-            {"tool_name": "TaskUpdate", "session_id": "s"},
-        )
-        assert writes >= 1, (
-            "the journal-skip stderr print must have run AND raised "
-            "(precondition for non-vacuity)"
-        )
-        assert escaped is None, (
-            f"BrokenPipeError escaped the journal-skip guard: {escaped}"
-        )
-        assert code == "NO-EXIT", "the helper returns; it has no sys.exit"
-
-    def test_tlg_gate_health_escape_handler_stderr_brokenpipe_no_exit_flip(
-        self, monkeypatch,
-    ):
-        """T3-2 (tlg:201) — THE HIGHEST-VALUE T3 site: the except-handler's
-        OWN print, which is NOT inside the enclosing tlg try (it IS the
-        handler). A BrokenPipeError here is the real exit-code-flip path.
-
-        Reached through the full advisory chain with the late lazy import
-        forced to raise (so the handler runs and reaches its print), and
-        that print's stderr raising. The advisory must STILL reach exit 0.
-
-        NON-VACUITY (counter-test, in-process, no source mutation): we swap
-        _emit_gate_health_event for a guard-STRIPPED stand-in whose handler
-        print is UN-wrapped, and confirm the advisory then does NOT reach
-        exit 0 (the BrokenPipeError escapes). The real (guarded) emitter
-        reaches exit 0. The two outcomes differ -> the guard is load-bearing
-        and this test is non-vacuous.
-        """
-        import builtins
-
-        real_import = builtins.__import__
-
-        def _boom_late_import(name, *a, **k):
-            # Force the gate_health emit's lazy import to fail so control
-            # reaches the except-handler print at tlg:201.
-            if name.startswith("shared.session_journal"):
-                raise RuntimeError("simulated late-import failure")
-            return real_import(name, *a, **k)
-
-        # --- real (guarded) emitter: advisory reaches exit 0 ---
-        monkeypatch.setattr(builtins, "__import__", _boom_late_import)
-        code, writes, out, escaped = _drive_with_broken_stderr(
-            tlg._emit_load_failure_advisory, "runtime", ValueError("boom")
-        )
-        assert writes >= 1, "the escape-handler stderr print must have raised"
-        assert escaped is None, (
-            f"BrokenPipeError escaped past the guarded handler: {escaped}"
-        )
-        assert code == 0, "advisory must still reach exit 0 with the guard"
-        assert json.loads(out.strip())["pactGateHealth"]["status"] == "failed"
-
-        # --- counter-test: guard-STRIPPED emitter -> exit DOES flip ---
-        # A stand-in whose escape-handler diagnostic print is UNGUARDED.
-        # The advisory calls it as its "bonus LAST" step; an unguarded raise
-        # there propagates before the advisory's sys.exit(0).
-        def _gate_health_guard_removed(_stage, _error_text, _input_data):
-            # Unguarded stderr write — exactly what removing the tlg:201
-            # try/except would produce.
-            print("unguarded escape-handler diagnostic", file=sys.stderr)
-
-        monkeypatch.setattr(builtins, "__import__", real_import)
-        monkeypatch.setattr(
-            tlg, "_emit_gate_health_event", _gate_health_guard_removed
-        )
-        code2, writes2, _out2, escaped2 = _drive_with_broken_stderr(
-            tlg._emit_load_failure_advisory, "runtime", ValueError("boom")
-        )
-        assert writes2 >= 1, "the unguarded print must have raised"
-        assert code2 != 0, (
-            "VACUITY CHECK: with the stderr guard removed, the BrokenPipeError "
-            "MUST prevent the advisory from reaching exit 0 — if this still "
-            "exited 0 the guard is not load-bearing and the test is vacuous"
-        )
-        assert escaped2 == "BrokenPipeError", (
-            "the unguarded raise must escape as BrokenPipeError, confirming "
-            "the real guard is what prevents the exit-code flip"
-        )
 
 
 # =============================================================================
@@ -621,83 +422,6 @@ class TestStderrBrokenPipeGuards:
 # =============================================================================
 
 
-class TestBoundedErrorTextOutputIdentity:
-
-    def test_in_bounds_output_exact_string(self):
-        """In-bounds (len(render) <= cap): no truncation, sanitize only.
-        Exact-string pin so a reorder regression that dropped/duplicated the
-        sanitize or wrongly appended the marker is caught.
-
-        NON-VACUITY: the exact-equality is the discriminator — any change to
-        the render template, the sanitize, or a spurious truncation marker
-        changes the string and fails. (The cycle-2/3/4 suites at tlg:4312+
-        already pin many in-bounds cases; this adds the plain-message
-        anchor.)
-        """
-        assert tlg._bounded_error_text(ValueError("plain message")) == (
-            "ValueError: plain message"
-        )
-        # Control chars sanitized to spaces, still in-bounds (no marker).
-        assert tlg._bounded_error_text(ValueError("a\x07b\x1bc")) == (
-            "ValueError: a b c"
-        )
-
-    def test_out_of_bounds_output_exact_string(self):
-        """Out-of-bounds (len(render) > cap): the result is exactly the
-        sanitized first-cap chars + the truncation marker — the byte-for-byte
-        output the OLD sanitize-then-truncate order produced (the §6
-        commutativity claim, made concrete).
-
-        NON-VACUITY: the exact expected string is derived independently
-        (prefix + payload, sliced to cap, + marker). A reorder bug that
-        truncated to the wrong length, double-applied the marker, sanitized
-        the wrong window, or computed `truncated` from the post-sanitize
-        length would change the bytes and fail this equality.
-        """
-        cap = tlg._ERROR_TEXT_MAX
-        render = "ValueError: " + "Z" * 300
-        expected = render[:cap] + "...[truncated]"
-        assert tlg._bounded_error_text(ValueError("Z" * 300)) == expected
-        assert len(expected) == cap + len("...[truncated]") == 214
-
-    def test_out_of_bounds_sanitizes_within_kept_window(self):
-        """Control chars that fall INSIDE the kept first-cap window are
-        sanitized to spaces even on the truncated path (item 4 keeps the
-        sanitize, only moves it after the slice). Mirrors the tlg:4136
-        health-marker pin shape for the helper directly.
-
-        NON-VACUITY: control chars at indices within the cap must become
-        spaces; if the reorder skipped sanitizing the kept slice the raw
-        \\x07/\\x1b would survive and the assertions invert.
-        """
-        # 50 'p', then control chars at indices 50-51 (well within cap=200),
-        # then a long tail that forces truncation.
-        err = ValueError("p" * 50 + "\x07\x1b" + "q" * 300)
-        result = tlg._bounded_error_text(err)
-        assert "...[truncated]" in result
-        assert "\x07" not in result and "\x1b" not in result
-        # The render prefix "ValueError: " is 12 chars; the two control chars
-        # land at render indices 62-63 -> sanitized to spaces, still inside
-        # the 200-char kept window.
-        assert result[62:64] == "  ", (
-            f"control chars in the kept window must be spaces: {result[62:64]!r}"
-        )
-        assert all(ch.isprintable() for ch in result)
-
-    def test_output_identity_holds_across_both_twins(self):
-        """Both hooks' _bounded_error_text must produce the SAME observable
-        output for the same input (they are byte-identical copies). This is
-        the output-level companion to the source-level T4b drift test.
-
-        NON-VACUITY: a divergent edit to one twin's logic would change one
-        side's output for the out-of-bounds input and fail this equality
-        even if (hypothetically) the source-string compare were fooled.
-        """
-        for err in (ValueError("plain"), ValueError("Z" * 300),
-                    ValueError("a\x07b" + "c" * 250)):
-            assert (
-                tlg._bounded_error_text(err) == bg._bounded_error_text(err)
-            ), f"twin output divergence for {err!r}"
 
 
 # =============================================================================
@@ -715,55 +439,3 @@ class TestBoundedErrorTextOutputIdentity:
 # =============================================================================
 
 
-class TestBoundedErrorTextTwinDrift:
-
-    def test_bounded_error_text_source_is_byte_identical_across_hooks(self):
-        """inspect.getsource(tlg._bounded_error_text) ==
-        inspect.getsource(bg._bounded_error_text), FULL source incl.
-        docstring. Any one-side-only edit (item-4 reorder applied to one
-        hook but not the other, a docstring tweak, a renamed local) fails
-        here — closing the twin-drift gap the architecture flagged as
-        CI-invisible.
-
-        NON-VACUITY is proven by the dedicated counter-test below (mutate one
-        side's source string in memory -> the compare must then fail).
-        """
-        tlg_src = inspect.getsource(tlg._bounded_error_text)
-        bg_src = inspect.getsource(bg._bounded_error_text)
-        assert tlg_src == bg_src, (
-            "_bounded_error_text twin drift between task_lifecycle_gate.py "
-            "and bootstrap_gate.py — the two copies MUST stay byte-identical "
-            "(logic AND docstring); update BOTH in the same commit.\n"
-            f"--- tlg source ---\n{tlg_src}\n"
-            f"--- bg source ---\n{bg_src}"
-        )
-
-    def test_drift_test_is_not_vacuous(self):
-        """VACUITY GUARD (mirrors
-        test_working_memory_concurrency_comprehensive.py:479): mutate one
-        logical line of one side's getsource string in memory and confirm the
-        equality the drift test relies on then FAILS. Proves a real
-        divergence would be caught — the drift test is not a no-op that
-        passes regardless.
-        """
-        tlg_src = inspect.getsource(tlg._bounded_error_text)
-        bg_src = inspect.getsource(bg._bounded_error_text)
-
-        # Precondition: the live sources match (mirrors the real drift test).
-        assert tlg_src == bg_src, "precondition: twins must match"
-
-        # Simulate drift: change one logical line of the tlg source copy.
-        mutated = tlg_src.replace(
-            "truncated = len(text) > _ERROR_TEXT_MAX",
-            "truncated = len(text) >= _ERROR_TEXT_MAX",
-            1,
-        )
-        assert mutated != tlg_src, (
-            "mutation did not apply — the anchored line changed; update the "
-            "vacuity guard's target line"
-        )
-        assert mutated != bg_src, (
-            "drift test is VACUOUS: a one-side logic change did not make the "
-            "source-string compare differ, so the drift test would not catch "
-            "real twin divergence"
-        )

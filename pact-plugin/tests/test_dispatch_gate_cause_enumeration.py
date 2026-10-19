@@ -232,7 +232,7 @@ def test_enumeration_appends_exactly_when_incumbent_does_not_fire(
     reason_a = out_a["hookSpecificOutput"]["permissionDecisionReason"]
 
     assert code_a == 2, "decision must still be DENY"
-    _assert_deny_text(reason_a, rule_text="no Task assigned", enumeration=True)
+    _assert_deny_text(reason_a, rule_text="no task dispatched", enumeration=True)
     assert _STALE_MARKER not in reason_a, "stale diagnosis must not fire when healthy"
 
     # ── Leg B — stale mismatch: incumbent wins, enumeration suppressed ──
@@ -247,7 +247,7 @@ def test_enumeration_appends_exactly_when_incumbent_does_not_fire(
 
     assert code_b == 2, "decision must still be DENY"
     assert _STALE_MARKER in reason_b, "incumbent stale diagnosis must fire"
-    _assert_deny_text(reason_b, rule_text="no Task assigned", enumeration=False)
+    _assert_deny_text(reason_b, rule_text="no task dispatched", enumeration=False)
 
 
 # ── Graceful degradation: A's failure degrades INTO B ─────────────────────
@@ -279,7 +279,7 @@ def test_detector_raise_degrades_into_enumeration_not_silence(
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
 
     assert code == 2, "deny still fires despite the detector raising"
-    _assert_deny_text(reason, rule_text="no Task assigned", enumeration=True)
+    _assert_deny_text(reason, rule_text="no task dispatched", enumeration=True)
     assert _STALE_MARKER not in reason, "no partial stale diagnosis"
 
 
@@ -504,7 +504,7 @@ def test_journaled_reason_excludes_the_enumeration(tmp_path, monkeypatch, capsys
 # Each marker was confirmed against the live constant (not merely proposed):
 # ASCII-only, occurring exactly once, and landing inside its own cause block.
 _CAUSE_MARKERS = {
-    1: "No task exists for this owner",
+    1: "No task was dispatched to this name",
     2: "recorded team no longer matches",
     3: "not available in this session at all",
     4: _CAUSE4_MARKER,
@@ -753,7 +753,7 @@ def test_claude_md_absent_still_appends_the_enumeration(
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
 
     assert code == 2, "decision unchanged (DENY) when CLAUDE.md is absent"
-    _assert_deny_text(reason, rule_text="no Task assigned", enumeration=True)
+    _assert_deny_text(reason, rule_text="no task dispatched", enumeration=True)
     assert _STALE_MARKER not in reason, "no stale diagnosis without a CLAUDE.md"
 
 
@@ -988,7 +988,7 @@ def test_unreadable_store_denies_while_the_owner_matching_task_survives(
         "reach the same conflated rule a genuinely empty one does, which is "
         "the whole reason cause (4) is enumerated"
     )
-    _assert_deny_text(reason, rule_text="no Task assigned", enumeration=True)
+    _assert_deny_text(reason, rule_text="no task dispatched", enumeration=True)
 
     assert task_files[0].read_text(encoding="utf-8") == before, (
         "the task file must be untouched — if the contents moved, the deny is "

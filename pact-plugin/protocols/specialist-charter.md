@@ -46,6 +46,6 @@ the happy path not crash?" No comprehensive unit tests—that's TEST phase work.
 
 Emit HALT/ALERT immediately, without orchestrator permission, on a viability threat. SECURITY or
 DATA is a HALT when exposure exists now or is unknown, an ALERT only when there is none; a committed
-or printed secret and real data in a local copy are exposure too ([algedonic.md](algedonic.md)).
-Your agent body lists the common triggers of your role; read algedonic.md immediately on detecting
+or printed secret and real data in a local copy are exposure too ([stop-signals.md](stop-signals.md)).
+Your agent body lists the common triggers of your role; read stop-signals.md immediately on detecting
 one.

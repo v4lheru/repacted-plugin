@@ -58,3 +58,15 @@ def test_a_rule_why_is_rendered_as_prose_like_its_explain_and_way_through(monkey
     monkeypatch.setattr(_docsgen, "_load_rules", lambda tree: fake)
     page = _docsgen.render_troubleshooting(None)["troubleshooting"]
     assert "- **Why:** A wrapper around &lt;name&gt; fakes a terminal." in page
+
+
+def test_script_summary_skips_a_bash_python_polyglot_opener():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_docsgen_source_under_test", PLUGIN_ROOT / "bin" / "_docsgen_source.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    script_summary = module.script_summary
+    text = (PLUGIN_ROOT / "bin" / "repact").read_text(encoding="utf-8")
+    summary = script_summary(text)
+    assert summary.startswith("repact: start a rePACTed session."), summary

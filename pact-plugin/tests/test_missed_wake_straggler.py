@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import journal_emitter  # noqa: E402
+import missed_wake_scan  # noqa: E402
 from shared import prompt_kind as pk  # noqa: E402
 from shared.session_journal import get_journal_path, read_events  # noqa: E402
 from fixtures.role_frames import (  # noqa: E402
@@ -56,7 +56,9 @@ def _lead(prompt) -> dict:
 
 def _run_main(monkeypatch, capsys, frame) -> dict:
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(frame)))
-    assert journal_emitter.main() == 0
+    with pytest.raises(SystemExit) as exc:
+        missed_wake_scan.main()
+    assert exc.value.code == 0
     return json.loads(capsys.readouterr().out)
 
 

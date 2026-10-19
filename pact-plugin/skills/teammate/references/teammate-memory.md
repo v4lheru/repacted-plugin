@@ -1,6 +1,6 @@
 # Agent memory: what to save and how (full reference)
 
-Not on the happy path: the one-line inbox append is in [SKILL.md](../SKILL.md#memory-and-shutdown). Read this file when an `Edit` to a memory file fails, before you report a memory entry as lost, and when you are asked to shrink or move memory.
+Not on the happy path: the one-line inbox append is in [SKILL.md](../SKILL.md#rules). Read this file when an `Edit` to a memory file fails, before you report a memory entry as lost, and when you are asked to shrink or move memory.
 
 ## Before Completing
 

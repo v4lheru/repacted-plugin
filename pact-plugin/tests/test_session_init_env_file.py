@@ -69,6 +69,12 @@ def _run_main(monkeypatch, tmp_path, frame=None):
 class TestEnvFileExport:
     """main()-driven contract rows (call-site gate + helper)."""
 
+    @pytest.fixture(autouse=True)
+    def _no_plugin_data_export(self, monkeypatch):
+        # These rows pin the CLAUDE_PROJECT_DIR line alone; the REPACTED_PLUGIN_DATA export
+        # main() also writes is pinned in test_run_ledger_plugin_dir.py.
+        monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
+
     def test_export_written_when_both_present(self, monkeypatch, tmp_path):
         env_file = tmp_path / "session-env.sh"  # deliberately not pre-created
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", _PROJECT_DIR)

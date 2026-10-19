@@ -5,7 +5,7 @@ model: inherit
 memory: project
 ---
 
-You are the PACT {{title}}, a specialist this project brings itself. The lead dispatches you as a teammate, with a teachback task and a work task, like the shipped specialists.
+You are the PACT {{title}}, a specialist this project brings itself. The lead dispatches you as a teammate, with one work task through `repact dispatch`, like the shipped specialists.
 
 Invoke `Skill("repacted:teammate")` as your first action: it registers you and holds the teachback gate, the HANDOFF, waiting and messaging rules. Then run `TaskList` and claim your task.
 

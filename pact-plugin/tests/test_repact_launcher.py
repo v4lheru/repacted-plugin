@@ -47,6 +47,7 @@ links = sorted(Path(os.environ["CLAUDE_CONFIG_DIR"]).joinpath("agents").glob("pa
     Path(os.environ["HOME"]) / ".claude" / "protocols" / "pact-plugin"]
 glob_md = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "CLAUDE.md"
 record = {"argv": sys.argv[1:], "launch": os.environ.get("REPACTED_LAUNCH"),
+          "execution": os.environ.get("REPACT_EXECUTION"), "routed": os.environ.get("REPACT_ROUTED"),
           "additional_md": os.environ.get("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"),
           "global_md": glob_md.read_text() if glob_md.exists() else None,
           "memory": sorted(p.name for p in memory.iterdir()) if memory.is_dir() else [],
@@ -713,3 +714,76 @@ def test_installed_mode_has_no_alone_check_and_two_starts_change_nothing(rig):
         assert result.returncode == 0 and result.stderr == "", result.stderr
     assert rig.names() == [LEGACY] and rig.link_inodes() == inodes
     assert not (rig.config / "repacted-alternate.lock").exists()
+
+
+# ---------- the front door: work and resume launch through this path ----------
+
+def _installed(rig):
+    rig.write_json(rig.config / "settings.json",
+                   {"enabledPlugins": {"repacted@repacted-local": True, "PACT@pact-marketplace": False}})
+
+
+def test_bare_repact_still_launches_a_session(rig):
+    _installed(rig)
+    result = rig.run()
+    assert result.returncode == 0, result.stderr
+    assert rig.stub_record()["argv"] == AGENT
+
+
+@pytest.mark.parametrize("args, prompt, execution", [
+    (["work", "fix the parser", "on empty input"], "fix the parser on empty input", None),
+    (["work", "inspect"], "inspect", None),
+    (["work"], "/repacted:work", None),
+    (["work", "--unattended", "--max-usd", "5", "--until", "18:30"],
+     "/repacted:autopilot --until 18:30 --max-usd 5", "subagents"),
+], ids=["ask", "ask-that-is-a-route-word", "next-row", "unattended"])
+def test_work_launches_a_session_with_the_ask_the_next_row_or_autopilot(rig, args, prompt, execution):
+    _installed(rig)
+    result = rig.run(*args)
+    assert result.returncode == 0, result.stderr
+    record = rig.stub_record()
+    assert record["argv"] == [*AGENT, prompt]
+    assert record["execution"] == execution and record["routed"] is None
+
+
+def test_work_refuses_inside_a_running_session_and_starts_nothing(rig):
+    _installed(rig)
+    result = rig.run("work", "fix it", CLAUDECODE="1")
+    assert result.returncode == 2 and "inside a Claude Code session" in result.stderr
+    assert rig.stub_record() is None
+
+
+def test_resume_prints_the_screen_then_resumes_that_session(rig):
+    _installed(rig)
+    folder = rig.config / "pact-sessions" / "project" / "abcd1234-0000-4000-8000-000000000001"
+    folder.mkdir(parents=True)
+    rig.write_json(folder / "pact-session-context.json", {"team_name": "session-abcd1234",
+                                                         "project_dir": str(rig.project)})
+    rig.write_json(folder / "workflow-state.json", {"v": 1, "built_at": "2026-10-19T00:00:00+00:00",
+                                                     "team": "session-abcd1234", "tasks": {}})
+    result = rig.run("resume", "--session-dir", str(folder))
+    assert result.returncode == 0, result.stderr
+    assert "[RESUME]" in result.stdout
+    assert rig.stub_record()["argv"] == [*AGENT, "--resume", folder.name]
+
+
+# ---------- help and a wrong interpreter ----------
+
+@pytest.mark.parametrize("word", ["--help", "help", "-h"])
+def test_help_prints_repacts_own_jobs_and_never_starts_claude(rig, word):
+    rig.seed()
+    result = rig.run(word)
+    assert result.returncode == 0, result.stderr
+    for job in ("dispatch", "submit", "accept", "reject", "amend", "inspect", "decide", "resume",
+                "work", "repact report", "repact --repact-status", "repact [claude arguments]"):
+        assert job in result.stdout, job
+    assert rig.stub_record() is None
+
+
+def test_run_by_python_it_says_how_to_run_it_in_one_line(rig):
+    result = subprocess.run([sys.executable, str(REPACT), "dispatch"], capture_output=True,
+                            text=True, timeout=60)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr.strip().splitlines() == [
+        'repact is a bash script: run it as "<plugin root>/bin/repact" <job>, not with python3 '
+        "(repact --help lists the jobs)"]

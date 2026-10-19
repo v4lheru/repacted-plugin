@@ -958,29 +958,6 @@ def _read_lead_session_id(team_name: str, teams_dir: str | None = None) -> str:
     return lead_session_id if isinstance(lead_session_id, str) else ""
 
 
-def is_canonical_journal_frame(input_data: dict) -> bool:
-    """True iff this process's journal writes land in the canonical (lead-session) journal.
-
-    True for the lead frame, or an in-process teammate (session_id == leadSessionId). False
-    for a tmux teammate and on any topology resolution failure: skipping defers to the
-    completion-time seams, while a misclassified emit could poison the shared marker
-    namespace. Never raises.
-    """
-    try:
-        if is_lead(input_data):
-            return True
-        sid = input_data.get("session_id")
-        if not (isinstance(sid, str) and sid):
-            # No usable session_id: skip before the config read.
-            return False
-        # Topology needs the identity-aligned team; the emit legs use the persisted team_name to
-        # keep their marker namespace consistent. A deliberate split.
-        lead_session_id = _read_lead_session_id(get_team_name())
-        return bool(lead_session_id) and sid == lead_session_id
-    except Exception:
-        return False
-
-
 def _iter_members(
     team_name: str,
     teams_dir: str | None = None,

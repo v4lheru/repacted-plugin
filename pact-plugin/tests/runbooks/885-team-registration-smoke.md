@@ -195,8 +195,8 @@ ls "$LIVE/skills/pact-team-registration/SKILL.md" 2>/dev/null \
 - Spawn-prompt directive (canonical source): [pact-plugin/agents/pact-orchestrator.md](../../agents/pact-orchestrator.md) §Agent Teams Dispatch
 - Secretary spawn: [pact-plugin/commands/bootstrap.md](../../commands/bootstrap.md) §Step — Spawn `pact-secretary`
 - Presence/liveness guards: `pact-plugin/tests/test_commands_structure.py`
-  (`TestRegisterDirectivePresentInAllSpawnSurfaces`,
-  `TestTeamRegistrationSkillLiveness`)
+  was removed in 2.1.0; the registry itself is covered by
+  `pact-plugin/tests/test_session_registry.py`
 - Frontmatter invocability guard: `pact-plugin/tests/test_agents_structure.py`
   (`test_frontmatter_includes_team_registration`)
 - Companion runbook: [691-bootstrap-secretary-dispatch.md](691-bootstrap-secretary-dispatch.md)

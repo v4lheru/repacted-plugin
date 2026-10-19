@@ -27,13 +27,16 @@ handles the bad input as it did. Without <group>, stdin's tool_name selects; whe
 gives none, the checks that run for every tool run and the security checks whose matcher
 is an expression.
 
+A `teams_only` check runs only in the `teams` execution mode; an unreadable
+mode runs every check.
+
 Combination (the host runs separate hooks in parallel and documents none of the order):
   - Every matched check runs, also after one refused: they all ran before.
   - A check's stdout is JSON when, stripped, it starts with { and ends with }; else it is
     plain text, which reaches the model only on UserPromptSubmit and SessionStart.
   - Exit 2 is a block whatever stdout says. Another non-zero exit is a non-blocking
     error; a JSON object on its stdout still counts. A timed-out check is discarded, or a
-    deny when the registry says `on_timeout="deny"` (the four security checks): exit 2,
+    deny when the registry says `on_timeout="deny"` (the security checks): exit 2,
     the reason names the check and ends `[rule: <check>.timeout]`. A wall clock backs the
     alarm, so a check that masks SIGALRM is denied once it returns. One that raises is a
     deny too, `[rule: <check>.error]`.
@@ -65,7 +68,7 @@ Journal rows (the dispatcher writes them after printing its result, best effort)
     `[rule: <id>]` tail a script leaves on its reason or stderr, else `<check>.<channel>`;
     channel is how it refused (exit_2, deny, ask, decision_block). The refusal line the
     host shows is normalised to `<check>: <reason> [rule: <id>]` (shared/rules.py explains
-    an id; bin/repact-explain reads the rows). code and target are the first 12 hex
+    an id; `repact inspect --refusals` reads the rows). code and target are the first 12 hex
     digits of a sha256 over the reason text and
     over the command, file path or task id. No text, command line or payload.
   A row goes to the session journal; when the shared package cannot load or the session
@@ -185,6 +188,16 @@ def matches(matcher: Optional[str], tool_name) -> bool:
     if not isinstance(tool_name, str) or not tool_name:
         return matcher in (None, "", "*")
     return registry.host_matches(matcher, tool_name)
+
+
+def execution_mode(payload: dict) -> str:
+    """shared/execution.for_payload in an _Isolation; a failure reads as "teams" (every check)."""
+    try:
+        with _Isolation():
+            from shared import execution
+            return execution.for_payload(payload)
+    except Exception:  # noqa: BLE001 - an unreadable mode keeps every check
+        return "teams"
 
 
 def select(event: str, checks, payload: dict, group: Optional[str] = None) -> list:
@@ -750,7 +763,7 @@ def _actor_name(payload: dict) -> str:
 
 def journal_rows(event: str, payload: dict, parsed: list) -> list:
     """The check_failure and gate_refusal rows for one dispatch, as (type, fields); a
-    refusal row names the actor (`agent`) when the frame does, for repact-explain --agent."""
+    refusal row names the actor (`agent`) when the frame does, for `repact inspect --refusals --agent`."""
     rows = []
     tool_name = payload.get("tool_name") if isinstance(payload.get("tool_name"), str) else ""
     agent = ""
@@ -858,7 +871,10 @@ def dispatch(event: str, raw: bytes, checks=None, group: Optional[str] = None) -
     memo.frames = {}
     try:
         outcomes = []
-        for check in select(event, checks, payload, group):
+        selected = select(event, checks, payload, group)
+        if any(check.teams_only for check in selected) and execution_mode(payload) != "teams":
+            selected = [check for check in selected if not check.teams_only]
+        for check in selected:
             begun = time.monotonic()
             outcomes.append(run_apart(check, raw, event) if deep else run_check(check, raw, event, tool_name))
             outcomes[-1].elapsed_s = time.monotonic() - begun

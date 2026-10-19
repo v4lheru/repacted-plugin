@@ -57,10 +57,10 @@ from dataclasses import dataclass
 # team config, real journal/inbox, or a shared resolver). Each requires an L2
 # non-mocked integration test.
 SEAM_DEPENDENT_HOOKS: frozenset[str] = frozenset({
-    "missed_wake_scan", "teammate_idle", "agent_handoff_emitter",
-    "session_init", "session_end", "dispatch_gate", "task_lifecycle_gate",
+    "missed_wake_scan", "teammate_idle",
+    "session_init", "session_end", "dispatch_gate",
     "bootstrap_gate", "bootstrap_marker_writer", "file_tracker",
-    "peer_inject", "validate_handoff",
+    "peer_inject",
     # merge_guard_pre/post: the on-disk authorization token is the canonical
     # post(mint)->pre(read) integration seam this classifier exists to catch; a
     # guard-specific seam regression must not ship inert. They DENY via exit(2)
@@ -117,8 +117,7 @@ SEAM_DEPENDENT_HOOKS: frozenset[str] = frozenset({
 # journaled as {unknown, expired}, but the lead's own summary is then parked as
 # unattributed and never becomes compact-summary.txt.
 L3_LIVE_PROBE_HOOKS: frozenset[str] = frozenset({
-    "missed_wake_scan", "teammate_idle", "agent_handoff_emitter",
-    "task_lifecycle_gate", "stop_background_gate", "validate_handoff",
+    "missed_wake_scan", "teammate_idle", "stop_background_gate",
     "session_init", "postcompact_archive", "bootstrap_gate",
 })
 
@@ -179,17 +178,19 @@ L3_CANDIDATE_HOOKS: frozenset[str] = frozenset({
 _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
     "missed_wake_scan": frozenset({
         "background_launch", "background_work", "clock", "constants", "finished_runs",
-        "intentional_wait", "journal_reader", "ledger", "pact_context", "paths", "plugin_identity",
-        "plugin_paths", "session_journal", "session_registry", "session_state", "state_file",
-        "task_store", "task_utils", "transcript_activity",
+        "intentional_wait", "journal_reader", "ledger", "pact_context", "paths",
+        "plugin_identity", "plugin_paths", "prompt_kind", "session_journal", "session_registry",
+        "session_state", "state_file", "task_store", "task_utils", "transcript_activity",
     }),  # state_file reached via background_work's state-file reads and writes.
     "teammate_idle": frozenset({
-        "amendment_relay", "amendments", "background_launch", "background_work", "constants",
-        "error_output", "intentional_wait", "journal_reader", "pact_context",
-        "paths", "plugin_identity", "session_journal", "session_registry", "session_state",
-        "state_file", "task_store", "task_utils", "transcript_activity",
-    }),  # amendment_relay, amendments: the unread-key re-prompt. Regenerated
-         # from the live derivation.
+        "amendment_relay", "amendments", "background_launch", "background_work",
+        "canonical_json", "constants", "error_output", "intentional_wait", "journal_reader",
+        "pact_context", "paths", "payload_digest", "plugin_identity", "session_journal",
+        "session_registry", "session_state", "state_file", "task_store", "task_utils",
+        "transcript_activity",
+    }),  # amendment_relay, amendments: the unread-key re-prompt. payload_digest
+         # (and its canonical_json) via the stored-teachback read. Regenerated from the live
+         # derivation.
     "track_files": frozenset({
         "background_launch", "background_work", "constants", "error_output", "intentional_wait",
         "journal_reader", "pact_context", "paths", "plugin_identity", "session_journal",
@@ -198,27 +199,19 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
     }),  # regenerated from the live derivation, not hand-listed: the Layer 1
          # fold adds background_work + intentional_wait. The 1.5.0 pin-gate cut
          # removed the pin-staleness clear and every edge only it reached.
-    "agent_handoff_emitter": frozenset({
-        "agent_handoff_marker", "canonical_json", "constants", "journal_reader", "pact_context",
-        "paths", "plugin_identity", "session_journal", "session_registry", "state_file",
-        "task_metadata_snapshot", "task_store",
-    }),  # task_metadata_snapshot reached via the teammate-frame snapshot
-         # seam (emit_task_metadata_snapshot); its own transitive edges
-         # (agent_handoff_marker, session_journal) were already here.
-         # state_file via task_utils.update_task_file's locked writer. No
-         # session_state: pact_context takes its two leaf names from paths.
     "session_init": frozenset({
-        "_fail_closed", "amendments", "background_launch", "background_work", "claude_md_manager",
-        "coexistence", "commit_rules", "compaction_owner", "constants", "dispatch_helpers",
-        "failure_cause",
-        "failure_log", "gh_helpers", "git_helpers", "handoff_schema", "intentional_wait",
-        "journal_reader", "marker_schema", "merge_guard_common", "pact_config", "pact_context",
-        "parts_ledger", "paths", "peer_context", "plugin_identity", "plugin_manifest",
-        "project_scope", "session_init_common", "session_init_lead", "session_init_resume",
-        "session_init_teammate", "session_journal", "session_registry", "session_resume",
-        "session_state", "state_file", "summary_head", "symlinks", "task_migration", "task_store",
-        "task_utils", "team_policy", "teammate_mode", "transcript_activity", "unattended",
-        "project_agents",  # via dispatch_helpers: the registry reads the project's own agents
+        "_fail_closed", "amendments", "autopilot_run", "background_launch", "background_work",
+        "canonical_json", "claude_md_manager", "coexistence", "commit_rules",
+        "compaction_owner", "constants", "cost_cap", "dispatch_helpers", "execution",
+        "failure_cause", "failure_log", "gh_helpers", "git_helpers", "handoff_schema",
+        "intentional_wait", "journal_reader", "marker_schema", "merge_guard_common",
+        "pact_config", "pact_context", "parts_ledger", "paths", "payload_digest",
+        "peer_context", "plugin_identity", "plugin_manifest", "plugin_paths", "project_agents",
+        "project_scope", "repact_shim", "session_init_common", "session_init_lead",
+        "session_init_resume", "session_init_teammate", "session_journal", "session_registry",
+        "session_resume", "session_spend", "session_state", "state_file", "summary_head",
+        "symlinks", "task_migration", "task_store", "task_utils", "team_name", "team_policy",
+        "teammate_mode", "transcript_activity", "unattended", "workflow_state",
     }),  # unattended reached via the SessionStart unattended-mode block
          # (session_init -> shared.unattended.read_mode); stdlib-only, so it
          # adds no further transitive shared edges.
@@ -246,7 +239,7 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # summary_head (1.5.0 D8) via compaction_owner, with its pointer readers;
          # session_journal via compaction_owner's compaction_attributed event.
     "dispatch_gate": frozenset({
-        "_fail_closed", "background_launch", "background_work", "commit_rules", "constants",
+        "_fail_closed", "background_launch", "background_work", "commit_rules", "constants", "execution",
         "dispatch_helpers", "intentional_wait", "journal_reader", "pact_config", "pact_context",
         "paths", "plugin_identity", "session_journal", "session_registry", "session_state",
         "stale_session", "state_file", "task_store", "task_utils", "team_policy",
@@ -265,21 +258,6 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # (dispatch_gate -> shared.background_work.frame_team_and_name, imported
          # inside a function); background_launch, intentional_wait and
          # state_file are its transitive edges.
-    "task_lifecycle_gate": frozenset({
-        "_fail_closed", "actor", "agent_handoff_marker", "background_launch", "background_work",
-        "canonical_json", "constants", "dispatch_helpers", "dispatch_site", "frame",
-        "handoff_schema", "intentional_wait", "journal_reader", "pact_context", "paths",
-        "plugin_identity", "session_journal", "session_registry", "session_state", "state_file",
-        "task_metadata_snapshot", "task_store", "task_utils", "teachback_schema", "tool_response",
-        "transcript_activity", "variety_scorer",
-        "commit_rules", "project_agents", "team_policy",  # via dispatch_helpers: the project's
-        # own agents, and the team policy that can turn them off (which reads commit_rules)
-    }),  # task_metadata_snapshot reached via the lead-completion +
-         # post-completion-backstop snapshot seams; its transitive edges
-         # were already in this closure.
-         # handoff_schema reached via the HANDOFF schema advisories (write-time
-         # + completion-time); it is a pure stdlib-free leaf, so it adds no
-         # further transitive edges.
     "bootstrap_gate": frozenset({
         "_fail_closed", "amendments", "compaction_owner", "constants", "git_helpers",
         "journal_reader", "marker_schema", "pact_context", "paths", "plugin_identity",
@@ -329,16 +307,6 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
         "session_journal", "session_registry", "session_state", "state_file", "task_store",
         "task_utils", "transcript_activity",
     }),
-    "validate_handoff": frozenset({
-        "_fail_closed", "background_launch", "background_work", "constants", "dispatch_helpers",
-        "error_output", "frame", "intentional_wait", "journal_reader", "pact_context", "paths",
-        "plugin_identity", "session_journal", "session_registry", "session_state", "state_file",
-        "task_store", "task_utils", "transcript_activity", "turn_end_gate", "turn_end_jobs",
-        "commit_rules", "project_agents", "team_policy",  # via dispatch_helpers: the project's
-        # own agents, and the team policy that can turn them off (which reads commit_rules)
-    }),  # regenerated from the live derivation: the SubagentStop background
-         # check imports turn_end_gate, which reaches background_work and
-         # state_file and their helpers.
     "stop_background_gate": frozenset({
         "_fail_closed", "background_launch", "background_work", "constants", "dispatch_helpers",
         "frame", "intentional_wait", "journal_reader", "pact_context", "paths", "plugin_identity",
@@ -346,6 +314,7 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
         "task_utils", "transcript_activity", "turn_end_gate", "turn_end_jobs",
         "commit_rules", "project_agents", "team_policy",  # via dispatch_helpers: the project's
         # own agents, and the team policy that can turn them off (which reads commit_rules)
+        "plugin_paths", "task_files", "team_labels",  # via frame: the team that holds a task file
     }),  # regenerated from the live derivation.
     "merge_guard_pre": frozenset({
         "_fail_closed", "constants", "error_output", "journal_reader", "merge_guard_common",

@@ -1,16 +1,18 @@
-"""The two host lines repact-doctor prints after its checks: the mode (V1) and the tested-host
-compat line (V9).
+"""The two host lines repact-doctor prints after its checks: the execution mode and the
+tested-host compat line.
 
 Location: pact-plugin/bin/_doctor_host.py. Used by bin/repact-doctor (report only:
 these lines are notes, never a check state, so they never reach the cache or the exit code).
 Stdlib only.
 
-  mode: guards-only (Agent Teams flag off)   the guards and ledgers run in any session
-  mode: full (Agent Teams on)                orchestration is available as well
+  execution: subagents (default)                      work runs as subagents
+  execution: teams (REPACT_EXECUTION=teams)           work runs as Agent Teams
   host 2.1.302: tested (last tested 2.1.302); python 3.9.6 (min 3.9); os macos: tested
 
-The flag is CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, read from the environment, then from the
-`env` block of the config root's settings.json. An absent flag is a valid mode, not a fault.
+The mode is shared/execution.decide over the environment laid on the `env` block of the config
+root's settings.json (the environment wins, as in a session): REPACT_EXECUTION, then the team
+policy, then the default; teams also needs CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS. Either mode is
+valid, not a fault.
 The host version is `claude --version`; a missing or silent binary prints `host unknown`.
 """
 from __future__ import annotations
@@ -20,11 +22,13 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 TEAMS_FLAG = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 COMPAT = Path(__file__).resolve().parents[1] / "reference" / "compat.json"
+HOOKS = Path(__file__).resolve().parents[1] / "hooks"
 VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 VERSION_TIMEOUT = 10
 
@@ -33,20 +37,34 @@ def _flag_on(value) -> bool:
     return str(value).strip().lower() not in ("", "0", "false", "no", "off", "none")
 
 
-def teams_on(ctx) -> bool:
-    """The Agent Teams flag from the environment, else the settings.json `env` block."""
-    if TEAMS_FLAG in ctx.env:
-        return _flag_on(ctx.env[TEAMS_FLAG])
+def _session_env(ctx) -> dict:
+    """The env a session here starts with: the settings.json `env` block under the environment."""
     try:
         settings = json.loads((ctx.config_root / "settings.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
+        settings = None
     block = settings.get("env") if isinstance(settings, dict) else None
-    return isinstance(block, dict) and TEAMS_FLAG in block and _flag_on(block[TEAMS_FLAG])
+    seeded = {str(k): str(v) for k, v in block.items()} if isinstance(block, dict) else {}
+    return {**seeded, **ctx.env}
+
+
+def teams_on(ctx) -> bool:
+    """The Agent Teams flag from the environment, else the settings.json `env` block."""
+    env = _session_env(ctx)
+    return TEAMS_FLAG in env and _flag_on(env[TEAMS_FLAG])
 
 
 def mode_line(ctx) -> str:
-    return "mode: full (Agent Teams on)" if teams_on(ctx) else "mode: guards-only (Agent Teams flag off)"
+    """The execution mode a new session here takes, and why."""
+    try:
+        if str(HOOKS) not in sys.path:   # bin -> shared, the allowed direction
+            sys.path.insert(1, str(HOOKS))
+        from shared import execution
+        repo = str(ctx.repo_root) if ctx.repo_root else None
+        chosen = execution.decide(_session_env(ctx), cwd=repo)
+    except Exception:  # noqa: BLE001 - a note, never a check state
+        return "execution: unknown (the execution rules could not be read)"
+    return f"execution: {chosen['mode']} ({chosen['why']})"
 
 
 def _key(version: str) -> Tuple[int, ...]:

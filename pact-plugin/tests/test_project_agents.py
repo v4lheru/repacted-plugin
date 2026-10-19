@@ -346,7 +346,8 @@ def _session(monkeypatch, tmp_path, plugin: Path, project: Path):
     (team / "config.json").write_text(json.dumps({"members": []}), encoding="utf-8")
     tasks = tmp_path / ".claude" / "tasks" / _TEAM
     tasks.mkdir(parents=True)
-    (tasks / "1.json").write_text(json.dumps({"id": "1", "owner": _NAME, "status": "pending"}),
+    (tasks / "1.json").write_text(json.dumps({"id": "1", "owner": _NAME, "status": "pending",
+                                              "metadata": {"dispatch": {"name": _NAME}}}),
                                   encoding="utf-8")
 
 

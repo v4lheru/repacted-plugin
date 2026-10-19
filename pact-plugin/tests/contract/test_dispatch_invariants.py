@@ -93,13 +93,11 @@ TEMPLATES = templates()
 
 
 def test_the_scan_finds_the_known_templates():
-    """Guards the scanner: the canonical forms in the shared dispatch reference, bootstrap.md and
-    the persona (CLEANUP-B moved the four consumer commands' copies into the reference)."""
+    """Guards the scanner: the canonical form in bootstrap.md (the persona's copy and
+    the shared dispatch reference moved behind `repact dispatch`, which writes the brief)."""
     where = {w for w, _ in TEMPLATES}
-    assert {"reference/dispatch/teachback-gated-dispatch.md", "commands/bootstrap.md",
-            "agents/pact-orchestrator.md"} <= where
-    # CLEANUP-B folded the nine command copies into the one reference template: 3 surfaces remain.
-    assert len(TEMPLATES) >= 3, len(TEMPLATES)
+    assert "commands/bootstrap.md" in where, where
+    assert len(TEMPLATES) >= 1, len(TEMPLATES)
 
 
 @pytest.mark.parametrize("where, call", TEMPLATES,

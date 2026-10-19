@@ -1217,8 +1217,7 @@ class TestCleanupOldSessions:
 
     THESE ARMS COVER THE EXECUTABLE HALF ONLY. The step 4 instruction in
     ``skills/pact-handoff-harvest/SKILL.md`` is the non-executable half and
-    carries its own presence pin in ``test_skills_structure.py``. The two
-    gates do not cross-cover.
+    is not covered here.
 
     A10 IS A REGRESSION PIN ON A DEFECT THAT WAS FIXED, NOT ON A DESIGN
     CHOICE. The predicate carried a cheap substring test above the parse. It

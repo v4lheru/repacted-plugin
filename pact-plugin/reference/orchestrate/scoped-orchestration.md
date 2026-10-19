@@ -60,7 +60,7 @@ If a sub-task emerges that is too complex for a single specialist invocation:
 - Sub-task requires architectural decisions before coding
 - Sub-task spans multiple concerns within a domain
 
-**Phase re-entry** (via `/repacted:imPACT`): When imPACT decides to redo a prior phase, create a new retry phase task — do not reopen the completed one. See [imPACT.md Phase Re-Entry Task Protocol](../../commands/imPACT.md#phase-re-entry-task-protocol) for details.
+**Phase re-entry** (from blocker triage): when the triage redoes a prior phase, create a new retry phase task; do not reopen the completed one. See [blocker-triage.md](../decide/blocker-triage.md#phase-re-entry).
 
 ---
 

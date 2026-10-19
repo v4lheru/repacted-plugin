@@ -8,7 +8,10 @@ tree for -a, a pathspec, -i/-o or -p), added lines only; a git read that fails d
 step that cannot be replayed denies the combined form (stage and commit in two calls).
 The command is read through shared/commit_routes.py (comments, here-documents, aliases, closed
 option tables, a name or HEAD moved by an earlier step); one that names git with commit or a
-history verb and cannot be read is denied. Exit 2 blocks, 0 allows.
+history verb and cannot be read is denied. It also refuses a `git stash` that takes or drops an
+entry from the stack every worktree shares (bare stash, an untagged push, save, pop, clear, a
+drop that names no entry; rule git_commit_check.shared_stash), read the same way. Exit 2 blocks,
+0 allows.
 
 Module map and notes: the design notes.
 """
@@ -54,6 +57,7 @@ try:
     from shared.error_output import hook_error_json  # noqa: F401  # re-export: tests import it here
     from shared.git_helpers import run_git
     from shared import commit_routes as routes
+    from shared.log_values import logs_secret_value, logs_token_value  # noqa: F401
     from shell_words import PREFIX_WORDS, strip_prefix, tokens as shell_tokens
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
     _emit_load_failure_deny("module imports", _module_load_error)
@@ -90,6 +94,46 @@ class Unread(Exception):
 class StageSeparately(Exception):
     """A staging step in the commit's command could not be replayed: the combined form is denied
     with a reason that asks for staging and committing in two calls."""
+
+
+class SharedStash(Exception):
+    """A command with no commit runs a `git stash` form shared_stash refuses: denied."""
+
+
+@dataclass
+class _StashStep:
+    """A refused `git stash` call, kept in read_commit's `before` beside the other steps."""
+    form: str
+
+
+STASH_RULE = "git_commit_check.shared_stash"
+_STASH_MESSAGE = re.compile(r"--message(?:=.*)?|-[A-Za-z]*m.*")   # -m, -mTAG, -um TAG, --message=
+
+
+def shared_stash(args: list) -> Optional[str]:
+    """The refused form of `git stash <args>` (`git stash pop`, ...), or None for one that passes.
+    The stash stack is one per repository, shared by every worktree and session: a bare stash or
+    an untagged push cannot be found again by its tag, and save (no tag to look up by), pop,
+    clear and a drop with no entry act on whichever entry is on top."""
+    sub, rest = (args[0], args[1:]) if args and not args[0].startswith("-") else ("push", args)
+    if sub == "push":
+        options = rest[:rest.index("--")] if "--" in rest else rest
+        if any(_STASH_MESSAGE.fullmatch(word) for word in options):
+            return None
+        return "git stash push" if args and args[0] == "push" else "git stash"
+    if sub in ("save", "pop", "clear"):
+        return f"git stash {sub}"
+    if sub == "drop" and not any(not word.startswith("-") for word in rest):
+        return "git stash drop"
+    return None
+
+
+def _stash_refusal(form: str) -> str:
+    return (f"PACT git_commit_check: `{form}` works on the one stash stack every worktree and "
+            "session of this repository shares, so it can take, apply or drop another session's "
+            "entry. Set work aside with a WIP commit, or with `git stash push -u -m <tag>` and "
+            "later `git stash apply <sha>` (the sha from `git stash list --format='%H %gs'`). "
+            f"[rule: {STASH_RULE}]")
 
 
 # Each git read is bounded; a slower git denies the commit (it is never allowed unscanned).
@@ -144,6 +188,7 @@ class Commit:
     verb: str = "commit"                                     # "route": only routes to scan
     head: Optional[tuple] = None                             # routes.follow_head: where HEAD may move
     routes: list = field(default_factory=list)               # cherry-pick, merge, am, ... calls
+    stash_issue: Optional[str] = None                        # a refused `git stash` form it runs
 
     def git(self, *args: str) -> list:
         return (["-C", self.repo] if self.repo else []) + self.options + list(args)
@@ -210,6 +255,8 @@ def read_commit(command: str, cwd: Optional[str], depth: int = 0,
             exported.update(filter(None, map(_assignment, command_words[1:])))
         elif _is_git(head):
             sub, call = _git_call(command_words, base, env)
+            if sub == "stash" and shared_stash(call.args):
+                before.append(_StashStep(shared_stash(call.args)))
             if sub and sub[0] != "!":
                 routes.follow_head(sub, call, before, call.ask)
             if sub and (sub == "commit" or sub in routes.ROUTE_VERBS):
@@ -255,15 +302,20 @@ def read_commit(command: str, cwd: Optional[str], depth: int = 0,
     calls = [step for step in before if isinstance(step, Commit) and step.verb != "add"]
     commits = [step for step in calls if step.verb == "commit"]
     calls = [step for step in calls if commits or step.verb != "paths"]  # read only for a commit
+    stash = next((step.form for step in before if isinstance(step, _StashStep)), None)
     if not calls or _before is not None:
+        if stash and _before is None:
+            raise SharedStash(stash)
         return None
     if not commits:
-        return Commit(calls[0].repo, calls[0].options, calls[0].env, verb="route", routes=calls)
+        return Commit(calls[0].repo, calls[0].options, calls[0].env, verb="route", routes=calls,
+                      stash_issue=stash)
     first, prior = commits[0], before[:before.index(commits[0])]
     first.stagings = [step for step in prior if isinstance(step, Commit) and step.verb == "add"]
     first.stage_issue = next((step for step in prior if isinstance(step, str)), None) or (
         "it runs a second commit, whose content cannot be read ahead" if commits[1:] else None)
     first.routes = [step for step in calls if step.verb != "commit"]
+    first.stash_issue = stash
     return first
 
 
@@ -302,7 +354,7 @@ def find_commit(command: str, cwd: Optional[str]) -> tuple:
     (the payload cwd, or None for this process's cwd, when it runs none)."""
     try:
         commit = read_commit(command, cwd)
-    except (Unread, routes.Unreadable):
+    except (Unread, routes.Unreadable, SharedStash):
         commit = None
     if commit:
         return True, commit.repo
@@ -314,7 +366,7 @@ def _commit_args(command: str) -> list:
     message is one word), or [] when there is none or it cannot be read."""
     try:
         commit = read_commit(command, None)
-    except (Unread, routes.Unreadable):
+    except (Unread, routes.Unreadable, SharedStash):
         return []
     return (commit.args or []) if commit else []
 
@@ -637,131 +689,6 @@ def check_security(staged_files, added: Optional[dict] = None, *, repo: Optional
     return errors
 
 
-_LOG_CALL = re.compile(r'\b(?:print|console\.log)\s*\(', re.IGNORECASE)
-_WORD = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
-_KEY_LOOKUP_BEFORE = re.compile(r'(?:\[|(?:getenv|\.get|environ)\s*\()\s*$')
-# Words that name a count or tokenizer tooling, never a credential. Every other word
-# containing "token" is treated as a value, including plurals such as access_tokens.
-_TOKEN_EXEMPT = re.compile(
-    r'^(?:max|num|count|input|output|total|prompt|completion|cached|used|remaining'
-    r'|cache_read|cache_creation)_tokens$'
-    r'|^token_(?:count|len|limit|budget|usage)$|^\w*tokeniz\w*$')
-_PROSE_TOKEN = re.compile(r'\btoken\b', re.IGNORECASE)
-
-
-def _placeholders(body: str, opener: str) -> list:
-    """The code inside `{...}` (f-string) or `${...}` (template literal) placeholders."""
-    out, depth, start, i = [], 0, None, 0
-    while i < len(body):
-        if depth == 0 and body.startswith(opener, i):
-            depth, start = 1, i + len(opener)
-            i = start
-            continue
-        if depth and body[i] == "{":
-            depth += 1
-        elif depth and body[i] == "}":
-            depth -= 1
-            if depth == 0:
-                out.append(body[start:i])
-        i += 1
-    return out
-
-
-def _without_placeholders(body: str, opener: str) -> str:
-    for code in _placeholders(body, opener):
-        body = body.replace(opener + code + "}", " ", 1)
-    return body
-
-
-def _split_call(text: str) -> tuple:
-    """(code_words, prose) for the arguments in `text`.
-
-    Code words are the identifiers the code reads, including f-string and template
-    placeholders. A string literal with no whitespace is a key and its words count
-    as code (`getattr(creds, 'access_token')`, `cfg['api_token']`); so does a lookup
-    key. A string with whitespace is prose and is returned separately.
-    """
-    words, prose, i, code_start = [], [], 0, 0
-    while i < len(text):
-        ch = text[i]
-        if ch in "'\"`":
-            prefix = re.search(r'([A-Za-z]{0,2})$', text[code_start:i]).group(1).lower()
-            words += _WORD.findall(text[code_start:i - len(prefix)])
-            end = i + 1
-            while end < len(text) and text[end] != ch:
-                end += 2 if text[end] == "\\" else 1
-            body = text[i + 1:end]
-            opener = "${" if ch == "`" else ("{" if "f" in prefix else None)
-            literal = body
-            if opener:
-                for code in _placeholders(body, opener):
-                    code_words, code_prose = _split_call(code)
-                    words += code_words
-                    prose += code_prose
-                literal = _without_placeholders(body, opener)
-            if (literal.strip() and not re.search(r'\s', literal.strip())) \
-                    or _KEY_LOOKUP_BEFORE.search(text[:i - len(prefix)]):
-                words += _WORD.findall(literal)
-            else:
-                prose.append(literal)
-            i = code_start = end + 1
-            continue
-        i += 1
-    words += _WORD.findall(text[code_start:])
-    return words, prose
-
-
-def _snake(word: str) -> str:
-    return re.sub(r'(?<=[a-z0-9])([A-Z])', r'_\1', word).lower()
-
-
-def _exempt(word: str) -> bool:
-    return bool(_TOKEN_EXEMPT.match(_snake(word)))
-
-
-def logs_token_value(line: str) -> bool:
-    """True when a print/console.log call on this line may log a token's value: a code word
-    containing "token" not in _TOKEN_EXEMPT, or prose naming "token" beside any non-exempt code
-    value. Rules in the notes."""
-    for call in _LOG_CALL.finditer(line):
-        words, prose = _split_call(line[call.end():])
-        values = [w for w in words if not _exempt(w)]
-        if any("token" in w.lower() for w in values):
-            return True
-        if values and any(_PROSE_TOKEN.search(p) for p in prose):
-            return True
-    return False
-
-
-
-# A code word naming a password, a secret or an api key (read as snake_case), unless it names a
-# property of one (its length, policy, field, label, name, path, ...) rather than the value.
-_CREDENTIAL_WORD = re.compile(r'passw(?:or)?d|secret|api_?key')
-_CREDENTIAL_EXEMPT = re.compile(
-    r'_(?:length|len|min|max|policy|field|label|prompt|required|hint|rules?|strength|count'
-    r'|names?|paths?|ids?|file|manager)$')
-
-
-def _credential_value(word: str) -> bool:
-    snake = _snake(word)
-    return bool(_CREDENTIAL_WORD.search(snake)) and not _CREDENTIAL_EXEMPT.search(snake)
-
-
-def logs_secret_value(line: str) -> bool:
-    """True when a print/console.log call on this line may log a credential's value.
-
-    Password, secret and api key: a code word (identifier, placeholder or lookup key) that names
-    one is a value; prose naming one (a prompt such as 'Enter password: ') is not. Token keeps its own
-    rule, logs_token_value."""
-    if logs_token_value(line):
-        return True
-    for call in _LOG_CALL.finditer(line):
-        words, _ = _split_call(line[call.end():])
-        if any(_credential_value(word) for word in words):
-            return True
-    return False
-
-
 def check_frontend_credentials(staged_files, added: dict):
     """SACROSANCT Rule 2: Check for credential exposure in frontend code."""
     errors = []
@@ -932,12 +859,15 @@ def main():
         except routes.Unreadable as error:
             _deny(f"PACT git_commit_check: {error}, so what it commits or merges cannot be "
                   "scanned first.")
+        except SharedStash as error:
+            _deny(_stash_refusal(str(error)))
         if commit is None or (commit.verb == "route" and named):
             if not named:
                 print(_SUPPRESS_OUTPUT)
                 sys.exit(0)  # Not a commit command, allow it
             commit = Commit(repo=os.path.abspath(os.path.expanduser(cwd)) if cwd else None, args=None,
-                            routes=commit.routes if commit else [])
+                            routes=commit.routes if commit else [],
+                            stash_issue=commit.stash_issue if commit else None)
             if re.search(r'\bgit\b', command[:named.start()], re.I):
                 commit.stage_issue = "the command could not be read, so what it stages first is unknown"
 
@@ -971,6 +901,13 @@ def replayed_stagings_or_deny(commit: Commit):
               "Name the patch files or commits in the command.")
 
 
+def _refuse_stash(commit: Commit) -> None:
+    """Deny a command whose scan passed but which also runs a refused `git stash` form; a scan
+    that denies first keeps its own reason (a stash before a commit is a staging step)."""
+    if commit.stash_issue:
+        _deny(_stash_refusal(commit.stash_issue))
+
+
 def _check_and_exit(command: str, commit: Commit) -> NoReturn:
     """Scan what `commit` takes and exit: 2 (blocked) on a security error, 0 otherwise."""
     # The message first: an amend with nothing staged still sends it.
@@ -993,6 +930,7 @@ def _check_and_exit(command: str, commit: Commit) -> NoReturn:
 
     # If nothing is committed, let git handle the error
     if not staged_files and not security_errors:
+        _refuse_stash(commit)
         print(_SUPPRESS_OUTPUT)
         sys.exit(0)
 
@@ -1039,6 +977,7 @@ def _check_and_exit(command: str, commit: Commit) -> NoReturn:
         print("See SACROSANCT rules in CLAUDE.md for guidance.", file=sys.stderr)
         sys.exit(2)  # Block the tool execution
 
+    _refuse_stash(commit)
     notice = pragma_notice(skipped)
     if notice:
         print(json.dumps({"systemMessage": notice, "hookSpecificOutput": {

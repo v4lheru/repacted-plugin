@@ -400,7 +400,7 @@ def _refuse_live_db_under_pytest(db_path) -> None:
     a residual rather than as a justification.
 
     WHY IT IS GATED, AND WHY THE GATE IS NOT OPTIONAL. The documented
-    production invocations (`/repacted:prune-memory` saves a pin through
+    production invocations (`/repacted:init prune` saves a pin through
     `save`) pass NO `--db-path` -- production SHOULD use the real store. An
     ungated refusal would break them outright. Outside pytest this function returns immediately.
 

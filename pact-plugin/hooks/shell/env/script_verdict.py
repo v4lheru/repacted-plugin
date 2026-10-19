@@ -23,7 +23,7 @@ from shell.env.names import (GLOB_BUDGET_MESSAGE, _WRITE_REDIRECT, glob_budget_o
                              mentions_class, reset_glob_budget, token_protected)
 from shell.env.places import (_Directory, _PIPE, _merge, _names_only_search, _search_skip, resolve_path_substitutions)
 from shell.env.programs import (GREP_PROGRAMS, NAME_CONSUMERS, PARSE_MESSAGE, PRINTERS, READERS, RG_PROGRAMS, SILENT_STDIN, SUGGESTION, UNREADABLE_MESSAGE, WALK_LIMIT)
-from shell.env.script import (_BODY, _BODY_KEY, _SUB_KEY, _State, _Step, _command_steps, _literal_rounds, _pull_substitutions, _read, _spell_rounds, normalize_env_get)
+from shell.env.script import (_BODY, _BODY_KEY, _SUB_KEY, _State, _Step, _command_steps, _literal_rounds, _pull_substitutions, _read, _spell_rounds, bind_names, loop_bindings, normalize_env_get)
 from shell.env.search import (_TooLarge, _named_message, _search_roots, first_protected_file, recursive_search)
 from shell.env import judge as _judge
 
@@ -149,10 +149,11 @@ def _listed_names_verdict(placed: list) -> str | None:
             continue
         roots, excludes, includes, hidden = search
         for here in source_places:
-            known = _search_roots(roots, here)
             try:
+                known = _search_roots(roots, here)
                 found = known and first_protected_file(known, here, excludes, hidden, includes)
             except _TooLarge:
+                known = []
                 found = f"one of more than {WALK_LIMIT} entries"
             if known is None:
                 found = "a name from a path not known here"
@@ -276,19 +277,27 @@ def _script_verdict(text: str, cwd: str | None, state: _State,
     command = _WRITE_REDIRECT.sub(
         lambda m: " " if token_protected(m.group(2), cwd) else m.group(0), command)
     command, rounds = _literal_rounds(command)
-    outer, judged = state.spell, None
+    outer = state.spell
     try:
-        for flags in (False, True):
-            variant, pairs = _expand_path_variables(command, cwd, flags)
-            if variant == judged:
-                break
-            judged = variant
-            state.spell = lambda body, pairs=pairs: _spell_pairs(_spell_rounds(body, rounds),
-                                                                 pairs)
-            reason = judge(variant, cwd, state, captured)
-            if reason:
+        for binding in loop_bindings(command):      # once per loop word
+            bound, judged = bind_names(command, binding), None
+            for flags in (False, True):
+                variant, pairs = _expand_path_variables(bound, cwd, flags)
+                if variant == judged:
+                    break
+                judged = variant
+                state.spell = lambda body, pairs=pairs: _spell_pairs(_spell_rounds(body, rounds),
+                                                                     pairs)
+                reason = judge(variant, cwd, state, captured)
+                if reason:
+                    return reason
+        notice = None
+        for binding in loop_bindings(original):
+            reason = git_egress_pass(bind_names(original, binding), cwd)
+            if reason and not isinstance(reason, Notice):
                 return reason
-        return git_egress_pass(original, cwd)
+            notice = notice or reason
+        return notice
     finally:
         state.spell = outer
 

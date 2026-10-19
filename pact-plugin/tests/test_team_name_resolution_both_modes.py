@@ -84,6 +84,13 @@ from unittest.mock import patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def teams_mode(monkeypatch):
+    """Rules (6)-(8b) are Agent Teams rules (shared/execution.py); this file runs them there."""
+    monkeypatch.setenv("REPACT_EXECUTION", "teams")
+    monkeypatch.setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
+
 _SUPPRESS_EXPECTED = {"suppressOutput": True}
 _NAME = "tester"
 
@@ -152,7 +159,7 @@ def _seed_team_store(tmp_path, *, team_name, lead_session_id, members=(), tasks=
     tasks_dir.mkdir(parents=True, exist_ok=True)
     for i, (owner, status) in enumerate(tasks):
         (tasks_dir / f"task_{i}.json").write_text(
-            json.dumps({"id": str(i), "owner": owner, "status": status}),
+            json.dumps({"id": str(i), "owner": owner, "metadata": {"dispatch": {"name": owner}}, "status": status}),
             encoding="utf-8",
         )
 
@@ -421,7 +428,7 @@ def _seed_config_less_team_store(tmp_path, *, team_name, tasks=()):
     tasks_dir.mkdir(parents=True, exist_ok=True)
     for i, (owner, status) in enumerate(tasks):
         (tasks_dir / f"task_{i}.json").write_text(
-            json.dumps({"id": str(i), "owner": owner, "status": status}),
+            json.dumps({"id": str(i), "owner": owner, "metadata": {"dispatch": {"name": owner}}, "status": status}),
             encoding="utf-8",
         )
 

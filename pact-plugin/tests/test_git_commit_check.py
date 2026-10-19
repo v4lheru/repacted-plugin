@@ -1226,3 +1226,40 @@ class TestStagingInTheSameCommand:
         assert _commit_in(staging_repo, "git add -A && git commit -m x", capsys)[0] == 2
         assert (staging_repo / ".git" / "index").read_bytes() == before
         assert os.listdir(tempfile.gettempdir()) == []
+
+
+class TestSharedStash:
+    """The stash stack is one per repository, shared by every worktree and session: a stash form
+    that takes or drops whichever entry is on top is refused, read as the commit scan reads git."""
+
+    @pytest.mark.parametrize("command", [
+        "git stash", "git stash -u", "git stash -q -k", "git stash push", "git stash push -u -- a.py",
+        "git stash save wip", "git stash save", "git stash pop", "git stash pop -q stash@{1}",
+        "git stash drop", "git stash drop -q", "git stash clear",
+        "git -C . stash pop", "GIT_DIR=.git git stash", "env FOO=1 git stash pop",
+        "git -c core.quotepath=off stash", "/usr/bin/git stash pop", "rtk git stash",
+        "git -c alias.s=stash s pop", "git -c 'alias.s=!git stash pop' s", "sh -c 'git stash pop'",
+        "git stash && git pull --rebase && git stash pop", "git status; git stash drop",
+    ])
+    def test_a_stash_that_takes_the_top_entry_is_refused(self, staging_repo, command, capsys):
+        code, err = _commit_in(staging_repo, command, capsys)
+        assert code == 2 and "git_commit_check.shared_stash" in err and "stash apply <sha>" in err, (
+            command, err)
+
+    @pytest.mark.parametrize("command", [
+        "git stash push -m wip-a", "git stash push -u -m wip-a -- a.py", "git stash -m wip-a",
+        "git stash -um wip-a", "git stash push --message=wip-a", "git stash push -mwip-a",
+        "git stash list", "git stash list --format='%H %gs'", "git stash show -p stash@{0}",
+        "git stash apply 1a2b3c4", "git stash drop stash@{2}", "git stash branch side 1a2b3c4",
+        "git reset --hard HEAD", "echo git stash pop",
+    ])
+    def test_a_tagged_or_read_only_stash_passes(self, staging_repo, command, capsys):
+        assert _commit_in(staging_repo, command, capsys)[0] == 0, command
+
+    def test_a_stash_after_a_clean_commit_is_refused_and_before_one_keeps_its_reason(
+            self, staging_repo, capsys):
+        _git(staging_repo, "add", "clean.py")
+        code, err = _commit_in(staging_repo, "git commit -m x && git stash pop", capsys)
+        assert code == 2 and "git_commit_check.shared_stash" in err, err
+        code, err = _commit_in(staging_repo, "git stash pop && git commit -m x", capsys)
+        assert code == 2 and "`git stash`" in err and "second call" in err, err

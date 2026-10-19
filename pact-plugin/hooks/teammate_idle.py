@@ -58,6 +58,7 @@ from shared.error_output import hook_error_json
 import shared.pact_context as pact_context
 from shared.background_work import frame_team_and_name
 from shared.session_state import _sanitize_member_name
+from shared.payload_digest import stored_teachback
 from shared.task_utils import iter_team_task_jsons
 
 
@@ -173,7 +174,7 @@ def missed_wake_line(tasks: list, session_dir: str, now: datetime | None = None)
         if not task_id or not said_once(session_dir, f"wake:{task_id}", str(wait.get("since") or "")):
             continue
         stored = ("HANDOFF stored" if isinstance(metadata.get("handoff"), dict)
-                  else "teachback stored" if isinstance(metadata.get("teachback_submit"), dict)
+                  else "teachback stored" if isinstance(stored_teachback(metadata), dict)
                   else "nothing stored")
         found.append(f"#{task_id} ({_sanitize_member_name(str(task.get('owner') or '')) or 'unknown'}, {stored})")
     if not found:

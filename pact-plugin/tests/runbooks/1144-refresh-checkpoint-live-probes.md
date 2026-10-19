@@ -1,12 +1,12 @@
-# Runbook: /repacted:refresh Mid-Workstream Checkpoint Live Probes
+# Runbook: /repacted:pause Mid-Workstream Checkpoint Live Probes
 
-**Purpose:** the post-merge runtime-confirmation gate for the /repacted:refresh
+**Purpose:** the post-merge runtime-confirmation gate for the /repacted:pause checkpoint
 command (#1144). The CI layers ship in the PR: schema round-trips
 (`test_session_journal.py`), the fail-safe resolver + spent-check + arbitration
 (`test_session_resume.py`), the real-`main()` surfacing matrix
-(`test_session_init.py::TestRefreshSurfacingMatrix`), the reaper guard truth
-table (`test_session_end.py`), and the command structural pins
-(`test_commands_structure.py`). What CI CANNOT prove is compaction-boundary
+(`test_session_init.py::TestRefreshSurfacingMatrix`), and the reaper guard truth
+table (`test_session_end.py`); the command structural pins
+(`test_commands_structure.py`) were removed in 2.1.0. What CI CANNOT prove is compaction-boundary
 behavior: whether the surfaced prompt survives an actual `/compact` render,
 whether tmux-mode TaskStop matches the in-process shutdown semantics the
 design encoded, and whether the full fire-once cycle behaves end-to-end in a

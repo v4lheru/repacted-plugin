@@ -9,8 +9,8 @@ missed-wake alarm, with a once-per-(task, since) missed_wake row); candidate mut
 waits and unanchored waits discharging a record, which are two predicates over the same rows
 rather than two scans; and a teammate idle on a finished unattended run (shared/finished_runs).
 A fourth alarm, stale unflagged background launches, reads the background registry, not the
-waits. The prompt_kind row and the straggler line live in journal_emitter (shared/prompt_kind).
-No markers: live task state and journal reads are the dedup.
+waits. On UserPromptSubmit it also writes the prompt_kind row and adds the straggler line
+(shared/prompt_kind; here since 2.1.0). No markers: live task state and journal reads are the dedup.
 
 # livelock-safe: additionalContext only on a surface path; suppressOutput otherwise; exit 0
 # on every path; the only write is the journal append.
@@ -416,6 +416,19 @@ def run_surface(input_data: dict, now: "datetime | None" = None) -> "str | None"
     return surface
 
 
+def _with_straggler(input_data: dict, surface: "str | None") -> "str | None":
+    """The prompt_kind row, and the straggler line after the surface. Both gate on the lead
+    frame themselves; any error leaves the surface as it was."""
+    try:
+        from shared import prompt_kind
+
+        straggler = prompt_kind.build_straggler_line(input_data)
+        prompt_kind.journal_prompt_kind(input_data, straggler=straggler is not None)
+    except Exception:
+        return surface
+    return "\n\n".join(part for part in (surface, straggler) if part) or None
+
+
 def main() -> None:
     # Broad catch-all keeps exit 0 on every path (livelock safety beats observability here).
     try:
@@ -428,6 +441,8 @@ def main() -> None:
             sys.exit(0)
         pact_context.init(input_data)
         surface = run_surface(input_data)
+        if input_data.get("hook_event_name") == "UserPromptSubmit":
+            surface = _with_straggler(input_data, surface)
         if surface:
             # Echo the firing event's name back per the additionalContext contract; the hook
             # is registered only on the two surface events.

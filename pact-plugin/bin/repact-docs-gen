@@ -10,7 +10,7 @@ transforms apply; anywhere else the tree is read as it is.
 
 `--check` writes nothing and exits 1 when any page differs from a fresh render (CI: the
 regeneration yields no diff). `--pages` limits the run, e.g. to the plugin's own
-docs/troubleshooting.md, which repact-explain and hooks/shared/rules.py point to.
+docs/troubleshooting.md, which `repact inspect --refusals` and hooks/shared/rules.py point to.
 
 Usage: repact-docs-gen [--check] [--pages NAME[,NAME]] ROOT
 Exit codes: 0 written or unchanged; 1 --check found a page that differs; 2 usage or source error.

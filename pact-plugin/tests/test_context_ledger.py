@@ -1,6 +1,6 @@
 """tests/test_context_ledger.py: per-agent attribution and the once-per-tier advisory
 (hooks/shared/context_ledger.py), end to end through dispatch, plus bin/repact-cost and
-repact-explain --agent. Attribution sums SIZES and keeps no text; nothing is said under the
+`repact inspect --refusals --agent`. Attribution sums SIZES and keeps no text; nothing is said under the
 advise line, each tier once per actor, a new name starts at zero; the transcript is measured
 by os.stat alone. The noise rule runs with the lines lowered through profile.json
 (`context_lines`), the tunable the module ships."""
@@ -172,6 +172,11 @@ class TestBudget:
     def test_large_by_risk(self):
         assert self._lines(_task(variety={"scope": 1, "risk": 4})) == self.LARGE
 
+    def test_large_by_the_stamp_repact_dispatch_writes(self):
+        assert self._lines(_task(dispatch={"variety": {"scope": 4, "risk": 2, "total": 9}})) == self.LARGE
+        assert self._lines(_task(variety={"scope": {"score": 3, "rationale": "r"},
+                                          "risk": {"score": 1, "rationale": "r"}})) == self.LARGE
+
     def test_explicit_budget_wins_over_the_stamp_and_is_clamped(self):
         assert self._lines(_task(context_budget_kb=700, variety={"scope": 4})) == (420_000, 700_000)
         assert self._lines(_task(context_budget_kb=350.5)) == (210_300, 350_500)
@@ -310,9 +315,9 @@ def test_the_lead_hears_each_tier_once_on_the_frame_after_the_crossing(session):
     assert said[4].startswith("context: lead ~1 KB after 4 calls; consider a fresh session")
     assert said[5] == ""                                               # not repeated
     assert said[7].startswith("context: lead is past the stop line (~2 KB after 7 calls)")
-    # The lead's own wording: its work goes on in fresh agents, and the user runs the refresh.
+    # The lead's own wording: its work goes on in fresh agents, and the user runs the checkpoint.
     assert "do no new work in THIS context" in told[7] and told[7].startswith("ran\n")
-    assert "give it to a fresh agent" in told[7] and "/repacted:refresh then /compact" in told[7]
+    assert "give it to a fresh agent" in told[7] and "/repacted:pause checkpoint then /compact" in told[7]
     assert "start no new work" not in told[7] and "write your HANDOFF" not in told[7]
     assert said[8].startswith("context: lead is past the hard line (~3 KB after 8 calls)")
     assert "write your HANDOFF now" in told[8]
@@ -325,7 +330,9 @@ def test_the_lead_hears_each_tier_once_on_the_frame_after_the_crossing(session):
 # --- the CLIs -------------------------------------------------------------------------------
 
 def _cli(name, *args):
-    return subprocess.run([sys.executable, str(PLUGIN_ROOT / "bin" / name), *args],
+    argv = ["bash", str(PLUGIN_ROOT / "bin" / "repact"), "inspect", "--refusals"] if name == "repact inspect --refusals" \
+        else [sys.executable, str(PLUGIN_ROOT / "bin" / name)]
+    return subprocess.run([*argv, *args],
                           capture_output=True, text=True,
                           env={**os.environ, "CLAUDE_CODE_SESSION_ID": ""}, timeout=30)
 
@@ -355,8 +362,8 @@ def test_repact_explain_filters_refusals_by_agent(tmp_path):
                 "frame": "teammate", "event": "PreToolUse"}
         return json.dumps({**base, **({"agent": agent} if agent else {})})
     (tmp_path / "session-journal.jsonl").write_text(row("bob") + "\n" + row("") + "\n")
-    done = _cli("repact-explain", "--agent", "bob", "--session-dir", str(tmp_path), "--json")
+    done = _cli("repact inspect --refusals", "--agent", "bob", "--session-dir", str(tmp_path), "--json")
     assert done.returncode == 0 and [r["agent"] for r in json.loads(done.stdout)] == ["bob"]
-    done = _cli("repact-explain", "--agent", "bob", "--session-dir", str(tmp_path))
+    done = _cli("repact inspect --refusals", "--agent", "bob", "--session-dir", str(tmp_path))
     assert "agent bob" in done.stdout
-    assert _cli("repact-explain", "--agent", "alice", "--session-dir", str(tmp_path)).returncode == 1
+    assert _cli("repact inspect --refusals", "--agent", "alice", "--session-dir", str(tmp_path)).returncode == 1

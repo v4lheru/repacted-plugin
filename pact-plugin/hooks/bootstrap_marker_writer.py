@@ -13,9 +13,13 @@ Used by: hooks.json — registered under TWO events, both running this same
            - UserPromptSubmit (no matcher — fires every prompt): steady-state
              turn-2+ self-heal; the semantically-strongest "ritual
              demonstrably completed" surface.
-           - PostToolUse matched on `Agent`: stamps the marker WITHIN the
-             bootstrapping turn when a spawn is what made the team appear on
-             disk, before the next specialist dispatch is gate-checked.
+           - PostToolUse matched on `Agent|TaskCreate|TaskUpdate`: stamps the
+             marker WITHIN the bootstrapping turn when a spawn or a task write
+             is what made the team appear on disk, before the next specialist
+             dispatch is gate-checked. Under `claude -p` the one prompt fires
+             before the team exists and the platform provisions the team on
+             the first TaskCreate, so the task events are the only trigger
+             that can precede the first Agent call there.
          The marker CONTENT is byte-identical regardless of which event fired
          (same _write_marker + signature SSOT); the firing event affects ONLY
          the echoed hookEventName, never the digest.
@@ -173,6 +177,7 @@ try:
         MARKER_MAX_BYTES,
         MARKER_SCHEMA_VERSION,
         expected_marker_signature,
+        session_dir_unlinked,
     )
     from shared.session_resume import update_session_info
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
@@ -272,17 +277,24 @@ def _team_is_identified(team_name: str) -> bool:
     yield nothing), and a member counts only when it carries a non-empty string
     ``name`` (the platform always writes one), so an empty or malformed roster
     is NOT an identified team.
+    A symlinked ``teams/<team_name>``, ``config.json`` or ``inboxes/`` is never
+    identified: the platform provisions real files, and a link could borrow
+    another team's roster. Symlinked ancestors (a linked
+    config dir) stay allowed. Known limit: a real config.json planted with a
+    roster is read like the platform's own.
     Fail-safe ``False`` on any error.
     """
     if not team_name:
         return False
     try:
+        team_dir = pact_context.get_claude_config_dir() / "teams" / team_name
+        if any(path.is_symlink() for path in (team_dir, team_dir / "config.json", team_dir / "inboxes")):
+            return False
         for member in pact_context._iter_members(team_name):
             name = member.get("name")
             if isinstance(name, str) and name.strip():
                 return True
-        teams_dir = pact_context.get_claude_config_dir() / "teams"
-        return (teams_dir / team_name / "inboxes").is_dir()
+        return (team_dir / "inboxes").is_dir()
     except Exception:
         return False
 
@@ -397,6 +409,19 @@ def _write_marker(session_dir: Path, session_id: str, plugin_root: str,
         except OSError:
             pass
         raise
+
+
+def write_at_session_start(session_dir: Path, plugin_root: str) -> bool:
+    """Subagents mode: session_init writes the marker at
+    SessionStart, because this hook is Teams-only and no team ritual exists to verify.
+    True when a valid marker is there afterwards. The caller has checked the lead frame."""
+    if is_marker_set(session_dir):
+        return True
+    plugin_version = _read_plugin_version(plugin_root)
+    if not plugin_root or not plugin_version or not session_dir_unlinked(session_dir):
+        return False
+    _write_marker(session_dir, session_dir.name, plugin_root, plugin_version)
+    return True
 
 
 def _write_back_aligned_team_name() -> None:
@@ -558,6 +583,10 @@ def _try_write_marker(input_data: dict) -> None:
     plugin_root = pact_context.get_plugin_root()
     plugin_version = _read_plugin_version(plugin_root)
     if not plugin_root or not plugin_version:
+        return
+
+    # The gate's own symlink question (session_dir_unlinked): a marker it would never read is not written.
+    if not session_dir_unlinked(session_dir):
         return
 
     session_id = session_dir.name

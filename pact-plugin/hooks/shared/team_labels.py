@@ -4,7 +4,7 @@ Summary: Who a session is, as a label for records: teammate_label and label_from
          (team, name) from the registry and the host task files, team_exists,
          teams_claiming_session, lead_label_for_session, current_task_id, and git_context
          (branch and short sha of a cwd, bounded).
-Used by: hooks/run_ledger.py, bin/repact-wait, shared/evidence/ledger.py, (via the bin/_repact_common
+Used by: hooks/run_ledger.py, bin/repact-wait, shared/task_files.py, (via the bin/_repact_common
          shim).
 Map (file order): teammate_label, label_from_agent_id, team_exists, teams_claiming_session,
 lead_label_for_session, current_task_id, GIT_TIMEOUT_SECONDS, git_context.

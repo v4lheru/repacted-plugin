@@ -5,8 +5,8 @@ Summary: PreToolUse hook matching Edit|Write|MultiEdit|NotebookEdit that blocks
          edits to application code outside the active worktree boundary.
 Used by: hooks.json PreToolUse hook (matcher: Edit|Write|MultiEdit|NotebookEdit)
 
-Only active when PACT_WORKTREE_PATH env var is set (by /repacted:worktree-setup).
-Complete no-op otherwise.
+The worktree boundary is active only when PACT_WORKTREE_PATH is set (by
+/repacted:worktree-setup). The settings check (settings_guard.decide) runs first, always.
 
 Input: JSON from stdin with tool_input.file_path (notebook_path for NotebookEdit)
 Output: JSON with hookSpecificOutput.permissionDecision if blocking
@@ -215,17 +215,35 @@ def check_worktree_boundary(file_path: str, worktree_path: str) -> str | None:
     return None  # Non-app-code outside worktree is fine
 
 
+def _settings_verdict(input_data) -> None:
+    """Exit with settings_guard's deny (2) or ask (0) when the write reaches Claude Code
+    settings or the running plugin's hooks; runs with or without an active worktree."""
+    if not isinstance(input_data, dict):
+        return
+    try:
+        import settings_guard
+
+        output = settings_guard.decide(input_data)
+    except Exception as e:
+        _emit_load_failure_deny("settings", e)
+    if output:
+        print(json.dumps(output))
+        sys.exit(2 if output["hookSpecificOutput"]["permissionDecision"] == "deny" else 0)
+
+
 def main():
+    try:
+        input_data = json.load(sys.stdin)
+    except (ValueError, OSError):   # no payload to judge: the no-op the hook always was
+        print(_SUPPRESS_OUTPUT)
+        sys.exit(0)
+
+    _settings_verdict(input_data)
+
     worktree_path = os.environ.get("PACT_WORKTREE_PATH", "")
     if not worktree_path:
         print(_SUPPRESS_OUTPUT)
-        sys.exit(0)  # No worktree active, complete no-op
-
-    try:
-        input_data = json.load(sys.stdin)
-    except json.JSONDecodeError:
-        print(_SUPPRESS_OUTPUT)
-        sys.exit(0)
+        sys.exit(0)  # No worktree active, the settings check above was the only one
 
     try:
         tool_input = input_data.get("tool_input", {})

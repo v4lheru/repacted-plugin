@@ -1,6 +1,20 @@
-# Waiting, idling and waking (full reference)
+# Waiting, idling and waking (Teams mode only)
 
-Not on the happy path: the SET and CLEAR shapes and the no-poll rule are in [SKILL.md](../SKILL.md#waiting-and-waking). Read this file when a wait outlasts 30 minutes, when work must outlive your turn, or when a wake and the disk disagree.
+**Teams mode only.** This page applies only when you run as an Agent Teams teammate (your spawn context names a team). In the default subagent mode none of it applies: you end your turn, and the lead resumes you with a message.
+
+In Teams mode, after each `repact submit` you send the team-lead one line, SET the wait below and run `repact-wait` in the foreground. Read the rest of this file when a wait outlasts 30 minutes, when work must outlive your turn, or when a wake and the disk disagree.
+
+## The wait, in short
+
+<!-- protocol:wait -->
+1. SET before idling on any protocol wait, as a top-level key: `TaskUpdate(taskId, metadata={"intentional_wait": {"reason": "awaiting_lead_completion", "expected_resolver": "lead", "since": "<now>", "covers_since": "<now>"}})`.
+2. `reason` and `expected_resolver` are non-empty strings. Resolvers: `external`, `lead`, `peer`, `user`. Other reasons: `awaiting_amendment_review`, `awaiting_blocker_resolution`, `awaiting_lead_commit`, `awaiting_lead_takeover`, `awaiting_peer_response`, `awaiting_post_handoff_decision`, `awaiting_teachback_approved`, `awaiting_user_decision`.
+3. `since` is a tz-aware UTC clock reading, never a guess: run `date -u +%Y-%m-%dT%H:%M:%S+00:00` alone; only it and `repact-wait` may run before acceptance.
+4. `covers_since` equals `since` on a new wait; a re-SET of a wait you still hold takes a fresh `since` and carries `covers_since` unchanged: the write replaces the whole object.
+<!-- /protocol -->
+5. CLEAR on the turn the wait resolves: `TaskUpdate(taskId, metadata={"intentional_wait": null})`.
+6. Stay in the turn: run `repact-wait <id> --until completed,rejection,amend` in the FOREGROUND (Bash timeout 600000). HANDOFF accepted: run plain `repact-wait <task id>` (no `--until`) once more; the lead stops you.
+7. After a turn end the lead's `SendMessage` wakes you; never poll `TaskList` or make filler calls (`true`, `sleep`). Run long commands in the foreground, never `run_in_background`: a turn end over a background job is refused unless a wait names the job (`covers_since`).
 
 ## Idle Discipline
 
@@ -12,7 +26,7 @@ output (even zero-content) blocks the next inbox delivery.
 - **Idle-waiting for a protocol-defined resolution** (teachback, team-lead commit,
   peer reply, user decision)? Use the `intentional_wait` task metadata per
   the Intentional Waiting section below.
-- **Awaiting lead completion?** SET the wait (`intentional_wait`; its shape and vocabulary are in SKILL.md §Waiting and waking) after storing your HANDOFF or teachback metadata AND sending the notify `SendMessage` to the team-lead. **Ordering invariant** (audit anchor, lead-side mirror): metadata write FIRST → notify `SendMessage` SECOND → intentional_wait SET THIRD. This ordering exists because the team-lead must wait for teammate's wake-signal `SendMessage` before treating their raw task-file read as authoritative — see [completion.md §Read-Trigger Precondition](../../../protocols/completion.md#read-trigger-precondition). Sending the `SendMessage` before the metadata write lands produces false-empty raw reads on the lead side; going idle before the `SendMessage` strands the lead silently. Then, FOURTH, do not end the turn: run `repact-wait <task id>` in the foreground ([§Waiting in the Turn](#waiting-in-the-turn-repact-wait)). Once your turn has ended, do NOT poll `TaskList` while idle — you cannot self-wake to do so; the team-lead's wake-signal `SendMessage` is the resolver. Your notify carries only the task id, rev and digest; the lead reads the stored copy once, after it arrives.
+- **Awaiting lead completion?** SET the wait (`intentional_wait`; its shape and vocabulary are in §The wait, in short) after `repact submit` stored your HANDOFF or teachback AND you sent the one-line `SendMessage` to the team-lead. **Ordering invariant** (audit anchor, lead-side mirror): `repact submit` FIRST → one-line `SendMessage` SECOND → intentional_wait SET THIRD. This ordering exists because the team-lead must wait for teammate's wake-signal `SendMessage` before treating their raw task-file read as authoritative — see [completion.md §Read-Trigger Precondition](../../../protocols/completion.md#agent-teams-only). Sending the `SendMessage` before the metadata write lands produces false-empty raw reads on the lead side; going idle before the `SendMessage` strands the lead silently. Then, FOURTH, do not end the turn: run `repact-wait <task id>` in the foreground ([§Waiting in the Turn](#waiting-in-the-turn-repact-wait)). Once your turn has ended, do NOT poll `TaskList` while idle — you cannot self-wake to do so; the team-lead's wake-signal `SendMessage` is the resolver. Your notify carries only the task id, rev and digest; the lead reads the stored copy once, after it arrives.
 - **Genuinely stuck**? Follow the On Blocker section.
 
 If you have nothing to say that advances the work, say nothing.
@@ -117,12 +131,12 @@ It polls the task file every 2 s and returns when the file changes or disappears
 
 | Exit | Meaning | Do |
 |---|---|---|
-| 0 | the task file changed | Re-read the task file and act: `completed` (CLEAR the wait; claim Task B, or nothing after an accepted HANDOFF), `*_rejection` (CLEAR, then §On Rejection), `amend_<n>` (dispose of it). On a rejection or an amendment a second line names the reader: `next: repact-payload <id> --key rejection` (or `--key amend`). Nothing to act on (your own or a hook's write): run it again. |
+| 0 | the task file changed | Re-read the task file and act: `completed` (CLEAR the wait; nothing more after an accepted HANDOFF), a `teachback` acceptance (CLEAR, then go on with the work), `*_rejection` (CLEAR, then §On Rejection), `amend_<n>` (dispose of it). On a rejection or an amendment a second line names the reader: `next: repact inspect <id> --key rejection` (or `--key amend`). Nothing to act on (your own or a hook's write): run it again. |
 | 3 | timeout, no change | Run it again. After 3 in a row, end the turn: the wait you SET stays, so `missed_wake_scan` and the stall checks still see you. |
 | 4 | task file missing or gone | Report it to the team-lead, then end the turn. |
 | 2 | usage, or team not resolved | Rerun with `--team`. |
 
-A `SendMessage` sent to you during the wait is not delivered until your turn ends (measured live). Everything you act on must be on disk, which the protocol already guarantees: acceptance is the status, a rejection is `metadata.*_rejection`, an amendment is an `amend_<n>` key. A message never carries a value: read a rejection with `repact-payload <id> --key rejection` and a ruling with `--key amend`.
+A `SendMessage` sent to you during the wait is not delivered until your turn ends (measured live). Everything you act on must be on disk, which the protocol already guarantees: acceptance is the status, a rejection is `metadata.*_rejection`, an amendment is an `amend_<n>` key. A message never carries a value: read a rejection with `repact inspect <id> --key rejection` and a ruling with `--key amend`.
 
 SET the wait before the first run and leave it through every rerun: a re-SET writes the file and wakes your own wait. After the lead accepts your HANDOFF, run `repact-wait` once more and do nothing else: the lead stops you mid-wait, which sends no idle notice. A stop mid-command is expected, not an error.
 
@@ -167,7 +181,7 @@ changed. It names the task and a digest (`[team-lead→<you>] Task #<id>:
 1. **Re-read durable state FIRST**, before acting on a wake — `status`,
    `blockedBy`, current description, and the relevant metadata keys
    (`teachback_rejection`, `handoff_rejection`, `amend_<n>`, or whichever key your
-   wait names). Read a value with `repact-payload <id> --key rejection` or
+   wait names). Read a value with `repact inspect <id> --key rejection` or
    `--key amend`: its header prints the digest the wake names. `TaskGet` does not
    surface metadata.
 2. **Durable state is authoritative; the wake is only a signal.** If durable state
@@ -180,7 +194,7 @@ changed. It names the task and a digest (`[team-lead→<you>] Task #<id>:
    resolves nothing (a crossed or redundant message, a peer ping) gets no reply —
    return to idle silently per §Idle Discipline and §Counter-Confirm Suppression.
    If the wake names a write the disk does not yet show (e.g., the wake says
-   "rejected on disk" but `repact-payload` exits 4), the durable write may
+   "rejected on disk" but `repact inspect --key` exits 4), the durable write may
    still be in flight: re-read once after a brief pause; never act on a single empty
    read; if still empty, keep waiting.
 4. **Crossed mid-turn directives reconcile the same way.** If an inbound directive
@@ -195,7 +209,7 @@ This rule generalizes the read flow of §On Rejection to every wait
 resolution, and it is what makes the team-lead's wake message redundant-by-design:
 ordering-immune at every seam, with no hook required (a synchronous wake-detection
 hook cannot exist — see the non-goal note in
-[completion.md §Crossed-Wake Idles](../../../protocols/completion.md#crossed-wake-idles)).
+[completion.md §Crossed-Wake Idles](../../../protocols/completion.md#agent-teams-only)).
 The no-poll discipline is unchanged: you still cannot poll while idle; this rule
 fires ON wake, whatever woke you.
 

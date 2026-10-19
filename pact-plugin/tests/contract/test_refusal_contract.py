@@ -4,7 +4,7 @@ Every rule id in hooks/shared/rules.py carries a non-empty `instead` (one plain 
 to do instead) and an anchor on docs/troubleshooting.md. The refusal line the host shows is
 `<check>: <reason> → <instead> [rule: <id>]` for a registered id, the tail last and unchanged;
 a fallback id (`<check>.<channel>`) and a registry that cannot load add no segment, and the
-refusal stands either way. `repact-explain --last` prints the way through and the anchor.
+refusal stands either way. `repact inspect --refusals last` prints the way through and the anchor.
 """
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import dispatch
@@ -76,7 +75,7 @@ def test_repact_explain_last_prints_the_way_through_and_the_anchor(tmp_path):
             for i, rule in enumerate(("mg.token.mismatch", "env.search.unknown_root"))]
     (session_dir / "session-journal.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(PLUGIN_ROOT / "bin" / "repact-explain"), "--last",
+    done = subprocess.run(["bash", str(PLUGIN_ROOT / "bin" / "repact"), "inspect", "--refusals", "last",
                            "--session-dir", str(session_dir)], capture_output=True, text=True,
                           env={**os.environ, "CLAUDE_CODE_SESSION_ID": ""}, timeout=30)
     assert done.returncode == 0, done.stderr

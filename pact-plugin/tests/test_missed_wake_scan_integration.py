@@ -55,7 +55,6 @@ from pathlib import Path
 
 import pytest
 
-import journal_emitter  # noqa: E402
 import missed_wake_scan as mw  # noqa: E402
 import teammate_idle  # noqa: E402
 from shared import prompt_kind as pk, session_journal, task_utils  # noqa: E402
@@ -455,13 +454,6 @@ class TestPromptKindRow:
         journal = Path(session_journal.get_journal_path()).read_text(encoding="utf-8")
         assert MARKER not in journal and "coder" not in journal
 
-    def test_main_journals_the_row_and_prints_what_it_printed_before(self, live_task_env, monkeypatch, capsys):
-        import io
-        for prompt in (f"hello {MARKER}", _teammate(IDLE)):
-            monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_lead_prompt(prompt))))
-            assert journal_emitter.main() == 0
-            assert json.loads(capsys.readouterr().out) == {"suppressOutput": True}
-        assert [event["kind"] for event in read_events("prompt_kind")] == ["user_typed", "idle_notification"]
 
     def test_only_a_lead_prompt_is_journaled(self, live_task_env):
         session_start = _lead_prompt("x")

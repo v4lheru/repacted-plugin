@@ -48,12 +48,13 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from telegram.config import CONFIG_DIR
 from telegram.telegram_client import TelegramClient
 
 logger = logging.getLogger("pact-telegram.routing")
 
-# Coordinator base directory
-COORDINATOR_DIR = Path.home() / ".claude" / "pact-telegram" / "coordinator"
+# Coordinator base directory, under the same config root as the .env
+COORDINATOR_DIR = CONFIG_DIR / "coordinator"
 
 # Session heartbeat interval (seconds)
 HEARTBEAT_INTERVAL = 30

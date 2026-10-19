@@ -5,7 +5,12 @@ Location: pact-plugin/bin/repact-unattended. The mode itself (the flag, the
 always-ask class, the classifier) is hooks/shared/unattended.py; hooks/unattended_gate.py
 refuses AskUserQuestion while the mode is ON. This command
 
-  on | off   writes the flag in the session directory and one journal row
+  on | off   writes the flag in the session directory and one journal row. `on` also leaves
+             the session's sticky marker, so the evidence controls stay on for the rest of the
+             session whatever the flag or REPACT_UNATTENDED say later. `off` is
+             the owner's alone: refused inside a Claude Code session (a session id in the
+             environment) or without an interactive terminal; the owner types off to confirm,
+             and it clears the marker. A new session starts fresh.
   status     prints the mode and what decided it (flag, env, unset, or an unusable flag)
   default    records a question the lead answered with its "(Recommended)" option; refused
              unless the gate gave that question (--ref) the verdict default
@@ -35,9 +40,10 @@ for _path in (BIN_DIR, HOOKS_DIR):
 
 from _repact_common import utc_now_iso  # noqa: E402
 from shared import session_journal, unattended  # noqa: E402
+from shared.owner_terminal import SESSION_ENV, TERMINAL_STREAMS, host_session_id, owner_confirms  # noqa: E402
 from shared.pact_context import reconstruct_session_dir  # noqa: E402
 
-SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")
+OFF_RULE = "unattended.off_owner_only"
 REF = re.compile(r"[0-9a-f]{12}")
 MAX_TEXT = 200
 EXAMPLE = "repact-unattended on --session-dir ~/.claude/pact-sessions/<project>/<session id>"
@@ -129,7 +135,23 @@ def state_line(mode) -> str:
     return f"unattended: {'ON' if mode.on else 'OFF'} ({mode.cause})"
 
 
+def owner_off(session_dir: str) -> str:
+    """Why `off` is refused here, or "" when the owner confirmed it at their own terminal."""
+    if host_session_id():
+        return "turning unattended mode off is refused inside a Claude Code session"
+    if not owner_confirms("off", f"Type off to turn unattended mode off for {session_dir}: "):
+        return f"turning unattended mode off needs the owner at their own terminal, {TERMINAL_STREAMS}"
+    return ""
+
+
 def switch(session_dir: str, on: bool) -> int:
+    if not on:
+        why = owner_off(session_dir)
+        if why:
+            print(f"repact-unattended: {why}. Leave the mode on and go on with other work. "
+                  f"[rule: {OFF_RULE}]", file=sys.stderr)
+            return 3
+        unattended.clear_sticky(session_dir)
     unattended.write_flag(session_dir, on, utc_now_iso())
     written = write_row(session_dir, "unattended_mode", state="on" if on else "off", cause="command")
     print(state_line(unattended.read_mode(session_dir)))

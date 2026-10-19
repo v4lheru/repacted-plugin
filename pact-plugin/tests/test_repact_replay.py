@@ -254,8 +254,10 @@ print(json.dumps({{"suppressOutput": True}}))
     tree = make_tree(tmp_path / "hostile", {"gate.py": hostile})
     watched = (live, tree, world["corpus"])
     before = tree_digest(*watched)
+    # PYTHONDONTWRITEBYTECODE: Apple's Python 3.9 writes its own bytecode cache under
+    # $HOME/Library/Caches/com.apple.python; that is the interpreter, not the replay.
     env = {**os.environ, "HOME": str(live_home), "CLAUDE_CONFIG_DIR": str(live_home / ".claude"),
-           "CLAUDE_PLUGIN_DATA": str(live_data)}
+           "CLAUDE_PLUGIN_DATA": str(live_data), "PYTHONDONTWRITEBYTECODE": "1"}
     result = replay("run", "--a", tree, "--b", tree, "--corpus", world["corpus"],
                     "--frame", "scenario-00001", "--frame", "scenario-00003", env=env, cwd=live_repo)
     time.sleep(0.6)     # past the moment the detached child would have written

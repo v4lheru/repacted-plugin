@@ -59,7 +59,7 @@ Select the domain coder based on PR focus:
 
 Each reviewer should state their understanding of the PR's intent before diving into review. This catches cases where a reviewer misunderstands the purpose and produces irrelevant findings.
 
-**Mechanism**: The reviewer's understanding of the PR intent is captured by the **Teachback-Gated Dispatch** above — the reviewer's Task A teachback states the review angle and understanding of intent, is submitted as `metadata.teachback_submit`, and the reviewer idles on `awaiting_lead_completion` until the team-lead accepts (blocking). See [teammate-teachback.md](../../skills/teammate/references/teammate-teachback.md) for the mechanism.
+**Mechanism**: The reviewer's understanding of the PR intent is captured by the **Teachback-Gated Dispatch** above — the reviewer's teachback states the review angle and understanding of intent, is submitted with `repact submit` on its work task, and the reviewer waits for the lead's acceptance before it reviews (blocking). See [teammate-teachback.md](../../skills/teammate/references/teammate-teachback.md) for the mechanism.
 
 ---
 

@@ -3,12 +3,9 @@ Location: pact-plugin/hooks/shared/frame.py
 Summary: One answer to "who is writing in this hook frame": lead or not, the
     acting member's name, the team, the session dir. Resolved once per
     dispatcher run and read by every check that needs it.
-Used by: task_lifecycle_gate.py, handoff_ordering_gate.py, evidence_gate.py,
-    acceptance_flags.py, amendment_gate.py, journal_emitter.py,
-    docker_lock_gate.py; hooks/dispatch.py opens the memo.
-    OPTED OUT on purpose: amendment_relay.py (finds the session dir across
-    project slugs and stays import-light on every Bash/Edit/Read).
-    write_checks.py is not migrated yet.
+Used by: docker_lock_gate.py and background_test_gate.py; hooks/dispatch.py
+    opens the memo. write_checks.py does not read it (its commit rule needs no
+    actor).
 
 THE LEAD PREDICATE. `is_lead_frame` is True for a frame whose `agent_type` is a
 lead spelling (`pact_context.is_lead`, which stays pure), and for a frame with
@@ -99,16 +96,16 @@ class Frame:
             return ""
 
     def task_team(self, task_id: Any) -> str | None:
-        """The team of this session that holds `task_id`'s file (shared/evidence/ledger's
+        """The team of this session that holds `task_id`'s file (shared/task_files'
         `resolve_team`, never another session's team), memoised per task id. Which
         file to read, not authority. None when no team of this session holds it."""
         key = task_id if isinstance(task_id, str) else repr(task_id)
         cache = self.__dict__.setdefault("_task_teams", {})
         if key not in cache:
             try:
-                from shared import evidence   # the facade: a test patches resolve_team there
+                from shared import task_files   # a test patches resolve_team there
 
-                cache[key] = evidence.resolve_team(self.payload.get("session_id"), task_id)
+                cache[key] = task_files.resolve_team(self.payload.get("session_id"), task_id)
             except Exception:
                 cache[key] = None
         return cache[key]

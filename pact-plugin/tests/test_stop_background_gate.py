@@ -868,7 +868,7 @@ def test_the_entry_scripts_share_one_job_filter():
     import ast
 
     labels = {"shell", "subagent", "monitor", "workflow", "MCP task", "teammate"}
-    for script in ("stop_background_gate.py", "validate_handoff.py"):
+    for script in ("stop_background_gate.py", "teams_turn_end.py"):
         tree = ast.parse((HOOKS_DIR / script).read_text(encoding="utf-8"))
         functions = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         assert "_has_running_job" not in functions, script

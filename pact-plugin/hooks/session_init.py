@@ -15,7 +15,7 @@ Performs PACT environment initialization:
 5b. Writes session resume info (resume command, team, timestamp) to project CLAUDE.md
 6. Checks for in_progress Tasks (resumption context via Task integration)
 7. Restores last session snapshot for cross-session continuity
-8. Checks for paused or refreshed work from a previous /repacted:pause or /repacted:refresh,
+8. Checks for paused or refreshed work from a previous /repacted:pause (or its checkpoint mode),
    and records session_resumption_surfaced when a resume claim surfaces
 
 Note: Plan detection (scanning docs/plans/) was removed from session startup
@@ -59,9 +59,11 @@ from shared.pact_context import (
     is_lead,
 )
 from shared.failure_log import append_failure
+from shared.team_name import session_team_name
 from shared import parts_ledger
 from shared.session_init_common import (
     _build_safety_net_context,
+    _persist_plugin_data_env,
     _persist_project_dir_env,
     _record_worktree_identity,
     build_directives,
@@ -76,6 +78,7 @@ from shared.session_init_lead import (
     lead_directive,
     record_session_start,
     runtime_config,
+    settle_execution,
 )
 from shared.session_init_resume import _resume_own_summary_clause, clear_stale_state
 from shared.session_init_teammate import inject_peer_context
@@ -135,6 +138,18 @@ _SESSION_ID_CONTROL_CHARS_RE = SESSION_ID_CONTROL_CHARS_RE
 # never drift.
 
 
+def start_execution(session_dir: str, project_dir: str, plugin_root: str) -> str:
+    """Record the lead's execution mode; in subagents mode also write the bootstrap marker."""
+    mode = settle_execution(session_dir, project_dir)
+    if mode == "subagents":
+        try:
+            import bootstrap_marker_writer
+            bootstrap_marker_writer.write_at_session_start(Path(session_dir), plugin_root)
+        except BaseException:  # noqa: BLE001 - its load-failure path exits; keep init alive
+            pass
+    return mode
+
+
 def main():
     """
     Main entry point for the SessionStart hook.
@@ -150,7 +165,7 @@ def main():
     5b. Writes session resume info (resume command, team, timestamp) to project CLAUDE.md
     6. Checks for in_progress Tasks (resumption context via Task integration)
     7. Restores last session snapshot for cross-session continuity
-    8. Checks for paused or refreshed work from a previous /repacted:pause or /repacted:refresh
+    8. Checks for paused or refreshed work from a previous /repacted:pause (or its checkpoint mode)
 
     Note: Plan detection (scanning docs/plans/) was removed from session startup
     to reduce latency. Plan detection is deferred to /repacted:orchestrate, which
@@ -205,6 +220,7 @@ def main():
         # exported (the structural guard).
         if os.environ.get("CLAUDE_ENV_FILE") and os.environ.get("CLAUDE_PROJECT_DIR"):
             _persist_project_dir_env(project_dir)
+        _persist_plugin_data_env()
         context_parts = []
         system_messages = []
         parts_ledger.reset()
@@ -266,7 +282,7 @@ def main():
         parts_ledger.account("runtime_config", context_parts)
 
         # 5. Remind orchestrator to identify the session-unique PACT team (platform-provisioned)
-        team_name = generate_team_name(input_data)
+        team_name = session_team_name(input_data, minted=generate_team_name(input_data))
 
         # 5a. Build the session context FIRST so get_session_dir() works for
         # subsequent journal writes. build_context_cache() populates the _cache
@@ -493,6 +509,11 @@ def main():
             session_id, team_name, session_dir, plugin_root, frame_is_lead,
         )
         parts_ledger.account("finish", context_parts)
+        # The execution mode, once per session, after the directive was built from the
+        # marker state this start found. In subagents mode
+        # the Teams-only marker writer never runs, so the bootstrap marker is written here.
+        if frame_is_lead and session_dir:
+            start_execution(session_dir, project_dir, plugin_root)
         parts_ledger.record(session_dir, source, frame_role or "lead", context_parts, system_messages)
         mark_notice_told(session_dir, system_messages)
 

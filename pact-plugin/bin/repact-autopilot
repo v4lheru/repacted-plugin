@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+"""repact-autopilot: the mechanics of /repacted:autopilot, testable without a model.
+
+Location: pact-plugin/bin/repact-autopilot. The lead follows commands/autopilot.md; this
+command keeps the run in <session dir>/autopilot.jsonl (hooks/shared/autopilot_run.py) and decides
+what comes next. It reads the task log with its own reader (shared/task_log, the ordering of
+`repact-task next`), the open questions with the readers of `repact decide` (bin/_front/inbox.py), the mode with
+shared/unattended, the spend with shared/session_spend and the cap with shared/cost_cap. It never
+pushes or opens a pull request: the lead does that, behind the existing guards. Its git calls
+read the head commit of a recorded --branch, the evidence `record done` closes the task's row on,
+and, after every `record`, commit the task log and the project ledger in the main checkout the way
+`repact-task commit` does, so a run leaves main clean.
+
+  start   [--until HH:MM] [--max-usd N] [--max-tasks N] [--pr]   records the run and its limits
+  next    the top ready task as JSON (exit 0), or {"stop": reason} (exit 1), written once
+  begin   <ref>                                                  the checkpoint before a task; tags
+                                                                 the row `autopilot`
+  record  <ref> done|halted|failed [--branch B] [--pr URL] [--waive REASON] [--reason WHY]
+                                                                 one outcome; done closes the
+                                                                 task-log row on commit:<head of B>,
+                                                                 only when every linked task has an
+                                                                 accepted HANDOFF with evidence
+                                                                 (shared/task_log/close_gate);
+                                                                 halted parks the row for the owner
+                                                                 with --reason, or the question of
+                                                                 the session's `repact-unattended
+                                                                 halt --task <ref>`, and is refused
+                                                                 with neither
+  report  [--json]                                               done, halted, branches, spend;
+                                                                 a run `next` has not stopped
+                                                                 names the task `next` would take
+  status  the resume line of an active run
+
+Stop reasons: unattended_off, spend_unknown, cost_cap, max_usd, past_until, max_tasks,
+no_task_log, queue_empty. A ref recorded in a run is never picked again in that run, closed or
+not: a done row the task log refused to close stays open, and the report says so. --max-usd caps what this run spends (session spend now minus at start);
+the cost cap (session.cost_cap_usd, PACT_SESSION_COST_CAP_USD) caps the session's total. A dollar
+limit is never ignored: start refuses one it cannot measure, and next stops on spend_unknown.
+
+Exit codes: 0 done (next: a task); 1 next: a stop; 2 usage; 3 refused; 4 no session directory.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import secrets
+import sys
+from pathlib import Path
+
+BIN_DIR = Path(__file__).resolve().parent
+HOOKS_DIR = BIN_DIR.parent / "hooks"
+for _path in (BIN_DIR, HOOKS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from shared import autopilot_run as R  # noqa: E402
+from shared import session_journal, unattended  # noqa: E402
+from shared.task_log import close_gate as CG  # noqa: E402
+from shared.pact_context import reconstruct_session_dir  # noqa: E402
+
+SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")
+REF = re.compile(r"T-[0-9a-f]{4,32}")
+BRANCH = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}")
+PR_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::\d{1,5})?/[A-Za-z0-9._~/%#?=&+-]{1,300}")
+EXAMPLE = 'python3 "<plugin root>/bin/repact-autopilot" start --until 07:00 --max-usd 40 --pr'
+EXIT_STOP, EXIT_USAGE, EXIT_REFUSED, EXIT_NO_SESSION = 1, 2, 3, 4
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}\n\n  {EXAMPLE}", file=sys.stderr)
+        sys.exit(EXIT_USAGE)
+
+
+def matching(pattern, what: str):
+    def check(value: str) -> str:
+        if not pattern.fullmatch(value):
+            raise argparse.ArgumentTypeError(f"not a {what}")
+        return value
+    return check
+
+
+def positive(kind):
+    def check(value: str):
+        try:
+            number = kind(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError("must be a number above 0") from None
+        if not 0 < number < 10 ** 6:
+            raise argparse.ArgumentTypeError("must be above 0 and below 1,000,000")
+        return number
+    return check
+
+
+def build_parser() -> Parser:
+    parser = Parser(prog="repact-autopilot", description=__doc__.split("\n")[0],
+                    formatter_class=argparse.RawDescriptionHelpFormatter, epilog=f"example:\n  {EXAMPLE}")
+    parser.add_argument("--session-dir", help="the session directory (default: the live session's)")
+    verbs = parser.add_subparsers(dest="verb", required=True, parser_class=Parser)
+    start = verbs.add_parser("start")
+    start.add_argument("--until", help="stop starting tasks after this local time, HH:MM")
+    start.add_argument("--max-usd", type=positive(float), help="dollars this run may spend")
+    start.add_argument("--max-tasks", type=positive(int), help="tasks this run may take")
+    start.add_argument("--pr", action="store_true", help="push each branch and open a draft PR")
+    verbs.add_parser("next")
+    verbs.add_parser("begin").add_argument("ref", type=matching(REF, "task ref (T-...)"))
+    record = verbs.add_parser("record")
+    record.add_argument("ref", type=matching(REF, "task ref (T-...)"))
+    record.add_argument("outcome", choices=R.OUTCOMES)
+    record.add_argument("--branch", type=matching(BRANCH, "branch name"))
+    record.add_argument("--pr", type=matching(PR_URL, "https pull request URL"))
+    record.add_argument("--waive", metavar="REASON",
+                        help="ask to close the row although a linked task has no accepted HANDOFF: "
+                             "unattended, it parks the row for a human (logged)")
+    record.add_argument("--reason", metavar="WHY",
+                        help="halted: why, for the owner (default: the question of this session's "
+                             "`repact-unattended halt --task <ref>`)")
+    verbs.add_parser("report").add_argument("--json", action="store_true")
+    verbs.add_parser("status")
+    for sub in verbs.choices.values():
+        sub.add_argument("--session-dir", default=argparse.SUPPRESS)
+    return parser
+
+
+def session_dir_of(explicit) -> str:
+    if explicit is None:
+        session = next((os.environ[name] for name in SESSION_ENV if os.environ.get(name)), "")
+        explicit = reconstruct_session_dir(os.environ.get("CLAUDE_PROJECT_DIR", ""), session)
+    folder = Path(explicit).expanduser() if explicit else None
+    return str(folder) if folder and folder.is_absolute() and folder.is_dir() else ""
+
+
+def refuse(message: str) -> int:
+    print(f"repact-autopilot: refused, {message}", file=sys.stderr)
+    return EXIT_REFUSED
+
+
+# --- readers this command reuses -------------------------------------------------------------------
+
+def load_inbox():
+    """bin/_front/inbox.py: the readers of task-log questions and unattended halts (`repact decide`)."""
+    if str(BIN_DIR) not in sys.path:
+        sys.path.insert(0, str(BIN_DIR))
+    from _front import inbox
+    return inbox
+
+
+def dollar_limits(start: dict):
+    """(max_usd of the run or None, the cost cap or None, who set the cap)."""
+    from shared import cost_cap
+    cap, source, _ = cost_cap.resolve_cap(os.getcwd())
+    return start.get("max_usd"), cap, source
+
+
+def ready_tasks(skip: set):
+    """(the ready tasks in `repact-task next` order minus `skip`, the state), or (None, None)."""
+    from shared.task_log import bridge
+    from shared.task_log import write as W
+    try:
+        store = W.Store.locate(Path.cwd())
+        bridge.sync_quietly(Path.cwd())             # a lead acceptance closes its task first
+        state = store.state()
+    except W.NoLog:
+        return None, None
+    try:
+        finished = bridge.completion_view(Path.cwd(), state=state).get("linked", {})
+    except Exception:  # noqa: BLE001 - platform task files are a hint, as in repact-task next
+        finished = {}
+    proposed = {ref for ref, task in state.tasks.items()
+                if task["owner"] == "user" and "proposed" in task["tags"]}
+    return [task for task in W.PT.ready(state)
+            if task["ref"] not in finished and task["ref"] not in proposed | skip], state
+
+
+# --- the verbs ------------------------------------------------------------------------------------
+
+def start(session_dir: str, args) -> int:
+    if not unattended.read_mode(session_dir).on:
+        return refuse("unattended mode is OFF: the owner turns it on (repact-unattended on)")
+    moment = R.now()
+    try:
+        until = R.until_at(args.until, moment).isoformat() if args.until else None
+    except ValueError as error:
+        print(f"repact-autopilot: {error}", file=sys.stderr)
+        return EXIT_USAGE
+    row = {"kind": "start", "id": moment.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(2),
+           "until": until, "max_usd": args.max_usd, "max_tasks": args.max_tasks, "pr": args.pr}
+    max_usd, cap, source = dollar_limits(row)
+    spend, why = R.spend_usd(session_dir)
+    if spend is None and (max_usd or cap):
+        limit = f"--max-usd {max_usd:g}" if max_usd else f"the ${cap:g} cost cap set by {source}"
+        return refuse(f"{limit} cannot be enforced: this session's spend cannot be read ({why})")
+    row["spend_at_start"] = spend
+    if not R.append(session_dir, row):
+        print("repact-autopilot: the run log could not be written", file=sys.stderr)
+        return 1
+    print(f"autopilot run {row['id']} started; " + json.dumps({k: row[k] for k in (
+        "until", "max_usd", "max_tasks", "pr")}))
+    return 0
+
+
+def stop_reason(session_dir: str, run: dict):
+    """(reason, detail) for a limit reached before any task is picked, else (None, "")."""
+    first = run["start"]
+    if not unattended.read_mode(session_dir).on:
+        return "unattended_off", "the owner turned unattended mode off"
+    max_usd, cap, source = dollar_limits(first)
+    if max_usd or cap:
+        spend, why = R.spend_usd(session_dir)
+        if spend is None:
+            return "spend_unknown", f"this session's spend cannot be read ({why})"
+        if cap and spend >= cap:
+            return "cost_cap", f"session spend ${spend:.2f} reached the ${cap:g} cap set by {source}"
+        used = spend - (first.get("spend_at_start") or 0.0)
+        if max_usd and used >= max_usd:
+            return "max_usd", f"this run spent ${used:.2f} of --max-usd {max_usd:g}"
+    return None, ""
+
+
+def task_json(run: dict, task: dict, resume: bool) -> dict:
+    from shared import project_tasks as PT
+    return {"ref": task["ref"], "title": PT.one_line(task["title"], 80), "priority": task["priority"],
+            "rank": task["rank"], "status": task["status"], "resume": resume,
+            "run": run["start"].get("id"), "pr": bool(run["start"].get("pr")),
+            "done_so_far": len(run["records"])}
+
+
+def pick(session_dir: str, run: dict):
+    """(task JSON, None) or (None, (reason, detail))."""
+    reason, detail = stop_reason(session_dir, run)
+    if reason:
+        return None, (reason, detail)
+    flight = R.in_flight(run)
+    if flight:
+        from shared.task_log import write as W
+        try:
+            task = W.Store.locate(Path.cwd()).state().tasks.get(flight)
+        except W.NoLog:
+            task = None
+        if task and task["status"] not in ("done", "dropped"):
+            return task_json(run, task, True), None
+    until = run["start"].get("until")
+    if until and R.now() >= R.datetime.fromisoformat(until):
+        return None, ("past_until", f"the clock passed --until ({until})")
+    limit = run["start"].get("max_tasks")
+    if limit and len(run["records"]) >= limit:
+        return None, ("max_tasks", f"{len(run['records'])} task(s) recorded of --max-tasks {limit}")
+    inbox = load_inbox()
+    questions, _, _ = inbox.task_rows(Path.cwd())
+    halts, _ = inbox.halt_rows(session_dir, Path.cwd())
+    skip = R.held_refs(R.read_rows(session_dir)) | {row["task"] for row in questions + halts}
+    skip |= {row.get("ref") for row in run["records"]}      # recorded once: never redone this run
+    tasks, _ = ready_tasks(skip)
+    if tasks is None:
+        return None, ("no_task_log", "this repo has no task log (repact-task init)")
+    if not tasks:
+        return None, ("queue_empty", "no ready task left that is not halted or waiting on a question")
+    return task_json(run, tasks[0], False), None
+
+
+def next_task(session_dir: str, run: dict) -> int:
+    if run["stop"] is not None:
+        print(json.dumps({"stop": run["stop"].get("reason"), "detail": run["stop"].get("detail")}))
+        return EXIT_STOP
+    task, stopped = pick(session_dir, run)
+    if task:
+        print(json.dumps(task))
+        return 0
+    reason, detail = stopped
+    R.append(session_dir, {"kind": "stop", "run": run["start"].get("id"), "reason": reason,
+                           "detail": detail})
+    print(json.dumps({"stop": reason, "detail": detail}))
+    return EXIT_STOP
+
+
+def write_row(session_dir: str, run: dict, row: dict, said: str) -> int:
+    """Append a begin or record row. A stopped run takes no new begin; a record still lands, so
+    the task that was in flight when the loop stopped gets its outcome."""
+    if run["stop"] is not None and row["kind"] == "begin":
+        return refuse(f"run {run['start'].get('id')} has stopped ({run['stop'].get('reason')}); "
+                      "start a new one")
+    if not R.append(session_dir, {"run": run["start"].get("id"), **row}):
+        print("repact-autopilot: the run log could not be written", file=sys.stderr)
+        return 1
+    print(said)
+    return 0
+
+
+PARKED = "parked for a human"
+
+
+def close_done(ref: str, branch, pr, session_dir: str = "", waiver=None):
+    """Close `ref`'s task-log row on the head commit of `branch` through the store's own `done`
+    (the path of `repact-task done`), behind the close gate (shared/task_log/close_gate: every linked
+    task completed with a stored HANDOFF and evidence, or the lead's waiver): (title, None) when the
+    row is closed now or already was, (title, why it stays open) otherwise. Unattended, a waiver
+    parks the row for a human instead of closing it: why starts with PARKED. A PR
+    URL is no evidence kind of the log."""
+    from shared.git_helpers import run_git
+    from shared.task_log import write as W
+    try:
+        store = W.Store.locate(Path.cwd())
+        task = store.state().tasks.get(ref)
+    except W.TaskError as error:
+        return None, str(error)
+    if task is None:
+        return None, f"{ref} is not in this repo's task log"
+    if task["status"] == "done":
+        return task["title"], None
+    if not branch:
+        no_pr = " (a PR URL is not task-log evidence)" if pr else ""
+        return task["title"], (f"no --branch to close on{no_pr}; close it with "
+                               f"`repact-task done {ref} --evidence commit:<sha>`")
+    head = run_git(["rev-parse", "--verify", "--quiet", f"{branch}^{{commit}}"])
+    sha = head.stdout.strip() if head is not None and head.returncode == 0 else ""
+    if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+        return task["title"], f"branch {branch} has no commit here"
+    decision = CG.check(store.main, task, session_dir, waiver)
+    if decision.refusal:
+        return task["title"], decision.refusal
+    try:
+        if decision.park:
+            store.park(ref, decision.park)
+            return task["title"], f"{PARKED}: {decision.park}"
+        if decision.note:
+            print(f"repact-autopilot: {decision.note}", file=sys.stderr)
+        store.done(ref, [f"commit:{sha}"], waiver=decision.waiver)
+    except W.TaskError as error:
+        return task["title"], str(error)
+    return task["title"], None
+
+
+def commit_log() -> str:
+    """Commit the task log, the project ledger and their .gitattributes lines in the main checkout,
+    through `repact-task commit`'s own path (bin/_tasks/views.commit: `git commit --only` of those
+    paths, nothing else the user staged). A run otherwise left them uncommitted on main: the
+    acceptance bridge appends the ledger at accept and `begin`/`record` write the log. A refusal
+    is a note, never a failed record."""
+    from _tasks import views as V
+    from shared.task_log import write as W
+    try:
+        return V.commit(W.Store.locate(Path.cwd()).main)
+    except W.TaskError as error:
+        return f"task log not committed: {error}"
+
+
+def halt_reason(session_dir: str, ref: str, given) -> str:
+    """Why `ref` halted, for the owner: --reason, else the question of this session's last
+    `repact-unattended halt --task <ref>`; "" when there is neither (the record is refused: a halt
+    nobody can read is a row nobody answers)."""
+    text = " ".join(str(given or "").split())
+    if text:
+        return text
+    try:
+        halts = session_journal.read_events_from(session_dir, "unattended_halt")
+    except Exception:  # noqa: BLE001 - an unreadable journal holds no question
+        halts = []
+    for halt in reversed(halts):
+        question = " ".join(str(halt.get("question") or "").split())
+        if halt.get("task_id") == ref and question:
+            return question
+    return ""
+
+
+def park_halted(ref: str, why: str):
+    """Park a halted row for the owner through the waiver's park path (store.park): status
+    blocked, tagged `parked`, the note the reason. `repact decide` lists it in any
+    later session and `next` never offers it again. (title, None) or (title,
+    why it was not parked)."""
+    from shared.task_log import write as W
+    title = None
+    try:
+        store = W.Store.locate(Path.cwd())
+        task = store.state().tasks.get(ref)
+        if task is None:
+            return None, f"{ref} is not in this repo's task log"
+        title = task["title"]
+        store.park(ref, f"halted: {why}")
+    except W.TaskError as error:
+        return title, str(error)
+    return title, None
+
+
+def mark_begun(ref: str) -> None:
+    """Tag the task-log row `autopilot`, so the close gate holds for it even where no session
+    directory can be found (best effort: the session's run log says the same while it is found)."""
+    from shared.task_log import write as W
+    try:
+        store = W.Store.locate(Path.cwd())
+        task = store.state().tasks.get(ref)
+        if task is not None and CG.AUTOPILOT_TAG not in task["tags"]:
+            store.set(ref, "tags", [*task["tags"], CG.AUTOPILOT_TAG])
+    except W.TaskError:
+        pass
+
+
+def report(session_dir: str, run: dict, as_json: bool) -> int:
+    from shared import project_tasks as PT
+    from shared.task_log import write as W
+    try:
+        tasks = W.Store.locate(Path.cwd()).state().tasks
+    except W.NoLog:
+        tasks = {}
+    try:
+        numbers = {row["task"]: row["n"] for row in load_inbox().collect(session_dir)[0]}
+    except Exception:  # noqa: BLE001 - the report never fails on the inbox
+        numbers = {}
+    first = run["start"]
+    spend, why = R.spend_usd(session_dir)
+    used = None if spend is None else round(spend - (first.get("spend_at_start") or 0.0), 2)
+    rows = [{"ref": row["ref"], "outcome": row.get("outcome"), "branch": row.get("branch"),
+             "pr": row.get("pr"), "inbox": numbers.get(row["ref"]),
+             "title": PT.one_line(tasks.get(row["ref"], {}).get("title") or row.get("title") or "?", 60),
+             "closed": tasks.get(row["ref"], {}).get("status", "done" if row.get("closed") else "") == "done",
+             "open_why": row.get("open_why")}
+            for row in run["records"]]
+    out = {"run": first.get("id"), "started": first.get("at"), "pr": bool(first.get("pr")),
+           "limits": {key: first.get(key) for key in ("until", "max_usd", "max_tasks")},
+           "stop": run["stop"] and {"reason": run["stop"].get("reason"), "detail": run["stop"].get("detail")},
+           "spend_usd": used, "spend_note": why, "in_flight": R.in_flight(run), "next": None}
+    if run["stop"] is None:                 # say what an early end leaves behind
+        task, stopped = pick(session_dir, run)
+        out["next"] = {"ref": task["ref"]} if task else {"stop": stopped[0]}
+    for outcome in R.OUTCOMES:
+        out[outcome] = [row for row in rows if row["outcome"] == outcome]
+    print(json.dumps(out, indent=1) if as_json else "\n".join(report_lines(out)))
+    return 0
+
+
+def report_lines(out: dict) -> list:
+    stop, ahead = out["stop"], out["next"] or {}
+    running = ("still running: `next` would take " + ahead["ref"] + "; only `next` ends the run"
+               if ahead.get("ref") else f"still running: `next` would stop it ({ahead.get('stop')})")
+    lines = [f"autopilot run {out['run']}, started {out['started']}: "
+             + (f"stopped ({stop['reason']}: {stop['detail']})" if stop else running),
+             "spend this run: " + (f"${out['spend_usd']:.2f} (estimate at list API prices)"
+                                   if out["spend_usd"] is not None else f"unknown ({out['spend_note']})")]
+    if out["in_flight"]:
+        lines.append(f"in flight, no outcome recorded: {out['in_flight']}")
+    for outcome in R.OUTCOMES:
+        lines.append(f"{outcome} ({len(out[outcome])}):")
+        for row in out[outcome]:
+            where = ", ".join(part for part in (row["branch"] and f"branch {row['branch']}",
+                                                 row["pr"] and f"PR {row['pr']}") if part)
+            asked = f" inbox #{row['inbox']}" if row["inbox"] else ""
+            still = (f" (recorded done, task still open: {row['open_why'] or 'not closed'})"
+                     if outcome == "done" and not row["closed"] else "")
+            lines.append(f"  {row['ref']} \"{row['title']}\"" + (f" {where}" if where else "")
+                         + asked + still)
+    return lines
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    session_dir = session_dir_of(getattr(args, "session_dir", None))
+    if not session_dir:
+        print("repact-autopilot: no session directory (give --session-dir)", file=sys.stderr)
+        return EXIT_NO_SESSION
+    if args.verb == "start":
+        return start(session_dir, args)
+    run = R.current_run(R.read_rows(session_dir))
+    if args.verb == "status":
+        print(R.run_line(session_dir) or "autopilot: no active run")
+        return 0
+    if run is None:
+        return refuse("no autopilot run in this session: run `repact-autopilot start` first")
+    if args.verb == "next":
+        return next_task(session_dir, run)
+    if args.verb == "begin":
+        code = write_row(session_dir, run, {"kind": "begin", "ref": args.ref}, f"begun {args.ref}")
+        if code == 0:
+            mark_begun(args.ref)
+        return code
+    if args.verb == "record":
+        row = {"kind": "record", "ref": args.ref, "outcome": args.outcome, "branch": args.branch,
+               "pr": args.pr}
+        said = f"recorded {args.ref} {args.outcome}"
+        if args.reason is not None and args.outcome != "halted":
+            return refuse("--reason goes with `record <ref> halted`")
+        held = R.evidence_holds(R.read_rows(session_dir)).get(args.ref)
+        waiver = CG.valid_waiver(args.waive) if args.outcome == "done" else None
+        if waiver:
+            row["waiver"] = waiver
+        if args.outcome == "done" and held and not waiver:
+            row.update({"closed": False, "open_why": held[:300]})
+            said += f"; task-log row left open: {held}"
+        elif args.outcome == "done":
+            title, why = close_done(args.ref, args.branch, args.pr, session_dir, args.waive)
+            row.update({"title": title and title[:200], "closed": why is None, "open_why": why and why[:300]})
+            if why and why.startswith(PARKED):
+                row["parked"] = True
+            said += "; task-log row closed" if why is None else (
+                f"; task-log row {why}" if row.get("parked") else f"; task-log row left open: {why}")
+        elif args.outcome == "halted":
+            reason = halt_reason(session_dir, args.ref, args.reason)
+            if not reason:
+                return refuse(f"say why {args.ref} halted, so the owner can answer it: "
+                              f"`record {args.ref} halted --reason \"<why>\"`, or first "
+                              f"`repact-unattended halt --task {args.ref} --question \"<question>\"`")
+            title, problem = park_halted(args.ref, reason)
+            row.update({"title": title and title[:200], "reason": reason[:300], "parked": problem is None})
+            said += (f"; task-log row {PARKED}: {reason}" if problem is None
+                     else f"; task-log row not parked: {problem}")
+        code = write_row(session_dir, run, row, said)
+        if code == 0:
+            print(commit_log())
+        return code
+    return report(session_dir, run, args.json)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

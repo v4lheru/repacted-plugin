@@ -1,14 +1,27 @@
 {
-  "_doc": "Tested host matrix (V9). bin/_doctor_host.py reads it and repact-doctor prints one host line; an untested host is a note, never a refusal. Add a Claude Code version here only after the plugin suite passed on it.",
+  "_doc": "Host matrix (V9). bin/_doctor_host.py reads it and repact-doctor prints one host line; an untested host is a note, never a refusal. 'tested' means the plugin's test suite passed on that Claude Code version, which uses simulated hook events. 'live' lists what real sessions on that version have exercised; anything not listed there is not proven live.",
   "as_of": "2026-10-16",
   "claude_code": {
-    "tested": ["2.1.302"]
+    "tested": [
+      "2.1.302"
+    ],
+    "live": {
+      "2.1.302": [
+        "interactive team sessions (lead and teammates)",
+        "claude -p autopilot runs through comPACT (no full orchestrate cycle yet)"
+      ]
+    }
   },
   "python": {
     "min": "3.9"
   },
   "os": {
-    "tested": ["macos"],
-    "expected": ["linux", "wsl"]
+    "tested": [
+      "macos"
+    ],
+    "expected": [
+      "linux",
+      "wsl"
+    ]
   }
 }

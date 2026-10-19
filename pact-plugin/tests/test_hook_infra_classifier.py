@@ -208,24 +208,6 @@ class TestTwoHopEdgesPinnedByName:
     shared-only OR absolute-only regression is caught with a named failure, not
     a silent under-derivation."""
 
-    def test_shared_2hop_task_lifecycle_teachback_variety(self):
-        # task_lifecycle_gate -> teachback_schema -> variety_scorer (shared chain).
-        tlg = _SEAM_HOOK_HELPER_CLOSURE["task_lifecycle_gate"]
-        assert "teachback_schema" in tlg
-        assert "variety_scorer" in tlg, (
-            "variety_scorer is reachable ONLY 2-hop via teachback_schema; its "
-            "absence means a direct-import-only derivation (the bug class)"
-        )
-        idx = _module_index()
-        # Drop the 2-hop spine edge -> variety_scorer must disappear from the
-        # derived closure (proves it's genuinely a transitive, not direct, dep).
-        without = derive_closure(
-            "task_lifecycle_gate", idx,
-            drop_edges=frozenset({("teachback_schema", "variety_scorer")}),
-        )
-        assert "variety_scorer" not in without
-
-
 class TestClosureOracleIsNonVacuous:
     """PROVE the equality assertion is non-vacuous: perturb the LIVE graph and
     show the derived closure changes, so a real edge drift WOULD break
@@ -251,16 +233,6 @@ class TestClosureOracleIsNonVacuous:
         assert full == {"probe_helper", "probe_leaf"}
         assert not _is_shared("probe_helper", idx)
         assert shared_only == frozenset()
-
-    def test_dropping_a_shared_edge_changes_derivation(self):
-        idx = _module_index()
-        full = derive_closure("task_lifecycle_gate", idx)
-        perturbed = derive_closure(
-            "task_lifecycle_gate", idx,
-            drop_edges=frozenset({("teachback_schema", "variety_scorer")}),
-        )
-        assert "variety_scorer" in full and "variety_scorer" not in perturbed
-        assert _SEAM_HOOK_HELPER_CLOSURE["task_lifecycle_gate"] != perturbed
 
     def test_dropping_the_relative_registry_edge_changes_derivation(self):
         # pact_context -> .session_registry is a RELATIVE edge; the full-transitive
@@ -304,7 +276,6 @@ COVERED_L2 = {
     "missed_wake_scan": "test_missed_wake_scan_integration.py",
     "teammate_idle": "test_missed_wake_scan_integration.py",
     "session_end": "test_session_end_integration.py",
-    "agent_handoff_emitter": "test_agent_handoff_emitter_integration.py",
     "session_init": "test_session_init_integration.py",
     "dispatch_gate": "test_dispatch_gate_integration.py",
     # The on-disk authorization token is the post(mint)→pre(read) integration
@@ -313,13 +284,6 @@ COVERED_L2 = {
     # exit(2) (fail-LOUD), so they are L2-only / never-L3 (no live-probe).
     "merge_guard_pre": "test_merge_guard_seam_integration.py",
     "merge_guard_post": "test_merge_guard_seam_integration.py",
-    # validate_handoff's degrade-path handoff_refusal_degraded telemetry is
-    # fail-open (silent on loss), so the journal seam gets a real composition
-    # test: real init -> session-dir resolution -> real append -> read_events
-    # over a tmp root. Its turn-end background block, a seam-dependent decision
-    # since it was composed in, is driven for real by
-    # test_validate_handoff_turn_end.py.
-    "validate_handoff": "test_validate_handoff_integration.py",
     # track_files joined SEAM_DEPENDENT_HOOKS with Layer 1 of the
     # background-work registry (task-dir resolution + team config). It goes in
     # COVERED, not BACKLOG: parking a brand-new seam dependency in the backlog
@@ -347,8 +311,6 @@ COVERED_L2 = {
 # Documented forward-only BACKLOG: seam hooks whose non-mocked L2 test is a named
 # fast-follow (not this cycle). The requirement BINDS new/modified seam hooks;
 # this list is the auditable record of the known gaps (promote on touch).
-#   - task_lifecycle_gate: heavy unit coverage; L3 real-session probe is the
-#     documented follow-up. Its L2 seam test is fast-follow.
 #   - bootstrap_marker_writer: iter_team_task_jsons readers.
 #   - file_tracker / peer_inject: L2-only (held), watch-list per the classifier.
 # (validate_handoff promoted to COVERED_L2 when its degrade telemetry gained
@@ -356,7 +318,7 @@ COVERED_L2 = {
 #  bootstrap_gate was promoted when its settle seat gained a child-process seam
 #  test; that test does not exercise its iter_team_task_jsons reads.)
 BACKLOG_L2 = frozenset({
-    "task_lifecycle_gate", "bootstrap_marker_writer",
+    "bootstrap_marker_writer",
     "file_tracker", "peer_inject",
 })
 
@@ -500,8 +462,9 @@ class TestClassifierQuietAndLoud:
     def test_primary_only_change_requires_waiver(self):
         # A hooks/ file that is neither a seam hook nor a seam helper -> PRIMARY,
         # not SECONDARY -> the auditable waiver path (never a silent pass). gh_helpers served
-        # here until session_init, session_end and bootstrap_marker_writer came to reach it.
-        c = classify_diff(["pact-plugin/hooks/shared/payload_digest.py"])
+        # here until session_init, session_end and bootstrap_marker_writer came to reach it, and
+        # payload_digest until session_init's resume screen (workflow_state) did.
+        c = classify_diff(["pact-plugin/hooks/shared/marked_regions.py"])
         assert c.primary and not c.secondary and c.waiver_required
 
     def test_fires_secondary_on_a_seam_hook(self):

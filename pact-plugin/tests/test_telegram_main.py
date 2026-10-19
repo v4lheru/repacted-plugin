@@ -73,7 +73,7 @@ class TestMainMissingDeps:
             main()
 
         captured = capsys.readouterr()
-        assert "/repacted:telegram-setup" in captured.err
+        assert "/repacted:init telegram" in captured.err
         assert "pip install" in captured.err
 
     def test_prints_all_missing_packages(self, capsys):
@@ -91,16 +91,26 @@ class TestMainMissingDeps:
 # Successful Start Tests
 # =============================================================================
 
+def _server_module(server):
+    """A stand-in for telegram.server: the real one imports httpx, an optional dependency this
+    file must not need (main() imports it lazily, after the dependency check)."""
+    module = ModuleType("telegram.server")
+    module.create_server = MagicMock(return_value=server)
+    return module
+
+
 class TestMainSuccessfulStart:
     """Tests for main() when all dependencies are present."""
 
     def test_calls_create_server_and_runs(self):
         """Should create server and run with stdio transport when deps are satisfied."""
         mock_server = MagicMock()
+        fake = _server_module(mock_server)
 
         with patch("telegram.deps.check_dependencies", return_value=[]), \
-             patch("telegram.server.create_server", return_value=mock_server) as mock_create:
+             patch.dict(sys.modules, {"telegram.server": fake}):
             main()
+        mock_create = fake.create_server
 
         mock_create.assert_called_once()
         mock_server.run.assert_called_once_with(transport="stdio")
@@ -110,6 +120,6 @@ class TestMainSuccessfulStart:
         mock_server = MagicMock()
 
         with patch("telegram.deps.check_dependencies", return_value=[]), \
-             patch("telegram.server.create_server", return_value=mock_server):
+             patch.dict(sys.modules, {"telegram.server": _server_module(mock_server)}):
             # Should return normally, not raise SystemExit
             main()

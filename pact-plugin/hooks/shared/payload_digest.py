@@ -3,9 +3,11 @@ Location: pact-plugin/hooks/shared/payload_digest.py
 Summary: THE digest of a stored metadata.teachback_submit or metadata.handoff (1.5.0, D2).
          The writer's stored line prints it (stored_line.after_write, from the task file
          read back), the teammate's notify carries it in place of the verbatim payload, and
-         bin/repact-payload prints it beside the object it reads for the lead. One function
+         `repact inspect <id> --key` prints it beside the object it reads for the lead. One function
          on both sides, so the two can only disagree when the stored object changed.
-Used by: hooks/shared/stored_line.py, bin/repact-payload.
+Used by: hooks/shared/stored_line.py, bin/_front/payload.py; stored_teachback by
+         hooks/shared/workflow_state.py, hooks/shared/task_migration.py, hooks/teammate_idle.py
+         and bin/_front/payload.py.
 
 digest = the first 12 hex characters of sha256 over canonical_json.canonical_bytes of the
 object with every null-valued key dropped. canonical_bytes sorts keys, so key order never
@@ -31,6 +33,18 @@ def without_nulls(value):
     if isinstance(value, list):
         return [without_nulls(item) for item in value]
     return value
+
+
+def stored_teachback(metadata):
+    """The teammate's stored teachback, or None. `repact submit` writes it under
+    metadata.teachback.submit (2.1.0); a live Agent Teams writer still stores the flat
+    metadata.teachback_submit, read second."""
+    if not isinstance(metadata, dict):
+        return None
+    record = metadata.get("teachback")
+    if isinstance(record, dict) and record.get("submit") is not None:
+        return record["submit"]
+    return metadata.get("teachback_submit")
 
 
 def payload_digest(value) -> str | None:

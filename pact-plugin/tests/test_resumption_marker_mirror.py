@@ -73,11 +73,6 @@ here, and no extension of this gate reaches it. And its scope is exactly the
 surfaces that existed when it was written, so a fourth surface naming the
 literal later would drift unchecked; that set is kept honest by census, not by
 this file.
-
-PRECEDENT, so a later reader knows the pattern was not invented here:
-`tests/test_commands_structure.py` pins the `--type session_refresh_consumed`
-literal in the command file that writes it, and `tests/test_audit_protocol.py`
-holds the protocol extracts byte-identical against their SSOT region.
 """
 from __future__ import annotations
 

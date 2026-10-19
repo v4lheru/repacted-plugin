@@ -35,6 +35,14 @@ NOT_THE_STORE = {
         'tasks = _mkdir(root / "tasks")',  # the corpus's own state layout
         'files = [(p.name, _read_text(p) or "") for p in sorted((root / "tasks").glob("*.json"))]',
     },
+    "hooks/shell/settings.py": {
+        # The guard's reader of an unresolved task-file path, not a join.
+        '_TASK_FILE_TAIL = re.compile(r"/tasks/[^/]+/[^/]+\\.json$")',
+    },
+    "hooks/shared/rules.py": {
+        # The settings.task_state refusal text naming the store, not a join.
+        '"(<config dir>/tasks/) or a PACT session dir (<config dir>/pact-sessions/: the "',
+    },
     "bin/_doctor.py": {
         # A list of path prefixes the doctor treats as ephemeral, not a join.
         'EPHEMERAL = ("/tmp/", "/private/", "/var/folders/", "/scratchpad/", "/.claude/tasks/", "/.claude/teams/",',
@@ -106,10 +114,11 @@ MIGRATION_WRITER = re.compile(r"\.(create|retire|remove_created)\(\s*(?:TaskRef|
 
 def test_only_the_migration_calls_the_creating_writers():
     """TaskStore.create, retire and remove_created make, rename and remove task files. They
-    exist for the resume migration alone; every other caller stays with `update`."""
+    exist for the resume migration and for TaskStore.create_next (repact dispatch's one
+    create, shared/ops/dispatch); every other caller stays with `update`."""
     callers = {
         str(path.relative_to(PLUGIN_ROOT))
         for path in _production_files()
         if any(MIGRATION_WRITER.search(line) for _, line in _code_lines(path))
     }
-    assert callers == {MIGRATION}
+    assert callers == {MIGRATION, "hooks/shared/task_store.py"}

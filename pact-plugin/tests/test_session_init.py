@@ -760,7 +760,7 @@ class TestRefreshSurfacingMatrix:
         # vacuous-by-unreachability. Dropping frame_is_lead from the
         # refresh_pending conjunction must turn this row RED.
         if agent_type is None:
-            assert "Teammates were shut down by /repacted:refresh" not in additional
+            assert "Teammates were shut down by /repacted:pause checkpoint" not in additional
 
     def test_quit_path_topology_prev_dir_differs(self, monkeypatch, tmp_path):
         """Topology invariance, quit path: CLAUDE.md points at the PRIOR
@@ -814,7 +814,7 @@ class TestRefreshSurfacingMatrix:
         assert "Prior conversation auto-compacted." in additional
         assert "Active Agents" in additional
         assert "Pre-refresh agents" not in additional
-        assert "Teammates were shut down by /repacted:refresh" not in additional
+        assert "Teammates were shut down by /repacted:pause checkpoint" not in additional
 
     def test_compact_branch_suppression_and_relabel_with_refresh(
         self, monkeypatch, tmp_path
@@ -833,7 +833,7 @@ class TestRefreshSurfacingMatrix:
             tasks=self._in_progress_tasks(),
         )
         additional = output["hookSpecificOutput"]["additionalContext"]
-        assert "Teammates were shut down by /repacted:refresh" in additional
+        assert "Teammates were shut down by /repacted:pause checkpoint" in additional
         assert ("Run /repacted:bootstrap first; spawn a fresh secretary only "
                 "when memory is needed.") in additional
         assert "The session briefing below is computed by this hook" not in additional
@@ -1438,6 +1438,12 @@ class TestInprocessModeNoticeIntegration:
     """
 
     # Stable substrings the notice MUST contain (drift guards per §9.2).
+    @pytest.fixture(autouse=True)
+    def _teams_mode(self, monkeypatch):
+        """The notice is Teams-only."""
+        monkeypatch.setenv("REPACT_EXECUTION", "teams")
+        monkeypatch.setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
+
     _DOC_REF = "reference/unattended-runs.md"
     _CLI_HINT = "--teammate-mode tmux"
 
@@ -7178,6 +7184,12 @@ class TestCompactionSeats:
     the line after the marker, the recorded start is kept, and staged summaries
     are settled before either clear. Nothing here decides whose compaction it was."""
 
+    @pytest.fixture(autouse=True)
+    def _teams_mode(self, monkeypatch):
+        """Teams mode: a subagents start writes the marker itself."""
+        monkeypatch.setenv("REPACT_EXECUTION", "teams")
+        monkeypatch.setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
+
     SID = "4ec31948-bbe5-4ef4-841c-631d1ef31e61"
     LEAD = "repacted:pact-orchestrator"
     CLAUSE = (
@@ -7396,7 +7408,7 @@ class TestCompactionSeats:
         context = self._context(monkeypatch, tmp_path, patches=[
             ("shared.session_init_resume.has_unspent_refresh", {"return_value": True}),
         ])
-        assert f"{self.TASK_FILES}{self._step_at_root()} Teammates were shut down by /repacted:refresh." in context
+        assert f"{self.TASK_FILES}{self._step_at_root()} Teammates were shut down by /repacted:pause checkpoint." in context
 
     @pytest.mark.parametrize("source", ["startup", "resume", "clear"])
     def test_no_other_source_carries_the_reread_step(self, monkeypatch, tmp_path, source):

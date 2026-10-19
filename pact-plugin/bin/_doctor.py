@@ -934,7 +934,7 @@ def run_checks(ctx: Context, cache: dict, mode: str = "default",
                          ("actions", lambda: check_actions(ctx)), ("gates", lambda: check_gates(ctx, state)),
                          ("tasks", lambda: check_tasks(ctx, now)), ("state", lambda: _ds.check_state(ctx)),
                          ("policy", lambda: _dp.check_policy(ctx)),
-                         ("packs", lambda: _ds.check_packs(ctx))]
+                         *((i, lambda f=f: f(ctx)) for i, f in _ds.LATE_CHECKS)]
     results = []
     for check_id, run in plan:
         if check_id in SLOW_CHECKS and mode != "full":

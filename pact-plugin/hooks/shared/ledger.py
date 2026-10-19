@@ -3,18 +3,23 @@ Location: pact-plugin/hooks/shared/ledger.py
 Summary: The test-run ledger: LEDGER_FIELDS, make_ledger_record, ledger_append (one locked
          O_APPEND write per record, truncated and line-break-escaped so a record stays one
          line) and the readers (parse_ledger_lines, read_ledger_counted, read_ledger).
-Used by: hooks/run_ledger.py, shared/finished_runs.py, bin/tcount, shared/evidence/ledger.py,
-         shared/evidence/check.py, bin/repact-cost (via the bin/_repact_common shim).
+         The run readers (read_runs, RUN_STEM, _run_key, _record_time, _run_end) join a hook row
+         to tcount's own row of the same run.
+Used by: hooks/run_ledger.py, shared/finished_runs.py, bin/tcount, shared/evidence_check.py,
+         shared/acceptance.py, shared/ref_dispositions.py, bin/repact-cost (via the
+         bin/_repact_common shim).
 Map (file order): the LEDGER_* schema constants, _finite, make_ledger_record, _dump_line,
 _encode_record, _ends_mid_line, ledger_append, _usable_row, parse_ledger_lines,
-read_ledger_counted, read_ledger.
+read_ledger_counted, read_ledger, RUN_STEM, read_runs, _record_time, _run_end, _run_key.
 """
 from __future__ import annotations
 
+import datetime
 import fcntl
 import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -37,7 +42,15 @@ LEDGER_FIELDS = (
 # Written only when given, after the fields above: a row without one is the row it always was.
 # cmd_executed: on a tcount row, the argv tcount ran when it differs from cmd by a worker flag
 # tcount added or lowered (cmd stays the command as typed: runs are told apart by it).
-LEDGER_OPTIONAL_FIELDS = ("cmd_executed", "duration_s", "slowest")
+# tree: on a tcount row, the content tree id of the run's code files (shared/content_tree.py),
+# taken before the run: the evidence gate compares it with the tree at acceptance.
+# run_dir: on a hook row, the real path of the directory its test run started in (tcount's own
+# directory, else the one in force at the runner segment of the command: shared/run_place.py),
+# taken when the row was written; the only place the evidence gate gives a hook row.
+# env: on a tcount row, the variables of acceptance.SELECTING_ENV that were set ({name: value}):
+# they change what a run selects or imports, so the evidence check reads them.
+LEDGER_OPTIONAL_FIELDS = ("cmd_executed", "duration_s", "slowest", "tree", "run_dir", "env")
+LEDGER_MAP_FIELDS = ("env",)                  # optional, a {str: str} map
 LEDGER_NUMBER_FIELDS = ("duration_s",)        # optional, a finite int or float >= 0 (D15)
 LEDGER_PAIR_FIELDS = ("slowest",)             # optional, a list of [file, seconds] pairs (a str, a finite number >= 0)
 _TRUNCATION_MARK = "...[truncated]"
@@ -78,8 +91,9 @@ def make_ledger_record(**fields) -> dict:
 
     Raises:
         ValueError: unknown field, bad source, a non-int count, a non-bool count_parsed, an
-            optional field that is not a str, a duration_s that is not a finite number >= 0, or a
-            slowest that is not a list of [file, seconds] pairs.
+            optional field that is not a str, a duration_s that is not a finite number >= 0, a
+            slowest that is not a list of [file, seconds] pairs, or an env that is not a
+            {str: str} map.
     """
     unknown = set(fields) - set(LEDGER_FIELDS) - set(LEDGER_OPTIONAL_FIELDS)
     if unknown:
@@ -95,6 +109,10 @@ def make_ledger_record(**fields) -> dict:
             elif name in LEDGER_PAIR_FIELDS:
                 if not _file_seconds_pairs(value):
                     raise ValueError(f"{name} must be a list of [file, seconds] pairs")
+            elif name in LEDGER_MAP_FIELDS:
+                if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                          for k, v in value.items()):
+                    raise ValueError(f"{name} must be a map of str to str")
             elif not isinstance(value, str):
                 raise ValueError(f"{name} must be a str")
             record[name] = value
@@ -181,13 +199,13 @@ def ledger_append(record: dict, path: Optional[os.PathLike | str] = None) -> boo
 
 
 def _usable_row(item) -> bool:
-    """True for one JSON object whose path fields every reader can take: cwd and log_path a
+    """True for one JSON object whose path fields every reader can take: cwd, log_path and run_dir a
     string or null, call_dirs a list or null, and no NUL in any of those paths. A list where a
     path belongs is unhashable in the readers' sets and a NUL makes every os.path call raise, so
     one such row used to stop the read, and the write-time gate then allowed any count."""
     if not isinstance(item, dict):
         return False
-    for name in ("cwd", "log_path"):
+    for name in ("cwd", "log_path", "run_dir"):
         value = item.get(name)
         if value is not None and (not isinstance(value, str) or "\x00" in value):
             return False
@@ -236,3 +254,67 @@ def read_ledger(path: Optional[os.PathLike | str] = None) -> list[dict]:
     also says how many lines were skipped."""
     return read_ledger_counted(path)[0]
 
+
+
+# ---------------------------------------------------------------------------
+# Run readers (shared/evidence_check.py, shared/acceptance.py, shared/ref_dispositions.py)
+# ---------------------------------------------------------------------------
+
+# A run's log name: a tcount log name or path, its stem, or the short 'HHMMSSZ-pid' form
+# (runs/2026-09-29T215711Z-26744-node.log, 215711Z-26744).
+RUN_STEM = re.compile(r"(?<![\w-])(?:(\d{4}-\d{2}-\d{2})T)?(\d{6})Z-(\d{2,7})(?![\w])")
+
+
+def read_runs(path: os.PathLike | str) -> tuple[list[dict], int]:
+    """(records, skipped): one record per run. tcount's own row is dropped when a hook row carries
+    its log path, and that hook row gets tcount's "run_cmd" (the argv it ran), "run_ended" (its
+    stamp: the run's end, where the hook's is the end of the whole Bash call), "run_cwd",
+    "run_tree" (where tcount ran and the content tree it saw, shared/content_tree.py) and
+    "run_env" (tcount's env field). Every record gets "run_seq", the line position of the run's
+    own tcount row (else of the record itself): tcount appends that row when the run ends, so it
+    orders two runs whose one-second stamps tie, where a hook row lands only after the whole Bash
+    call. A run_seq read from the file is overwritten. In memory only: the ledger is not written."""
+    try:
+        records, skipped = parse_ledger_lines(Path(path).read_bytes())
+    except OSError:
+        return [], 0
+    own, place = {}, {}
+    for seq, r in enumerate(records):
+        if r.get("source") == "tcount" and isinstance(r.get("log_path"), str) and r["log_path"]:
+            own[r["log_path"]], place[r["log_path"]] = r, seq
+    hooked = {r["log_path"] for r in records
+              if r.get("source") == "hook" and isinstance(r.get("log_path"), str) and r["log_path"]}
+    runs = []
+    for seq, record in enumerate(records):
+        log = record.get("log_path") if isinstance(record.get("log_path"), str) else None
+        if record.get("source") == "tcount" and log in hooked:
+            continue
+        record["run_seq"] = place[log] if record.get("source") == "hook" and log in own else seq
+        if record.get("source") == "hook" and log in own:
+            record["run_cmd"], record["run_ended"] = own[log].get("cmd"), own[log].get("ts")
+            record["run_cwd"], record["run_tree"] = own[log].get("cwd"), own[log].get("tree")
+            record["run_env"] = own[log].get("env")
+        runs.append(record)
+    return runs, skipped
+
+
+def _record_time(record: dict, key: str = "ts") -> Optional[float]:
+    """The epoch seconds of a row's ISO stamp (a trailing Z read as UTC on Python 3.9 too), or None."""
+    value = record.get(key)
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value).timestamp()
+    except ValueError:
+        return None
+
+
+def _run_end(record: dict) -> Optional[float]:
+    """When the run ended: the stamp of tcount's own row (read_runs), else the row's."""
+    return _record_time(record, "run_ended") or _record_time(record)
+
+
+def _run_key(record: dict) -> Optional[tuple]:
+    """(date or None, HHMMSS, pid) of the run's log name, or None."""
+    match = RUN_STEM.search(Path(str(record.get("log_path") or "")).name)
+    return match.groups() if match else None

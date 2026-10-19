@@ -1,5 +1,5 @@
 """
-commands/next.md and the command files' boundary writes against bin/repact-task (D10 P3).
+reference/work/task-log.md and the command files' boundary writes against bin/repact-task.
 
 Ported from test_backlog.py when the commands moved from hooks/shared/backlog.py to repact-task: the
 RULES survive (where writes happen, what the boundary table may name, every drift flag has a
@@ -24,7 +24,7 @@ INVOCATION = 'bin/repact-task"'
 # here reddens test_every_subcommand_is_classified, so the write-site detector cannot go blind.
 ITEM_WRITES = frozenset({"add", "set", "dep", "link", "start", "done", "reopen", "drop"})
 READS = frozenset({"next", "blocked", "tree", "show", "fsck", "summary"})
-OTHER = frozenset({"init", "sync", "render", "commit", "import-md", "import-gates", "import-pact-backlog",
+OTHER = frozenset({"init", "sync", "ledger", "render", "commit", "import-md", "import-gates", "import-pact-backlog",
                    "project", "atlas"})
 COUNT_WORDS = {1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX"}
 NAMED_FILE = re.compile(r"`([A-Za-z0-9_-]+\.md)`")
@@ -50,16 +50,16 @@ def write_sites(name):
             if INVOCATION in line and any(f'" {verb} ' in line for verb in ITEM_WRITES)]
 
 
-def next_md():
-    return (COMMANDS_DIR / "next.md").read_text(encoding="utf-8")
+def task_log_md():
+    return (PLUGIN_ROOT / "reference" / "work" / "task-log.md").read_text(encoding="utf-8")
 
 
 def rule_sentence(lead: str) -> str:
     """The one bold rule sentence that starts with `lead` (e.g. 'FOUR FILES carry boundary writes')."""
-    for line in next_md().splitlines():
+    for line in task_log_md().splitlines():
         if line.startswith("**") and lead in line:
             return line
-    raise AssertionError(f"no rule sentence containing {lead!r} in next.md")
+    raise AssertionError(f"no rule sentence containing {lead!r} in task-log.md")
 
 
 def test_every_subcommand_is_classified():
@@ -74,17 +74,17 @@ def test_every_subcommand_is_classified():
 
 def test_the_write_sites_are_where_the_rule_says_and_nowhere_else():
     """The positive half runs first: a detector that matches nothing makes every zero vacuous."""
-    carriers = ("wrap-up.md", "orchestrate.md", "comPACT.md", "imPACT.md")
+    carriers = ("wrap-up.md", "orchestrate.md", "comPACT.md", "decide.md")
     empty = [name for name in carriers if not write_sites(name)]
     assert not empty, f"no repact-task write site found in {empty}; the detector is orphaned"
-    for name in ("rePACT.md", "refresh.md", "pause.md", "peer-review.md"):
+    for name in ("rePACT.md", "pause.md", "peer-review.md"):
         assert write_sites(name) == [], f"{name} gained a boundary write the ruling put at zero"
 
 
-def test_next_md_names_exactly_the_files_that_carry_write_sites():
+def test_task_log_md_names_exactly_the_files_that_carry_write_sites():
     sentence = rule_sentence("FILES carry boundary writes")
     named = set(NAMED_FILE.findall(sentence))
-    carrying = {path.name for path in COMMANDS_DIR.glob("*.md") if write_sites(path.name)} - {"next.md"}
+    carrying = {path.name for path in COMMANDS_DIR.glob("*.md") if write_sites(path.name)}
     assert named == carrying, f"the rule names {sorted(named)}; the sites are in {sorted(carrying)}"
     assert sentence.startswith(f"**{COUNT_WORDS[len(named)]} FILES"), sentence
 
@@ -97,7 +97,7 @@ def test_the_report_files_exist():
 
 
 def boundary_table_identifiers():
-    text = next_md().split("### When the writes happen", 1)[-1]
+    text = task_log_md().split("### When the writes happen", 1)[-1]
     names = set()
     for line in text.splitlines():
         cells = [c.strip() for c in line.split("|")]
@@ -190,7 +190,7 @@ def test_every_drift_flag_kind_has_a_step_three_row():
     assert raised == set(ROW_FOR_FLAG), (
         f"the fixture no longer trips {sorted(set(ROW_FOR_FLAG) - raised)}; fix the fixture, "
         f"or retire the row if the code dropped that flag")
-    table = next_md().split("## Step 3", 1)[1].split("## Step 4", 1)[0]
+    table = task_log_md().split("## Step 3", 1)[1].split("## Step 4", 1)[0]
     rows = {line.split("|")[1].strip() for line in table.splitlines() if line.startswith("| ")}
     missing = sorted(set(ROW_FOR_FLAG.values()) - rows)
-    assert not missing, f"next.md's Step 3 table has no row for {missing}"
+    assert not missing, f"task-log.md's Step 3 table has no row for {missing}"

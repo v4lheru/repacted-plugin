@@ -49,7 +49,8 @@ USER_PROMPT_TIMEOUT_S = 30
 # longer than SECURITY_TIMEOUT_CAP_S: a contract test pins it.
 SECURITY_TIMEOUT_CAP_S = 90
 SECURITY_TIMEOUTS_S = {"env_guard": 15, "merge_guard_pre": 15, "egress_guard": 60,
-                       "git_commit_check": 90}
+                       "git_commit_check": 90, "worktree_guard": 15, "write_checks": 60,
+                       "task_write_guard": 15, "ops_frame_guard": 15}
 # The host's entry timeout is the sum of the member alarms plus this margin, so the
 # dispatcher's own alarm always fires before the host pre-empts the process.
 ENTRY_MARGIN_S = 30
@@ -105,6 +106,9 @@ class Check:
     # "discard": a timed-out check decided nothing (one check_failure row, the next check
     # runs). "deny": the timeout itself is the refusal, exit 2 with `[rule: <name>.timeout]`.
     on_timeout: str = "discard"
+    # Agent Teams machinery: dispatch.py skips it when the
+    # session's execution mode is subagents (shared/execution.py).
+    teams_only: bool = False
 
     def legacy_command(self) -> str:
         """The hooks.json command that ran this check as its own process (for a native
@@ -120,8 +124,13 @@ def _hook(name: str, matcher: Optional[str] = None, **kwargs) -> Check:
     return Check(name=name, matcher=matcher, script=f"hooks/{name}.py", **kwargs)
 
 
-def _prompt_hook(name: str) -> Check:
-    return _hook(name, timeout_s=USER_PROMPT_TIMEOUT_S)
+def _prompt_hook(name: str, **kwargs) -> Check:
+    return _hook(name, timeout_s=USER_PROMPT_TIMEOUT_S, **kwargs)
+
+
+def _teams_hook(name: str, matcher: Optional[str] = None, **kwargs) -> Check:
+    """A check that only Agent Teams needs: skipped in subagents mode."""
+    return _hook(name, matcher, teams_only=True, **kwargs)
 
 
 def _security_hook(name: str, matcher: str) -> Check:
@@ -135,58 +144,59 @@ def _security_hook(name: str, matcher: str) -> Check:
 # process cannot reproduce.
 REGISTRY: dict[str, tuple[Check, ...]] = {
     "UserPromptSubmit": (
-        _prompt_hook("bootstrap_marker_writer"),
-        _prompt_hook("bootstrap_prompt_gate"),
-        _prompt_hook("missed_wake_scan"),
-        _prompt_hook("journal_emitter"),
+        _prompt_hook("bootstrap_marker_writer", teams_only=True),
+        _prompt_hook("bootstrap_prompt_gate", teams_only=True),
+        _prompt_hook("missed_wake_scan", teams_only=True),
     ),
     "SessionStart": (
         _hook("session_init"),
-        _hook("missed_wake_scan"),
+        _teams_hook("missed_wake_scan"),
         _hook("doctor_brief"),
     ),
     "PreCompact": (_hook("precompact_state_reminder"),),
     "PostCompact": (_hook("postcompact_archive"),),
     "PreToolUse": (
-        _hook("bootstrap_gate", "Agent|Task|Read|Bash"),
+        _teams_hook("bootstrap_gate", "Agent|Task|Read|Bash"),
         _security_hook("git_commit_check", "Bash"),
         Check(name="docker_lock_gate", matcher="Bash", native="docker_lock_gate:dispatch_check",
               journals_refusals=True),
         _security_hook("merge_guard_pre", "Bash"),
-        _hook("wait_filler_gate", "Bash"),
+        _teams_hook("wait_filler_gate", "Bash"),
         Check(name="background_test_gate", matcher="Bash",
-              native="background_test_gate:dispatch_check"),
+              native="background_test_gate:dispatch_check", teams_only=True),
         _hook("process_table_guard", "Bash"),
         _security_hook("env_guard", "Read|NotebookRead|Grep|Bash"),
         _security_hook("egress_guard", "mcp__.*|WebFetch|Artifact|Bash"),
         _hook("dispatch_gate", "Agent"),
-        _hook("worktree_guard", "Edit|Write|MultiEdit|NotebookEdit"),
-                _hook("handoff_ordering_gate", "TaskUpdate"),
-        _hook("task_claim_gate", "Edit|Write|Bash"),
-        _hook("acceptance_flags", "TaskUpdate"),
-        _hook("amendment_gate", "TaskUpdate"),
-        _hook("write_checks", "TaskUpdate|Bash"),
+        _security_hook("worktree_guard", "Edit|Write|MultiEdit|NotebookEdit"),
+        _security_hook("write_checks", "Bash"),
+        # The workflow writes stay on the repact commands.
+        Check(name="task_write_guard", matcher="TaskUpdate|TaskCreate",
+              native="task_write_guard:dispatch_check",
+              timeout_s=SECURITY_TIMEOUTS_S["task_write_guard"], on_timeout="deny"),
+        Check(name="ops_frame_guard", matcher="Bash", native="ops_frame_guard:dispatch_check",
+              timeout_s=SECURITY_TIMEOUTS_S["ops_frame_guard"], on_timeout="deny"),
         _hook("unattended_gate", "AskUserQuestion", journals_refusals=True),
         _hook("merge_question_gate", "AskUserQuestion"),
     ),
-    "SubagentStop": (_hook("validate_handoff"),),
-    "Stop": (_hook("stop_background_gate"),),
-    "SubagentStart": (_hook("peer_inject"),),
+    "SubagentStop": (Check(name="subagent_stop", native="subagent_stop:dispatch_check"),
+                     Check(name="teams_turn_end", native="teams_turn_end:dispatch_check",
+                           teams_only=True)),
+    "Stop": (_teams_hook("stop_background_gate"),),
+    "SubagentStart": (_teams_hook("peer_inject"),),
     "SessionEnd": (_hook("session_ledger"),
                    Check(name="distill_enqueue", native="distill_enqueue:dispatch_check")),
-    "TaskCompleted": (_hook("agent_handoff_emitter"),),
-    "TeammateIdle": (_hook("teammate_idle"),),
+    "TeammateIdle": (_teams_hook("teammate_idle"),),
     "PostToolUse": (
         _hook("track_files", "Edit|Write|Bash"),
         _hook("merge_guard_post", "AskUserQuestion|Bash"),
-        _hook("task_lifecycle_gate", "TaskCreate|TaskUpdate"),
         Check(name="task_store_probe", matcher="TaskCreate|TaskUpdate",
               native="task_store_probe:dispatch_check"),
-        _hook("bootstrap_marker_writer", "Agent"),
+        # TaskCreate/TaskUpdate: under `claude -p` the one prompt fires before the team
+        # exists, and the platform provisions it on the first TaskCreate.
+        _teams_hook("bootstrap_marker_writer", "Agent|TaskCreate|TaskUpdate"),
         _hook("run_ledger", "Bash"),
-        _hook("evidence_gate", "TaskCreate|TaskUpdate"),
-        _hook("journal_emitter", "TaskCreate|TaskUpdate|Agent"),
-        _hook("amendment_relay", "Bash|Edit|Write|Read|TaskUpdate|MultiEdit|NotebookEdit"),
+        _teams_hook("amendment_relay", "Bash|Edit|Write|Read|TaskUpdate|MultiEdit|NotebookEdit"),
         # Fail-open by its own contract (output_secret_scan.py); the short alarm only
         # bounds the stall.
         _hook("output_secret_scan", "Bash", timeout_s=30),

@@ -1,28 +1,32 @@
 """
 Location: pact-plugin/hooks/shared/protocol_descriptor.py
 Summary: The ONE teaching source of the teachback / HANDOFF / wait contract. Field
-         names, enum values, the reconstruction threshold, REV_MAX and the wait
-         vocabulary are IMPORTED from the validating modules (teachback_schema,
-         handoff_schema, intentional_wait, amendments, stored_line); only the
-         one-line rule strings, the mistakes table and the view templates are
-         authored here. The `render_*` functions turn the descriptor into the
-         text of every model-read restatement: the marked regions in
-         skills/teammate/SKILL.md, protocols/completion.md,
-         reference/dispatch/teachback-gated-dispatch.md and the two spawn notes
-         in hooks/shared/peer_context.py.
+         names, enum values, thresholds and the wait vocabulary are IMPORTED from
+         the validating modules (teachback_schema, handoff_schema, amendments,
+         ref_dispositions, intentional_wait, ops.submit, ops.dispatch); only the
+         one-line rule strings and the view templates are authored here. The
+         `render_*` functions turn the descriptor into the text of every
+         model-read restatement, each a marked region:
+         - the coder's side (2.1, `repact submit`): skills/teammate/SKILL.md, the
+           field pages teammate-teachback.md and teammate-handoff.md, the
+           Teams-only wait rules in teammate-waiting.md, the HANDOFF skeleton and
+           guide in hooks/shared/ops/brief.py, and the two Teams spawn notes in
+           hooks/shared/peer_context.py.
+         The lead's side has no region: `repact dispatch` writes the brief.
 Used by: dev/protocol/render.py (writes or checks the regions),
          tests/contract/test_protocol_rendered.py (pins every region to the
          rendered text and the descriptor to the validators). NO hook imports
-         this module at runtime: the regions are committed, so the hook-infra
-         closures (hook_infra_classifier) stay as they are.
+         this module at runtime: the regions are committed, so brief.py and
+         peer_context.py read plain constants and the hook import closures stay
+         as they are.
 
-Contract: pure module; stdlib only; no I/O; import never raises.
+Contract: pure module; no I/O; import never raises.
 
 Why a descriptor and committed regions rather than a generator at install time:
 the surface stays readable in git and in the plugin cache without running
 anything, and `render.py --check` (run by the contract test) proves the committed
 text equals the rendered text byte for byte. A rule string that disagrees with a
-validator is now one file away from the validator instead of sixteen.
+validator is one file away from the validator.
 """
 
 from __future__ import annotations
@@ -40,11 +44,17 @@ from shared.intentional_wait import (
     KNOWN_REASONS,
     KNOWN_RESOLVERS,
 )
-from shared.stored_line import WHAT
+from shared.ops.dispatch import TWO_PHASE_MIN
+from shared.ops.submit import (
+    HANDOFF_MAX as SUBMIT_HANDOFF_MAX,
+    LIST_KEYS as SUBMIT_LIST_KEYS,
+    REQUIRED_KEYS as SUBMIT_REQUIRED_KEYS,
+    TEACHBACK_MAX as SUBMIT_TEACHBACK_MAX,
+)
+from shared.ref_dispositions import VERBS as REF_VERBS
 from shared.teachback_schema import (
     TEACHBACK_OBJECT_FIELDS,
     TEACHBACK_REASONING_RECONSTRUCTION_REQUIRED_MIN,
-    TEACHBACK_RECOMMENDED_BAND_MIN,
     TEACHBACK_REQUIRED_FIELDS,
     TEACHBACK_REQUIRED_SUBKEYS,
     TEACHBACK_VARIETY_ACK_VALID_VALUES,
@@ -97,21 +107,21 @@ SINCE_COMMAND = "date -u +%Y-%m-%dT%H:%M:%S+00:00"
 # The post-notify wait: returns at once when the lead already accepted, rejected or amended.
 WAIT_COMMAND = "repact-wait <id> --until completed,rejection,amend"
 # How a teammate reads what the lead wrote: the value is in the task file, never in a message.
-REJECTION_READER = "repact-payload <id> --key rejection"
-AMEND_READER = "repact-payload <id> --key amend"
+REJECTION_READER = "repact inspect <id> --key rejection"
+AMEND_READER = "repact inspect <id> --key amend_<n>"
 # The one line a lead sends after a directive is on disk. amendments.wake_line() builds the
 # same line from real values; tests/contract/test_protocol_rendered.py pins the two together.
 WAKE_LINE = f"[{LEAD}→<teammate>] Task #<id>: <{'|'.join(WAKE_VERBS)}> on disk, digest <d>."
 UNCERTAINTY_PREFIXES = ("fixed:", "known-limit:", "not-applicable:")
-REF_DISPOSITIONS = ("done:", "partial:", "deferred:", "dropped:")
+REF_DISPOSITIONS = tuple(f"{verb}:" for verb in REF_VERBS)
 
 # Rules of the four string fields of a teachback, by name. The object field's
 # rule is on its Field below.
 _TEACHBACK_RULES = {
     "understanding": "the brief restated: what you build, constraints, interfaces",
-    "most_likely_wrong": "",
+    "most_likely_wrong": "the part of your plan most likely to be wrong",
     "least_confident_item": "one assumption for the lead to confirm",
-    "first_action": "",
+    "first_action": "your first concrete step",
 }
 
 _VARIETY_ACK_SUBKEYS = (
@@ -119,6 +129,9 @@ _VARIETY_ACK_SUBKEYS = (
     ("concern", '"<non-empty unless yes>"'),
 )
 
+# The field tuples are current: the contract test pins them to the validators, and the 2.1
+# views below read them. The stored and notify lines are the 2.0 Agent Teams wording, kept as
+# data. The `wait` ceremony is current in Teams mode.
 PROTOCOL = Protocol(
     teachback=Ceremony(
         key="teachback_submit",
@@ -169,8 +182,9 @@ PROTOCOL = Protocol(
                         + f' | "{ACK}"}}')),
             *(Field(name, "list|str", required=name not in HANDOFF_RECOMMENDED_FIELDS)
               for name in HANDOFF_CANONICAL_FIELDS),
-            Field("refs", "object", required_when="your task carries project tasks",
-                  rule='one per ref, `{"T-<id>": "done: <evidence>"}`, else `partial:`, `deferred:` or `dropped: <why>`'),
+            Field("refs", "object", required_when="your task carries project tasks or ACs",
+                  rule='one per ref, `{"T-<id>": "done: <evidence>"}` or `{"AC-<n>": "done: <passing run log stem>"}`, '
+                       'else `partial:`, `deferred:` or `dropped: <why>`'),
         ),
         stored_line="HANDOFF stored on #<id> (owner <you>): rev N, digest <d>",
         notify="[{sender}→team-lead] Task complete on #<id>, rev <n>, digest <d>.",
@@ -194,9 +208,7 @@ PROTOCOL = Protocol(
     ),
 )
 
-# The stored-line word for each ceremony key, from the hook that prints the line;
-# the rev bound the task store can hold exactly; the wait staleness horizon.
-STORED_WHAT = dict(WHAT)
+# The rev bound the task store can hold exactly; the wait staleness horizon.
 HANDOFF_REV_MAX = REV_MAX
 WAIT_STALE_MINUTES = DEFAULT_THRESHOLD_MINUTES
 
@@ -207,88 +219,12 @@ WAIT_STALE_MINUTES = DEFAULT_THRESHOLD_MINUTES
 # contract pieces (names, enums, counts, thresholds, lines) come from PROTOCOL.
 # ---------------------------------------------------------------------------
 
-_NUMBER_WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine"}
-
-
 def _tick(names) -> str:
     return ", ".join(f"`{n}`" for n in names)
 
 
-def _teachback_field_list(ceremony: Ceremony) -> str:
-    """`understanding` (rule), `most_likely_wrong`, ... and `variety_acknowledgment`, an OBJECT {...}"""
-    strings = [f for f in ceremony.fields if f.kind == "str"]
-    objects = [f for f in ceremony.fields if f.kind == "object" and not f.required_when]
-    parts = [f"`{f.name}`" + (f" ({f.rule})" if f.rule else "") for f in strings]
-    for obj in objects:
-        shape = ", ".join(f'"{k}": {v}' for k, v in obj.subkeys)
-        parts.append(f"`{obj.name}`, an OBJECT `{{{shape}}}`")
-    return ", ".join(parts[:-1]) + ", and " + parts[-1]
-
-
-def render_skill_teachback() -> str:
-    """SKILL.md §Teachback steps 2-5: the write, the conditional field, the stored line, the notify."""
-    tb = PROTOCOL.teachback
-    strings = [f for f in tb.fields if f.kind == "str"]
-    required = [f for f in tb.fields if not f.required_when]
-    conditional = [f for f in tb.fields if f.required_when]
-    lines = [
-        f"2. Write `metadata.{tb.key}`, an OBJECT, in ONE `TaskUpdate`. {_NUMBER_WORDS[len(required)]} fields, "
-        f"the first {_NUMBER_WORDS[len(strings)].lower()} non-empty strings: {_teachback_field_list(tb)}. "
-        "A `WITHHELD:` rationale is deliberate: answer `concern` and quote it.",
-    ]
-    for f in conditional:
-        keys = ", ".join(f'"{k}"' for k, _ in f.subkeys)
-        lines.append(f"3. When {f.required_when}, add `{f.name}` `{{{keys}}}`: {f.rule}. Optional below that.")
-    lines += [
-        f"4. Read the tool result: notify only after its line `{tb.stored_line}`. `NOT STORED`, a refusal or a "
-        "correction: do not notify, write the FULL object again (a partial write erases what you omit). "
-        "No line at all: read the task file back; notify only if it holds your write.",
-        f"5. Notify, one line: `{tb.notify}` Never repeat the teachback: the lead reads the stored copy.",
-        f"6. SET the wait (below) in a SEPARATE `TaskUpdate`, then `{WAIT_COMMAND}`. The lead completes Task A; "
-        "you never do.",
-        f"7. Rejected (`metadata.{tb.rejection_key}`; read it: `{REJECTION_READER}`): CLEAR the wait, rewrite the full "
-        "object on the same task with `metadata.revision_number` +1 (2 on the first resubmit), notify, SET again.",
-        "",
-        "### Common mistakes",
-        "",
-        "| # | Wrong shape | Canonical shape |",
-        "|---|---|---|",
-    ]
-    lines += [f"| {i} | {wrong} | {right} |" for i, (wrong, right) in enumerate(tb.mistakes, 1)]
-    return "\n".join(lines)
-
-
-def render_skill_handoff() -> str:
-    """SKILL.md §HANDOFF steps 4-6: the key list in order, the field rules, the stored line, the order."""
-    ho = PROTOCOL.handoff
-    always = [f for f in ho.fields if not f.required_when]
-    recommended = [f.name for f in always if not f.required]
-    by_case = [f for f in ho.fields if f.required_when]
-    rules = {f.name: f.rule for f in ho.fields if f.rule}
-    lines = [
-        f"4. Write `metadata.{ho.key}`, an OBJECT, in ONE `TaskUpdate`. Keys, in order: "
-        f"{_tick(f.name for f in always)}. All but {_tick(recommended)} (recommended) are required; "
-        "a list may be empty. Keys, not labels: `decisions`, never `key_decisions`.",
-        f"   - `rev`: {rules['rev']}. `2.5`, `true` and `0` are returned; `\"2\"` is repaired.",
-        f"   - `amendments`: `{rules['amendments']}`, one entry per key; `{{}}` with none.",
-        f"   - Each `uncertainty` item opens with {', '.join(f'`{p}`' for p in UNCERTAINTY_PREFIXES[:-1])}"
-        f" (into the PR) or `{UNCERTAINTY_PREFIXES[-1]}`.",
-    ]
-    for f in by_case:
-        lines.append(f"   - `{f.name}`, when {f.required_when}: {f.rule}. A missing ref returns the write.")
-    lines += [
-        f"5. Read the tool result: notify only after its line `{ho.stored_line}`; another owner means the wrong "
-        "task. `NOT STORED` or a refusal (a gate can RETURN the write) means no copy is on disk: do not notify, "
-        "fix what it names and write the FULL object again. No line at all: read `rev` back from the task file; "
-        "notify only if the disk holds your rev.",
-        f"6. Order: {' → '.join(ho.ordering)}. The notify, one line: `{ho.notify}` "
-        "Never repeat the HANDOFF: the lead reads the stored copy.",
-    ]
-    return "\n".join(lines)
-
-
 def render_skill_wait() -> str:
-    """SKILL.md §Waiting and waking items 1-4: the SET shape, the vocabulary, since and covers_since."""
+    """teammate-waiting.md (Teams only): the SET shape, the vocabulary, since and covers_since."""
     wait = PROTOCOL.wait
     by_name = {f.name: f for f in wait.fields}
     reasons = [r for r in by_name["reason"].values if r != WAIT_REASON_DEFAULT]
@@ -304,95 +240,202 @@ def render_skill_wait() -> str:
     ])
 
 
-def render_completion_acceptance() -> str:
-    """protocols/completion.md: what the lead checks on a teachback or HANDOFF, one line per ceremony."""
-    tb, ho = PROTOCOL.teachback, PROTOCOL.handoff
-    strings = [f.name for f in tb.fields if f.kind == "str"]
+# ---------------------------------------------------------------------------
+# 2.1: the coder's path. One brief, two
+# skeleton files and one command, `repact submit`, which checks, repairs and
+# stores. The texts below say only what ops/submit.py really does.
+# ---------------------------------------------------------------------------
+
+SUBMIT_TEACHBACK = "repact submit <id> --teachback <file>"
+SUBMIT_HANDOFF = "repact submit <id>"
+# The line a two-phase teachback ends the turn on (ops/submit.py prints it, and
+# hooks/subagent_stop.py lets a turn end on it).
+TEACHBACK_STOP_LINE = "TEACHBACK SUBMITTED #<id>"
+# What each exit of `repact submit` means (bin/_repact_ops.py, Exit codes).
+SUBMIT_EXITS = (
+    ("0", "stored, and accept will pass the checks it can see now. End your turn."),
+    ("2", "nothing stored. It lists every problem in one message: fix them all, then run it again."),
+    ("3", "stored, but accept will refuse for the reasons it lists (most often: no passing run of "
+          "the brief's tcount on the tree as it is now). Fix them, rerun the tests with the brief's "
+          "tcount path, then run submit again."),
+)
+_SUBMIT_REPAIRS = ("it sets `rev` itself, makes a relative `produced` path absolute against your "
+                   "worktree, and adds a missing " + ", ".join(f"`{k}`" for k in SUBMIT_LIST_KEYS)
+                   + " as `[]`")
+
+# What to write in each HANDOFF key, for the field page and the brief's guide.
+_HANDOFF_RULES = {
+    "produced": "one item per file you changed, its path first, then what changed",
+    "decisions": "the choices you made, one line each with its why",
+    "reasoning_chain": "a few lines on how you got there",
+    "uncertainty": ("each item opens with " + ", ".join(f"`{p}`" for p in UNCERTAINTY_PREFIXES[:-1])
+                    + f" (it goes into the PR) or `{UNCERTAINTY_PREFIXES[-1]}`"),
+    "integration": "what the lead or the next unit must know to use this",
+    "open_questions": "what is still open; an unfinished step opens with `remaining:`",
+}
+
+
+# The skeleton's placeholder for each required key (submit refuses a placeholder left in place).
+_SKELETON_PLACEHOLDERS = {
+    "produced": ["<absolute path in your worktree>: <what changed>"],
+    "integration": "<what the lead or the next unit must know to use this>",
+}
+
+
+def _required_word(name: str) -> str:
+    if name in SUBMIT_REQUIRED_KEYS:
+        return "required"
+    if name in SUBMIT_LIST_KEYS:
+        return "a list, may be empty"
+    return "recommended" if name in HANDOFF_RECOMMENDED_FIELDS else "optional"
+
+
+def render_skill_steps() -> str:
+    """SKILL.md §The work: the five steps from the brief to the stored HANDOFF, and submit's exits."""
+    return "\n".join([
+        "1. Read the brief whole. Work only in its worktree, with absolute paths or `git -C <worktree>`.",
+        "2. Teachback: fill the teachback skeleton in your own words, then run the brief's "
+        f"`{SUBMIT_TEACHBACK}` line. No Edit, Write or Bash for the work before it is stored; "
+        "reading is fine.",
+        "   - It prints `Accepted automatically`: go on.",
+        f"   - It prints `Stop here`: end your turn with the one line `{TEACHBACK_STOP_LINE}`. The lead "
+        f"resumes you. This happens when the variety total is {TWO_PHASE_MIN}+ or your answer is "
+        "not `yes`.",
+        "3. Do the work. Invoke the skills your agent file lists first.",
+        "4. Run tests the way the brief's Tests line says: with the tcount path it gives (a bare "
+        "`tcount` can be another install), from the worktree, after your last edit; for a fix or a "
+        "feature, a red run that names the test file comes first. A count you report must come from "
+        "a recorded run; accept reads the runs from the ledger.",
+        "5. Hand in: fill the HANDOFF skeleton (replace every `<...>` placeholder), then run the "
+        f"brief's `{SUBMIT_HANDOFF}` line, without `--teachback`. It repairs what is mechanical: "
+        f"{_SUBMIT_REPAIRS}. Then:",
+        *[f"   - exit {code}: {meaning}" for code, meaning in SUBMIT_EXITS],
+    ])
+
+
+def render_teachback_fields() -> str:
+    """teammate-teachback.md: the fields, what submit refuses, and when the lead reviews it."""
+    tb = PROTOCOL.teachback
+    rows = [f"| `{f.name}` | {f.rule} |" for f in tb.fields if f.kind == "str"]
     ack = next(f for f in tb.fields if f.kind == "object" and not f.required_when)
     rr = next(f for f in tb.fields if f.required_when)
-    reasons = dict(tb.rejection_reasons)
-    ho_required = [f.name for f in ho.fields if f.required and not f.required_when and f.kind != "int"
-                   and f.name != "amendments"]
-    ho_recommended = [f.name for f in ho.fields if not f.required]
+    rows.append(f"| `{ack.name}` | an object: `{ack.subkeys[0][0]}` is "
+                + ", ".join(f"`{v}`" for v in TEACHBACK_VARIETY_ACK_VALID_VALUES[:-1])
+                + f" or `{TEACHBACK_VARIETY_ACK_VALID_VALUES[-1]}`"
+                + f"; `{ack.subkeys[1][0]}` says why unless the answer is `yes` |")
+    rows.append(f"| `{rr.name}` | required when {rr.required_when}, optional below: an object of exactly "
+                + _tick(k for k, _ in rr.subkeys) + ", each a non-empty string |")
     return "\n".join([
-        "Rendered from `hooks/shared/protocol_descriptor.py`:",
-        f"- `{tb.key}`: an object with {_tick(strings)} (non-empty strings) and `{ack.name}` "
-        f"(an object: `{ack.subkeys[0][0]}` in {'/'.join(TEACHBACK_VARIETY_ACK_VALID_VALUES)}, "
-        f"`{ack.subkeys[1][0]}` non-empty unless yes).",
-        f"- `{rr.name}`: required when {rr.required_when} (missing → `missing_reasoning_reconstruction`); "
-        f"{reasons['malformed_reasoning_reconstruction']} → `malformed_reasoning_reconstruction`; "
-        f"{reasons['empty_reasoning_reconstruction_field']} → `empty_reasoning_reconstruction_field`. "
-        f"Recommended at {TEACHBACK_RECOMMENDED_BAND_MIN}-{TEACHBACK_REASONING_RECONSTRUCTION_REQUIRED_MIN - 1}.",
-        f"- `{ho.key}`: `rev` {ho.fields[0].rule}; `amendments` one disposition per `{AMEND_PREFIX}<n>` "
-        f"({'/'.join(DISPOSITION_VERBS)} or {ACK}); required {_tick(ho_required)}; {_tick(ho_recommended)} "
-        f"recommended; `refs` when {ho.fields[-1].required_when}.",
-        f"- The wake, sent after the write is stored: `{WAKE_LINE}` One line, the digest from the stored line, "
-        f"never a value; the teammate reads with `{REJECTION_READER}` or `{AMEND_READER}`.",
+        "| Field | What to write |",
+        "|---|---|",
+        *rows,
+        "",
+        "`repact submit --teachback` refuses, listing every problem at once:",
+        "- a field missing or empty, or an answer outside "
+        + "/".join(TEACHBACK_VARIETY_ACK_VALID_VALUES) + ", or `concern` empty when the answer is not `yes`;",
+        f"- `{rr.name}` missing at {TEACHBACK_REASONING_RECONSTRUCTION_REQUIRED_MIN}+, or with other keys "
+        "or an empty value;",
+        "- a key that only looks like a field (another case, a lookalike letter) or holds a control "
+        "character: spell it exactly;",
+        "- a `<...>` placeholder left from the skeleton;",
+        f"- a teachback over {SUBMIT_TEACHBACK_MAX // 1024} KB;",
+        "- a different teachback once one is accepted: go on with the work instead.",
+        "",
+        f"It is accepted at once when the variety total is under {TWO_PHASE_MIN} and your answer is `yes`. "
+        f"Otherwise the lead reads it: end your turn on `{TEACHBACK_STOP_LINE}` (Teams mode: run the "
+        "`repact-wait` line it prints).",
     ])
 
 
-def render_dispatch_task_a() -> str:
-    """The Task A description every dispatch pastes (the lines inside TaskCreate's description=)."""
-    tb = PROTOCOL.teachback
-    strings = [f.name for f in tb.fields if f.kind == "str"]
-    ack = next(f for f in tb.fields if f.kind == "object" and not f.required_when)
-    return "\n".join([
-        '    description="DOGFOOD TEACHBACK GATE for {feature}.\\n\\n"',
-        f'                "Submit TEACHBACK by writing metadata.{tb.key} using the CANONICAL field schema '
-        f'(do NOT improvise key names): {", ".join(strings)}, {ack.name} (an OBJECT). '
-        'See the teammate skill for field semantics. "',
-        '                "Then send the notify SendMessage with the task id and the digest the stored line printed, '
-        'never the teachback itself (teammate skill, Teachback step 5). "',
-        f'                "SET intentional_wait{{reason={WAIT_REASON_DEFAULT}, expected_resolver={WAIT_RESOLVER_DEFAULT}, '
-        'since=<canonical_since() output>, covers_since=<the same value as since>}. Idle. "',
-        '                "DO NOT mark this task completed — team-lead-only completion. Lead will mark completed "',
-        '                "after teachback acceptance, then send the one-line wake; Task B is then claimable. "',
-        f'                "If TEACHBACK is rejected, team-lead writes metadata.{tb.rejection_key} and sends the one-line "',
-        f'                "wake; read it with {REJECTION_READER} and revise on this same task.\\n\\n"',
-        '                "When Task B unblocks, claim it (TaskUpdate status=in_progress) BEFORE any implementation tool-use — '
-        'it is pre-assigned to you but still pending; you flip it, not the lead. Task B stays blocked until the lead '
-        'accepts this teachback: that is the gate, not a desync.\\n\\n"',
-        '                "Mission for Task B: the primary-work task assigned to you in your TaskList (the work task, NOT '
-        "this TEACHBACK gate task), identified by its subject (the '{name}: {mission}' pattern). Claim it after this "
-        'teachback is accepted."',
-    ])
-
-
-def render_dispatch_task_b() -> str:
-    """The lines that close every Task B description (claim first, never self-complete, HANDOFF, rejection)."""
+def render_handoff_fields() -> str:
+    """teammate-handoff.md: every key, what submit repairs and what it refuses."""
     ho = PROTOCOL.handoff
+    by_name = {f.name: f for f in ho.fields}
+    rows = [f"| `{name}` | {_required_word(name)}: {_HANDOFF_RULES[name]} |"
+            for name in HANDOFF_CANONICAL_FIELDS]
+    verbs = [f"`{verb}: <{why}>`" for verb, why in zip(DISPOSITION_VERBS, ("where", "why", "why"))]
+    rows.append(f"| `amendments` | one entry per `{AMEND_PREFIX}<n>` on the task, keyed by it: "
+                + ", ".join(verbs) + f" or `{ACK}`; `{{}}` with none |")
+    rows.append(f"| `refs` | one entry per ref or AC the skeleton lists: `{REF_VERBS[0]}: <evidence>`, or "
+                + ", ".join(f"`{v}:`" for v in REF_VERBS[1:-1]) + f" or `{REF_VERBS[-1]}:` with the why |")
+    rows.append("| `rev` | do not set it: submit assigns it, one more than the stored one |")
     return "\n".join([
-        '                "FIRST claim this task (TaskUpdate status=in_progress) before any implementation tool-use — '
-        'it is pre-assigned to you but still pending; you flip it, not the lead.\\n\\n"',
-        '                "DO NOT mark this task completed yourself. "',
-        f'                "After staging artifacts, write metadata.{ho.key}, send notify SendMessage with task id, rev and '
-        'digest (teammate skill, HANDOFF step 6) to team-lead, "',
-        f'                "SET intentional_wait{{reason={WAIT_REASON_DEFAULT}}}. Idle. Lead will mark "',
-        f'                "completed after HANDOFF validation. If team-lead rejects, team-lead writes metadata.{ho.rejection_key}; "',
-        f'                "read it with {REJECTION_READER} and revise on this same task.\\n\\nWrite the HANDOFF whatever the size of the diff — a task whose '
-        'deliverable is a JUDGEMENT rather than a CHANGE carries its value in the rationale, not in the diff.'
-        '\\n\\nUpstream: TEACHBACK Task #{A_id}.",',
+        "| Key | Rule |",
+        "|---|---|",
+        *rows,
+        "",
+        f"`repact submit` repairs what is mechanical: {_SUBMIT_REPAIRS}. It refuses, listing every "
+        "problem at once and storing nothing:",
+        "- " + " or ".join(f"`{k}`" for k in SUBMIT_REQUIRED_KEYS) + " missing;",
+        "- a `produced` path that resolves outside your worktree;",
+        "- an `uncertainty` item with none of " + ", ".join(f"`{p}`" for p in UNCERTAINTY_PREFIXES) + ";",
+        f"- an `{AMEND_PREFIX}<n>` on the task with no entry in `amendments` (it prints the amendment's text);",
+        "- a listed ref or AC with no entry in `refs`, or an entry that opens with none of "
+        + ", ".join(f"`{v}:`" for v in REF_VERBS) + ";",
+        "- a key that only looks like a canonical one, a `<...>` placeholder left from the skeleton, "
+        f"or a HANDOFF over {SUBMIT_HANDOFF_MAX // 1024} KB;",
+        "- a teachback that is not accepted yet.",
     ])
+
+
+def _py_lines(name: str, value) -> list:
+    """`name = <value>` as Python source, one key or item per line (json literals are Python here)."""
+    import json
+    if isinstance(value, dict):
+        body = [f"    {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}," for k, v in value.items()]
+        return [f"{name} = {{", *body, "}"]
+    body = [f"    {json.dumps(item, ensure_ascii=False)}," for item in value]
+    return [f"{name} = (", *body, ")"]
+
+
+def handoff_skeleton_template() -> dict:
+    """The HANDOFF skeleton the brief writes, without `refs` (brief.py adds one per carried ref)."""
+    out = {}
+    for name in HANDOFF_CANONICAL_FIELDS:
+        if name in SUBMIT_REQUIRED_KEYS:
+            out[name] = _SKELETON_PLACEHOLDERS[name]
+        else:
+            out[name] = [] if name in SUBMIT_LIST_KEYS else ""
+    out["amendments"] = {}
+    return out
+
+
+def handoff_guide() -> tuple:
+    """The brief's short HANDOFF block, one line per rule submit checks."""
+    return (
+        "- produced: one item per file, its path first (made absolute; it must be in your worktree).",
+        "- integration: required: what the lead or the next unit must know to use this.",
+        "- uncertainty: each item opens with " + ", ".join(UNCERTAINTY_PREFIXES[:-1])
+        + f" or {UNCERTAINTY_PREFIXES[-1]}.",
+        f"- amendments: one entry per {AMEND_PREFIX}<n> on the task ("
+        + ", ".join(f"{verb}:" for verb in DISPOSITION_VERBS) + f" or {ACK}).",
+        "- refs: one entry per listed ref or AC (" + ", ".join(f"{v}:" for v in REF_VERBS) + ").",
+        "- Replace every <...> placeholder. Do not set rev: the command assigns it.",
+    )
+
+
+def render_brief_handoff() -> str:
+    """hooks/shared/ops/brief.py: the HANDOFF skeleton template and the brief's guide, as Python source."""
+    return "\n".join([*_py_lines("HANDOFF_SKELETON", handoff_skeleton_template()), "",
+                      *_py_lines("HANDOFF_GUIDE", handoff_guide())])
 
 
 def render_spawn_notes() -> str:
-    """The two constants peer_context.py appends to every teammate's spawn context, as Python source."""
-    tb, ho = PROTOCOL.teachback, PROTOCOL.handoff
+    """The two constants peer_context.py appends to a Teams teammate's spawn context, as Python source."""
     return "\n".join([
         "_TEACHBACK_REMINDER = (",
-        f'    "\\n\\nTEACHBACK TIMING: write metadata.{tb.key} on Task A BEFORE any Edit/Write/Bash "',
-        f'    "call; the only shell exceptions are `{SINCE_COMMAND}` (the wait\'s `since`) "',
-        '    "and `repact-wait` after the notify. The teachback is a gate: Task B stays blocked until "',
-        '    "the team-lead accepts. The teammate skill holds the format."',
+        '    "\\n\\nTEACHBACK TIMING: your brief (the file your spawn prompt names) holds the teachback "',
+        f'    "skeleton and the exact `{SUBMIT_TEACHBACK}` line. Run it before any Edit/Write/Bash "',
+        '    "for the work; reading is fine. The teachback is a gate: when submit says the lead "',
+        '    "reviews it, run the `repact-wait` line it prints. The teammate skill holds the rest."',
         ")",
         "",
         "_COMPLETION_AUTHORITY_NOTE = (",
-        '    "\\n\\nCOMPLETION AUTHORITY: you do NOT mark your own tasks `completed`. Write the HANDOFF "',
-        f'    "(metadata.{ho.key}) or the teachback to the task and stay `in_progress`; the team-lead "',
-        '    "transitions status to `completed` on accept. On a Task A (teachback) + Task B (work) pair: "',
-        f'    "claim A, submit, SET `intentional_wait{{reason={WAIT_REASON_DEFAULT}}}`, run "',
-        f'    "`{WAIT_COMMAND.replace("<id>", "<A id>")}` in the foreground, and begin B only when A "',
-        '    "is `completed` on disk."',
+        '    "\\n\\nCOMPLETION AUTHORITY: you do NOT mark your own tasks `completed` and never write "',
+        '    "the teachback or the HANDOFF with TaskUpdate. Hand in with the brief\'s `repact submit <id>` line; the "',
+        '    "team-lead\'s `repact accept` transitions status to `completed`. After each submit, send the "',
+        '    "team-lead one line, SET `intentional_wait{reason=' + WAIT_REASON_DEFAULT + '}` and run "',
+        f'    "`{WAIT_COMMAND}` in the foreground."',
         ")",
     ])
 
@@ -400,12 +443,11 @@ def render_spawn_notes() -> str:
 # Region name -> (relative path from the plugin root, renderer). The ONE map the
 # dev renderer and the contract test share.
 REGIONS: dict[str, tuple[str, object]] = {
-    "teachback": ("skills/teammate/SKILL.md", render_skill_teachback),
-    "handoff": ("skills/teammate/SKILL.md", render_skill_handoff),
-    "wait": ("skills/teammate/SKILL.md", render_skill_wait),
-    "acceptance": ("protocols/completion.md", render_completion_acceptance),
-    "dispatch-task-a": ("reference/dispatch/teachback-gated-dispatch.md", render_dispatch_task_a),
-    "dispatch-task-b": ("reference/dispatch/teachback-gated-dispatch.md", render_dispatch_task_b),
+    "steps": ("skills/teammate/SKILL.md", render_skill_steps),
+    "teachback-fields": ("skills/teammate/references/teammate-teachback.md", render_teachback_fields),
+    "handoff-fields": ("skills/teammate/references/teammate-handoff.md", render_handoff_fields),
+    "wait": ("skills/teammate/references/teammate-waiting.md", render_skill_wait),
+    "brief-handoff": ("hooks/shared/ops/brief.py", render_brief_handoff),
     "spawn-notes": ("hooks/shared/peer_context.py", render_spawn_notes),
 }
 

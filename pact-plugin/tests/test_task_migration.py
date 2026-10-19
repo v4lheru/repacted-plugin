@@ -187,6 +187,17 @@ def test_stored_state_prints_presence_and_a_bounded_rev_only(metadata, state):
     assert tm.stored_state(metadata) == state
 
 
+def test_the_ops_dispatch_and_teachback_cross_a_resume_and_read_as_a_stored_teachback():
+    # 2.1.0: `repact dispatch` and `repact submit` store metadata.dispatch and
+    # metadata.teachback.submit; a resume carries both and the note reads the nested teachback.
+    dispatch = {"name": "coder-a", "teachback": "two_phase"}
+    teachback = {"submit": {"understanding": "u"}, "at": NOW}
+    planned = tm.plan([task("4", metadata={"dispatch": dispatch, "teachback": teachback})], set(), 0, OLD, NOW)
+    carried = planned.tasks[0]["metadata"]
+    assert carried["dispatch"] == dispatch and carried["teachback"] == teachback
+    assert tm.stored_state(carried) == "teachback stored"
+
+
 def test_the_journal_row_holds_key_names_only_and_no_wait():
     source = task("1", metadata={"intentional_wait": {"reason": "MARKER-WAIT"}, "handoff": {"produced": "MARKER"},
                                  "amend_1": "MARKER", "bad key\n": 1})

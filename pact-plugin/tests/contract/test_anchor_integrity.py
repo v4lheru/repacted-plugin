@@ -152,11 +152,11 @@ REFERENCES = references(all_hook_strings())
 def test_the_scan_finds_the_known_references():
     """Guards the scanner itself: an empty parse would make every check below vacuous."""
     found = {ref for _, ref in REFERENCES}
+    # The skill-row and section citations left with the hooks 2.1.0 retired; the file and
+    # persona kinds remain.
     assert "persona:11" in found
-    assert {"row:teammate:1", "row:teammate:2", "row:teammate:3", "row:teammate:4"} <= found
     assert "file:skills/teammate/references/teammate-messaging.md" in found
-    assert "section:teammate-teachback.md:When to Method-Reconstruct" in found
-    assert len(REFERENCES) >= 15, len(REFERENCES)
+    assert len(REFERENCES) >= 10, len(REFERENCES)
 
 
 @pytest.mark.parametrize("where, ref", REFERENCES, ids=[f"{w}|{r}" for w, r in REFERENCES])

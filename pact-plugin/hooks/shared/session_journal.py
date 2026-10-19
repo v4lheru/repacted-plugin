@@ -65,16 +65,16 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     "compaction_summary_dropped": {"cause": str},
     # commands/orchestrate.md: the FEATURE-level variety (dispatch_variety is per dispatch).
     "variety_assessed": {"task_id": str, "variety": dict},
-    # hooks/task_lifecycle_gate.py at a Task-B TaskCreate; GC-immune 5-key mirror; no reader today.
+    # No writer since 2.1.0 (old journals carry it); GC-immune 5-key mirror; no reader today.
     "dispatch_variety": {"task_id": str, "variety": dict},
     # Two emit legs share one marker per (team, task_id). variety stays OPTIONAL: an
     # un-stamped dispatch must still count, not be rejected.
     "dispatch_site": {"task_id": str},
     # cause keeps raised and returned_false apart; only skipped_type "dispatch_site" is read today (Q5).
     "journal_emit_skipped": {"skipped_type": str, "cause": str},
-    # hooks/task_lifecycle_gate.py on a teachback acceptance; read by wrap-up Q6.
+    # shared/ops/submit.py on a teachback; read by wrap-up Q6.
     "teachback_ack": {"task_id": str, "rationale_articulates_this_dispatch": str},
-    # shared/task_metadata_snapshot.py at completion; GC-immune mirror of task metadata.
+    # No writer since 2.1.0 (old journals carry it); GC-immune mirror of task metadata.
     "task_metadata_snapshot": {"task_id": str, "metadata": dict},
     # orchestrate/comPACT; session_resume subscripts p["phase"], so phase is required.
     "phase_transition": {"phase": str, "status": str},
@@ -83,14 +83,14 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     # commands/orchestrate.md + comPACT.md write agent_dispatch with agent,
     # task_id, phase (all quoted strings) + scope (list).
     "agent_dispatch": {"agent": str, "task_id": str, "phase": str},
-    # hooks/agent_handoff_emitter.py; all four are read by the secretary.
+    # shared/ops/accept.py; all four are read by the secretary.
     "agent_handoff": {
         "agent": str,
         "task_id": str,
         "task_subject": str,
         "handoff": dict,
     },
-    # hooks/validate_handoff.py when the stop-loop guard degrades a refusal.
+    # No writer since 2.1.0 (old journals carry it): a degraded stop-loop refusal.
     "handoff_refusal_degraded": {
         "agent_type": str,
         "detail": str,
@@ -156,7 +156,7 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
         "worktree_path": str,
         "consolidation_completed": bool,
     },
-    # commands/refresh.md; list fields are checked shallowly.
+    # reference/pause/checkpoint.md; list fields are checked shallowly.
     "session_refreshed": {
         "consolidation_completed": bool,
         "halt_active": bool,
@@ -187,7 +187,7 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, dict[str, type]] = {
     # bin/repact-unattended while the mode is on; short, single-line lead words.
     "unattended_default": {"ref": str, "question": str, "chose": str, "why": str},
     "unattended_halt": {"task_id": str, "question": str},
-    # hooks/journal_emitter.py; byte counts only, summed by bin/repact-report.
+    # No writer since 2.1.0 (old journals carry it); byte counts only, summed by bin/repact-report.
     "metadata_write": {"task_id": str, "key": str, "bytes": int},
     # hooks/task_store_probe.py: the host did not write the task file it claimed to.
     "task_store_absent": {"team": str, "task_id": str, "misses": int},
@@ -636,8 +636,8 @@ def read_events(
 
 def latest_variety_by_task(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """The LATEST variety_assessed event per task_id, feature-level and dispatch-marked
-    alike. How variety consumers must resolve a task: hooks/journal_emitter.py can
-    write a FEATURE row for a Task B stamped before its teachback gate existed, then a
+    alike. How variety consumers must resolve a task: an old journal can
+    hold a FEATURE row for a work task stamped before its dispatch, then a
     DISPATCH row at the wiring; the later row is the truth for that task."""
     latest: dict[str, dict[str, Any]] = {}
     for event in events:

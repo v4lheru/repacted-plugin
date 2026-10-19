@@ -2015,7 +2015,6 @@ class TestInitBeforeReaderOrdering:
     # Hooks that import pact_context AND call a reader in their main().
     # Each tuple: (module filename, reader function names used)
     HOOKS_WITH_READERS = [
-        ("agent_handoff_emitter.py", {"get_team_name"}),
         ("file_tracker.py", {"get_team_name", "resolve_agent_name"}),
         ("track_files.py", {"get_session_id"}),
         ("merge_guard_pre.py", {"get_session_id"}),

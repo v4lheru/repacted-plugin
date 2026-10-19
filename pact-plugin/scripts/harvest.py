@@ -50,7 +50,7 @@ OPEN_STATUSES = frozenset({"pending", "in_progress"})
 # A Task A (teachback) carries only these keys: it never holds a HANDOFF.
 TEACHBACK_KEYS = frozenset({"teachback_submit", "teachback_rejection", "intentional_wait"})
 # Signal tasks (algedonic, blockers) are listed on their own, never flagged as missing a HANDOFF.
-SIGNAL_PREFIXES = ("ALERT", "BLOCKER", "HALT")
+SIGNAL_PREFIXES = ("ALERT", "BLOCKER", "HALT", "STOP")
 
 # The values that count as EMPTY for the present-and-empty exception (membership, not truthiness:
 # a task-file field holding 0 or False is content). Keep None in the set.

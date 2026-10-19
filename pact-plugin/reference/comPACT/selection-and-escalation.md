@@ -87,7 +87,7 @@ Examples of blockers:
 
 When blocker is reported:
 1. Receive blocker report from specialist
-2. Run `/repacted:imPACT` to triage
+2. Triage it ([blocker-triage.md](../decide/blocker-triage.md))
 3. May escalate to `/repacted:orchestrate` if task exceeds self-contained scope
 
 ## When to Escalate

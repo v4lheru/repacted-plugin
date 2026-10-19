@@ -262,14 +262,14 @@ class TestTeachbackReminder:
 
     def test_reminder_contains_key_instructions(self):
         """The teachback reminder must mention the key instructions:
-        - metadata.teachback_submit as the delivery mechanism
+        - the brief's `repact submit` line as the delivery mechanism
         - Edit/Write/Bash as the ordering rule anchor
         - 'gate' semantics (teachback is a blocking gate)
         - teammate skill reference for the full format (TEAMMATE m6)
         """
         from peer_inject import _TEACHBACK_REMINDER
 
-        assert "metadata.teachback_submit" in _TEACHBACK_REMINDER
+        assert "repact submit" in _TEACHBACK_REMINDER
         assert "Edit/Write/Bash" in _TEACHBACK_REMINDER
         assert "gate" in _TEACHBACK_REMINDER.lower()
         assert "teammate skill" in _TEACHBACK_REMINDER
@@ -1122,8 +1122,7 @@ class TestCompletionAuthorityNote:
 
         assert "do NOT mark your own tasks" in _COMPLETION_AUTHORITY_NOTE
         assert "awaiting_lead_completion" in _COMPLETION_AUTHORITY_NOTE
-        assert "Task A" in _COMPLETION_AUTHORITY_NOTE
-        assert "Task B" in _COMPLETION_AUTHORITY_NOTE
+        assert "repact submit" in _COMPLETION_AUTHORITY_NOTE
         assert "team-lead" in _COMPLETION_AUTHORITY_NOTE.lower()
 
     def test_note_appears_after_teachback_reminder(self, tmp_path):
@@ -1318,13 +1317,12 @@ class TestCompletionAuthorityLiteralPhraseRegressionGuard:
         # rename in shared.intentional_wait surfaces here.
         assert "awaiting_lead_completion" in _COMPLETION_AUTHORITY_NOTE
 
-    def test_directive_describes_two_task_pair(self):
+    def test_directive_names_the_submit_route(self):
         from peer_inject import _COMPLETION_AUTHORITY_NOTE
 
-        # Both halves of the dispatch pair must be named — single-half
-        # phrasing has been observed to leave Task B context under-described.
-        assert "Task A" in _COMPLETION_AUTHORITY_NOTE
-        assert "Task B" in _COMPLETION_AUTHORITY_NOTE
+        # The hand-in goes through `repact submit`, never a TaskUpdate write.
+        assert "repact submit" in _COMPLETION_AUTHORITY_NOTE
+        assert "never write" in _COMPLETION_AUTHORITY_NOTE
 
 
 

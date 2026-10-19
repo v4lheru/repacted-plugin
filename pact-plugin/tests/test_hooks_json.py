@@ -47,9 +47,7 @@ MUST_BE_SYNC = {
     # create-before-dispatch model is obsolete; dispatch_gate ⑧ is the
     # residual fail-closed backstop.)
     "worktree_guard.py",  # Blocks edits outside worktree
-    "validate_handoff.py",  # Validates agent output
     "stop_background_gate.py",  # Refuses a turn end over unacknowledged background work
-    "agent_handoff_emitter.py",  # Writes agent_handoff journal event on TaskCompleted
     "git_commit_check.py",  # Checks git commit conventions
     "wait_filler_gate.py",  # Denies bare true/sleep filler commands
     "track_files.py",     # Tracks file edits (PostToolUse, non-async)
@@ -58,17 +56,13 @@ MUST_BE_SYNC = {
     # The user-layer hooks emit additionalContext, which an async hook's
     # discarded stdout would silently lose.
     "run_ledger.py",  # Records test-run counts; nudges toward tcount when none parse
-    "evidence_gate.py",  # HANDOFF evidence and teachback alignment verdicts
-    "acceptance_flags.py",  # Flags an acceptance over an unevidenced claim
     # EVENTS (m8a) and the phase D hooks it registers. A deny, and additionalContext,
     # are lost in an async hook; the journal emitter is sync so its event lands before
     # the next tool call, which the repeat suppression against a later block relies on.
-    "journal_emitter.py",  # Hook-emitted variety_assessed / agent_dispatch / phase_transition
     "process_table_guard.py",  # Denies process listings that print command lines
     "env_guard.py",  # Keeps .env-class file contents out of Read, Grep and Bash
     "egress_guard.py",  # Denies a credential in MCP, WebFetch, Artifact or network-client input
-    "amendment_gate.py",  # HANDOFF must dispose of every amend_<n> (enforced under the D25 gate)
-    "write_checks.py",  # Notes HANDOFF claims the ledger lacks; returns a rule-breaking commit (D25)
+    "write_checks.py",  # Returns a rule-breaking commit
     "amendment_relay.py",  # Relays new amend_<n> keys to a busy teammate
     "output_secret_scan.py",  # Replaces a secret value in Bash output before the model sees it
 }
@@ -220,8 +214,6 @@ class TestUserLayerHookRegistrations:
     EXPECTED = [
         ("PostToolUse", "Bash", "run_ledger.py"),
         ("PostToolUseFailure", "Bash", "run_ledger.py"),
-        ("PostToolUse", "TaskCreate|TaskUpdate", "evidence_gate.py"),
-        ("PreToolUse", "TaskUpdate", "acceptance_flags.py"),
     ]
 
     @staticmethod
@@ -293,10 +285,8 @@ class TestEventsAndWaveDRegistrations:
     entry exactly once, under exactly this event and matcher, and synchronous."""
 
     EXPECTED = [
-        ("PostToolUse", "TaskCreate|TaskUpdate|Agent", "journal_emitter.py"),
         ("PreToolUse", "Bash", "process_table_guard.py"),
-        ("PreToolUse", "TaskUpdate", "amendment_gate.py"),
-        ("PreToolUse", "TaskUpdate|Bash", "write_checks.py"),
+        ("PreToolUse", "Bash", "write_checks.py"),
         ("PostToolUse", "Bash|Edit|Write|Read|TaskUpdate|MultiEdit|NotebookEdit", "amendment_relay.py"),
     ]
 
@@ -310,9 +300,8 @@ class TestEventsAndWaveDRegistrations:
             if hook.get("command", "").endswith(f'/hooks/{script}"')
         ]
 
-    # A script with a second, lead-prompt registration (refactor: journal_emitter writes the
-    # prompt_kind row and the straggler line on UserPromptSubmit).
-    ALSO = {"journal_emitter.py": [("UserPromptSubmit", None, False)]}
+    # A script with a second, lead-prompt registration (none since 2.1.0).
+    ALSO: dict = {}
 
     @pytest.mark.parametrize("event, matcher, script", EXPECTED,
                              ids=[s for _, _, s in EXPECTED])
@@ -327,13 +316,6 @@ class TestEventsAndWaveDRegistrations:
     def test_pinned_in_must_be_sync(self, script):
         assert script in MUST_BE_SYNC
 
-    def test_the_journal_emitter_covers_the_three_tool_names_it_reads(self):
-        """journal_emitter.events_for reads TaskCreate, TaskUpdate and Agent; the matcher
-        must name each, or an event type silently never fires."""
-        import journal_emitter
-        matcher = dict((s, m) for _, m, s in self.EXPECTED)["journal_emitter.py"]
-        assert set(matcher.split("|")) == {"TaskCreate", "TaskUpdate", "Agent"}
-        assert journal_emitter.events_for({"tool_name": "Read", "tool_input": {}}, "t") == []
 
 
 class TestNewSDKOptimizationEntries:
@@ -852,3 +834,20 @@ class TestSessionLedgerRegistration:
     def test_the_registered_file_exists(self):
         assert (HOOKS_DIR / "session_ledger.py").is_file()
 
+
+
+class TestTeamsOnlyRegistrations:
+    """The Teams-only checks stay registered: the flag only skips
+    them in subagents mode. A guard flagged Teams-only would be off by default, so none is."""
+
+    def test_the_teams_only_checks_are_still_registered(self, hooks_config):
+        import dispatch_registry as registry
+        registered = json.dumps(registry.expand_hooks_json(hooks_config))
+        flagged = {check.name for checks in registry.REGISTRY.values()
+                   for check in checks if check.teams_only}
+        assert flagged and all(f"/hooks/{name}.py" in registered for name in flagged)
+
+    def test_no_security_check_is_teams_only(self):
+        import dispatch_registry as registry
+        assert not [check.name for checks in registry.REGISTRY.values() for check in checks
+                    if check.teams_only and (check.on_timeout == "deny" or check.journals_refusals)]

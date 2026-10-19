@@ -64,19 +64,98 @@ def file_is_protected(name: str, path: str) -> bool:
 
 
 def path_is_protected(token: str, cwd: str | None) -> bool:
-    """True for a protected name as written, or a path that resolves to one. A directory
-    is never protected (a virtualenv named .env), nor is a token ending in a slash. Where
-    the directory is not known a relative token is judged by its name alone: what it
-    resolves to cannot be looked up."""
+    """True for a protected name as written, or a path that resolves to one: the .env
+    class, or a credential file (is_credential_path). A directory is never protected (a
+    virtualenv named .env), nor is a token ending in a slash. Where the directory is not
+    known a relative token is judged by its name alone: what it resolves to cannot be
+    looked up."""
     if not token or token.endswith("/"):
         return False
     name = token.rsplit("/", 1)[-1]
     path = _absolute(token, cwd)
     if path is None:
-        return is_protected_name(name) and not is_template_name(name)
+        return is_protected_name(name) and not is_template_name(name) \
+            or is_credential_path(os.path.expanduser(token))
     if os.path.isdir(path):
         return False
-    return file_is_protected(name, path)
+    return file_is_protected(name, path) or is_credential_path(path)
+
+
+# ── Credential files ───────────────────────────────────────────────────────────
+# Files that hold a credential but are not KEY=value files: read, Grep, print, copy and
+# send are refused like the .env class; env-get does not apply to them. Public keys
+# (*.pub), known_hosts and ssh config stay readable. Names are compared case-folded.
+CREDENTIAL_FILE_NAMES = frozenset({
+    ".npmrc", ".pypirc", ".git-credentials", ".pgpass", ".credentials.json", ".vault-token",
+    "application_default_credentials.json", "credentials.tfrc.json",
+    "secrets.json", "secrets.yaml", "secrets.yml", "secrets.toml", ".s3cfg", ".my.cnf",
+})
+# (directory, file name) pairs: a name that is only a credential inside its tool's directory.
+CREDENTIAL_DIR_FILES = frozenset({
+    (".aws", "credentials"), (".kube", "config"), (".docker", "config.json"),
+    ("gcloud", "credentials.db"), ("gcloud", "access_tokens.db"), ("gcloud", "adc.json"),
+    (".azure", "accesstokens.json"), (".azure", "msal_token_cache.json"),
+    (".azure", "msal_token_cache.bin"), (".azure", "service_principal_entries.json"),
+    ("gh", "hosts.yml"), ("glab-cli", "config.yml"), (".cargo", "credentials"),
+    (".cargo", "credentials.toml"), (".gem", "credentials"), ("rclone", "rclone.conf"),
+})
+# In ~/.ssh every other file is peeked for a private key (`~/.ssh/github` is one).
+_SSH_PUBLIC = re.compile(r"config|known_hosts.*|authorized_keys.*|.*\.pub")
+_SSH_KEY = re.compile(r"id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?(?:[._-].*)?")
+# *.pem and *.key are refused only when they hold a private key, so certificates and CA
+# bundles stay readable.
+PRIVATE_KEY_SUFFIXES = (".pem", ".key")
+PRIVATE_KEY_MARK = b"PRIVATE KEY"
+PRIVATE_KEY_PEEK = 200
+
+
+def _holds_private_key(path: str) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            return PRIVATE_KEY_MARK in handle.read(PRIVATE_KEY_PEEK)
+    except OSError:
+        return False
+
+
+def _credential_parts(parts: list[str], path: str | None) -> bool:
+    name = parts[-1]
+    if not name or name.endswith(".pub"):
+        return False
+    if name in CREDENTIAL_FILE_NAMES or _SSH_KEY.fullmatch(name):
+        return True
+    if "service-account" in name or "service_account" in name:
+        return name.endswith(".json")
+    if len(parts) > 1 and (parts[-2], name) in CREDENTIAL_DIR_FILES:
+        return True
+    if len(parts) > 1 and parts[-2] == ".ssh" and name.startswith("id_"):
+        return True
+    if len(parts) > 1 and parts[-2] == ".ssh" and not _SSH_PUBLIC.fullmatch(name):
+        return path is not None and os.path.isfile(path) and _holds_private_key(path)
+    if "legacy_credentials" in parts[:-1]:                 # gcloud's per-account copies
+        return True
+    if name.endswith(PRIVATE_KEY_SUFFIXES):
+        return path is not None and os.path.isfile(path) and _holds_private_key(path)
+    return False
+
+
+def is_credential_path(path: str) -> bool:
+    """True when `path` (as written, `~` expanded) or the file it resolves to is a
+    credential file: an ssh private key, a cloud or registry credential, kube config, a
+    secrets.* data file, or a .pem/.key that holds a private key. A word with white
+    space in it is not a path here (an option value such as `ssh -i key`)."""
+    if not path or any(char.isspace() for char in path):
+        return False
+    written = [part.casefold() for part in path.replace("\\", "/").split("/")]
+    on_disk = path if os.path.isabs(path) else None
+    if _credential_parts(written, on_disk):
+        return True
+    if on_disk is None:
+        return False
+    try:
+        real = os.path.realpath(path)
+    except (OSError, ValueError):
+        return False
+    return real != path and _credential_parts([p.casefold() for p in real.split("/")], real)
 
 
 def _candidates(word: str) -> set[str]:

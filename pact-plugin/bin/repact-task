@@ -27,6 +27,7 @@ from _tasks import atlas as A  # noqa: E402
 from _tasks import importers as I  # noqa: E402
 from _tasks import registry as R  # noqa: E402
 from _tasks import views as V  # noqa: E402
+from shared.owner_terminal import TERMINAL_STREAMS, owner_confirms  # noqa: E402
 from shared.task_log import write as W  # noqa: E402
 
 PT = W.PT
@@ -50,7 +51,15 @@ EXAMPLES = (
                                  "open tasks whose platform task is completed"),
     ("summary", "repact-task summary --refresh", "the session-start line"),
     ("sync", "repact-task sync --check", "record missed lead acceptances and rejections (--check writes nothing)"),
-    ("render", "repact-task render --configure", "write the configured views (backlog, progress, release gates)"),
+    ("render", "repact-task render --configure", "write the configured views (backlog, progress, release gates, "
+                                                 "and known limits and the decision log once the ledger exists)"),
+    ("ledger", "repact-task ledger --backfill",
+     "count the ledger's known limits, decisions and remaining items; --backfill adds what accepted "
+     "HANDOFFs of this repo's teams (or --team T) hold and it lacks"),
+    ("ledger", 'repact-task ledger retire 1a2b3c4d --reason "fixed by the lock rewrite"',
+     "retire a known limit by the id docs/known-limits.md prints; it leaves the page"),
+    ("ledger", "repact-task ledger --limits",
+     "list every open known limit, newest first, with its id (the page shows the newest 50)"),
     ("commit", "repact-task commit", "commit ONLY the log and its views, with one sentence"),
     ("project", 'repact-task project --what "One line" --stack python,git --decision D27',
      "edit .repacted/project.json (--status, --slug, --name, --atlas on|off, --drop-decision)"),
@@ -131,6 +140,9 @@ def _parser() -> argparse.ArgumentParser:
     done.add_argument("--evidence", action="append", required=True)
     done.add_argument("--remaining", metavar="TITLE",
                       help="the part not done, as the title of a new planned task linked back to this one")
+    done.add_argument("--waive", metavar="REASON",
+                      help="close an autopilot row whose linked task has no accepted HANDOFF (logged); "
+                           "unattended, it parks the row for a human instead")
     reopen = sub.add_parser("reopen")
     reopen.add_argument("ref")
     reopen.add_argument("--note")
@@ -152,6 +164,12 @@ def _parser() -> argparse.ArgumentParser:
     render.add_argument("views", nargs="*", metavar="VIEW")
     render.add_argument("--configure", action="store_true")
     sub.add_parser("commit")
+    ledger = sub.add_parser("ledger")
+    ledger.add_argument("words", nargs="*", metavar="retire ID")
+    ledger.add_argument("--reason")
+    ledger.add_argument("--backfill", action="store_true")
+    ledger.add_argument("--limits", action="store_true")
+    ledger.add_argument("--team", metavar="TEAM")
     project = sub.add_parser("project")
     project.add_argument("--what")
     project.add_argument("--stack", metavar="A,B")
@@ -211,7 +229,7 @@ def _tree(state, ref: str, key, depth: int, seen: set, out: list) -> None:
 def _ptask_status(ptask: str) -> Optional[str]:
     """The platform task's status when its file is readable, else None (a missing file is no claim)."""
     team, _, task_id = ptask.partition("/")
-    from shared import evidence as ev
+    from shared import task_files as ev
     task = ev.load_task(ev.task_path(team, task_id)) if team and task_id else None
     status = task.get("status") if isinstance(task, dict) else None
     return status if isinstance(status, str) else None
@@ -330,6 +348,48 @@ class Missed(Exception):
     def __init__(self, lines):
         super().__init__("missed")
         self.lines = lines
+
+
+def _proposed(task: dict) -> bool:
+    """A HANDOFF's remaining item the user has not taken yet (hooks/shared/task_log/ledger.py)."""
+    return task["owner"] == "user" and "proposed" in task["tags"]
+
+
+def _ledger(args, store) -> list:
+    """`ledger`: the counts; `--backfill` first adds what the accepted HANDOFFs hold."""
+    from shared.task_log import ledger
+    out = []
+    if args.words:
+        if args.words[0] != "retire" or len(args.words) != 2 or args.backfill or args.limits \
+                or args.team is not None:
+            raise W.Usage("the one ledger action is `retire <id> --reason <text>`")
+        limit = ledger.retire(store, args.words[1], args.reason)
+        _rerender(store)
+        return [f"retired {ledger.short_id(limit)} ({limit['ptask']} rev {limit['rev']})"]
+    if args.reason is not None:
+        raise W.Usage("--reason goes with `retire <id>`")
+    if args.limits:
+        if args.backfill or args.team is not None:
+            raise W.Usage("--limits only lists; run --backfill on its own")
+        active = ledger.active_limits(ledger.read(store.main)[0])
+        return [f"{ledger.short_id(entry)}  {entry['ptask']} rev {entry['rev']}  {entry['text']}"
+                for entry in reversed(active)] + [f"{len(active)} open known limit(s)"]
+    if args.team is not None and not args.backfill:
+        raise W.Usage("--team goes with --backfill")
+    if args.team is not None and not W.PT.NAME_RE.match(args.team):
+        raise W.Usage("--team names a team, like session-1")
+    if args.backfill:
+        done = _bridge().backfill(Path.cwd(), team=args.team)
+        out.append(f"backfill: {done['tasks']} accepted HANDOFF(s) read; added {done['limits']} known "
+                   f"limit(s), {done['decisions']} decision(s), {done['proposed']} proposed task(s)")
+        _rerender(store)
+    entries, corrupt = ledger.read(store.main)
+    counts = {kind: sum(1 for entry in entries if entry["kind"] == kind) for kind in ledger.KINDS}
+    gone = len(ledger.retired(entries))
+    out.append(f"ledger: {counts['limit']} known limit(s) ({gone} retired), {counts['decision']} "
+               f"decision(s), {counts['remaining']} remaining item(s)"
+               + (f"; {corrupt} unreadable line(s)" if corrupt else ""))
+    return out
 
 
 def _sync(check: bool):
@@ -463,6 +523,8 @@ def run(args) -> list:
         if missed:                    # a lead-attributed write was lost: a defect, not a to-do (amend_5)
             raise Missed(lines)
         return lines
+    if args.command == "ledger":
+        return _ledger(args, store)
     if args.command in READ_COMMANDS:              # design section 5.4: reads see the lead's acceptances
         _bridge().sync_quietly(Path.cwd())
     if args.command == "render":
@@ -491,7 +553,9 @@ def run(args) -> list:
     if args.command == "next":
         completion = _completion(Path.cwd())
         finished = completion["linked"]                     # never recommended: the work is over
-        queue = [task for task in PT.ready(state) if task["ref"] not in finished]
+        ready = [task for task in PT.ready(state) if task["ref"] not in finished]
+        proposed = [task for task in ready if _proposed(task)]   # waits on the user's say
+        queue = [task for task in ready if not _proposed(task)]
         shown = queue if args.all else queue[:NEXT_DEFAULT]
         stale = stale_open(state)
         out = []
@@ -502,6 +566,9 @@ def run(args) -> list:
                     f"#{ptask.rsplit('/', 1)[-1]}" for ptask in completion["mentioned"][task["ref"]]))
             out.append(PT.render_line(state, task) + "".join(f"  [{mark}]" for mark in marks))
         out.append(f"active: {len(PT.active(state))}")
+        if proposed:
+            out.append(f"{len(proposed)} proposed from accepted HANDOFFs, not recommended until the user "
+                       "takes one: `repact-task set <ref> --owner <name>` (or `drop` it)")
         if stale:
             out.append(f"{len(stale)} stale (no change in {PT.STALE_DAYS} days): close, drop, or re-decide with set")
         if finished:
@@ -544,6 +611,7 @@ def run(args) -> list:
             (PT.cached_summary(store.main) or PT.summary_line(state))
         return [line] if line else []
     ref = resolve(state, args.ref)
+    _owner_only(state, ref, args)
     if args.command == "tree":
         out = [PT.render_line(state, state.tasks[ref]), "  needs:"]
         _tree(state, ref, lambda r: state.tasks[r]["depends_on"], 2, {ref}, out)
@@ -574,7 +642,20 @@ def run(args) -> list:
     elif args.command == "start":
         store.start(ref, ptask=args.ptask)
     elif args.command == "done":
-        remainder = store.done(ref, args.evidence, remaining=args.remaining)
+        from shared.task_log import close_gate as CG
+        session_dir = CG.session_dir_from_env()
+        owner = args.waive is not None and not session_dir and owner_confirms(
+            ref, f"No session directory: closing {ref} with a waiver is the owner's. Type {ref} to confirm: ")
+        decision = CG.check(store.main, state.tasks[ref], session_dir, args.waive, owner=owner)
+        if decision.refusal:
+            raise W.Refused(decision.refusal)
+        if decision.park:                   # unattended: a waiver never closes
+            store.park(ref, decision.park)
+            _rerender(store)
+            return [_line(store, ref), f"{ref} parked for a human (unattended): repact decide lists it"]
+        if decision.note:
+            print(f"repact-task: {decision.note}", file=sys.stderr)
+        remainder = store.done(ref, args.evidence, remaining=args.remaining, waiver=decision.waiver)
         if remainder:
             _rerender(store)
             return [_line(store, ref), _line(store, remainder)]
@@ -585,6 +666,36 @@ def run(args) -> list:
             print(_line(store, child))
     _rerender(store)
     return [_line(store, ref)]
+
+
+PARKED_RULE = "task_log.parked_for_owner"
+CLEARS_PARK = ("done", "drop", "reopen", "start")
+PARK_FIELDS = ("status", "tag", "note")
+
+
+def _parked(row: dict) -> bool:
+    """A row parked for the owner (W.Store.park): the parked tag, and not closed by a done."""
+    return W.PARKED_TAG in (row.get("tags") or []) and row.get("status") in ("blocked", "dropped")
+
+
+def _owner_only(state, ref: str, args) -> None:
+    """Refuse a command that would answer the owner's parked question: done, drop,
+    reopen or start of a parked row (or of a parent whose dropped children include one), or a
+    set of its status, tags or note, unless the owner confirms at their own terminal (no session
+    id, an interactive terminal, the ref retyped; repact decide passes the terminal on)."""
+    changes = args.command in CLEARS_PARK or (
+        args.command == "set" and any(getattr(args, name, None) is not None for name in PARK_FIELDS))
+    if not changes:
+        return
+    rows = [ref] + (W.open_descendants(state, ref) if getattr(args, "with_children", False) else [])
+    parked = [row for row in rows if _parked(state.tasks[row])]
+    if not parked:
+        return
+    if owner_confirms(ref, f"{', '.join(parked)} is parked for you. Type {ref} to confirm `{args.command}`: "):
+        return
+    raise W.Refused(f"{', '.join(parked)} is parked for the owner (unattended), so `{args.command}` is the "
+                    f"owner's: run `repact decide {ref} {args.command} ...` in your own terminal, "
+                    f"{TERMINAL_STREAMS}, and retype the ref. [rule: {PARKED_RULE}]")
 
 
 def _enter_repo(repo) -> None:

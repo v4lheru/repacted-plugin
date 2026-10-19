@@ -53,7 +53,8 @@ SCRIPTS = {
     "allow_ctx": ("import json\nprint(json.dumps({'hookSpecificOutput': {'hookEventName': "
                   "'PreToolUse', 'additionalContext': 'ran'}}))\n"),
 }
-SECURITY = ("env_guard", "merge_guard_pre", "egress_guard", "git_commit_check")
+SECURITY = ("env_guard", "merge_guard_pre", "egress_guard", "git_commit_check", "worktree_guard",
+            "write_checks", "task_write_guard", "ops_frame_guard")
 
 
 @pytest.fixture
@@ -110,6 +111,15 @@ def test_a_hung_check_with_discard_is_still_an_allow(run, tmp_path):
     assert _journal(tmp_path, "hangs") == ([("hangs", "CheckTimeout")], [])
 
 
+def test_a_slow_write_checks_is_denied_not_allowed(run, tmp_path):
+    """The evidence gate's timeout is no allow: write_checks keeps the
+    registry's on_timeout, here on a check that hangs past its alarm."""
+    real = {check.name: check for check in registry.checks_for("PreToolUse")}["write_checks"]
+    done = run(["hangs"], stdin=b'{"tool_name": "TaskUpdate", "session_id": "s1"}',
+               hangs={"timeout_s": 1, "on_timeout": real.on_timeout})
+    _refusal(done, "hangs")
+
+
 def test_a_check_that_swallows_its_timeout_and_allows_is_still_denied(run, tmp_path):
     done = run(["swallows_allow"], swallows_allow={"timeout_s": 1, "on_timeout": "deny"})
     hso = _refusal(done, "swallows_allow")
@@ -158,7 +168,7 @@ def test_an_advisory_check_that_raises_still_decides_nothing(run, tmp_path):
 
 
 class TestRegistryContract:
-    def test_the_four_security_checks_deny_on_timeout_under_the_cap(self):
+    def test_the_security_checks_deny_on_timeout_under_the_cap(self):
         by_name = {check.name: check for check in registry.checks_for("PreToolUse")}
         for name in SECURITY:
             check = by_name[name]
@@ -181,9 +191,9 @@ class TestRegistryContract:
                                or not registry._EXACT_MATCHER.fullmatch(c.matcher)]
                 assert timeout > sum(c.timeout_s for c in members), (event, matcher)
 
-    def test_an_advisory_check_waits_60s_so_the_bash_entry_is_630s_not_4410s(self):
+    def test_an_advisory_check_waits_60s_so_the_bash_entry_is_585s(self):
         assert registry.DEFAULT_TIMEOUT_S == 60
-        assert registry.entry_timeout("PreToolUse") == 630   # 7 x 60 + 180 security + 30 margin
+        assert registry.entry_timeout("PreToolUse") == 585   # 5 x 60 + 255 security + 30 margin
 
 
 @pytest.mark.parametrize("name, failure", [("killed", "signal 9"), ("exits_3", "exit 3")])

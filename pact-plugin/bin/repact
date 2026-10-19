@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+''':'
 # repact: start a rePACTed session. Run `pact` or `repact`, never both at once.
 #
 # Location: pact-plugin/bin/repact (owned by launcher; see
@@ -48,6 +49,19 @@
 # until `repacted-memdir --merge-split --confirm-live` folds the two dirs together (never
 # overwriting; see that tool's help) and points the links back at PACT.
 #
+# `repact dispatch|submit|accept|reject|amend|inspect|decide ...` runs that workflow operation or
+# front-door reader (bin/_repact_ops.py) and starts nothing; so does `repact report`.
+# `repact work ["<ask>"] [--unattended ...]` and `repact resume` start a session: _repact_ops.py
+# builds the claude arguments and execs this script again with REPACT_ROUTED=1, which skips the
+# routing once (so an ask that is a route word is still a prompt). Only these exact first words
+# route; anything else, bare `repact` included, launches as below.
+#
+# `repact --help` and `repact help` print repact's own jobs and uses (the help of bin/_repact_ops.py),
+# never claude's: `claude --help` lists claude's flags.
+#
+# This file is bash. The line under the shebang is a no-op to bash and opens a Python string, so
+# `python3 bin/repact` prints one line saying how to run it instead of a SyntaxError; bash exits before the string ends. Keep the bash body free of three single quotes.
+#
 # `repact --repact-status` prints the mode, the root and the memory-dir state and starts
 # nothing; it is recognised anywhere before a `--`, so the user's shell function can put its
 # own flags first. Every other argument passes to claude untouched: repact --resume <id>,
@@ -60,7 +74,15 @@ self=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH
 BIN=$(dirname "$self")
 ROOT=$(dirname "$BIN")
 MEMDIR="$BIN/repacted-memdir"
-[ "${1:-}" = "report" ] && shift && exec python3 "$BIN/repact-report" "$@"   # D3: `repact report` = repact-report
+if [ -n "${REPACT_ROUTED:-}" ]; then
+  unset REPACT_ROUTED                     # set by `repact work|resume`: launch with these arguments
+else
+  [ "${1:-}" = "report" ] && shift && exec python3 "$BIN/repact-report" "$@"   # `repact report` = repact-report
+  case "${1:-}" in   # the five operations and the front door
+    dispatch|submit|accept|reject|amend|inspect|decide|resume|work) exec python3 "$BIN/_repact_ops.py" "$@" ;;
+    help|--help|-h) exec python3 "$BIN/_repact_ops.py" --help ;;   # repact's jobs, not claude's
+  esac
+fi
 
 status=no
 for arg in "$@"; do
@@ -109,3 +131,6 @@ else
   REPACTED_LAUNCH=alternate claude --plugin-dir "$ROOT" --settings "$settings" \
     --agent repacted:pact-orchestrator "$@"
 fi
+exit
+'''
+import sys; sys.exit("repact is a bash script: run it as \"<plugin root>/bin/repact\" <job>, not with python3 (repact --help lists the jobs)")  #'

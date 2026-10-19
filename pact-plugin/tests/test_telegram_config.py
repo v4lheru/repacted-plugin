@@ -604,3 +604,19 @@ class TestEnsureConfigDir:
             result = ensure_config_dir()
 
         assert result == test_dir
+
+
+def test_config_and_coordinator_dirs_follow_claude_config_dir(tmp_path):
+    """An isolated CLAUDE_CONFIG_DIR must not reach the owner's real Telegram config."""
+    import os
+    import subprocess
+    import sys
+
+    code = ("from telegram import config, routing; "
+            "print(config.CONFIG_DIR); print(routing.COORDINATOR_DIR)")
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = subprocess.run([sys.executable, "-c", code], cwd=plugin, env=env,
+                         capture_output=True, text=True, check=True).stdout.split("\n")
+    assert out[0] == str(tmp_path / "cfg" / "pact-telegram")
+    assert out[1] == str(tmp_path / "cfg" / "pact-telegram" / "coordinator")

@@ -726,25 +726,6 @@ class TestTheRetiredQueueFileIsIgnored:
                                     "wake:44": "said"}))
         return path
 
-    @pytest.mark.parametrize("checks", [None, "CHECKS for #9"])
-    def test_the_leads_taskupdate_gets_none_of_its_text(self, session, checks):
-        import acceptance_flags
-        from fixtures.role_frames import lead_frame_qualified
-
-        team = "pact-leftover"
-        path = self.plant(session, team)
-        before = path.read_bytes()
-        call = {**lead_frame_qualified(), "tool_name": "TaskUpdate",
-                "tool_input": {"taskId": "9", "status": "completed", "metadata": {"x": 1}}}
-        with patch("shared.pact_context.get_team_name", return_value=team), \
-             patch("acceptance_flags.acceptance_lines", return_value=checks):
-            output = acceptance_flags.run(call)
-        if checks is None:
-            assert output is None
-        else:
-            assert output["hookSpecificOutput"]["additionalContext"] == checks
-        assert path.read_bytes() == before
-
     def test_the_idle_hook_neither_reads_nor_writes_it(self, session):
         team = "pact-leftover"
         path = self.plant(session, team)

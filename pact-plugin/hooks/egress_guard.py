@@ -10,12 +10,17 @@ Summary: PreToolUse(mcp__.*|WebFetch|Artifact|Bash) hook that denies a credentia
            Artifact  the strings in the input, plus the text of every file it publishes or
                      uploads (file_path, file_paths): the page goes to claude.ai.
            Bash      only commands that run a network or publish client (curl, wget, http, gh,
-                     glab, ssh, scp, rsync, nc, pbcopy, osascript). Then the WHOLE command is
+                     glab, ssh, scp, rsync, nc, pbcopy, osascript, and the cloud storage
+                     clients aws, gsutil, gcloud, az, azcopy, rclone, s3cmd, whose upload
+                     sources egress_copies.py reads). Then the WHOLE command is
                      scanned, because the secret often sits in another segment of the pipe
                      (`printf ... | pbcopy`), and so is every local file the client uploads by
                      path (curl -d @f / -F k=@f / -T f, scp and rsync sources, `< f`; see
                      egress_uploads.py). A file that cannot be read fails closed. git push is
-                     handled by the git hooks (task 225).
+                     handled by the git hooks. A git command that names a remote
+                     URL whose user part holds a password, a variable or a token (git remote
+                     add|set-url, clone, config, fetch) is refused as well: git keeps that URL
+                     in .git/config and prints it with the remote.
          Loopback is inside the boundary: a curl/wget/http command whose every URL in the
          text and every target its clients are aimed at (scheme-less `localhost:3000/api` too,
          read as the shell passes it) is localhost/127.x/::1, and a local-browser MCP call
@@ -66,7 +71,7 @@ _ALLOW_OUTPUT = json.dumps({"suppressOutput": True})
 NETWORK_PROGRAMS = frozenset({
     "curl", "wget", "http", "https", "gh", "glab", "ssh", "scp", "rsync", "nc", "ncat",
     "netcat", "pbcopy", "osascript", "xh", "xhs", "curlie",
-})
+}) | egress_uploads.CLOUD_PROGRAMS        # aws, gsutil, gcloud, az, azcopy, rclone, s3cmd
 # Clients whose target is a URL on the command line: aimed only at loopback, nothing leaves.
 URL_CLIENTS = frozenset({"curl", "wget", "http", "https", "xh", "xhs", "curlie"})
 # MCP servers that are a browser on this machine: loopback pages stay local too.
@@ -282,6 +287,42 @@ def bash_scan_text(command: str, parts: list[list[str]]) -> str:
     return command
 
 
+GIT_URL_RULE = "egress.url.credential"
+
+
+def url_credential(word: str) -> str | None:
+    """What the user part of a URL in `word` carries, if it is a credential: a password, a
+    variable (`$TOKEN`, a substitution) or a token the shared detector knows; else None. A
+    user name alone (`git@`, `https://me@host`) is not one."""
+    _scheme, sep, rest = word.partition("://")
+    if not sep:
+        return None
+    userinfo, at, _host = rest.split("/", 1)[0].rpartition("@")
+    if not at:
+        return None
+    if "$" in userinfo or "`" in userinfo:
+        return "a variable"
+    if userinfo.partition(":")[2]:
+        return "a password"
+    return detect(userinfo)
+
+
+def git_url_credential(parts: list[list[str]]) -> str | None:
+    """The refusal for a git command whose arguments name a credential-bearing URL."""
+    for words in parts:
+        command = strip_prefix(words)
+        if not command or command[0].rsplit("/", 1)[-1] != "git":
+            continue
+        for word in command[1:]:
+            what = url_credential(word)
+            if what:
+                return (f"Blocked: this git command names a remote URL that carries a credential "
+                        f"({what}); git keeps the URL in .git/config and prints it with the "
+                        f"remote, so the credential would leave this session in plain text. "
+                        f"[rule: {GIT_URL_RULE}]")
+    return None
+
+
 def _deny(reason: str) -> dict:
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -334,6 +375,13 @@ def _decide(payload: dict) -> dict | None:
         if not isinstance(command, str):
             return None
         parts = segments(command)
+        try:
+            found = git_url_credential(parts)
+        except Exception as error:   # noqa: BLE001 - fail closed: a remote URL may carry a token
+            found = (f"Blocked: the remote URL check on this git command failed "
+                     f"({type(error).__name__}). [rule: {GIT_URL_RULE}]")
+        if found:
+            return _deny(found)
         clients = network_clients(parts, extra_programs)
         if not clients or (clients <= URL_CLIENTS and bash_only_loopback(command)):
             return None

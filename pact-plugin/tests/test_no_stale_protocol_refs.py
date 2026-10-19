@@ -80,15 +80,24 @@ def _docstring_nodes(tree) -> set[int]:
     return ids
 
 
+# Protocol files that were deleted; a hook string naming one sends the model to nothing.
+RETIRED_PROTOCOLS = (
+    "pact-agent-stall.md", "pact-audit.md", "pact-completeness.md", "pact-completion-authority.md",
+    "pact-ct-teachback.md", "pact-phase-transitions.md", "pact-protocols.md", "pact-s1-autonomy.md",
+    "pact-s2-coordination.md", "pact-s4-checkpoints.md", "pact-s4-environment.md",
+    "pact-s4-tension.md", "pact-s5-policy.md", "pact-scope-contract.md", "pact-scope-detection.md",
+    "pact-scope-phases.md", "pact-state-recovery.md", "pact-task-hierarchy.md", "pact-variety.md",
+    "pact-workflows.md",
+)
+
+
 def test_no_hook_message_sends_the_model_to_a_moved_protocol():
     """Hook strings reach the model (advisories, deny reasons). None may name a protocol file that
-    is a one-line "> Moved" stub or was deleted (the `retired` list of tests/contract/budgets.json);
-    comments and docstrings are for maintainers and not scanned."""
+    is a one-line "> Moved" stub or was deleted (RETIRED_PROTOCOLS); comments and docstrings are
+    for maintainers and not scanned."""
     import ast
-    import json
-    budgets = json.loads((PLUGIN_ROOT / "tests" / "contract" / "budgets.json").read_text(encoding="utf-8"))
     moved = sorted({p.name for p in (PLUGIN_ROOT / "protocols").glob("*.md") if is_stub(p)}
-                   | {Path(r).name for r in budgets["retired"] if r.startswith("protocols/")})
+                   | set(RETIRED_PROTOCOLS))
     assert "pact-variety.md" in moved  # the deleted protocols are in the list
     hits = []
     for path in sorted((PLUGIN_ROOT / "hooks").rglob("*.py")):

@@ -20,15 +20,19 @@ from shell.env.git_egress import (Notice, _git_split)
 from shell.env.names import (token_protected)
 from shell.env.places import (_PIPE, _names_only_search, _search_skip)
 from shell.env.programs import (DUMP_MESSAGE, EGRESS_PROGRAMS, FIND_ACTIONS, GREP_PROGRAMS, LOADERS, OPERAND_READERS, PRINTERS, READERS, RG_PROGRAMS, SILENT_STDIN, SUGGESTION, UNREADABLE_MESSAGE, _GIT_VALUE_OPTIONS)
-from shell.env.script import (json_literal, SHELLS, _BODY_RUNNERS, _INTERPRETER, _SCRIPT_OPTIONS, _SCRIPT_PRINTS, _STDIN_PRINTERS, _SUB_KEY, _SUB_MARK, _State, _Step, _command_steps, _heredoc_expansions, _pull_substitutions, _read, _script_prints_file)
-from shell.env.search import (_cut_lists_names_only, _file_keys, _git_verdict, _named_message, _option_values, _positionals, _recurse_verdict, dumps_environment)
+from shell.env.script import (json_literal, _sub_program, SHELLS, _BODY_RUNNERS, _INTERPRETER, _SCRIPT_OPTIONS, _SCRIPT_PRINTS, _STDIN_PRINTERS, _SUB_KEY, _SUB_MARK, _State, _Step, _command_steps, _heredoc_expansions, _pull_substitutions, _read, _script_prints_file)
+from shell.env.search import (_cut_lists_names_only, _file_keys, _git_verdict, _named_message, _option_values, _positionals, _recurse_verdict, _SENDS, _sent_words, dumps_environment)
 
 def _printing_words(words: list[str], state: "_State | None" = None) -> list[str]:
     """The words of a substitution's command that can name a file whose contents it prints.
     For `env-get FILE KEY -- cmd` these are cmd's alone: env-get never prints a value, and
     what cmd prints is what the standing ruling already lets env-get print when run directly."""
     command = strip_prefix(words)
-    if len(command) > 1 and _INTERPRETER.fullmatch(command[0].rsplit("/", 1)[-1]):
+    program = command[0].rsplit("/", 1)[-1] if command else ""
+    if program in GREP_PROGRAMS | RG_PROGRAMS:          # not its pattern or --exclude='.env*'
+        skip = _search_skip(program, command[1:])
+        return [word for word in words if word not in skip]
+    if len(command) > 1 and _INTERPRETER.fullmatch(program):
         command = command[1:]                           # python3 .../env-get is env-get
     if not command or not _is_env_get(command[0], state):
         return words
@@ -169,8 +173,8 @@ def _inner_script(words: list[str], command: list[str]) -> str | None:
     """The script a runner prefix hands to a shell: `bash -c S`, `eval S`."""
     leading = words[:len(words) - len(command)]
     names = [word.rsplit("/", 1)[-1] for word in leading]
-    if "eval" in names:
-        return " ".join(command)
+    if "eval" in names:                     # eval 'X=$(..)': its words, assignments included
+        return " ".join(words[names.index("eval") + 1:])
     if command and any(name in SHELLS for name in names) and any(
             word.startswith("-") and not word.startswith("--") and "c" in word
             for word in leading):
@@ -308,9 +312,14 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
     leading = words[:len(words) - len(command)]
     for word in words:                                  # X=$(cat .env): X now holds values
         name = word.split("=", 1)[0]
-        if "=" in word and name.isidentifier() and _sub_paths([word], state, cwd):
-            state.loaded.add(name)
-            state.loaded_from = state.loaded_from or _sub_paths([word], state, cwd)[0]
+        if "=" in word and name.isidentifier() and _SUB_MARK in word:
+            # X=$(grep -rn K .): a capture refused when printed holds what it would print.
+            found = _sub_paths([word], state, cwd)
+            if found or _sub_reads([word], state, cwd):
+                state.loaded.add(name)
+                state.loaded_from = state.loaded_from or (found or ["a .env-class file"])[0]
+        elif "=" in word and name.isidentifier() and _uses_loaded([word.split("=", 1)[1]], state):
+            state.loaded.add(name)                      # Y=$X: a copy of a loaded value
     switch = _trace_switch(command)
     if switch is not None:
         state.traced = switch
@@ -329,6 +338,13 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
         named = [w for w in args if token_protected(w, cwd)] + _sub_names(command[0], state, cwd)
         if named:
             return _named_message(named[0])
+        if _sub_reads(command[:1], state, cwd):        # $(grep -rn K .): the output runs, and
+            return _named_message("a .env-class file")  # "command not found" prints it on stderr
+        spelled = _sub_program(command[0], state)       # $(echo grep) -rn K . is grep;
+        if not state.captured and (spelled is None or spelled in GREP_PROGRAMS | RG_PROGRAMS):
+            reason = _recurse_verdict(spelled or "grep", args, cwd)   # unspelled: read as grep
+            if reason:
+                return reason
     if _INTERPRETER.fullmatch(program) and args and _is_env_get(args[0], state):
         program, args = "env-get", args[1:]            # python3 .../env-get is env-get
     elif program == "env-get" and not _is_env_get(command[0], state):
@@ -337,6 +353,9 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
         return (command_verdict(args[args.index("--") + 1:], [], cwd, state)
                 if "--" in args else None)
     if program == "ssh":
+        sent = [path for path in stdin if token_protected(path, cwd)]
+        if sent:                                        # ssh host 'cat > x' < .env
+            return _named_message(sent[0], _SENDS)
         remote = _positionals(args, _SSH_VALUE_OPTIONS)[1:]
         return _upper().judge(_read(" ".join(remote), state), cwd, state) if remote else None
     if program == "export" and _sub_paths(args, state, cwd):
@@ -364,6 +383,10 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
         return _named_message(found[0] if found else "a .env-class file")
     if reader and not state.captured and _sub_paths(args, state, cwd, shown=True):
         return _named_message(_sub_paths(args, state, cwd, shown=True)[0])   # cat $(ls .env)
+    if program in ("read", "mapfile", "readarray") and (
+            _sub_paths(list(strings), state, cwd) or _sub_reads(list(strings), state, cwd)):
+        state.loaded.update(arg for arg in args if not arg.startswith("-"))   # read X <<<"$(..)"
+        state.loaded_from = state.loaded_from or "a .env-class file"
     reading = [path for path in stdin if token_protected(path, cwd)]
     if reading:
         if program in ("read", "mapfile", "readarray"):
@@ -373,7 +396,7 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
             state.loop_read = True                      # while read ...; done < .env
             state.loaded_from = state.loaded_from or reading[0]
         elif program in EGRESS_PROGRAMS:
-            return _named_message(reading[0], "send {path} (a .env-class file) off the machine")
+            return _named_message(reading[0], _SENDS)
         elif not state.captured and program not in SILENT_STDIN and not (
                 program in GREP_PROGRAMS | RG_PROGRAMS and _names_only_search(args)
                 or program == "cut" and _cut_lists_names_only(args, cwd)):
@@ -413,7 +436,8 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
                                             "through the shell's trace (set -x or -v)")
         return None
     if program in EGRESS_PROGRAMS:
-        return _named_message(named[0], "send {path} (a .env-class file) off the machine")
+        sent = _sent_words(program, args, cwd)
+        return _named_message(sent[0], _SENDS) if sent else None
     if program == "git":
         if _git_verdict(args):
             return None

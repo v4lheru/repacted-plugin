@@ -103,7 +103,8 @@ SAFE_GRID = [
     "top -l 1 -o cpu", "top -b -n 1", "top -o mem -stats pid,rss",
     "cat /proc/meminfo", "cat /proc/4242/status", "ls /proc", "cat /proc/4242/cmdline.txt",
     "cat notes/proc/4242/cmdline",
-] + [f"ps -o {keyword} -p 4242" for keyword in sorted(guard.PS_SAFE_KEYWORDS)]
+    "procs --version", "htop --help", "pgrep -x htop", "brew info btop",
+] +[f"ps -o {keyword} -p 4242" for keyword in sorted(guard.PS_SAFE_KEYWORDS)]
 
 DENY_GRID = [
     "ps", "ps -p 4242", "ps -A", "ps -e", "ps -axww", "ps aux", "ps auxww", "ps u -p 4242",
@@ -125,6 +126,10 @@ DENY_GRID = [
     "tail /proc/$PID/cmdline", "less /proc/4242/cmdline", "tr '\\0' ' ' < /proc/4242/cmdline",
     "xargs -0 < /proc/4242/cmdline", "strings /proc/4242/cmdline | head",
     "cat /proc/4242/environ",
+    # full-screen and modern listers print command lines by default.
+    "procs", "procs --tree", "htop", "htop -t", "btop", "/opt/homebrew/bin/procs",
+    "env A=1 procs", "command htop", "rtk proxy procs", "bash -c 'procs'", "procs | head",
+    "btm", "glances", "atop",
 ]
 
 

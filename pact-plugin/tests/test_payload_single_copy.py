@@ -1,11 +1,11 @@
 """
-Location: pact-plugin/tests/test_payload_single_copy.py (1.5.0, D2 + D3)
+Location: pact-plugin/tests/test_payload_single_copy.py
 Summary: The teachback and HANDOFF write repair and the single-copy digest.
          D3: handoff_ordering_gate repairs the benign drifts (rev "2", key_decisions, a string
          variety_acknowledgment) and returns the write as updatedInput, with one schema_coerced
          journal row per repair; everything else is returned or flagged as before.
          D2: one digest (hooks/shared/payload_digest.py) printed by the stored line and by
-         bin/repact-payload, so the notify names it instead of repeating the payload.
+         `repact inspect <id> --key`, so the notify names it instead of repeating the payload.
          CH-3 (the design notes): --key rejection and --key amend, the
          teammate's readers of a lead directive, agreeing with bin/repact-wait on what is open.
          Adversarial rows at each boundary: odd revs, unicode, huge strings, both spellings,
@@ -14,23 +14,20 @@ Summary: The teachback and HANDOFF write repair and the single-copy digest.
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-import handoff_ordering_gate as gate
 from shared.handoff_schema import normalise_handoff
 from shared.payload_digest import payload_digest
 from shared.handoff_schema import REV_MAX
 from shared.stored_line import REV_MAX as STORE_REV_MAX
 from shared.teachback_schema import normalise_teachback
 
-CLI = Path(__file__).resolve().parent.parent / "bin" / "repact-payload"
+CLI = Path(__file__).resolve().parent.parent / "bin" / "repact"
 TEAM = "session-test0023"
 HANDOFF = {"rev": 1, "amendments": {}, "produced": ["a.py"], "decisions": ["d"],
            "uncertainty": [], "integration": [], "open_questions": []}
@@ -116,49 +113,8 @@ class TestNormaliseTeachback:
 
 
 # ─── D3: the gate returns the repaired write ─────────────────────────────────
-def _run_gate(monkeypatch, capsys, metadata, rows=None):
-    frame = {"tool_name": "TaskUpdate", "tool_input": {"taskId": "42", "metadata": metadata}}
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(frame)))
-    if rows is not None:
-        monkeypatch.setattr(gate, "_append_row", lambda event, task_id: rows.append(event))
-    with pytest.raises(SystemExit) as exc:
-        gate.main()
-    out = capsys.readouterr().out
-    return exc.value.code, json.loads(out)
 
 
-class TestGateRepair:
-    def test_a_repairable_handoff_is_returned_as_updated_input_with_one_row_per_repair(
-            self, monkeypatch, capsys):
-        rows: list = []
-        sent = {"handoff": dict(HANDOFF, rev="2", key_decisions=["x"]), "intentional_wait": None}
-        code, out = _run_gate(monkeypatch, capsys, sent, rows)
-        specific = out["hookSpecificOutput"]
-        assert code == 0 and "permissionDecision" not in specific
-        updated = specific["updatedInput"]
-        assert updated["taskId"] == "42" and updated["metadata"]["intentional_wait"] is None
-        assert updated["metadata"]["handoff"] == dict(HANDOFF, rev=2)
-        assert "repaired your write on Task #42" in specific["additionalContext"]
-        assert [(r["type"], r["field"], r["coercion"]) for r in rows] == [
-            ("schema_coerced", "rev", "digit_string_to_int"),
-            ("schema_coerced", "key_decisions", "dropped_decisions_present")]
-        assert all("x" not in json.dumps(r.get("coercion")) for r in rows)
-
-    def test_a_repairable_teachback_is_returned_as_updated_input(self, monkeypatch, capsys):
-        code, out = _run_gate(monkeypatch, capsys,
-                              {"teachback_submit": dict(TEACHBACK, variety_acknowledgment="yes")}, [])
-        assert code == 0
-        assert out["hookSpecificOutput"]["updatedInput"]["metadata"]["teachback_submit"] == TEACHBACK
-
-    @pytest.mark.parametrize("rev", ["two", "-1", "2.0", 2.0, True, "9" * 100_000])
-    def test_an_unrepairable_rev_is_still_returned(self, rev, monkeypatch, capsys):
-        code, out = _run_gate(monkeypatch, capsys, {"handoff": dict(HANDOFF, rev=rev)}, [])
-        assert code == 2 and out["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    def test_a_canonical_write_is_untouched(self, monkeypatch, capsys):
-        rows: list = []
-        code, out = _run_gate(monkeypatch, capsys, {"handoff": HANDOFF}, rows)
-        assert (code, out, rows) == (0, {"suppressOutput": True}, [])
 
 
 # ─── D2: the digest ──────────────────────────────────────────────────────────
@@ -188,7 +144,7 @@ class TestDigest:
         assert payload_digest({"x": deep}) is None
 
 
-# ─── D2: bin/repact-payload ──────────────────────────────────────────────────
+# ─── D2: repact inspect --key ──────────────────────────────────────────────────
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     config = tmp_path / "config"
@@ -213,7 +169,9 @@ def write_task(config, task_id, metadata):
 
 
 def run(*args):
-    return subprocess.run([sys.executable, str(CLI), *args], capture_output=True, text=True,
+    """`repact inspect <args>`; the HANDOFF when no --key names another (the old reader's default)."""
+    key = [] if "--key" in args or "--relayed-handoff" in args else ["--key", "handoff"]
+    return subprocess.run(["bash", str(CLI), "inspect", *args, *key], capture_output=True, text=True,
                           env=dict(os.environ), timeout=30)
 
 
@@ -229,9 +187,9 @@ class TestRepactPayload:
         assert "Acme" not in body and "[REDACTED:denylist]" in body
         assert json.loads(body)["rev"] == 1
 
-    def test_the_teachback_when_asked_or_when_no_handoff_is_stored(self, home):
+    def test_the_teachback_when_asked(self, home):
         write_task(home, "87", {"teachback_submit": TEACHBACK})
-        result = run("87")   # the team is this session's
+        result = run("87", "--key", "teachback")   # the team is this session's
         assert result.returncode == 0, result.stderr
         assert result.stdout.startswith(f"teachback_submit on #87 (team {TEAM}, owner d23, "
                                         f"status in_progress): digest {payload_digest(TEACHBACK)}")
@@ -336,7 +294,7 @@ class TestRepactPayloadTaskFileGone:
         marker = {"_truncated": True, "original_bytes": 40000, "head": "{"}
         write_journal(home, {"type": "task_metadata_snapshot", "task_id": "90", "subject": "s",
                              "metadata": {"teachback_submit": marker}})
-        result = run("90")
+        result = run("90", "--key", "teachback")
         assert result.returncode == 0 and "only the head of 40000 bytes was kept" in result.stdout
 
     @pytest.mark.parametrize("case", ["no-session", "other-session", "stale-team", "forged-lead",

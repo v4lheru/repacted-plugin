@@ -7,7 +7,8 @@ docs/architecture/state-ownership.md: every owning store's writer must exist in 
 vanished under a standing teams/<team>/config.json while its lead journal recorded tasks is
 amber. check_profile is the advisory line for the optional per-user profile; check_distill the
 line for the distill session queue; check_packs the line for skill-pack recall
-fragments. Split from _doctor.py to keep that module under its byte ceiling.
+fragments; check_launcher the line for the `repact` shim on PATH (hooks/shared/repact_shim.py).
+Split from _doctor.py to keep that module under its byte ceiling.
 """
 from __future__ import annotations
 
@@ -178,6 +179,19 @@ def check_packs(ctx) -> "Result":
                       _capped([_printable(line) for line in report.lines()]
                               + ["fragment format: reference/recall-packs.md"]))
     return Result("packs", "skill packs", "green", f"{report.triggers} recall trigger(s) from {names}")
+
+
+def check_launcher(ctx) -> "Result":
+    """The `repact` shim at ~/.local/bin/repact: green when ours, current, resolving to an
+    installed plugin and on PATH; amber with the way through otherwise; skip when turned off."""
+    from shared import repact_shim
+
+    state, summary, detail = repact_shim.doctor_lines(ctx.home, ctx.config_root, ctx.env)
+    return Result("launcher", "repact command", state, _printable(summary), _capped(detail))
+
+
+# The last checks of run_checks, in order (here to keep _doctor.py under its byte ceiling).
+LATE_CHECKS = (("packs", check_packs), ("launcher", check_launcher))
 
 
 def check_state(ctx) -> "Result":

@@ -181,6 +181,22 @@ def hard_line(limits: dict) -> int:
     return int(limits["stop"] * HARD_FACTOR)
 
 
+def _stamp(metadata: dict) -> dict:
+    """The variety stamp: the one `repact dispatch` writes (metadata.dispatch.variety), else
+    the hand-written metadata.variety, else {}."""
+    dispatch = metadata.get("dispatch")
+    for stamp in ((dispatch.get("variety") if isinstance(dispatch, dict) else None),
+                  metadata.get("variety")):
+        if isinstance(stamp, dict):
+            return stamp
+    return {}
+
+
+def _score(value: Any) -> int | float | None:
+    """A dimension's score: a bare number, or the `score` of a {score, rationale} entry."""
+    return _number(value.get("score")) if isinstance(value, dict) else _number(value)
+
+
 def task_budget(task: Any, limits: dict) -> dict:
     """`limits` with the advise and stop lines of `task` (a parsed task file): the explicit
     metadata.context_budget_kb first, else the large lines for a large variety stamp, else
@@ -192,8 +208,8 @@ def task_budget(task: Any, limits: dict) -> dict:
         low, high = BUDGET_KB_RANGE
         stop = int(min(max(explicit, low), high) * 1000)
         return {**limits, "advise": int(stop * ADVISE_SHARE), "stop": stop}
-    variety = metadata.get("variety") if isinstance(metadata.get("variety"), dict) else {}
-    scope, risk = _number(variety.get("scope")), _number(variety.get("risk"))
+    variety = _stamp(metadata)
+    scope, risk = _score(variety.get("scope")), _score(variety.get("risk"))
     if (scope is not None and scope >= LARGE_SCOPE) or (risk is not None and risk >= LARGE_RISK):
         return {**limits, **LARGE_LINES}
     return dict(limits)
@@ -439,11 +455,11 @@ BAND_TEXT = ("your context is past the stop line (~{size}): start no new work. Y
              "the tests for what you have already written and fix what they show; then write "
              "your HANDOFF with a `remaining:` list. Past the hard line (~{hard}) you stop.")
 # The lead's own band: its limit is on this context, not on the job, and only the user can
-# run the refresh that carries the work into a fresh one.
+# run the checkpoint that carries the work into a fresh one.
 LEAD_BAND_TEXT = ("your context is past the stop line (~{size}): do no new work in THIS context. "
                   "Finish the step in hand, record each new order from the user as a task and "
-                  "give it to a fresh agent, and tell the user once to type /repacted:refresh "
-                  "then /compact. Past the hard line (~{hard}) delegate everything.")
+                  "give it to a fresh agent, and tell the user once to type "
+                  "/repacted:pause checkpoint then /compact. Past the hard line (~{hard}) delegate everything.")
 HARD_TEXT = ("your context is past the hard line (~{size}); write your HANDOFF now and end "
              "the turn")
 

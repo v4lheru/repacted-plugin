@@ -9,7 +9,7 @@ Perform a brief self-assessment. Compare your initial variety assessment and orc
 **Answer these questions (item 5 computes the arc start):**
 
 1. **Variety accuracy**: Was the initial variety score close to actual complexity? Over/under by how much?
-2. **Phase efficiency**: Did any phases need to be re-run (imPACT)? Were any skipped phases needed after all?
+2. **Phase efficiency**: Did any phases need to be re-run (blocker triage)? Were any skipped phases needed after all?
 3. **Specialist fit**: Were specialists well-matched to tasks? Any that should have been different?
 4. **Estimation pattern**: Does this match a recurring pattern from prior sessions? (Search pact-memory for `orchestration_calibration` entries)
 5. **Arc start** (not a question; questions 6 and 7 scope their reads with it). **Inputs**: `{plugin_root}` and `{session_dir}` are the values recorded in the Current Session block of `CLAUDE.md`; `feature_task_id` is the id of the feature task this wrap-up is closing. In a resumed session the journal holds prior arcs, so read every `variety_assessed` event — `python3 "{plugin_root}/hooks/shared/session_journal.py" read --type variety_assessed --session-dir '{session_dir}'`, which prints a SINGLE JSON array, so `json.loads` the whole output — then `import sys; sys.path.insert(0, "{plugin_root}/hooks")`, `from shared.session_journal import resolve_arc_start` and `arc_start = resolve_arc_start(events, feature_task_id)`: the LATEST `ts` among feature-level events matching `feature_task_id`, or `None` when none matches. Pass `--since '{arc_start}'` on the reads below (it compares parsed timestamps and INCLUDES an event exactly on the boundary); when `arc_start` is `None`, omit `--since`.

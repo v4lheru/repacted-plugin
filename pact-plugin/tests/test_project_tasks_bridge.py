@@ -4,11 +4,10 @@ bridge rows; rulings amend_1, amend_2 and amend_4 on #180).
 
 The lead's acceptance of a platform Task B the lead bound to a project task (start --ptask, or
 project_task/refs in the lead's own write; 1.5.0 F2) closes it on verified evidence; a rejection records the revision and closes nothing; nothing a teammate does
-closes anything. Every hook test drives hooks/evidence_gate.py as a real subprocess with a
-PostToolUse(TaskUpdate) payload shaped like the frames captured live on Claude Code 2.1.283 (#180
-metadata.a1_capture_result): the lead frame carries the lead spelling of agent_type and no agent_id,
-an in-process teammate frame carries the teammate's own NAME as agent_type and an agent_id without
-'@', and the completion carries tool_response.statusChange.
+closes anything. Since 2.1.0 the bridge runs inside the lead's own `repact accept`, `reject`
+and `dispatch` (shared/ops/sides.task_log), which only the lead can call; `run_hook` drives that
+call as a real subprocess, from a payload that names the task and the act (a completion, a
+handoff_rejection, a project_task/refs link).
 
 Everything runs in temp dirs: a temp git repo, a temp CLAUDE_CONFIG_DIR (task files, team config,
 session dirs), a temp CLAUDE_PLUGIN_DATA (run ledger, logs) and a temp KB profile.
@@ -27,7 +26,6 @@ import pytest
 from project_tasks_support import (GIT_ENV, PLUGIN_ROOT, git, kb_profile, load, new_repo, reader,
                                    run_cli, writer)
 
-HOOK = PLUGIN_ROOT / "hooks" / "evidence_gate.py"
 SESSION_LEDGER = PLUGIN_ROOT / "hooks" / "session_ledger.py"
 BRIDGE_PATH = PLUGIN_ROOT / "hooks" / "shared" / "task_log" / "bridge.py"
 EVIDENCE_PATH = PLUGIN_ROOT / "hooks" / "shared" / "task_log" / "evidence.py"
@@ -166,15 +164,42 @@ def lead_accepts(world, **kwargs):
     return frame(world, status="completed", **kwargs)
 
 
-def teammate_frame(world, name="coder", **kwargs):
-    """An in-process teammate: agent_type is its own member NAME, agent_id has no '@'."""
-    return frame(world, agent_type=name, agent_id="a0123456789abcdef", **kwargs)
+# The lead's op through the bridge, as shared/ops/sides.task_log runs it: the act's own metadata
+# is `written`, the task file is the task, and a store error stays inside the op (fail open).
+_DRIVER = r"""
+import json, os, sys
+from shared import ref_dispositions as RD
+from shared.task_log import bridge, write as W
+payload, team = json.load(sys.stdin), sys.argv[1]
+tool_input = payload.get("tool_input") or {}
+written = tool_input.get("metadata") if isinstance(tool_input.get("metadata"), dict) else {}
+if payload.get("tool_name") == "TaskCreate":
+    task_id = str(payload["tool_response"]["task"]["id"])
+else:
+    task_id = str(tool_input.get("taskId"))
+actions = ((["link"] if RD.metadata_refs(written) else [])
+           + (["reject"] if written.get("handoff_rejection") else [])
+           + (["accept"] if tool_input.get("status") == "completed" else []))
+path = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "tasks", team, task_id + ".json")
+line = None
+try:
+    store = W.Store.locate(payload["cwd"], by=W.with_team("bridge", payload.get("session_id")))
+    with open(path, encoding="utf-8") as handle:
+        task = json.load(handle)
+    bridge.apply(store, team, task_id, task, written, actions, payload.get("session_id"))
+    line = bridge.acceptance_line(bridge.last_report)
+except W.NoLog:
+    sys.exit(0)
+except Exception:
+    pass
+print(json.dumps({"hookSpecificOutput": {"additionalContext": line}} if line else {"suppressOutput": True}))
+"""
 
 
 def run_hook(payload) -> subprocess.CompletedProcess:
-    env = {**os.environ, **GIT_ENV}
-    return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True,
-                          text=True, env=env, timeout=60)
+    env = {**os.environ, **GIT_ENV, "PYTHONPATH": str(PLUGIN_ROOT / "hooks")}
+    return subprocess.run([sys.executable, "-c", _DRIVER, TEAM],
+                          input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=60)
 
 
 def bridge():
@@ -190,6 +215,15 @@ def evidence_module():
 # ---------------------------------------------------------------------------------------------
 
 class TestAcceptance:
+    def test_a_secretary_owned_task_never_closes_or_links_a_project_task(self, world):
+        # The deleted TaskUpdate adapter skipped a teachback-exempt owner; apply() keeps that rule.
+        bind_ref(world)
+        world.task(owner="secretary", project_task=world.ref, handoff={"evidence": {"head": world.head}})
+        before = world.log_lines()
+        result = run_hook(lead_accepts(world, metadata={"project_task": world.ref}))
+        assert result.returncode == 0
+        assert world.log_lines() == before and world.project_task()["status"] != "done"
+
     def test_a_handoff_evidence_object_closes_the_task_on_a_verified_head(self, world):
         bind_ref(world)
         world.task(project_task=world.ref, handoff={"produced": ["x"], "evidence": {"head": world.head}})
@@ -329,71 +363,6 @@ class TestDispatchLink:
         task = world.project_task()
         assert task["status"] == "active"
         assert {"kind": "reference", "target": f"ptask:{TEAM}/{TASK_B}"} in task["links"]
-
-    def test_a_teammate_setting_project_task_links_nothing(self, world):
-        world.task(status="pending", project_task=world.ref)
-        before = world.log_lines()
-        run_hook(teammate_frame(world, metadata={"project_task": world.ref}))
-        assert world.log_lines() == before
-
-
-# ---------------------------------------------------------------------------------------------
-# the discriminating cases: nothing but the lead's acceptance closes a project task
-# ---------------------------------------------------------------------------------------------
-
-class TestOnlyTheLeadCloses:
-    def _linked(self, world, owner="coder"):
-        world.task(owner=owner, project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        return world.log_lines()
-
-    def test_a_teammate_self_completion_closes_nothing(self, world):
-        before = self._linked(world)
-        result = run_hook(teammate_frame(world, status="completed"))
-        assert result.returncode == 0 and world.log_lines() == before and world.journal() == []
-
-    def test_a_teammate_completing_someone_elses_task_closes_nothing(self, world):
-        """Only is_lead stops this one: the frame's agent_type ('reviewer') is not the owner, so the
-        owner guard passes it, and a sabotaged discriminator must turn this red."""
-        before = self._linked(world)
-        run_hook(teammate_frame(world, name="reviewer", status="completed"))
-        assert world.log_lines() == before and world.journal() == []
-
-    def test_a_non_owner_teammate_setting_project_task_links_nothing(self, world):
-        world.task(status="pending", project_task=world.ref)
-        before = world.log_lines()
-        run_hook(teammate_frame(world, name="reviewer", metadata={"project_task": world.ref}))
-        assert world.log_lines() == before
-
-    def test_a_tmux_teammate_frame_closes_nothing(self, world):
-        before = self._linked(world)
-        run_hook(frame(world, agent_type="pact-backend-coder", status="completed"))    # no agent_id
-        assert world.log_lines() == before
-
-    def test_a_plain_frame_without_agent_type_closes_nothing(self, world):
-        before = self._linked(world)
-        run_hook(frame(world, agent_type=None, status="completed"))
-        assert world.log_lines() == before and world.journal() == []
-
-    def test_the_owner_guard_holds_when_a_teammate_is_named_like_the_lead(self, world):
-        before = self._linked(world, owner=LEAD_TYPE)
-        run_hook(lead_accepts(world))
-        assert world.log_lines() == before and world.journal() == []
-
-    def test_the_secretary_is_excluded_outright(self, world):
-        before = self._linked(world, owner="secretary")
-        run_hook(lead_accepts(world))
-        assert world.log_lines() == before and world.journal() == []
-
-    def test_a_task_a_acceptance_links_nothing_and_is_a_no_op(self, world):
-        world.task(task_id="6", owner="coder")                   # a teachback task, no project_task
-        before = world.log_lines()
-        run_hook(lead_accepts(world, task_id="6"))
-        assert world.log_lines() == before
-
-    def test_a_completion_without_a_status_change_is_a_no_op(self, world):
-        before = self._linked(world)
-        run_hook(frame(world, status="completed", status_change=False))
-        assert world.log_lines() == before
 
 
 # ---------------------------------------------------------------------------------------------
@@ -588,7 +557,7 @@ class TestTaskForPtask:
 
 
 # ---------------------------------------------------------------------------------------------
-# fail open on hook errors; the SessionEnd child syncs
+# fail open; the SessionEnd child syncs
 # ---------------------------------------------------------------------------------------------
 
 class TestFailOpen:
@@ -597,12 +566,6 @@ class TestFailOpen:
         world.task(project_task=world.ref)
         result = run_hook(lead_accepts(world))
         assert result.returncode == 0 and result.stdout == ""
-
-    def test_a_bridge_error_never_reaches_the_tool_call(self, world, monkeypatch):
-        hook = load("evidence_gate_under_test", HOOK)
-        monkeypatch.setattr(hook, "_load_bridge", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        assert hook.run(lead_accepts(world)) is None
 
     def test_the_session_ledger_child_syncs_its_project(self, world, monkeypatch):
         world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})

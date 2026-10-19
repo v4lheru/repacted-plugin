@@ -50,7 +50,6 @@ from pathlib import Path
 
 import pytest
 
-import task_lifecycle_gate as tlg  # noqa: E402
 from shared.session_journal import (  # noqa: E402
     append_event,
     make_event,
@@ -410,224 +409,18 @@ class TestMaskedReadSeam:
 #   The teammate-frame leg asserts the backstop is ABSENT, and that absence is
 #   the frame gate acting on a fixture that seeds no leadSessionId team config.
 # =============================================================================
-class TestBackstopBothModes:
-    @pytest.mark.parametrize("subject,workflow", [
-        (PREPARE_SUBJECT, "prepare"),
-        (ARCHITECT_SUBJECT, "architect"),
-    ])
-    def test_lead_missing_emit_fires_advisory(self, live_env, subject, workflow):
-        """LEAD frame + PREPARE/ARCHITECT complete + NO artifact_paths event for
-        (workflow,feature) → the nudge fires. The recovery pointer is missing."""
-        _tmp, _session_dir = live_env
-        advisories = tlg.evaluate_lifecycle(_payload(agent_type=LEAD, subject=subject))
-        assert _has_backstop_advisory(advisories), (
-            f"lead frame, {subject!r}, no emit → backstop must nudge"
-        )
-
-    def test_lead_with_emit_present_no_advisory(self, live_env):
-        """LEAD frame + the artifact_paths event PRESENT for (prepare,feature) →
-        no nudge. Same-fixture positive control proving the advisory above is the
-        presence check, not an unconditional fire."""
-        _tmp, _session_dir = live_env
-        append_event(_artifact_event("prepare"))
-        advisories = tlg.evaluate_lifecycle(
-            _payload(agent_type=LEAD, subject=PREPARE_SUBJECT))
-        assert not _has_backstop_advisory(advisories)
-
-    @pytest.mark.parametrize("lead_spelling", [LEAD, LEAD_BARE])
-    def test_both_lead_spellings_fire(self, live_env, lead_spelling):
-        """is_lead accepts both LEAD_AGENT_TYPES spellings."""
-        _tmp, _session_dir = live_env
-        advisories = tlg.evaluate_lifecycle(
-            _payload(agent_type=lead_spelling, subject=PREPARE_SUBJECT))
-        assert _has_backstop_advisory(advisories)
-
-    def test_teammate_frame_no_advisory_boundary_seal(self, live_env):
-        """BOUNDARY SEAL (P0-1): a teammate frame self-completing the SAME
-        PREPARE phase with NO emit produces NO backstop advisory. The
-        suppression is the frame gate: this fixture frame seeds no team config
-        carrying a leadSessionId, so the topology leg cannot resolve and
-        is_canonical_journal_frame returns False. This arm does NOT cover the
-        in-process teammate frame, which DOES nudge."""
-        _tmp, _session_dir = live_env
-        advisories = tlg.evaluate_lifecycle(
-            _payload(agent_type=TEAMMATE, subject=PREPARE_SUBJECT))
-        assert not _has_backstop_advisory(advisories), (
-            "a frame that cannot resolve the canonical-journal topology must "
-            "not nudge (this fixture seeds no leadSessionId team config)"
-        )
-
-    def test_teammate_then_lead_same_fixture_attributes_the_silence_to_the_gate(
-            self, live_env):
-        """Non-vacuity for the boundary seal: the SAME (subject, no-emit)
-        fixture that is SILENT at the teammate frame FIRES at the lead
-        frame. So the gate causes the silence when it rejects the frame. A
-        missing precondition does not cause it, because this fixture holds
-        the subject and the no-emit state fixed across the two drives.
-
-        🔴 WHAT THIS ARM CANNOT PROVE, AND ITS NAME MUST NOT CLAIM IT. The
-        arm does NOT separate the ROLE leg from the TOPOLOGY leg. Its two
-        inputs are a teammate frame with no team config, and a lead frame.
-        `is_lead` and `is_canonical_journal_frame` AGREE at each of them, so
-        a revert of the gate to `is_lead` keeps this arm GREEN. MEASURED:
-        the arm is missing from the failing set of that revert.
-
-        THE ARM THAT DOES PROVE IT is cell 2 of the agent_type matrix
-        below, `test_empty_or_missing_agent_type_resolvable_topology_nudges`.
-        That arm seeds the two topology halves, so the two predicates
-        DISAGREE there and the revert reddens it. Read the two together.
-
-        THE NAME OF THIS ARM SAID `proves_gate_is_the_frame` and before that
-        `proves_gate_is_role`. Each named a discrimination the fixture
-        cannot make. Do not restore either one."""
-        _tmp, _session_dir = live_env
-        teammate = tlg.evaluate_lifecycle(
-            _payload(agent_type=TEAMMATE, subject=PREPARE_SUBJECT))
-        lead = tlg.evaluate_lifecycle(
-            _payload(agent_type=LEAD, subject=PREPARE_SUBJECT))
-        assert not _has_backstop_advisory(teammate)
-        assert _has_backstop_advisory(lead)
-
-    # -------------------------------------------------------------------
-    # THE agent_type TWO-ARM MATRIX. The two arms hold the SAME agent_type
-    # value and differ ONLY in whether the topology leg resolves.
-    #
-    # 🔴 WHY THE MATRIX AND NOT ONE ARM. A single silent arm pins the
-    # OUTCOME of an unresolvable topology as if it were a property of the
-    # agent_type value. A reader then reads "empty agent_type does not
-    # nudge" as a fail-safe default and defends it. It is not a default. It
-    # is one cell of a matrix, and the OTHER cell is the lead launched with
-    # no --agent flag, which carries the same absent agent_type AND writes
-    # the canonical journal, so it MUST nudge.
-    # -------------------------------------------------------------------
-    @pytest.mark.parametrize("agent_type", ["", None])
-    def test_empty_or_missing_agent_type_unresolvable_topology_no_advisory(
-            self, live_env, agent_type):
-        """CELL 1 of the matrix. An empty or absent agent_type makes the ROLE
-        leg False, so the frame gate falls to the TOPOLOGY leg. This arm
-        seeds NEITHER half, so that leg cannot resolve and the backstop stays
-        silent. Read this cell only with cell 2, which holds the same
-        agent_type value against a resolvable topology."""
-        _tmp, _session_dir = live_env
-        advisories = tlg.evaluate_lifecycle(
-            _payload(agent_type=agent_type, subject=PREPARE_SUBJECT))
-        assert not _has_backstop_advisory(advisories)
-
-    @pytest.mark.parametrize("agent_type", ["", None])
-    def test_empty_or_missing_agent_type_resolvable_topology_nudges(
-            self, live_env, agent_type):
-        """CELL 2 of the matrix, AND IT IS THE ONE THE DEFECT HID. The SAME
-        agent_type value, with BOTH halves of the topology leg seeded, MUST
-        nudge. This is the lead launched with no --agent flag: is_lead
-        answers False for it and the frame DOES write the canonical journal.
-
-        A REVERT OF THE GATE TO is_lead MAKES THIS ARM RED. Cell 1 stays
-        green under that revert, which is the whole cause the matrix exists.
-        """
-        tmp, _session_dir = live_env
-        _seed_lead_topology(tmp)
-        advisories = tlg.evaluate_lifecycle(
-            _payload(agent_type=agent_type, subject=PREPARE_SUBJECT,
-                     session_id=SID))
-        assert _has_backstop_advisory(advisories), (
-            "A lead launched with no --agent flag writes the canonical "
-            "journal, so the artifact-paths check must run for it. If this "
-            "arm is red, the gate answered on ROLE and the missing "
-            "durability pointer goes unreported for every such lead."
-        )
-
-    def test_the_two_cells_differ_only_in_the_topology_half(self, live_env):
-        """NON-VACUITY OF THE MATRIX. The two cells above sit in different
-        test functions, so nothing forces them to hold one variable fixed. If
-        a later edit changes the agent_type of one cell, the matrix silently
-        becomes two unrelated arms and stops discriminating. This arm drives
-        BOTH cells in one function with ONE agent_type value."""
-        tmp, _session_dir = live_env
-        silent = tlg.evaluate_lifecycle(
-            _payload(agent_type=None, subject=PREPARE_SUBJECT))
-        assert not _has_backstop_advisory(silent)
-
-        _seed_lead_topology(tmp)
-        nudged = tlg.evaluate_lifecycle(
-            _payload(agent_type=None, subject=PREPARE_SUBJECT,
-                     session_id=SID))
-        assert _has_backstop_advisory(nudged), (
-            "ONE agent_type value, two topology states, two outcomes. If "
-            "this fails, the suppression in cell 1 is not the topology leg "
-            "and the matrix names the wrong cause."
-        )
 
 
 # =============================================================================
 # P1-5 BACKSTOP exemptions — skipped phases + non-artifact phases are exempt;
 #       the advisory NEVER blocks.
 # =============================================================================
-class TestBackstopExemptions:
-    @pytest.mark.parametrize("subject", [
-        f"CODE: {FEATURE}",
-        f"TEST: {FEATURE}",
-        f"ATOMIZE: {FEATURE}",
-        f"CONSOLIDATE: {FEATURE}",
-        f"backend-coder: implement {FEATURE}",  # a specialist work task
-    ])
-    def test_non_artifact_phase_exempt(self, live_env, subject):
-        """CODE/TEST/ATOMIZE/CONSOLIDATE/specialist subjects are NOT in the
-        phase→workflow map → _phase_artifact_requirement returns None → no nudge
-        (their artifacts are git-tracked or non-existent)."""
-        _tmp, _session_dir = live_env
-        advisories = tlg.evaluate_lifecycle(
-            _payload(agent_type=LEAD, subject=subject))
-        assert not _has_backstop_advisory(advisories)
-
-    def test_skipped_phase_exempt(self, live_env):
-        """A PREPARE phase marked metadata.skipped=True produced no artifact →
-        exempt even under the lead frame with no emit."""
-        _tmp, _session_dir = live_env
-        advisories = tlg.evaluate_lifecycle(
-            _payload(agent_type=LEAD, subject=PREPARE_SUBJECT, skipped=True))
-        assert not _has_backstop_advisory(advisories)
-
-    def test_advisory_never_blocks(self, live_env):
-        """The backstop is advisory-only: evaluate_lifecycle returns a list of
-        (code, message) advisories — it does NOT raise and does NOT emit a deny.
-        The nudge being present is informational; the TaskUpdate is never
-        blocked."""
-        _tmp, _session_dir = live_env
-        # No raise, returns a list, advisory present but harmless.
-        advisories = tlg.evaluate_lifecycle(
-            _payload(agent_type=LEAD, subject=PREPARE_SUBJECT))
-        assert isinstance(advisories, list)
-        for entry in advisories:
-            assert isinstance(entry, tuple) and len(entry) == 2
 
 
 # =============================================================================
 # P2-6 unit — _phase_artifact_requirement maps subjects to (workflow, feature)
 #       or None. Phantom-green-seeded from real subject shapes.
 # =============================================================================
-class TestPhaseArtifactRequirement:
-    def test_prepare_maps(self):
-        assert tlg._phase_artifact_requirement(PREPARE_SUBJECT) == ("prepare", FEATURE)
-
-    def test_architect_maps(self):
-        assert tlg._phase_artifact_requirement(ARCHITECT_SUBJECT) == ("architect", FEATURE)
-
-    @pytest.mark.parametrize("subject", [
-        f"CODE: {FEATURE}", f"TEST: {FEATURE}", f"ATOMIZE: {FEATURE}",
-        f"CONSOLIDATE: {FEATURE}", "random subject", "",
-    ])
-    def test_non_phase_returns_none(self, subject):
-        assert tlg._phase_artifact_requirement(subject) is None
-
-    def test_malformed_no_separator_returns_none(self):
-        """A subject startswith the prefix-token but no ': ' separator → degenerate
-        → None (fail open, no nudge on an unresolvable feature slug)."""
-        assert tlg._phase_artifact_requirement("PREPARE") is None
-        assert tlg._phase_artifact_requirement("PREPARE:") is None
-
-    def test_non_string_returns_none(self):
-        assert tlg._phase_artifact_requirement(None) is None
-        assert tlg._phase_artifact_requirement(123) is None
 
 
 # =============================================================================

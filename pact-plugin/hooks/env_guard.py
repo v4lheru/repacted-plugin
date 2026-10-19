@@ -349,11 +349,19 @@ def decide(payload: dict) -> dict | None:
     if tool == "Bash":
         command = tool_input.get("command")
         reason = bash_verdict(command, cwd) if isinstance(command, str) else None
+        if reason and not isinstance(reason, Notice):
+            return _deny(reason)
+        import settings_guard   # loaded here, so the entry's own imports stay stdlib
+        settings = settings_guard.decide(payload)   # after the env verdict: one ask
+        if settings:
+            if reason:
+                settings["systemMessage"] = str(reason)
+            return settings
         if isinstance(reason, Notice):
             return {"systemMessage": str(reason),
                     "hookSpecificOutput": {"hookEventName": "PreToolUse",
                                            "additionalContext": str(reason)}}
-        return _deny(reason) if reason else None
+        return None
     return None
 
 

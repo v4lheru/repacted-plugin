@@ -15,7 +15,8 @@ stay in the persona and `protocols/`; this skill links them by name and does not
 1. Before dispatch: label premises VERIFIED, INHERITED or ASSUMED; scope the files the change
    FORCES, not the files it is about; name the join between lanes in both briefs; check reserved
    files against every open sibling branch; copy the repo's `<repo>/.claude/pact-dispatch-notes.md`
-   lines that apply into each brief; say the dispatch once, in the task text; for text an
+   lines that apply into each brief, and those of `<repo>/.repacted/profile.md` (`repact-profile build`) into
+   the work task's CONTEXT; say the dispatch once, in the task text; for text an
    end user will read, name the reader, the register and a length cap.
    → `references/dispatch-briefs-and-premises.md`
 2. Decide who does it. By default the lead keeps an investigation whose
@@ -31,9 +32,8 @@ stay in the persona and `protocols/`; this skill links them by name and does not
    → `references/rulings-and-relays.md`
 4. At teachback and HANDOFF: gate on the enumeration, and read the teammate's doubts as a map of
    where to push. A count the run ledger lacks is a note to you, never a return. Treat a flag as a
-   question, never a verdict, though a NO-RUN or MISMATCH against the run ledger is a fact. For
-   a manual look or a replay: `handoff-evidence handoff --team <T> --task <N> --show`. A teammate's SendMessage is
-   not a finding. Commission an adversarial non-author pass for authorization controls AT DISPATCH.
+   question, never a verdict, though an `evidence.*` refusal from `repact accept` is a fact about
+   the run ledger. A teammate's SendMessage is not a finding. Commission an adversarial non-author pass for authorization controls AT DISPATCH.
    → `references/acceptance-and-verification-gates.md`
 5. On a HALT or a flagged risk: size it (what is new, where it went, the discriminating case, the
    blast radius) before stopping everyone; call the stop on verification loops that no longer move
@@ -49,8 +49,8 @@ stay in the persona and `protocols/`; this skill links them by name and does not
 ## Map
 - `references/dispatch-briefs-and-premises.md` briefs, premises, scoping, delegation.
 - `references/rulings-and-relays.md` rulings, supersessions, relays, pointers, message economy.
-- `references/acceptance-and-verification-gates.md` status gates, risk intake, evidence hooks,
-  `handoff-evidence`.
+- `references/acceptance-and-verification-gates.md` status gates, risk intake, the evidence
+  check.
 - `references/long-jobs-halts-and-loops.md` halts, loops, long jobs, dual drivers, wrap-up.
 - `protocols/self-refine.md` and `refinement-log.md` keep the skill current.
 

@@ -444,7 +444,7 @@ class TestRejectionRelay:
         write_task(home, "34", {"teachback_rejection": rejection()})
         context = relay.relay(payload())
         assert context == ("REJECTION teachback_rejection on #34: Add the gate test.; "
-                           "run repact-payload 34 --key rejection")      # no dispose hint: it is not an amendment
+                           "run repact inspect 34 --key rejection")      # no dispose hint: it is not an amendment
         write_task(home, "34", {"teachback_rejection": rejection(), "note": "unrelated write"})
         assert relay.relay(payload()) is None
         assert json.loads(stamp_path(home).read_text())["relayed"]["34"] == ["teachback_rejection@1r0"]

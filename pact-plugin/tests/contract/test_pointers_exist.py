@@ -143,7 +143,7 @@ def test_every_spawn_text_gives_the_teammate_skill_as_the_first_instruction():
         named += [(path.relative_to(PLUGIN_ROOT).as_posix(), name) for name in FIRST_ACTION.findall(text)]
         if OLD_FIRST_SKILL in text:
             old_name_in.append(path.relative_to(PLUGIN_ROOT).as_posix())
-    assert len(named) >= 4, named   # the persona, bootstrap and its detail file, the dispatch reference
+    assert len(named) >= 2, named   # bootstrap and its detail file
     assert {name for _, name in named} == {"repacted:teammate"}, named
     assert old_name_in == [], old_name_in
     block = (PLUGIN_ROOT / "hooks" / "shared" / "peer_context.py").read_text(encoding="utf-8")

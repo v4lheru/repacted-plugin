@@ -15,7 +15,6 @@ from shared.session_init_lead import SNAPSHOT_MAX_BYTES, cap_snapshot
 from tests.test_session_init import TestInprocessModeNoticeIntegration, _run_session_init_for_path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-INJECTION = json.loads((PLUGIN_ROOT / "tests" / "contract" / "budgets.json").read_text(encoding="utf-8"))["injection"]
 
 
 def _transcripts():
@@ -75,16 +74,12 @@ def test_an_oversized_snapshot_is_cut_at_a_line_and_names_the_journal(tmp_path):
     assert cap_snapshot("short", str(tmp_path)) == "short"
 
 
-def test_the_static_startup_frame_fits_the_injection_budget(monkeypatch, tmp_path):
-    additional, _, _ = _run_session_init_for_path(monkeypatch, tmp_path, "startup", team_exists=True)
-    size = len(additional.encode("utf-8"))
-    assert size <= INJECTION["session_init_static"] <= INJECTION["session_init_startup"], size
-
-
 def test_the_unattended_notice_is_told_once_per_session_and_mode(monkeypatch, tmp_path):
     # The harness drives an unknown frame, which journals nothing; a lead's session dir exists
     # by the time the notice runs, so plant it where get_session_dir() will point.
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("REPACT_EXECUTION", "teams")  # the notice is Teams-only
+    monkeypatch.setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
     session_dir = Path(reconstruct_session_dir(str(tmp_path / "project"), "aabb1122-0000-0000-0000-000000000000"))
     session_dir.mkdir(parents=True)
     runner = TestInprocessModeNoticeIntegration()

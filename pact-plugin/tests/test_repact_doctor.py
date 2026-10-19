@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from shared import repact_shim
+
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 DOCTOR = PLUGIN_ROOT / "bin" / "repact-doctor"
 FAKE_KEY = "REPACT_TEST_SECRET_ABCDEFGH1234"
@@ -68,7 +70,7 @@ class World:
         self.scope = tmp / "scope_mcp.py"
         self.env = {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.config),
                     "CLAUDE_PLUGIN_DATA": str(self.data), "XDG_CONFIG_HOME": str(tmp / "xdg"),
-                    "XDG_CACHE_HOME": str(tmp / "cache"), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "XDG_CACHE_HOME": str(tmp / "cache"), "PATH": f"{self.home}/.local/bin{os.pathsep}" + os.environ.get("PATH", "/usr/bin:/bin"),
                     "REPACT_DOCTOR_REPO": str(self.repo), "REPACT_DOCTOR_SCOPE_MCP": str(self.scope)}
         self._build()
 
@@ -85,8 +87,16 @@ class World:
             (self.pact / sub).mkdir(parents=True)
         (self.pact / "agents" / "pact-architect.md").write_text("agent\n")
         (self.config / "plugins").mkdir(parents=True)
+        repacted = self.tmp / "repacted-install"           # the `repact` shim's target (launcher)
+        (repacted / "bin").mkdir(parents=True)
+        (repacted / "bin" / "repact").write_text("#!/bin/sh\n")
+        (repacted / "bin" / "repact").chmod(0o755)
         (self.config / "plugins" / "installed_plugins.json").write_text(json.dumps(
-            {"plugins": {"PACT@pact-marketplace": [{"scope": "user", "installPath": str(self.pact)}]}}))
+            {"plugins": {"PACT@pact-marketplace": [{"scope": "user", "installPath": str(self.pact)}],
+                         "repacted@repacted": [{"scope": "user", "installPath": str(repacted)}]}}))
+        shim = repact_shim.shim_path(self.home)
+        shim.parent.mkdir(parents=True)
+        shim.write_text(repact_shim.shim_text())
         (self.config / "agents").mkdir()
         (self.config / "agents" / "pact-architect.md").symlink_to(self.pact / "agents" / "pact-architect.md")
         (self.config / "protocols").mkdir()
@@ -164,8 +174,8 @@ def only_changed(states: dict, check_id: str, state: str):
 def test_a_clean_world_is_green_everywhere(world):
     states = world.states("--full")
     assert {k: v["state"] for k, v in states.items()} == {k: "skip" if k == "state" else "green" for k in states}, states
-    assert len(states) == 16   # 9 + kb (KB-CATALOG) + tasks (D10 P3) + state + profile (refactor) + distill
-    #                            + policy + packs
+    assert len(states) == 17   # 9 + kb (KB-CATALOG) + tasks + state + profile (refactor) + distill
+    #                            + policy + packs + launcher
 
 
 def test_the_kb_check_runs_right_after_the_index_check(world):
@@ -780,7 +790,7 @@ def test_a_fresh_home_passes_with_the_mode_and_host_lines(tmp_path):
     assert not [k for k, c in states.items() if c["state"] == "red"], states
     assert {k for k, c in states.items() if c["state"] == "amber"} <= FRESH_AMBER_ALLOWED, states
     assert states["profile"]["state"] == "green" and "optional" in states["profile"]["summary"]
-    assert "mode: guards-only (Agent Teams flag off)" in run.stdout.splitlines()
+    assert "execution: subagents (default)" in run.stdout.splitlines()
     assert re.search(r"^host \S+: (tested|untested) \(last tested [\d.]+\)", run.stdout, re.M), run.stdout
     real_home = pwd.getpwuid(os.getuid()).pw_dir          # conftest points HOME at a tmp dir
     assert "scope_mcp" not in run.stdout and real_home not in run.stdout
@@ -788,13 +798,14 @@ def test_a_fresh_home_passes_with_the_mode_and_host_lines(tmp_path):
 
 def test_the_mode_reads_the_settings_flag_and_an_unlisted_host_is_untested(world):
     host = load("_doctor_host_mode", PLUGIN_ROOT / "bin" / "_doctor_host.py")
-    (world.config / "settings.json").write_text(json.dumps({"env": {host.TEAMS_FLAG: "1"}}))
+    (world.config / "settings.json").write_text(json.dumps(
+        {"env": {host.TEAMS_FLAG: "1", "REPACT_EXECUTION": "teams"}}))
     fake = world.tmp / "fakebin" / "claude"
     fake.parent.mkdir()
     fake.write_text("#!/bin/sh\necho '0.0.1 (Claude Code)'\n")
     fake.chmod(0o755)
     run = world.run(PATH=f"{fake.parent}:/usr/bin:/bin")
-    assert "mode: full (Agent Teams on)" in run.stdout
+    assert "execution: teams (REPACT_EXECUTION=teams)" in run.stdout
     assert "host 0.0.1: untested (last tested " in run.stdout, run.stdout
 
 

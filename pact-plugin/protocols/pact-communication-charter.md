@@ -1,33 +1,10 @@
 # Communication Charter
 
-These norms govern how PACT agents communicate. Part I, the mechanics of
-how messages are delivered between agents, lives in lead-reference.md §Message Delivery. Part II covers
-how written output — messages, comments, docs, PRs, issues — should
-read. Both apply to all PACT agents and the orchestrator.
+These norms govern how PACT agents communicate, for every agent and the lead.
 
-## Part I — Message Delivery Mechanics
+## Part I — Message Delivery
 
-> Moved: see [lead-reference.md §Message Delivery](lead-reference.md#message-delivery). Teammate side: skills/teammate/references/teammate-messaging.md.
-
-### Delivery Model
-
-> Moved: see [lead-reference.md §Delivery Model](lead-reference.md#delivery-model).
-
-### Lead-Side Discipline — Verify Before Dispatching
-
-> Moved: see agents/pact-orchestrator.md §1.
-
-#### Pre-Send Self-Check
-
-> Moved: lead side in agents/pact-orchestrator.md §1, teammate side in skills/teammate/references/teammate-messaging.md §Pre-Send Self-Check.
-
-### Teammate-Side Discipline — Verify Before Acting + Assume Eventually-Seen
-
-> Moved: see skills/teammate/references/teammate-messaging.md.
-
-### Algedonic-Signal Latency Caveat
-
-> Moved: see [lead-reference.md §Algedonic-Signal Latency Caveat](lead-reference.md#algedonic-signal-latency-caveat).
+How messages travel between agents (queued, delivered at the next idle, no cancel, no broadcast) is in [lead-reference.md §Message Delivery](lead-reference.md#message-delivery), with the [delivery model](lead-reference.md#delivery-model) and [stop-signal latency](lead-reference.md#stop-signal-latency). The teammate side is in `skills/teammate/references/teammate-messaging.md`.
 
 ## Part II — Written Output
 

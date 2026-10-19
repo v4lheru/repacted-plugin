@@ -28,7 +28,7 @@ Sections-passed denominator is 8 per runbook §5 (§1, §1.1, §2, §2.1, §3, �
 
 | Run date (UTC) | Operator | Plugin version | Sections passed | inline-mission mode | Notes / per-section observations |
 | -------------- | -------- | -------------- | --------------- | ------------------- | -------------------------------- |
-| _pending — execute post-merge in fresh session_ | | 4.1.6 | /4 | warn (default) | gate-clean spawn (§1) PASS/FAIL · Task A/B structural shape (§2) PASS/FAIL · acceptance two-call pair (§3) PASS/FAIL · briefing-within-one-wake (§4) PASS/FAIL. |
+| _pending — execute post-merge in fresh session_ | | 4.1.6 | /4 | warn (default) | gate-clean spawn (§1) PASS/FAIL · single-task structural shape (§2) PASS/FAIL · acceptance two-call pair (§3) PASS/FAIL · briefing-within-one-wake (§4) PASS/FAIL. |
 
 Sections-passed denominator is 4 per runbook §5 (§1, §2, §3, §4). The inline-mission mode column records whether the production default (`warn`) was in effect during the run or whether the operator overrode to `deny` / `shadow`. If a section fails, file a follow-up issue per the severity tiers in runbook §5 and link it in the Notes column.
 

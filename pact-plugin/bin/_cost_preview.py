@@ -7,8 +7,9 @@ The line names the planned dispatches, their estimated cost and its basis, the s
 so far and the session cost cap (shared/cost_cap.py). Every dollar figure is an estimate at
 list API prices, not billing (shared/session_spend.py). The per-dispatch estimate is the
 median spend of one teammate transcript over the past sessions on this machine (this session
-excluded: its teammates may still be running) when there are at least MIN_DISPATCHES of them,
-else DEFAULT_DISPATCH_USD, labelled as a default. Past sessions are read from their spend
+excluded: its teammates may still be running), labelled a rough guide below MIN_DISPATCHES of
+them. With none recorded the cost is "unknown": no figure is printed and none is set against the
+cap (a borrowed default once stopped an autopilot run early). Past sessions are read from their spend
 caches; up to BACKFILL_SESSIONS sessions without one are read now, within a byte budget, and
 cached. Nothing of a transcript but token counts and model names is read into a result.
 
@@ -27,15 +28,11 @@ from typing import List, Optional, Tuple
 
 from shared import cost_cap, plugin_paths, session_spend
 
-MIN_DISPATCHES = 5
+MIN_DISPATCHES = 5               # fewer: the median is printed as a rough guide
 HISTORY_SESSIONS = 40            # newest spend caches read
 BACKFILL_SESSIONS = 5            # past sessions without a cache read now
 BACKFILL_BUDGET = 256 * 1024 * 1024
-# MEASURED 2026-10-17: the median of 109 teammate transcripts of one multi-agent session on the
-# author's machine (Opus 5.5 at list prices, cache reads included). Used only with too few
-# recorded dispatches on this machine, and the line says so.
-DEFAULT_DISPATCH_USD = 4.46
-DEFAULT_BASIS = "a default: no recorded dispatches yet on this machine"
+UNKNOWN_BASIS = "no recorded dispatches on this machine yet"
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
@@ -92,15 +89,15 @@ def past_dispatches(exclude: Optional[str]) -> List[float]:
     return values
 
 
-def per_dispatch(exclude: Optional[str]) -> Tuple[float, str]:
-    """(dollars per dispatch, the basis the line prints)."""
+def per_dispatch(exclude: Optional[str]) -> Tuple[Optional[float], str]:
+    """(dollars per dispatch, the basis the line prints), or (None, why) when nothing is measured."""
     values = past_dispatches(exclude)
     if len(values) >= MIN_DISPATCHES:
         return statistics.median(values), f"median of {len(values)} past dispatches on this machine"
     if values:
-        return DEFAULT_DISPATCH_USD, (f"a default: only {len(values)} recorded dispatches on this "
-                                      f"machine, fewer than {MIN_DISPATCHES}")
-    return DEFAULT_DISPATCH_USD, DEFAULT_BASIS
+        return statistics.median(values), (f"median of only {len(values)} past dispatches on this "
+                                           f"machine, a rough guide")
+    return None, UNKNOWN_BASIS
 
 
 def current(session: Optional[str], session_dir: Optional[str]
@@ -124,10 +121,10 @@ def current(session: Optional[str], session_dir: Optional[str]
 def preview_line(dispatches: int, session: Optional[str], session_dir: Optional[str],
                  cwd: Optional[str] = None) -> str:
     each, basis = per_dispatch(session)
-    planned = each * dispatches
+    planned = None if each is None else each * dispatches
     noun = "dispatch" if dispatches == 1 else "dispatches"
-    parts = [f"Cost preview: {dispatches} {noun}, about {_money(planned)} "
-             f"({_money(each)} each: {basis})"]
+    parts = [f"Cost preview: {dispatches} {noun}, cost unknown ({basis})" if planned is None else
+             f"Cost preview: {dispatches} {noun}, about {_money(planned)} ({_money(each)} each: {basis})"]
     spend, why = current(session, session_dir)
     if spend is None:
         parts.append(f"this session so far: unknown ({why})")
@@ -143,7 +140,7 @@ def preview_line(dispatches: int, session: Optional[str], session_dir: Optional[
     else:
         left = cap - spend.usd
         cap_text = f"cap {_money(cap)} set by {source}, {_money(max(left, 0.0))} left"
-        if planned > left:
+        if planned is not None and planned > left:
             cap_text += "; these dispatches would pass it"
         parts.append(cap_text)
     return "; ".join(parts) + f". The figures are an {session_spend.LABEL}."

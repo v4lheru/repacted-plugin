@@ -1,12 +1,14 @@
 # Bootstrap Secretary-Dispatch Runbook (#691)
 
+> Since 2.1.0: `task_lifecycle_gate.py` is gone, and every dispatch is one work task carrying its own teachback (no separate teachback task). The secretary checks below still hold; the advisories they cite from that hook no longer fire.
+
 End-to-end operator runbook for a fresh-session bootstrap, focused on the
 single-task **teachback-exempt** dispatch for the secretary spawn (the
 `pact-secretary` agentType is in `TEACHBACK_EXEMPT_AGENT_TYPES`, so there is
-NO Task A teachback — one work-task, `owner="secretary"`, no `blockedBy`).
+NO separate teachback task — one work-task, `owner="secretary"`, no `blockedBy`).
 Use this to verify that the orchestrator persona's Agent Teams Dispatch
 section and the bootstrap command's secretary-spawn step stay aligned with
-what `dispatch_gate.py` and `task_lifecycle_gate.py` actually enforce. A
+what `dispatch_gate.py` actually enforces. A
 regression in either document re-introduces friction on the highest-frequency
 dispatch in PACT (every session start), so this runbook is the structural net.
 
@@ -19,9 +21,8 @@ The runbook validates four assertions on the secretary spawn:
   `TaskCreate(description=...)`; the spawn prompt stays terse and
   references `TaskList`).
 - Exactly ONE work-task exists with `owner="secretary"` and NO `blockedBy`
-  — no Task A teachback task, no blocking edge (the teachback-exemption
-  path; `task_lifecycle_gate.work_addblockedby_missing` is SUPPRESSED for
-  the secretary via `is_teachback_exempt`).
+  — no separate teachback task, no blocking edge (the teachback-exemption
+  path; `is_teachback_exempt` names the secretary).
 - The secretary delivers the session briefing on its FIRST turn after
   spawn (no Task-A-acceptance gate) AND self-completes the briefing task
   (`secretary: deliver session briefing`), then stays alive as memory
@@ -38,10 +39,9 @@ Implementation references:
 - Bootstrap ritual: [pact-plugin/commands/bootstrap.md](../../commands/bootstrap.md) §Step 2 — Spawn `pact-secretary` (the SSOT for the current dispatch shape)
 - Dispatch gate: `pact-plugin/hooks/dispatch_gate.py` (rule ⑧
   `has_task_assigned`, rule ⑨ `long_inline_mission`)
-- Task-lifecycle gate: `pact-plugin/hooks/task_lifecycle_gate.py` (the
-  `work_addblockedby_missing` advisory is SUPPRESSED for teachback-exempt
-  owners via `is_teachback_exempt`; the `self_completion` advisory is
-  SUPPRESSED for the secretary via `is_self_complete_exempt`)
+- Exemption predicates: `pact-plugin/hooks/shared/intentional_wait.py`
+  (`is_teachback_exempt`, `is_self_complete_exempt`; the task-lifecycle
+  gate that read them was removed in 2.1.0)
 - Secretary briefing surface: [pact-plugin/agents/pact-secretary.md](../../agents/pact-secretary.md) §At Spawn (Session Briefing)
 - Companion runbook for marker-write diagnostics:
   [662-dispatch-gate.md](662-dispatch-gate.md) — out of scope here
@@ -92,7 +92,7 @@ self-completion transition.
    the session-init system reminder is delivered.
 2. Watch the orchestrator's tool calls during bootstrap Step 2. The
    canonical sequence per the persona's Agent Teams Dispatch contract is
-   three calls (single-task, teachback-exempt — NO Task A):
+   three calls (single-task, teachback-exempt — no separate teachback task):
    1. `TaskCreate(subject="secretary: deliver session briefing", description=...)` — single work task (mission lives in `description`)
    2. `TaskUpdate(taskId, owner="secretary")` — assign to the secretary; NO `addBlockedBy` (no teachback gate)
    3. `Agent(name="secretary", team_name=<team>, subagent_type="pact-secretary", description="Spawn session secretary", prompt="YOUR PACT ROLE: teammate (secretary).\n\nYou are joining team <team>. As your FIRST action, Invoke Skill(\"repacted:teammate\") to record your identity. Then check `TaskList` for tasks assigned to you.")`
@@ -133,8 +133,8 @@ self-completion transition.
   sequence drifted to omit the prerequisite `TaskCreate` + `TaskUpdate`.
 - A SECOND task created with a `"teachback"` subject (or a `blockedBy`
   edge on the work-task): drift BACK to the superseded two-task
-  teachback-gated shape. The secretary is teachback-exempt — a Task A
-  teachback round-trip should NOT be created.
+  teachback-gated shape. The secretary is teachback-exempt — a teachback
+  round-trip should NOT be created.
 - A `dispatch_decision` event with `rule="long_inline_mission"` (any
   decision): the persona's Agent Teams Dispatch section example prompt
   exceeds 800 chars OR omits the `TaskList` reference phrase. The
@@ -182,12 +182,12 @@ NO blocking edge — the teachback-exempt single-task shape.
 
 **Failure signals**:
 
-- Two tasks on disk (a `"teachback"` Task A + a blocked work-task):
+- Two tasks on disk (a `"teachback"` task + a blocked work-task):
   persona / bootstrap.md drift BACK to the superseded two-task
   teachback-gated pattern. The secretary is teachback-exempt.
 - The work-task has a non-empty `blockedBy`: a stray teachback gate was
-  applied (`task_lifecycle_gate.work_addblockedby_missing` is suppressed
-  for the secretary, so a `blockedBy` here is an over-gating drift).
+  applied (the secretary is teachback-exempt, so a `blockedBy` here is an
+  over-gating drift).
 - Mission text in the spawn prompt instead of the work-task
   `description`: persona drifted on the "mission lives in `description`"
   convention (would also trip rule ⑨ in §1).
@@ -229,10 +229,8 @@ briefing work-task as the final act of delivering the briefing.
       — the secretary SELF-completed it (the
       `is_self_complete_exempt`-witnessed carve-out; the team-lead did
       NOT flip it).
-- [ ] No `dispatch_decision` / `task_lifecycle_gate` `self_completion`
-      advisory fired against the secretary's self-completion (the
-      advisory is suppressed for the secretary via
-      `is_self_complete_exempt`).
+- [ ] No `dispatch_decision` advisory fired against the secretary's
+      self-completion (`is_self_complete_exempt` covers the secretary).
 
 **Failure signals**:
 
@@ -308,9 +306,9 @@ Step 2. File a P1 issue and revert the offending commit. The bootstrap
 is the highest-frequency dispatch in PACT — every session start hits it
 — so a §1 regression compounds across every operator session.
 
-If §2 fails: structural shape drift (a stray teachback Task A, or a
-`blockedBy` edge). Inspect the journal for `task_lifecycle_gate`
-advisories. File a P1 issue (over-gating regression) or P2 (persona
+If §2 fails: structural shape drift (a stray teachback task, or a
+`blockedBy` edge). Inspect the journal for `dispatch_decision`
+events. File a P1 issue (over-gating regression) or P2 (persona
 drift, gate still catches it advisorily).
 
 If §3 fails (briefing missing OR task left `in_progress`): the briefing

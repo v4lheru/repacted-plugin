@@ -10,8 +10,9 @@ amend is amend_<n> keys on its in_progress tasks the relay has not handed it yet
 It never prints tool inputs or outputs: only the description an agent writes for a call,
 with secret values redacted.
 
+Agent Teams only: under subagents it refuses with one line (`repact inspect` is the status there).
 Usage: repact-status [--transcript PATH | --session ID] [--team NAME] [--until ISO]
-Exit codes: 0 printed; 2 usage error; 3 no session transcript found.
+Exit codes: 0 printed; 2 usage error or not an Agent Teams session; 3 no session transcript found.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))   # bin -> shared, the allowed direction
 from shared import transcripts as tr  # noqa: E402
+from _front.teams import teams_only  # noqa: E402
 
 EXAMPLE = "repact-status --session 5a318e14-c851-4a08-a12d-e779a43d3ec8"
 
@@ -33,6 +35,9 @@ def main(argv=None) -> int:
     parser.add_argument("--team", help="the team name (default: from the teammates' metadata)")
     parser.add_argument("--until", help="replay: read only entries at or before this ISO time")
     args = parser.parse_args(argv)
+    refused = teams_only("repact-status")
+    if refused is not None:
+        return refused
     until = tr.parse_ts(args.until) if args.until else None
     if args.until and until is None:
         parser.error(f"--until is not an ISO time: {args.until!r}")

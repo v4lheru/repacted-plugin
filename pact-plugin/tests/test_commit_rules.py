@@ -1,13 +1,12 @@
 """The commit-message rule (shared/commit_rules.py, hooks/write_checks.py commit_gate) and the mode
-reader it runs under (shared/evidence use_mode): review findings L4 (trailers, a message built
-at run time) and L5 (mode words, an unreadable checks.json)."""
+reader it runs under (shared/check_modes use_mode): trailers, a message built at run time, mode
+words and an unreadable checks.json."""
 import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
-import amendment_gate
 import write_checks
 
 PLUGIN = Path(__file__).resolve().parents[1]
@@ -15,8 +14,7 @@ _spec = importlib.util.spec_from_file_location("l4_commit_rules", PLUGIN / "hook
 rules = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(rules)
 
-ev = write_checks.load_evidence()
-from shared.evidence import ledger as _ev_ledger  # noqa: E402  (use_mode and load_constants look their names up here)
+ev = write_checks.load_evidence()      # shared.check_modes: use_mode and load_constants look their names up here
 
 # Joined at run time so this file's own commit is not returned by the rule it tests.
 ATTRIBUTION = "Co-" + "authored-by"
@@ -28,9 +26,9 @@ def gate(monkeypatch, tmp_path):
     """commit_gate under a checks.json the test writes (commit_rule mode `gate` by default)."""
     checks = tmp_path / "checks.json"
     checks.write_text(json.dumps({"modes": {"commit_rule": "gate"}}))
-    monkeypatch.setattr(_ev_ledger, "CHECKS_FILE", checks)
+    monkeypatch.setattr(ev, "CHECKS_FILE", checks)
     monkeypatch.setattr(ev, "shadow_log", lambda event: None)
-    monkeypatch.setattr(_ev_ledger, "_mode_noted", set())
+    monkeypatch.setattr(ev, "_mode_noted", set())
 
     def run(command):
         return write_checks.commit_gate({"tool_input": {"command": command}, "cwd": str(tmp_path)}, ev)[0]
@@ -102,18 +100,13 @@ def test_an_unreadable_or_malformed_file_uses_the_shipped_mode(gate, content, ca
     else:
         gate.checks.write_text(content)
     assert ev.use_mode("commit_rule") == "gate"
-    assert ev.use_mode("handoff_evidence") == "advisory"
+    assert ev.use_mode("handoff_evidence") == "gate"                  # shipped as gate
     assert ev.use_mode("commit_rule") == "gate"
     err = capsys.readouterr().err.strip().splitlines()
     assert len(err) == 2 and "shipped mode 'gate'" in err[0]           # one note per check
     assert gate(f"git commit -m 'Add x.' -m '{ATTRIBUTION}: Claude'")  # the rule still returns
 
 
-def test_amendment_gate_reads_its_mode_without_regard_to_case(gate):
-    gate.checks.write_text(json.dumps({"modes": {"amendment_gate": "Gate"}}))
-    assert amendment_gate.gate_mode(ev) == "enforce"
-    gate.checks.write_text(json.dumps({"modes": {"amendment_gate": "NOTE"}}))
-    assert amendment_gate.gate_mode(ev) == "note"
 
 
 def test_an_empty_deny_words_list_checks_no_words_and_a_missing_one_the_shipped_words(gate):
@@ -125,3 +118,32 @@ def test_an_empty_deny_words_list_checks_no_words_and_a_missing_one_the_shipped_
     gate.checks.write_text(json.dumps({"modes": {"commit_rule": "gate"},
                                        "commit_rule": {"deny_words": "scanner"}}))
     assert gate(message)                                               # malformed: shipped words
+
+
+# Moved from tests/user_layer/test_write_checks.py when the TaskUpdate checks left write_checks.
+def test_a_rule_breaking_commit_is_returned_every_time_it_is_issued(gate):
+    """The return-once rail let the same commit through on its second try."""
+    heredoc = "git commit -m \"$(cat <<'EOF'\nAdd the parser.\n\n" + ATTRIBUTION + ": Claude\nEOF\n)\""
+    for _ in range(3):
+        reason = gate(heredoc)
+        assert "AI attribution" in reason and "a body" in reason
+    assert gate("git commit -m 'Add the parser.'") is None
+
+
+@pytest.mark.parametrize("command, problem", [
+    ("git commit --amend -m 'Add the parser.' -m '" + ATTRIBUTION + ": Claude'", "AI attribution"),
+    ("git commit -F- <<'EOF'\nAdd the parser.\n\nMore text.\nEOF", None),           # stdin: unreadable, fail-open
+    ("git commit -m \"$(cat <<-EOF\n\tAdd the parser.\n\tBody line.\n\tEOF\n)\"", "a body"),
+    ("git commit -m 'Add the parser. \uff23o-Authored-By: Claude'", "AI attribution"),  # fullwidth C
+    ("git commit -m 'Add the parser co\u200b-authored-by: Claude'", "AI attribution"),  # zero-width space
+    ("git commit -m 'Skip the gu\u00adard in CI.'", "'guard'"),                        # soft hyphen
+    ("git commit -m 'Add the caf\u00e9 parser for na\u00efve dates.'", None),          # real accents pass
+    ("git commit -m 'Add the guardian angel feature.'", None),                         # a word, not the deny word
+])
+def test_commit_rule_boundary_rows(command, problem, gate):
+    reason = gate(command)
+    if problem is None:
+        assert reason is None, command
+    else:
+        assert reason and problem in reason, command
+        assert gate(command) == reason

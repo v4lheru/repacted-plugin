@@ -113,13 +113,3 @@ def test_the_bootstrap_secretary_carve_out_accepts_every_namespace(monkeypatch, 
 
 # ---------- site 6: validate_handoff's PACT-agent test ----------
 
-@pytest.mark.parametrize("agent_type, expected", [
-    ("repacted:pact-preparer", True),
-    ("PACT:pact-preparer", True),
-    ("repacted:" "custom-agent", False),
-    ("other:pact-preparer", False),
-])
-def test_validate_handoff_recognises_namespaced_pact_agents(agent_type, expected):
-    from validate_handoff import is_pact_agent
-
-    assert is_pact_agent(agent_type) is expected

@@ -21,7 +21,9 @@ Contract
   - A wrapper prefix (`nice -n 19`, `env VAR=x`, `time -p`) is seen through: the run is
     named and parsed as the runner behind it, and the wrapper's own flags are not worker flags.
   - Appends one record (source "tcount", real exit code, log path, duration_s: start to end of
-    the run, in seconds) to the run ledger
+    the run, in seconds, and tree: the content tree id of the code files before the run, which
+    the evidence check compares at acceptance, and env: PYTEST_ADDOPTS, NODE_OPTIONS and
+    PYTHONPATH when set, which change what a run selects or imports) to the run ledger
     through _repact_common.ledger_append, the writer the run-ledger hook also uses.
   - Caps a known runner at 2 workers when the command sets no worker count of its own:
     vitest and jest get `--maxWorkers=2`, `dotnet test` and `dotnet build` get `-m:2`
@@ -62,6 +64,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -72,6 +75,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 from _repact_common import (  # noqa: E402  shared harness
     DATA_DIR_MODE, data_subdir, git_context, ledger_append, utc_now_iso,
 )
+from shared.acceptance import SELECTING_ENV  # noqa: E402
+from shared.content_tree import content_tree  # noqa: E402
 from shared.runcounts import (  # noqa: E402
     MAX_FAILING_IDS, MAX_WORKERS, cap_workers, command_name, core_argv, format_tcount_line, parse_counts,
     runner_from_argv, runs_under_nice,
@@ -235,11 +240,14 @@ def verdict(counts, exit_code: int | None) -> int:
 
 
 def record_run(argv: list[str], runner: str, counts, exit_code: int | None, log_path: Path,
-               executed: list[str] | None = None, duration_s: float | None = None) -> None:
+               executed: list[str] | None = None, duration_s: float | None = None,
+               tree: str | None = None) -> None:
     """Append this run to the ledger. Attribution by name is the hook's job (see run_ledger.py).
 
-    cmd is argv, the command as typed: the evidence check tells one command's runs from
-    another's by it. executed: the argv that ran, given only when the worker cap changed it.
+    cmd is argv, the command as typed, shell-quoted (shlex.join) so a `-k "a or b"` keeps its
+    words: the evidence check tells one command's runs from another's by it. executed: the argv that ran, given only when the worker cap changed it.
+    tree: the content tree id of the code files the run saw (shared/content_tree.py).
+    env: the SELECTING_ENV variables that are set, which the evidence check reads.
     """
     cwd = os.getcwd()
     git_head, git_branch = git_context(cwd)
@@ -250,9 +258,10 @@ def record_run(argv: list[str], runner: str, counts, exit_code: int | None, log_
         **fields,
         "session_id": os.environ.get("CLAUDE_CODE_SESSION_ID"),
         "cwd": cwd, "git_head": git_head, "git_branch": git_branch,
-        "cmd": " ".join(argv), "exit_code": exit_code,
+        "cmd": shlex.join(argv), "exit_code": exit_code,
         "count_parsed": counts is not None, "source": "tcount", "log_path": str(log_path),
-        "duration_s": duration_s,
+        "duration_s": duration_s, "tree": tree,
+        "env": {name: os.environ[name] for name in SELECTING_ENV if name in os.environ} or None,
     })
 
 
@@ -284,6 +293,7 @@ def main(argv: list[str]) -> int:
     if os.environ.get("TCOUNT_NICE") == "1":
         argv, executed = ["nice", "-n", "19", *argv], ["nice", "-n", "19", *executed]
     log_path = log_path_for(runner)
+    tree = content_tree(os.getcwd())    # before the run: the files it tests, not what it writes
     started = time.monotonic()
     exit_code, output = run_to_log(executed, log_path, child_env(runner),
                                    niced=capping and not runs_under_nice(executed))
@@ -291,7 +301,7 @@ def main(argv: list[str]) -> int:
     counts = parse_counts(output, runner_hint=runner)
     for line in render(runner, counts, exit_code, log_path):
         print(line)
-    record_run(argv, runner, counts, exit_code, log_path, executed if change else None, duration_s)
+    record_run(argv, runner, counts, exit_code, log_path, executed if change else None, duration_s, tree)
     return verdict(counts, exit_code)
 
 

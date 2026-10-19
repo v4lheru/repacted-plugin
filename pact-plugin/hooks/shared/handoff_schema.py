@@ -3,11 +3,10 @@ Location: pact-plugin/hooks/shared/handoff_schema.py
 Summary: Canonical metadata.handoff schema constants and validators. SSOT for
          the canonical field order, the required/recommended split, and the
          legacy-spelling alias map used on the READ side.
-Used by: hooks/task_lifecycle_gate.py (write-time + completion-time advisories),
+Used by: hooks/shared/ops/submit.py (undisposed: the uncertainty dispositions),
          hooks/shared/session_resume.py (resume-brief decision summary),
          scripts/handoff_census.py (re-runnable journal census),
-         tests/test_handoff_schema.py (constants + both validators),
-         tests/test_handoff_key_annotation_pinned.py (canonical field names).
+         tests/test_handoff_schema.py (constants + both validators).
          This list is a HAND-MAINTAINED restatement of the import graph and
          nothing checks it, so it goes stale silently — derive the real set
          with a grep for this module's name before trusting it.
@@ -44,6 +43,8 @@ Public surface:
 - normalise_handoff(handoff) — the write-side repair handoff_ordering_gate
   applies before the write lands: (normalised copy, coercions). Only the
   mechanically safe drifts; anything else is left for the validators.
+- uncertainty_items(handoff) / undisposed(handoff) — the uncertainty items, one
+  per line, and those that open with no fixed:, known-limit: or not-applicable:.
 """
 
 from __future__ import annotations
@@ -235,3 +236,37 @@ def normalise_handoff(handoff: object) -> tuple[object, list[dict]]:
             continue
         repaired[renames.get(key, key)] = new_rev if key == "rev" else value
     return repaired, coercions
+
+
+# An uncertainty item's disposition (after an optional bullet and severity tag), and the
+# items that say there is none.
+DISPOSITION = re.compile(r"^(?:[-*\u2022]\s*)?(?:\[[a-z]+\]\s*)?(fixed|known[- ]limit|not[- ]applicable)\s*:", re.I)
+NO_UNCERTAINTY = re.compile(r"^(?:none|n/?a|no (?:areas of )?uncertaint(?:y|ies)(?: flagged)?)\W*$", re.I)
+
+
+def _flatten(value) -> list:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [f"{k}: {t}" for k, v in value.items() for t in _flatten(v)]
+    if isinstance(value, (list, tuple)):
+        return [t for v in value for t in _flatten(v)]
+    return [str(value)] if value is not None else []
+
+
+def uncertainty_items(handoff: dict) -> list:
+    """One item per element and per line of handoff.uncertainty (a dict flattens to 'k: v').
+    Every line is its own item: splitting only at bullets let 'fixed: a\\nThe cache path is
+    untested' pass as one disposed item."""
+    items = []
+    for chunk in _flatten(handoff.get("uncertainty")):
+        for piece in re.split(r"[\r\n\u0085\u2028\u2029]+", chunk):
+            text = re.sub(r"^\d+[.)]\s*", "", " ".join(piece.split()))
+            if text and not NO_UNCERTAINTY.match(text):
+                items.append(text)
+    return items
+
+
+def undisposed(handoff: dict) -> list:
+    """The uncertainty items that open with none of fixed:, known-limit:, not-applicable:."""
+    return [text for text in uncertainty_items(handoff) if not DISPOSITION.match(text)]

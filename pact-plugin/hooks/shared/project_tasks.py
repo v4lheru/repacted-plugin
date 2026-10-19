@@ -39,6 +39,7 @@ EID_RE = re.compile(r"^\d{8}T\d{9}Z-[0-9a-f]{8}$")
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")
 LIST_FIELDS = ("tags", "batch_with", "exclusive_with")
+WAIVER_KEYS = ("why", "by", "at")
 SET_FIELDS = frozenset({"title", "status", "priority", "rank", "owner", "tags", "parent", "note",
                         "batch_with", "exclusive_with"})
 OPS = frozenset({"create", "set", "dep_add", "dep_del", "link_add", "link_del", "done", "accept",
@@ -176,6 +177,15 @@ def _any_verified(items) -> bool:
     return any(item["verified"] for item in items)
 
 
+def _waiver_ok(event: dict) -> bool:
+    """An absent waiver, or {why, by, at} as three non-empty strings."""
+    if "waiver" not in event:
+        return True
+    waiver = event["waiver"]
+    return isinstance(waiver, dict) and all(
+        isinstance(waiver.get(key), str) and waiver[key].strip() for key in WAIVER_KEYS)
+
+
 def event_problem(event) -> Optional[str]:
     """Why `event` fails the schema, or None when it is well-formed."""
     if not isinstance(event, dict):
@@ -213,6 +223,8 @@ def event_problem(event) -> Optional[str]:
         if event.get("kind") not in LINK_KINDS or not isinstance(event.get("target"), str) \
                 or not event["target"]:
             return "bad link"
+    elif op in ("done", "accept") and not _waiver_ok(event):
+        return "bad waiver"
     elif op == "done":
         if not _evidence_ok(event.get("evidence")):
             return "bad evidence"
@@ -332,18 +344,23 @@ def _apply(task: dict, event: dict) -> None:
     elif op == "done":
         task["status"] = "done"
         task["evidence"].extend(event["evidence"])
+        if event.get("waiver"):
+            task["waiver"] = event["waiver"]
     elif op == "accept":
         task["accepts"].append({"ptask": event["ptask"], "rev": event["rev"],
                                 "verified": event["verified"], "ts": event["ts"]})
-        if event["verified"]:
+        if event["verified"] or event.get("waiver"):   # an attended waiver closes, and says so
             task["status"] = "done"
             task["evidence"].extend(event["evidence"])
+        if event.get("waiver"):
+            task["waiver"] = event["waiver"]
     elif op == "reject":
         task["rejects"].append({"ptask": event["ptask"], "rev": event["rev"], "ts": event["ts"]})
     elif op == "reopen":
         task["status"] = "planned" if task["status"] == "dropped" else "active"
         task["prior_evidence"].extend(task["evidence"])
         task["evidence"] = []
+        task.pop("waiver", None)
         if event.get("note"):
             task["note"] = event["note"]
     task["updated"] = event["ts"]

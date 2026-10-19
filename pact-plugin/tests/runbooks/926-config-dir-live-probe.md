@@ -51,8 +51,8 @@ mkdir -p "$CLAUDE_CONFIG_DIR"
   spawn the secretary. **OBSERVE:** the team config and tasks appear under
   `$CLAUDE_CONFIG_DIR/teams/<team>/` and `$CLAUDE_CONFIG_DIR/tasks/<team>/`
   (NOT under `~/.claude/...`). → criterion (a) substrate + (b) spawn.
-- **Step 2 — dispatch a teammate with a task.** Create a Task A/B dispatch to any
-  specialist. **OBSERVE:** the teammate is NOT blocked at dispatch (no
+- **Step 2 — dispatch a teammate with a task.** Dispatch any specialist with
+  `repact dispatch`. **OBSERVE:** the teammate is NOT blocked at dispatch (no
   "no task assigned" deny); it proceeds to teachback. → criterion (a).
 - **Step 3 — confirm agent + `@`-ref resolution.** The spawned specialist loads
   its agent body and `CLAUDE.md`. **OBSERVE:** the agent runs (agents resolved

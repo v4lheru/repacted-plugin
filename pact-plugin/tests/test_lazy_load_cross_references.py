@@ -128,7 +128,7 @@ def test_read_pointers_are_plugin_root_paths_that_resolve():
 def test_imperative_protocols_referenced_by_at_least_one_agent():
     """Each imperative protocol (PROTO targets, m4) must appear in at least one agent body."""
     imperative = [
-        "algedonic.md",
+        "stop-signals.md",
         "workflows.md",
         "recovery.md",
         "completion.md",

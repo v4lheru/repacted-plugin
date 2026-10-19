@@ -35,7 +35,6 @@ REGISTRATIONS_BEFORE = [
     ('UserPromptSubmit', None, 'hooks/bootstrap_marker_writer.py', False),
     ('UserPromptSubmit', None, 'hooks/bootstrap_prompt_gate.py', False),
     ('UserPromptSubmit', None, 'hooks/missed_wake_scan.py', False),
-    ('UserPromptSubmit', None, 'hooks/journal_emitter.py', False),
     ('SessionStart', None, 'hooks/session_init.py', False),
     ('SessionStart', None, 'hooks/missed_wake_scan.py', False),
     ('SessionStart', None, 'hooks/doctor_brief.py', False),
@@ -52,32 +51,28 @@ REGISTRATIONS_BEFORE = [
     ('PreToolUse', 'mcp__.*|WebFetch|Artifact|Bash', 'hooks/egress_guard.py', False),
     ('PreToolUse', 'Agent', 'hooks/dispatch_gate.py', False),
     ('PreToolUse', 'Edit|Write|MultiEdit|NotebookEdit', 'hooks/worktree_guard.py', False),  # rv4
-    ('PreToolUse', 'TaskUpdate', 'hooks/handoff_ordering_gate.py', False),
-    ('PreToolUse', 'Edit|Write|Bash', 'hooks/task_claim_gate.py', False),
-    ('PreToolUse', 'TaskUpdate', 'hooks/acceptance_flags.py', False),
-    ('PreToolUse', 'TaskUpdate', 'hooks/amendment_gate.py', False),
-    ('PreToolUse', 'TaskUpdate|Bash', 'hooks/write_checks.py', False),
+    ('PreToolUse', 'Bash', 'hooks/write_checks.py', False),  # TaskUpdate dropped: 2.1.0 workflow writes go through repact
+    ('PreToolUse', 'TaskUpdate|TaskCreate', 'hooks/task_write_guard.py', False),  # 2.1.0 slim-down
+    ('PreToolUse', 'Bash', 'hooks/ops_frame_guard.py', False),  # 2.1.0 slim-down
     ('PreToolUse', 'AskUserQuestion', 'hooks/unattended_gate.py', False),
     ('PreToolUse', 'AskUserQuestion', 'hooks/merge_question_gate.py', False),
-    ('SubagentStop', None, 'hooks/validate_handoff.py', False),
+    ('SubagentStop', None, 'hooks/subagent_stop.py', False),  # 2.1.0 slim-down
+    ('SubagentStop', None, 'hooks/teams_turn_end.py', False),  # 2.1.0 slim-down
     ('Stop', None, 'hooks/stop_background_gate.py', False),
     ('SubagentStart', None, 'hooks/peer_inject.py', False),
     ('SessionEnd', None, 'hooks/session_end.py', True),
     ('SessionEnd', None, 'hooks/session_ledger.py', False),
     ('SessionEnd', None, 'hooks/distill_enqueue.py', False),  # registered after the dispatcher
-    ('TaskCompleted', None, 'hooks/agent_handoff_emitter.py', False),
     ('TeammateIdle', None, 'hooks/teammate_idle.py', False),
     ('PostToolUse', 'Edit|Write|Bash', 'hooks/track_files.py', False),
-    ('PostToolUse', 'Edit|Write', 'hooks/file_tracker.py', True),
     ('PostToolUse', 'AskUserQuestion|Bash', 'hooks/merge_guard_post.py', False),
-    ('PostToolUse', 'TaskCreate|TaskUpdate', 'hooks/task_lifecycle_gate.py', False),
     ('PostToolUse', 'TaskCreate|TaskUpdate', 'hooks/task_store_probe.py', False),  # registered after the dispatcher
-    ('PostToolUse', 'Agent', 'hooks/bootstrap_marker_writer.py', False),
+    # Widened from 'Agent': under claude -p the team appears on the first TaskCreate.
+    ('PostToolUse', 'Agent|TaskCreate|TaskUpdate', 'hooks/bootstrap_marker_writer.py', False),
     ('PostToolUse', 'Bash', 'hooks/run_ledger.py', False),
-    ('PostToolUse', 'TaskCreate|TaskUpdate', 'hooks/evidence_gate.py', False),
-    ('PostToolUse', 'TaskCreate|TaskUpdate|Agent', 'hooks/journal_emitter.py', False),
     ('PostToolUse', 'Bash|Edit|Write|Read|TaskUpdate|MultiEdit|NotebookEdit', 'hooks/amendment_relay.py', False),
     ('PostToolUse', 'Bash', 'hooks/output_secret_scan.py', False),
+    ('PostToolUse', 'Edit|Write', 'hooks/file_tracker.py', True),
     ('PostToolUseFailure', 'Bash', 'hooks/run_ledger.py', False),
 ]
 
@@ -171,7 +166,7 @@ class TestRegistry:
         assert all(r[3] for r in _registrations(raw_hooks_json) if "dispatch.py" not in r[2])
 
     def test_entry_count(self, raw_hooks_json):
-        assert len(_registrations(raw_hooks_json)) == 31  # + MultiEdit|NotebookEdit (worktree_guard)
+        assert len(_registrations(raw_hooks_json)) == 29  # 2.1.0: the TaskCompleted entry and one PostToolUse task entry went with their hooks
 
     def test_timeouts_are_the_host_defaults_except_the_security_checks(self):
         own = {**registry.SECURITY_TIMEOUTS_S, "output_secret_scan": 30}
@@ -180,12 +175,14 @@ class TestRegistry:
                         else registry.DEFAULT_TIMEOUT_S)
             assert {check.timeout_s for check in checks if check.name not in own} == {expected}, event
             assert all(check.timeout_s == own[check.name] for check in checks if check.name in own)
-        # Bash: 11 checks, 4 of them security checks at their own alarms, plus the margin.
+        # Bash: 11 checks, 6 of them security checks at their own alarms, plus the margin
+        # (worktree_guard and task_write_guard are on the file and task tools only).
+        bash_security = sum(v for k, v in registry.SECURITY_TIMEOUTS_S.items()
+                            if k not in ("worktree_guard", "task_write_guard"))
         assert registry.entry_timeout("PreToolUse") == (
-            7 * registry.DEFAULT_TIMEOUT_S + sum(registry.SECURITY_TIMEOUTS_S.values())
-            + registry.ENTRY_MARGIN_S)
-        assert registry.entry_timeout("UserPromptSubmit") == (   # 4 checks: journal_emitter joined
-            4 * registry.USER_PROMPT_TIMEOUT_S + registry.ENTRY_MARGIN_S)
+            5 * registry.DEFAULT_TIMEOUT_S + bash_security + registry.ENTRY_MARGIN_S)
+        assert registry.entry_timeout("UserPromptSubmit") == (   # 3 checks since 2.1.0
+            3 * registry.USER_PROMPT_TIMEOUT_S + registry.ENTRY_MARGIN_S)
 
     def test_the_effective_view_is_what_the_registration_tests_read(self):
         assert _registrations(effective_hooks_config()) == _registrations(
@@ -424,7 +421,8 @@ DRIVER = textwrap.dedent(f"""
     spec = json.loads(sys.argv[2])
     checks = [r.Check(name=c["name"], script=c.get("script"), native=c.get("native"),
                       matcher=c.get("matcher"), timeout_s=c.get("timeout_s", 600),
-                      journals_refusals=c.get("journals", False)) for c in spec]
+                      journals_refusals=c.get("journals", False),
+                      teams_only=c.get("teams_only", False)) for c in spec]
     group = sys.argv[3] if len(sys.argv) > 3 else None
     sys.exit(dispatch.dispatch(sys.argv[1], sys.stdin.buffer.read(), checks=checks, group=group))
 """)
@@ -492,6 +490,33 @@ def _rows(tmp_path) -> list:
     for path in (tmp_path / ".claude").rglob("*.jsonl"):
         rows += [json.loads(line) for line in path.read_text("utf-8").splitlines() if line.strip()]
     return rows
+
+
+class TestExecutionMode:
+    """A Teams-only check runs only when the session runs Agent
+    Teams; the mode is shared/execution.py's."""
+
+    def test_a_teams_only_check_is_skipped_in_subagents_mode(self, run):
+        done = run("PreToolUse", ["allow_ctx"], allow_ctx={"teams_only": True})
+        assert (done.returncode, done.stdout) == (0, b"")
+
+    def test_a_teams_only_check_runs_in_teams_mode(self, run, env):
+        env.update({"REPACT_EXECUTION": "teams", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"})
+        done = run("PreToolUse", ["allow_ctx"], allow_ctx={"teams_only": True})
+        assert done.returncode == 0
+        assert json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] == "ran Bash"
+
+    def test_a_check_for_both_modes_runs_in_subagents_mode(self, run):
+        done = run("PreToolUse", ["allow_ctx"])
+        assert json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] == "ran Bash"
+
+    def test_the_registry_flags_the_teams_only_hooks_of_the_design(self):
+        flagged = {check.name for checks in registry.REGISTRY.values()
+                   for check in checks if check.teams_only}
+        assert flagged == {"missed_wake_scan", "teammate_idle", "peer_inject", "amendment_relay",
+                           "stop_background_gate", "background_test_gate", "wait_filler_gate",
+                           "bootstrap_gate", "bootstrap_prompt_gate", "bootstrap_marker_writer",
+                           "teams_turn_end"}
 
 
 class TestBoundary:

@@ -90,31 +90,26 @@ _DB_PIN_MIRRORED = (
     "editor migrates one half without the other, so the count is not the sole "
     "guard here."
 )
-_TELEGRAM = (
-    "a default-root-pinned code counterpart exists at telegram/config.py:35 "
-    "(CONFIG_DIR = Path.home() / '.claude' / 'pact-telegram'). Migrating these "
-    "would write the .env where the server never reads it."
-)
-
-# Premise pin for _TELEGRAM, which licenses 8 of the 15 allowlisted
-# occurrences - the majority - and is the only justification here without one.
-# _DB_PIN's premise is pinned by ARM2_ALLOWLIST; _DB_PIN_MIRRORED names a second
-# detector; this had neither, so a "migrate telegram too" pass would silently
-# invalidate both entries while this file stayed green.
+# Telegram's prose and code moved TOGETHER off the default root: telegram/
+# config.py resolves CONFIG_DIR from $CLAUDE_CONFIG_DIR (else ~/.claude), and
+# reference/init/telegram.md writes the .env under
+# "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pact-telegram". Neither half may move
+# alone, or the setup writes the .env where the server never reads it. This pin
+# holds both halves; it carries no allowlist entry any more.
 #
 # THIS READS telegram/config.py, WHICH CENSUS_DIRS DELIBERATELY EXCLUDES, AND
 # THAT IS CORRECT. CENSUS_DIRS is the population of the VIOLATION SCAN. A
 # premise pin is a different operation on a different file, and it reads outside
-# that population BECAUSE THAT IS WHY THE ENTRY NEEDS A PIN AT ALL - the premise
+# that population BECAUSE THAT IS WHY IT NEEDS A PIN AT ALL - the premise
 # lives where the scan does not look. Do not "tidy" this into CENSUS_DIRS.
-_TELEGRAM_PREMISE = ("telegram/config.py", 'Path.home() / ".claude" / "pact-telegram"')
+_TELEGRAM_PREMISE = ("telegram/config.py", 'os.environ.get("CLAUDE_CONFIG_DIR")')
+_TELEGRAM_PROSE = ("reference/init/telegram.md",
+                   '"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pact-telegram"')
 
 # (path, literal, count, justification). The count closes the hole in BOTH
 # directions: a new site pushes it above declared, a removed site drops it
 # below, so a stale entry reds instead of outliving its reason.
 ARM1_ALLOWLIST = [
-    ("commands/telegram-setup.md", "~/.claude/pact-telegram", 2, _TELEGRAM),
-    ("commands/telegram-setup.md", "~/.claude/pact-telegram/.env", 6, _TELEGRAM),
     # the protocol consolidation: the SSOT copy is deleted; the recovery table moved to recovery.md.
     ("protocols/recovery.md", "~/.claude/pact-memory/memory.db", 1, _DB_PIN_MIRRORED),
     # the secretary rework: the two storage-path mentions moved verbatim to the skill's long form.
@@ -255,16 +250,16 @@ def test_arm1_key_discriminates_the_tail_not_only_the_count():
     )
 
 
-def test_telegram_allowlist_premise_still_holds():
-    """8 of 15 allowlisted occurrences rest on this one line. If it moves, they
-    are unlicensed and telegram-setup.md's prose becomes a real defect."""
-    rel, needle = _TELEGRAM_PREMISE
-    text = (PLUGIN_ROOT / rel).read_text(encoding="utf-8")
-    assert needle in text, (
-        f"{rel} no longer binds its config dir to the default root, so the "
-        f"_TELEGRAM justification is false and its 8 allowlisted occurrences in "
-        f"commands/telegram-setup.md are unlicensed. Either restore the pin or "
-        f"migrate the prose AND drop those entries - see #1206."
+def test_telegram_prose_and_code_share_the_config_root():
+    """reference/init/telegram.md writes the .env under $CLAUDE_CONFIG_DIR; the server
+    must read it from the same root. If either half moves alone, the setup
+    writes a file the server never reads."""
+    missing = [rel for rel, needle in (_TELEGRAM_PREMISE, _TELEGRAM_PROSE)
+               if needle not in (PLUGIN_ROOT / rel).read_text(encoding="utf-8")]
+    assert not missing, (
+        f"{missing} no longer resolve the Telegram config dir from "
+        f"CLAUDE_CONFIG_DIR, so reference/init/telegram.md and telegram/config.py "
+        f"disagree on where the .env lives. Move both halves together."
     )
 
 

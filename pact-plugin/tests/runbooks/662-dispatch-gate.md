@@ -1,5 +1,7 @@
 # Dispatch-Gate Runbook (#662)
 
+> Since 2.1.0: `task_lifecycle_gate.py` is gone (task-file writes are checked by `hooks/task_write_guard.py`); the sections below that name it describe the 4.x hooks.
+
 Manual fresh-session counter-test methodology for the dispatch-protocol
 hardening landed in #662 (Commits 1-4). Hooks loaded in the session that
 authors them do not fire — these checks MUST run in a fresh session
@@ -25,7 +27,7 @@ inline-mission mode setting in effect, and any per-section observations.
 Implementation references:
 
 - `pact-plugin/hooks/dispatch_gate.py` — PreToolUse `matcher='Agent'`
-- `pact-plugin/hooks/task_lifecycle_gate.py` — PostToolUse `matcher='TaskCreate|TaskUpdate'`
+- `pact-plugin/hooks/task_lifecycle_gate.py` — removed in 2.1.0; `pact-plugin/hooks/task_write_guard.py` took over the task-write checks
 - `pact-plugin/hooks/bootstrap_gate.py::is_marker_set` — SHA256 marker-content verifier
 - `pact-plugin/hooks/hooks.json` — hook registration matchers
 - `pact-plugin/hooks/shared/dispatch_helpers.py` — registry + task-assigned helpers + `MARKER_SCHEMA_VERSION`
@@ -287,7 +289,7 @@ remediated in-place:
 1. Tag the affected version on GitHub as `yanked` in release notes.
 2. Bump plugin to a `4.2.1` patch that reverts:
    - `pact-plugin/hooks/dispatch_gate.py` (delete file)
-   - `pact-plugin/hooks/task_lifecycle_gate.py` (delete file)
+   - `pact-plugin/hooks/task_lifecycle_gate.py` (already removed in 2.1.0; nothing to delete)
    - `pact-plugin/hooks/shared/dispatch_helpers.py` (delete file)
    - `pact-plugin/hooks/hooks.json` (revert PreToolUse `matcher='Agent'`
      hooks list — note: `team_guard.py` was removed in #979, so a full

@@ -7,7 +7,7 @@ and inner scripts. Fail closed: a path that is missing, unreadable, built at run
 a budget raises Unreadable and the guard denies. `-` (stdin) and binary files are skipped.
 Used by hooks/egress_guard.py; stdlib only plus the sibling shell_words.
 Map, in file order: command reading and runners; per-client file options (curl, httpie,
-wget, gh/glab, scp/rsync); redirects, readers and substitution reads; upload_paths and
+wget, gh/glab, scp/rsync and cloud copies in egress_copies); redirects, readers and substitution reads; upload_paths and
 _scannable; URL targets (url_targets); file_texts.
 Doc: the design notes
 """
@@ -23,6 +23,8 @@ import sys
 from pathlib import Path
 
 import egress_code
+from egress_copies import (CLOUD_PROGRAMS, RSYNC_VALUE_FLAGS, SCP_VALUE_FLAGS, cloud_sources,
+                           copy_sources as _copy_sources, positionals as _positionals)
 from shell_words import (HEREDOC_MARK, RUNNER_COMMAND_OPTIONS, read_script, runner_prefix,
                          substitution_spans)
 from shell_words import Unreadable as ShellUnreadable
@@ -48,21 +50,11 @@ HEREDOC_WORD = HEREDOC_MARK.split("{", 1)[0]       # read_script's heredoc delim
 WGET_FILE_FLAGS = frozenset({"--post-file", "--body-file"})
 API_INPUT_FLAGS = frozenset({"--input"})
 API_FIELD_FLAGS = frozenset({"-F", "--field"})
-SCP_VALUE_FLAGS = frozenset({"-c", "-D", "-F", "-i", "-J", "-l", "-o", "-P", "-S", "-X"})
-RSYNC_VALUE_FLAGS = frozenset({
-    "-e", "-f", "-T", "-B", "-M", "--rsh", "--exclude", "--include", "--filter", "--files-from",
-    "--exclude-from", "--include-from", "--password-file", "--port", "--temp-dir", "--log-file",
-    "--backup-dir", "--partial-dir", "--compare-dest", "--copy-dest", "--link-dest", "--chmod",
-    "--chown", "--timeout", "--bwlimit", "--max-size", "--min-size", "--out-format", "--suffix",
-    "--rsync-path", "--remote-option", "--sockopts", "--address", "--usermap", "--groupmap",
-    "--info", "--debug", "--skip-compress", "--modify-window", "--contimeout", "--block-size",
-    "--max-delete", "--iconv", "--checksum-choice", "--compress-choice", "--compress-level",
-})
 SHELL_RUNNERS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish"})
 # httpie and its look-alikes (xh, xhs) read request items the same way; curlie takes both
 # curl options and httpie items.
 HTTPIE_PROGRAMS = frozenset({"http", "https", "xh", "xhs"})
-UPLOAD_CLIENTS = HTTPIE_PROGRAMS | {"curl", "curlie", "wget", "scp", "rsync"}
+UPLOAD_CLIENTS = HTTPIE_PROGRAMS | CLOUD_PROGRAMS | {"curl", "curlie", "wget", "scp", "rsync"}
 # Runner words and their options come from shell_words' one table; shells and eval are kept
 # as the program, since their script is read by inner_scripts.
 KEPT_RUNNERS = SHELL_RUNNERS | {"eval"}
@@ -450,49 +442,6 @@ def _api_files(words: list[str]) -> list[str]:
             continue
         i += 1
     return found
-
-
-def _is_remote(arg: str) -> bool:
-    """scp/rsync: [user@]host:path, host::module or a scp:// / rsync:// URL. A path that starts
-    with /, ./, ../ or ~ is local even when it holds a colon."""
-    if "://" in arg:
-        return True
-    if arg.startswith(("/", "./", "../", "~")):
-        return False
-    head = arg.split("/", 1)[0]
-    return ":" in head
-
-
-def _positionals(words: list[str], value_flags: frozenset) -> tuple[list[str], list[str]]:
-    """(positional arguments, rsync --exclude patterns) after the program word."""
-    args, excludes, i = [], [], 1
-    while i < len(words):
-        word = words[i]
-        if word == "--":
-            args += words[i + 1:]
-            break
-        if word.startswith("--") and "=" in word:
-            name, value = word.split("=", 1)
-            if name == "--exclude":
-                excludes.append(value)
-            i += 1
-        elif word in value_flags:
-            if word == "--exclude" and i + 1 < len(words):
-                excludes.append(words[i + 1])
-            i += 2
-        elif word.startswith("-") and len(word) > 1:
-            i += 1
-        else:
-            args.append(word)
-            i += 1
-    return args, excludes
-
-
-def _copy_sources(words: list[str], value_flags: frozenset) -> tuple[list[str], list[str]]:
-    args, excludes = _positionals(words, value_flags)
-    if len(args) < 2 or not _is_remote(args[-1]):
-        return [], []
-    return [arg for arg in args[:-1] if not _is_remote(arg)], excludes
 
 
 def _redirected_files(words: list[str]) -> list[str]:
@@ -955,6 +904,9 @@ def upload_paths(command: str, cwd: str, clients: frozenset, depth: int = 0,
                 sources, excludes = _copy_sources(
                     words, SCP_VALUE_FLAGS if program == "scp" else RSYNC_VALUE_FLAGS)
                 paths += sources
+        elif program in CLOUD_PROGRAMS:
+            sources, excludes = cloud_sources(words)
+            paths += sources
         paths += _redirected_files(words)
         for path, where in [(path, where) for path in paths] + cat_files:
             if path == "-":

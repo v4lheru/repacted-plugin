@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from shared.paths import is_safe_path_component
+from shared.payload_digest import stored_teachback
 from shared.task_store import TaskRef, TaskStore, is_safe_task_id, store_halted
 
 OPEN_STATUSES = ("pending", "in_progress")
@@ -292,7 +293,7 @@ def stored_state(metadata) -> str:
         if type(rev) is int and 0 < rev < _REV_MAX:
             return f"HANDOFF rev {rev} stored"
         return "HANDOFF stored"
-    if "teachback_submit" in metadata:
+    if "teachback_submit" in metadata or stored_teachback(metadata) is not None:
         return "teachback stored"
     return "nothing stored"
 

@@ -12,7 +12,7 @@ The Code-phase standards, in short form. Each section links to the full text wit
 ## Core principles
 
 1. **Single responsibility**: each function, class or module has exactly one reason to change.
-2. **DRY**: extract duplicated logic (e.g. one `validateEmail` used by create and update).
+2. **DRY**: extract duplicated logic.
 3. **KISS**: the simplest solution that works; a plain config object beats a factory-builder chain.
 4. **Defensive programming**: guard clauses first, safe property access (`?.`, `??`), clamp
    invalid values, fail with a typed error.
@@ -94,8 +94,8 @@ The LAST stdout line is always one verdict. Record it verbatim in your HANDOFF `
 
 Fix every finding in files you modified (delete the import or fix the name); never lint-fix files
 you did not touch. A deliberate side-effect import or re-export keeps a reasoned suppression:
-`# noqa: F401  # re-export: <why>`, never a bare `# noqa`. If the script is missing or errors, say so
-in the HANDOFF. How the checker ladder works: [import-hygiene-and-cli-examples](references/import-hygiene-and-cli-examples.md).
+`# noqa: F401  # re-export: <why>`, never a bare `# noqa`. If the script is missing (never search the disk
+for it) or errors, skip it and say so in the HANDOFF. How the checker ladder works: [import-hygiene-and-cli-examples](references/import-hygiene-and-cli-examples.md).
 
 ## Teaching examples for agent-facing CLIs
 

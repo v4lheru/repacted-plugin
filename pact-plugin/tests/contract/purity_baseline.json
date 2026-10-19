@@ -3,7 +3,7 @@
  "version": 1,
  "refreshes": [
   {
-   "date": "2026-10-18",
+   "date": "2026-10-19",
    "mode": "public",
    "reason": "derived for the public tree: the private rows whose shipped file still has the hit in its public text, at the public line, plus the reviewed public-only rows",
    "delta": {
@@ -16,7 +16,7 @@
     "secret/password-in-url": 6,
     "secret/password-inline": 11,
     "secret/private-key": 3,
-    "secret/secret-assignment": 63
+    "secret/secret-assignment": 62
    }
   }
  ],
@@ -267,13 +267,6 @@
    "scope": "core"
   },
   {
-   "path": "pact-plugin/tests/test_agent_memory_cap_single_source.py",
-   "line": 202,
-   "class": "secret/secret-assignment",
-   "id": "142d415f29e3c377",
-   "scope": "test"
-  },
-  {
    "path": "pact-plugin/tests/test_distill_promote.py",
    "line": 158,
    "class": "secret/password-in-url",
@@ -324,42 +317,42 @@
   },
   {
    "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 259,
+   "line": 269,
    "class": "secret/bearer-token",
    "id": "74202588a7d6ca55",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 259,
+   "line": 269,
    "class": "secret/password-inline",
    "id": "b0ec2e46b7bb94b6",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 259,
+   "line": 269,
    "class": "secret/secret-assignment",
    "id": "a8228de532a8808c",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 260,
+   "line": 270,
    "class": "secret/private-key",
    "id": "30568d6d3b0c3fc3",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_shell_decision_tables.py",
-   "line": 194,
+   "line": 177,
    "class": "secret/password-inline",
    "id": "e681fff0af6f0c2c",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_shell_decision_tables.py",
-   "line": 194,
+   "line": 177,
    "class": "secret/secret-assignment",
    "id": "8332a099e1b8755f",
    "scope": "test"

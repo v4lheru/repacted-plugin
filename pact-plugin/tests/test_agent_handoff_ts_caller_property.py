@@ -10,8 +10,8 @@ WHY THAT IS A CALLER PROPERTY AND NOT A SCHEMA PROPERTY, WHICH IS THE WHOLE
 CAUSE FOR THIS FILE. `session_journal.make_event` stamps its own timestamp
 through `setdefault("ts", ...)`, so A CALLER-SUPPLIED `ts` IS PRESERVED. The
 schema does not reject one and nothing warns. The one-format property
-thus belongs to the CALLERS, and it holds today only because neither
-`agent_handoff` emit path passes a `ts` of its own.
+thus belongs to the CALLERS, and it holds today only because the one
+`agent_handoff` emit path (`repact accept`) passes no `ts` of its own.
 
 THE FAILURE IS SILENT AND IT RUNS IN EITHER DIRECTION. `make_event` stamps a
 Z-suffix form and `canonical_since()` emits an offset form. MEASURED:
@@ -47,19 +47,21 @@ import pytest
 
 _HOOKS_DIR = Path(__file__).resolve().parents[1] / "hooks"
 
-# The two agent_handoff emit paths. Named rather than derived: this is a
-# claim ABOUT these two files, so discovering them from the property this file
-# tests would make the assertion agree with whatever it found.
+# The agent_handoff emit path: `repact accept` journals the accepted HANDOFF through
+# sides.journal, which hands its fields to make_event. Named rather than derived: this is a
+# claim ABOUT this file, so discovering it from the property this file tests would make the
+# assertion agree with whatever it found.
 EMIT_PATHS = (
-    _HOOKS_DIR / "agent_handoff_emitter.py",
-    _HOOKS_DIR / "task_lifecycle_gate.py",
+    _HOOKS_DIR / "shared" / "ops" / "accept.py",
 )
+_EMIT_CALLS = ("make_event", "journal")
 
 EVENT_TYPE = "agent_handoff"
 
 
 def _agent_handoff_make_event_calls(source_path: Path) -> list:
-    """Every `make_event("agent_handoff", ...)` call in one module."""
+    """Every `make_event("agent_handoff", ...)` or `sides.journal(ctx, "agent_handoff", ...)` call
+    in one module."""
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     calls = []
     for node in ast.walk(tree):
@@ -67,11 +69,9 @@ def _agent_handoff_make_event_calls(source_path: Path) -> list:
             continue
         func = node.func
         name = getattr(func, "id", None) or getattr(func, "attr", None)
-        if name != "make_event":
+        if name not in _EMIT_CALLS:
             continue
-        if not node.args or not isinstance(node.args[0], ast.Constant):
-            continue
-        if node.args[0].value == EVENT_TYPE:
+        if any(isinstance(arg, ast.Constant) and arg.value == EVENT_TYPE for arg in node.args[:2]):
             calls.append(node)
     return calls
 
@@ -98,10 +98,10 @@ class TestNeitherEmitPathSuppliesATimestamp:
         """🔴 A 'none of them passes ts' ASSERTION PASSES FOR FREE ON ZERO
         CALLS, so the population is pinned here.
 
-        A rename of `make_event`, a move of either emit site, or a change to
+        A rename of `make_event` or `journal`, a move of the emit site, or a change to
         the event-type literal would empty the scan, and the arm above would
         report green about a set it could not find. This arm fails,
-        and it names the count so a THIRD emit path arriving is visible too.
+        and it names the count so a SECOND emit path arriving is visible too.
         """
         found = {
             path.name: len(_agent_handoff_make_event_calls(path))
@@ -111,10 +111,10 @@ class TestNeitherEmitPathSuppliesATimestamp:
             f"an emit path carries NO {EVENT_TYPE} make_event call, so the "
             f"arm above scanned nothing and passed for free. Counts: {found}"
         )
-        assert sum(found.values()) == 2, (
-            f"the {EVENT_TYPE} emit population is not two calls at this time. A "
-            f"third emit path must be added to EMIT_PATHS and to the prose "
-            f"that names the two. Counts: {found}"
+        assert sum(found.values()) == 1, (
+            f"the {EVENT_TYPE} emit population is not one call at this time. A "
+            f"second emit path must be added to EMIT_PATHS and to the prose "
+            f"that names the one. Counts: {found}"
         )
 
 

@@ -3,6 +3,8 @@
 > **Purpose**: a skill pack (a Claude Code plugin installed beside repacted) tells recall which tool calls should point the agent at its skills.
 >
 > **Usage**: put one or more `*.json` files in a `recall.d/` folder at the root of your plugin. Run `repact-doctor`: its `skill packs` line counts your triggers, or names every fragment it skipped and why.
+>
+> **Status**: recall runs in shadow mode in this release. It reads your triggers and records which skill it would have pointed the agent at, but it does not show the pointer to the agent yet. Fragments you write now keep working when delivery is turned on.
 
 ---
 
@@ -25,7 +27,7 @@
 }
 ```
 
-The plugin must also ship `skills/acme-deploy/SKILL.md`. When a Bash command matches, recall points the agent at `Skill(acme:acme-deploy)`.
+The plugin must also ship `skills/acme-deploy/SKILL.md`. When a Bash command matches, recall records `Skill(acme:acme-deploy)` as the skill to point the agent at (shadow mode, see Status above).
 
 ## The fields
 

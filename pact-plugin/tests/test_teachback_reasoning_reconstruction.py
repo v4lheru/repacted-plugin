@@ -10,7 +10,6 @@ extension. Coverage:
   - Variety trigger: constants imported from variety_scorer.py (NOT literals)
   - Variety None-default: treated as ROUTE_ORCHESTRATE band (Recommended)
   - Exemption: TEACHBACK_EXEMPT_AGENT_TYPES bypass also bypasses reasoning_reconstruction
-  - Ordering invariant: Step 1->2->3 unchanged by 5-field shape (regression pin)
   - Backward-compat: 4-field shape (without reasoning_reconstruction) validates
   - Internal consistency: lead-side check accepts well-formed triangle;
     rejects partial / empty.
@@ -299,31 +298,6 @@ class TestExemption:
             assert agent_type not in TEACHBACK_EXEMPT_AGENT_TYPES
 
 
-class TestOrderingInvariantRegression:
-    """Pin the structural ordering invariant against the 5-field shape."""
-
-    SKILL_FILE = Path(__file__).parent.parent / "skills" / "teammate" / "references" / "teammate-teachback.md"
-
-    def test_step_ordering_unchanged_by_5_field_shape(self):
-        """The Step 1 -> Step 2 -> Step 3 ordering prose in
-        the teammate teachback reference is field-count-agnostic. Adding a nested
-        sub-object inside the Step 1 JSON payload MUST NOT introduce a
-        second metadata write, a re-ordered step sequence, or a second
-        "Ordering invariant" phrase anchor. See architect §5.2.
-
-        This pin co-defends EXPECTED_COUNTS in test_skills_structure.py.
-        """
-        text = self.SKILL_FILE.read_text(encoding="utf-8")
-        # Phrase count is exactly 1 (matches test_skills_structure.py
-        # EXPECTED_COUNTS pin).
-        assert text.count("Ordering invariant") == 1
-        # The three step markers appear in order.
-        idx_step1 = text.index("**Step 1 ")
-        idx_step2 = text.index("**Step 2 ")
-        idx_step3 = text.index("**Step 3 ")
-        assert idx_step1 < idx_step2 < idx_step3
-
-
 class TestBackwardCompat:
     """4-field shape (no reasoning_reconstruction) continues to validate."""
 
@@ -334,20 +308,6 @@ class TestBackwardCompat:
                 _payload(), dispatching_variety_score=score
             )
             assert verdict == "accept", f"4-field payload rejected at variety {score}"
-
-    def test_existing_test_skills_structure_expected_counts_unchanged(self):
-        """The EXPECTED_COUNTS pin (1 for pact-teachback, 3 for
-        pact-agent-teams) is documented as architect §4.3 no-touch.
-        Read it via the live test module and assert the values stay
-        unchanged. If a future PR shifts these, this test fails first
-        and surfaces the violation explicitly.
-        """
-        from test_skills_structure import TestOrderingInvariantPhraseCount
-
-        counts = TestOrderingInvariantPhraseCount.EXPECTED_COUNTS
-        # TEAMMATE (m6): the sites moved into skills/teammate (1 inline + 3 references).
-        assert counts["teammate/references/teammate-teachback.md"] == 1
-        assert sum(counts.values()) == 4
 
 
 class TestLeadSideConsistencyCheck:

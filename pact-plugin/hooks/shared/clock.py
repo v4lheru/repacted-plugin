@@ -2,7 +2,7 @@
 Location: pact-plugin/hooks/shared/clock.py
 Summary: The one UTC clock reading for records: utc_now (aware datetime) and utc_now_iso
          (seconds precision, +00:00). A leaf: stdlib only.
-Used by: shared/ledger.py, bin/repact-amend, bin/repact-unattended, shared/evidence/*, bin/_doctor.py,
+Used by: shared/ledger.py, bin/repact-unattended, shared/check_modes.py, bin/_doctor.py,
          shared/background_work.py.
 Map (file order): utc_now, utc_now_iso.
 """

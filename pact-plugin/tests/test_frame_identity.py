@@ -19,8 +19,6 @@ import pytest
 
 import dispatch
 import docker_lock_gate
-import handoff_ordering_gate
-import task_lifecycle_gate as tlg
 from shared import frame, session_registry
 from shared.task_utils import update_task_file
 
@@ -107,30 +105,6 @@ def test_dispatch_opens_the_memo_under_the_same_name():
     assert dispatch.FRAME_MEMO == frame.MEMO_MODULE
 
 
-def test_one_dispatcher_run_resolves_the_task_team_once(world, monkeypatch, capsys):
-    """D6: acceptance_flags and amendment_gate read one memoised team per run, though
-    each check re-imports shared.frame (the dispatcher drops it between checks)."""
-    import amendment_gate
-    import dispatch_registry
-
-    _evidence = amendment_gate.load_evidence()
-
-    calls = []
-    monkeypatch.setattr(_evidence, "resolve_team",
-                        lambda session, task_id: calls.append((session, task_id)) or TEAM)
-    monkeypatch.delitem(sys.modules, "shared.frame", raising=False)
-    seed(world, "9", status="in_progress", owner=MEMBER)
-    checks = [c for c in dispatch_registry.checks_for("PreToolUse")
-              if c.name in ("acceptance_flags", "amendment_gate")]
-    assert len(checks) == 2
-    raw = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "TaskUpdate",
-                      "session_id": LEAD_SID, "tool_input": {
-                          "taskId": "9", "status": "completed",
-                          "metadata": {"handoff": {"rev": 1}}}}).encode()
-    dispatch.dispatch("PreToolUse", raw, checks=checks)
-    capsys.readouterr()
-    assert calls == [(LEAD_SID, "9")]
-    assert frame.MEMO_MODULE not in sys.modules
 
 
 # --- aud-bugs 6: self-completion for an in-process teammate ---------------------------------
@@ -142,29 +116,8 @@ def _complete(owner_type, agent_id, task_id="9"):
                                        "metadata": {}}}}
 
 
-def test_in_process_teammate_self_completion_is_disputed(world):
-    seed(world, "9", subject="work", owner=MEMBER, status="completed", metadata={})
-    advisories = tlg.evaluate_lifecycle(_complete(MEMBER, f"a{MEMBER}-{HEX}"))
-    assert any(rule == "self_completion" for rule, _ in advisories)
-    assert on_disk(world, "9")["metadata"]["completion_disputed"] is True
 
 
-@pytest.mark.parametrize("agent_type, agent_id", [
-    (MEMBER, f"a{HEX}"),                     # an Agent-tool subagent id
-    (MEMBER, f"aauditor-{HEX}"),             # an id built from another member's name
-    (MEMBER, f"a{MEMBER}-{HEX.upper()}"),    # not the harness shape
-    (MEMBER, f"a{MEMBER}-{HEX}0"),
-    ("stranger", f"astranger-{HEX}"),        # not a member
-    (MEMBER, None),
-])
-def test_self_completion_actor_needs_the_exact_in_process_shape(world, agent_type, agent_id):
-    """A frame off the harness shape names nobody: it is disputed as unknown (least
-    privileged, shared/actor.py), never attributed to the member it resembles."""
-    seed(world, "9", subject="work", owner=MEMBER, status="completed", metadata={})
-    advisories = dict(tlg.evaluate_lifecycle(_complete(agent_type, agent_id)))
-    assert "cannot name (unknown)" in advisories["self_completion"]
-    assert repr(MEMBER) not in advisories["self_completion"]
-    assert on_disk(world, "9")["metadata"]["completion_disputed"] is True
 
 
 # --- aud-bugs 7: a lead without agent_type keeps the auditor's verdict ------------------------
@@ -175,25 +128,8 @@ def _audit_write(**frame_fields):
             "tool_response": {"task": {"id": "5"}}}
 
 
-def test_lead_without_agent_type_does_not_overwrite_the_authored_verdict(world):
-    seed(world, "5", subject="audit", owner="auditor", status="in_progress",
-         metadata={"audit_summary": "GREEN", "audit_summary_authored": "RED: missing test"})
-    tlg.evaluate_lifecycle(_audit_write(session_id=LEAD_SID))
-    meta = on_disk(world, "5")["metadata"]
-    assert meta["audit_summary_authored"] == "RED: missing test"
-    assert meta["lead_close_note"] == "GREEN"
 
 
-@pytest.mark.parametrize("frame_fields", [
-    {"session_id": OTHER_SID},                       # tmux teammate: no agent_type, own session
-    {"agent_type": "auditor", "session_id": LEAD_SID},  # in-process teammate
-])
-def test_a_teammate_write_still_mirrors(world, frame_fields):
-    seed(world, "5", subject="audit", owner="auditor", status="in_progress",
-         metadata={"audit_summary_authored": "RED: old"})
-    tlg.evaluate_lifecycle(_audit_write(**frame_fields))
-    meta = on_disk(world, "5")["metadata"]
-    assert meta["audit_summary_authored"] == "GREEN" and "lead_close_note" not in meta
 
 
 # --- aud-bugs 19: the HANDOFF line and the bridge for a lead without agent_type ---------------
@@ -203,27 +139,8 @@ def _completion(**frame_fields):
             "tool_input": {"taskId": "42", "status": "completed"}}
 
 
-def test_handoff_line_reaches_a_lead_without_agent_type(world):
-    seed(world, "42", subject="devops: CODE it", owner="devops", status="completed", metadata={})
-    assert "NO HANDOFF ON DISK for #42" in (
-        handoff_ordering_gate._handoff_disk_line(_completion(session_id=LEAD_SID)) or "")
-    assert handoff_ordering_gate._handoff_disk_line(_completion(session_id=OTHER_SID)) is None
 
 
-def test_bridge_is_told_a_lead_without_agent_type_is_the_lead(world, monkeypatch):
-    import evidence_gate
-
-    seen = []
-
-    class Bridge:
-        @staticmethod
-        def handle(payload, lead):
-            seen.append(lead)
-
-    monkeypatch.setattr(evidence_gate, "_load_bridge", lambda: Bridge)
-    evidence_gate.bridge_step(_completion(session_id=LEAD_SID))
-    evidence_gate.bridge_step(_completion(session_id=OTHER_SID))
-    assert seen == [True, False]
 
 
 # --- aud-bugs 8: the docker lock names a separate-process teammate ----------------------------

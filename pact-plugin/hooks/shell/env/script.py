@@ -5,12 +5,13 @@ Summary: env-get normalisation and the script reader: expansions, substitutions,
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: json_literal, _QUOTED_ENV_GET, _ASSIGNMENT, _env_get_variables, normalize_env_get, SHELLS, _BODY_RUNNERS, _INTERPRETER, _SCRIPT_OPTIONS, _STRING_LITERAL, _SCRIPT_PRINTS, _SCRIPT_RUNS, _SUBSTITUTION, _SUB_MARK, _SUB_KEY, _BODY, _BODY_KEY, _HEREDOC_OPERATOR, _State, _read, _script_prints_file, _STDIN_PRINTERS, _FD_COPY, _STDOUT_TO_FILE, _STDOUT_SHOWN, _heredoc_expansions, _pull_substitutions, _REDIRECT_IN, _REDIRECTS, _OPERATOR_PART, _REDIRECT_FD, _Step, _command_steps, _simple_commands, _LEADING_ASSIGNMENT, _RESPELLED, _VARIABLE_USE, _WORD_SAFE, _DYNAMIC_SETTERS, _computed, _sets_variables_unseen, _expand_line, _spell_rounds, _expand_once, _literal_rounds, expand_literal_variables, _IGNORE_WRITE, _UNSEEN_IGNORE.
+Map: json_literal, _QUOTED_ENV_GET, _ASSIGNMENT, _env_get_variables, normalize_env_get, SHELLS, _BODY_RUNNERS, _INTERPRETER, _SCRIPT_OPTIONS, _STRING_LITERAL, _SCRIPT_PRINTS, _SCRIPT_RUNS, _SUBSTITUTION, _SUB_MARK, _SUB_KEY, _BODY, _BODY_KEY, _HEREDOC_OPERATOR, _State, _read, _script_prints_file, _STDIN_PRINTERS, _FD_COPY, _STDOUT_TO_FILE, _STDOUT_SHOWN, _heredoc_expansions, _sub_program, _pull_substitutions, _REDIRECT_IN, _REDIRECTS, _OPERATOR_PART, _REDIRECT_FD, _Step, _command_steps, _simple_commands, _LEADING_ASSIGNMENT, _RESPELLED, _VARIABLE_USE, _WORD_SAFE, _DYNAMIC_SETTERS, _computed, _sets_variables_unseen, _expand_line, _spell_rounds, _expand_once, _literal_rounds, expand_literal_variables, LOOP_WORDS, _LOOP_WORD, _OPERATORS, _KEEPS_COMMAND, _OPENS, _CLOSES, HOOK_PATHS, _loops, _loop_header, loop_bindings, bind_names, _IGNORE_WRITE, _UNSEEN_IGNORE.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from shell.words import HEREDOC_MARK
@@ -18,6 +19,7 @@ from shell.words import read_script
 from shell.words import segments
 from shell.words import strip_prefix
 from shell.words import substitution_spans
+from shell.words import token_spans as shell_token_spans
 from shell.words import tokens as shell_tokens
 from shell.inline_code import INTERPRETER as _INTERPRETER, SCRIPT_OPTIONS as _SCRIPT_OPTIONS  # noqa: F401  # re-export
 from shell.env.names import (token_protected)
@@ -170,6 +172,21 @@ def _heredoc_expansions(line: str, start: int, end: int, text: str) -> list[str]
     if _STDOUT_SHOWN.search(line) or program in _STDIN_PRINTERS and (piped or not to_file):
         return ["echo " + " ".join(spans + re.findall(r"\$\{?[A-Za-z_]\w*\}?", text))]
     return [": " + " ".join(spans)] if spans else []
+
+
+def _sub_program(word: str, state: _State) -> str | None:
+    """The program a program word made of one substitution names, when its command only
+    spells a name: $(echo grep), $(which python3), $(command -v rg). None otherwise."""
+    keys = _SUB_KEY.findall(word)
+    if len(keys) != 1 or keys[0] != word or keys[0] not in state.subs:
+        return None
+    steps = _command_steps(state.subs[keys[0]])[0]
+    words = strip_prefix(steps[0].words) if len(steps) == 1 else []
+    if words[:1] in (["echo"], ["printf"], ["which"]) and len(words) == 2 \
+            or words[:2] in (["command", "-v"], ["type", "-P"]) and len(words) == 3:
+        name = words[-1].rsplit("/", 1)[-1]
+        return name if re.fullmatch(r"[\w.+-]+", name) else None
+    return None
 
 
 def _pull_substitutions(command: str, state: _State) -> str:
@@ -379,6 +396,106 @@ def expand_literal_variables(command: str) -> str:
     modifiers); any command with eval, source, IFS or another dynamic setter. Runs to a fixed
     point, so `A=/x; B="$A/y"; cd "$B"` resolves. `command` has been through read_script."""
     return _literal_rounds(command)[0]
+
+
+# ── loop words and the hook's own paths ──────────────────────────────
+# `for W in a b; do BODY; done` over plain words runs BODY once per word, so the command is
+# judged once per binding with $W spelled as the word inside BODY only. Up to LOOP_WORDS
+# bindings in all (one loop of 16 words, or two nested loops of 4 and 4).
+LOOP_WORDS = 16
+_LOOP_WORD = re.compile(r"[A-Za-z0-9_./+:@%,-]+")      # ASCII only: no lookalike is bound
+_OPERATORS = "();<>|&\n"
+_KEEPS_COMMAND = frozenset({"do", "then", "else", "elif", "{", "!", "time"})
+_OPENS = frozenset({"for", "while", "until", "select", "if", "case"})
+_CLOSES = frozenset({"done", "fi", "esac"})
+# Paths the hook's environment holds and the Bash tool's shell shares ($PWD moves with cd:
+# the search-root rule spells it per directory).
+HOOK_PATHS = ("HOME", "CLAUDE_PROJECT_DIR", "CLAUDE_CONFIG_DIR")
+
+
+def _loops(command: str) -> list[list]:
+    """[NAME, words, body start, body end] for each `for NAME in WORDS; do ... done` whose
+    `for`, `do` and `done` stand in command position, by offsets into `command`; the words
+    are as typed and the end is None when no matching `done` was found."""
+    spans = shell_token_spans(command, _OPERATORS) or []
+    found, open_loops, at_command, i = [], [], True, 0
+    while i < len(spans):
+        typed = command[spans[i][0]:spans[i][1]]
+        if all(char in _OPERATORS for char in typed):
+            at_command, i = True, i + 1
+            continue
+        keyword = typed if at_command else ""
+        at_command = keyword in _KEEPS_COMMAND
+        if keyword in _CLOSES and open_loops:
+            loop = open_loops.pop()
+            if loop is not None:
+                loop[3] = spans[i][0]
+        elif keyword in _OPENS:
+            loop, i = _loop_header(command, spans, i) if keyword == "for" else (None, i)
+            if loop is not None:
+                found.append(loop)
+                at_command = True
+            open_loops.append(loop)
+        i += 1
+    return found
+
+
+def _loop_header(command: str, spans: list, i: int) -> tuple:
+    """([NAME, words, body start, None], index of `do`) for the loop header at spans[i], or
+    (None, i) when it is not `for NAME in words` ended by `;` or a newline, then `do`."""
+    typed = [command[start:end] for start, end, _ in spans[i:i + LOOP_WORDS + 6]]
+    if len(typed) < 4 or not re.fullmatch(r"[A-Za-z_]\w*", typed[1]) or typed[2] != "in":
+        return None, i
+    end = next((k for k in range(3, len(typed)) if all(c in _OPERATORS for c in typed[k])), 0)
+    do = end
+    while 0 < do < len(typed) and typed[do] and not typed[do].strip(";\n"):
+        do += 1                                     # `;`, newlines, or both, then `do`
+    if not end or do == end or do >= len(typed) or typed[do] != "do":
+        return None, i
+    return [typed[1], typed[3:end], spans[i + do][1], None], i + do
+
+
+def loop_bindings(command: str) -> list[list[tuple[str, str]]]:
+    """Each way the loops of `command` bind their names, as [(NAME, word), ...]: [[]] when
+    none is bound. A loop is bound only when every word is plain ASCII path text, its
+    `done` was found, and the command spells NAME nowhere else (assigned, read, a second
+    loop, ${NAME:-x}) and sets no name unseen (eval, source, declare, IFS)."""
+    if "for" not in command or _sets_variables_unseen(command):
+        return [[]]
+    usable = [(name, words) for name, words, _, end in _loops(command)
+              if end is not None and words and all(_LOOP_WORD.fullmatch(w) for w in words)
+              and len(re.findall(_RESPELLED.format(name=re.escape(name)), command)) == 1]
+    if not usable:
+        return [[]]
+    bindings = [[]]
+    for name, words in usable:
+        bindings = [binding + [(name, word)] for binding in bindings for word in words]
+        if len(bindings) > LOOP_WORDS:
+            return [[]]
+    return bindings
+
+
+def bind_names(command: str, binding: list[tuple[str, str]]) -> str:
+    """`command` with each loop's $NAME spelled as its bound word inside that loop's body,
+    and $HOME, $CLAUDE_PROJECT_DIR and $CLAUDE_CONFIG_DIR as the hook's own values where the
+    command never spells the name itself (see _expand_line for the quoting kept)."""
+    for name, word in binding:
+        loop = next((loop for loop in _loops(command) if loop[0] == name), None)
+        if loop is None or loop[3] is None:
+            continue
+        body = _expand_line(command[loop[2]:loop[3]], {name: word}, "")[0]
+        command = command[:loop[2]] + body + command[loop[3]:]
+    names = {name: os.environ[name] for name in HOOK_PATHS
+             if os.path.isabs(os.environ.get(name, "")) and name in command
+             and not re.search(r"[\"'\\$`\n]", os.environ[name])
+             and not re.search(_RESPELLED.format(name=name), command)}
+    if not names or _sets_variables_unseen(command):
+        return command
+    out, quote = [], ""
+    for line in command.split("\n"):
+        expanded, quote = _expand_line(line, names, quote)
+        out.append(expanded)
+    return "\n".join(out)
 
 
 _IGNORE_WRITE = re.compile(r""">>?\s*["']?[^\s;&|]*(?:\.gitignore|info/exclude)""")

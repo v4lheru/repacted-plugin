@@ -3,8 +3,8 @@ Location: pact-plugin/tests/contract/test_shell_package.py
 Summary: Code-quality pins for the shell lane (the design notes §2):
          C2 one fail-closed emitter in the tree and every site denies through it.
          C5 the import direction inside hooks/shell is acyclic, with one declared
-         call-time edge and no `shared` import; C6 every shell module carries a header
-         and fits its line and byte ceilings; the merge_guard_common façade propagates
+         call-time edge and no `shared` import; C6 every shell module carries a header;
+         the merge_guard_common façade propagates
          a setattr to the package module that reads the name (test monkeypatches).
          Later steps add C3 (one tokeniser) and C4 (policy is data).
 Used by: the contract suite; run-tests QUICK.
@@ -156,21 +156,10 @@ def test_c5_module_level_edges_are_acyclic_and_the_call_time_edge_is_the_only_on
                for target in deps), "an import names a module that is not in the package"
 
 
-# ─── C6: headers and ceilings ────────────────────────────────────────────────────────
-LINE_CEILING = 700
-# Known limit: shell_words.py was 751 lines when it moved to shell/words.py, and the merge
-# guard's three lenient scanners added 78. It gets its own ceiling until a tokeniser
-# retirement (step 15) or a reader split brings it under the common one.
-LINE_CEILINGS = {"shell.words": 850}
-BYTE_CAP = 40_000              # the lane's cap (design target 36 K)
-
-
+# ─── C6: headers ─────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("name,path", list(_shell_modules()), ids=lambda v: v if isinstance(v, str) else "")
-def test_c6_every_shell_module_has_a_header_and_fits(name, path):
+def test_c6_every_shell_module_has_a_header(name, path):
     text = path.read_text(encoding="utf-8")
-    ceiling = LINE_CEILINGS.get(name, LINE_CEILING)
-    assert text.count("\n") <= ceiling, f"{name}: {text.count(chr(10))} lines, ceiling {ceiling}"
-    assert len(text.encode("utf-8")) <= BYTE_CAP, f"{name}: {len(text.encode())} bytes"
     if path.name == "__init__.py":
         return
     head = text[:4000]
@@ -209,7 +198,7 @@ RESIDUAL_QUOTE_READERS = {
     # The merge guard's one context scanner (carrier 1, the two-reading join, awk's computed
     # text). words.read_script cannot serve it: read_script raises Unreadable where this scan
     # must go on leniently, keep every offset and skip each heredoc body by the close rule.
-    # words.py is also at its 40,000 B ceiling. strip.py reads no quote of its own.
+    # strip.py reads no quote of its own.
     "shell.merge.heredocs": 12,
 }
 

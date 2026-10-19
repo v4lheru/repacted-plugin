@@ -18,17 +18,13 @@ title, two writers at once. Everything runs in temp dirs through the World of th
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from project_tasks_support import GIT_ENV, PLUGIN_ROOT, load, run_cli
-from test_project_tasks_bridge import SID, TASK_B, TEAM, World, lead_accepts, run_hook
+from project_tasks_support import PLUGIN_ROOT, load, run_cli
+from test_project_tasks_bridge import TASK_B, TEAM, World, lead_accepts, run_hook
 
-GATE = PLUGIN_ROOT / "hooks" / "amendment_gate.py"
 RULES = PLUGIN_ROOT / "hooks" / "shared" / "ref_dispositions.py"
 PTASK = f"{TEAM}/{TASK_B}"
 
@@ -41,25 +37,6 @@ def world(tmp_path, monkeypatch):
 def cli(world, *args):
     """repact-task in the world's repo, with the world's plugin data (the run ledger)."""
     return run_cli(world.repo, *args, env={"CLAUDE_PLUGIN_DATA": str(world.data)})
-
-
-def gate_write(world, handoff, task_id=TASK_B, cwd=None):
-    """A teammate's HANDOFF write through the real PreToolUse gate."""
-    payload = {"tool_name": "TaskUpdate", "session_id": SID, "cwd": str(world.repo) if cwd is None else cwd,
-               "agent_type": "coder", "agent_id": "a0123456789abcdef",
-               "tool_input": {"taskId": task_id, "metadata": {"handoff": handoff}}}
-    return subprocess.run([sys.executable, str(GATE)], input=json.dumps(payload), capture_output=True,
-                          text=True, env={**os.environ, **GIT_ENV}, timeout=60)
-
-
-def denied(result) -> bool:
-    out = json.loads(result.stdout) if result.stdout.strip() else {}
-    return result.returncode == 2 and out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-
-
-def note_of(result) -> str:
-    out = json.loads(result.stdout) if result.stdout.strip() else {}
-    return out.get("hookSpecificOutput", {}).get("additionalContext") or ""
 
 
 HANDOFF = {"rev": 1, "amendments": {}, "produced": ["x"], "decisions": [], "uncertainty": [],
@@ -125,65 +102,12 @@ class TestMultiRefAcceptance:
 
 
 # ---------------------------------------------------------------------------------------------
-# 2. the HANDOFF gate on carried refs
+# 2. the disposition grammar of carried refs
 # ---------------------------------------------------------------------------------------------
 
 class TestRefGate:
-    def test_a_handoff_without_dispositions_for_a_carried_ref_is_returned(self, world):
-        world.store.start(world.ref, ptask=PTASK)
-        world.task(status="in_progress")
-        result = gate_write(world, HANDOFF)
-        assert denied(result)
-        reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
-        assert f"{world.ref}: Build the acceptance bridge" in reason
-        assert "handoff.refs" in reason and "NOT STORED" in reason
-
-    def test_a_handoff_that_disposes_of_each_carried_ref_passes(self, world):
-        world.store.start(world.ref, ptask=PTASK)
-        world.task(status="in_progress")
-        result = gate_write(world, {**HANDOFF, "refs": {world.ref: "done: commit abc1234"}})
-        assert result.returncode == 0 and not denied(result)
-
-    def test_a_malformed_disposition_is_named_and_returned(self, world):
-        world.store.start(world.ref, ptask=PTASK)
-        world.task(status="in_progress")
-        result = gate_write(world, {**HANDOFF, "refs": {world.ref: "finished", "T-zz": "done"}})
-        assert denied(result)
-        reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "not a disposition" in reason and world.ref in reason
-
-    def test_a_ref_only_named_in_the_task_text_is_a_note_not_a_return(self, world):
-        body = world.task(status="in_progress")
-        body["description"] = f"Your scope: {world.ref} and the plan section."
-        (world.home / "tasks" / TEAM / f"{TASK_B}.json").write_text(json.dumps(body))
-        result = gate_write(world, HANDOFF)
-        assert result.returncode == 0 and not denied(result)
-        assert world.ref in note_of(result) and "not disposed of in handoff.refs" in note_of(result)
-
-    def test_metadata_refs_count_even_without_a_task_log(self, world, tmp_path):
-        """The machine-readable carrier is the metadata too: a lead that writes refs at dispatch
-        gets the gate even where the repo keeps no log."""
-        plain = tmp_path / "plain"
-        plain.mkdir()
-        world.task(status="in_progress", refs=["T-0123abcd"])
-        result = gate_write(world, HANDOFF, cwd=str(plain))
-        assert denied(result) and "T-0123abcd" in result.stdout
-
-    def test_a_missing_team_task_file_allows_the_write(self, world):
-        world.store.start(world.ref, ptask=PTASK)
-        result = gate_write(world, HANDOFF)
-        assert result.returncode == 0 and not denied(result)
-
-    def test_the_shipped_mode_is_enforce_and_an_absent_key_reads_as_enforce(self):
-        gate = load("amendment_gate_under_test", GATE)
-        constants = json.loads((PLUGIN_ROOT / "bin" / "checks.json").read_text())
-        assert constants["modes"]["ref_dispositions"] == "enforce"
-
-        class Ev:
-            @staticmethod
-            def load_constants():
-                return {"modes": {}}
-        assert gate.ref_mode(Ev) == "enforce"
+    """The HANDOFF check on carried refs moved into `repact submit` in 2.1.0 (shared/ops/submit.py);
+    tests/test_ops_flow.py proves it there. The grammar it reads stays here."""
 
     def test_the_disposition_grammar(self):
         rules = load("ref_dispositions_under_test", RULES)

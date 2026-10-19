@@ -88,7 +88,7 @@ def _restore_gate_modules():
     yield
     for name in (INLINE, VARIETY):
         os.environ.pop(name, None)
-    for mod_name in ("dispatch_gate", "handoff_ordering_gate"):
+    for mod_name in ("dispatch_gate",):
         module = sys.modules.get(mod_name)
         if module is not None:
             importlib.reload(module)
@@ -138,9 +138,3 @@ class TestGateSiteWiring:
         got = _reload_gate_mode(clean, "dispatch_gate", INLINE, raw, "INLINE_MISSION_MODE")
         assert got == _old_resolve(raw, _DEFAULT[INLINE], _INVALID_FALLBACK[INLINE])
 
-    @pytest.mark.parametrize("raw", _BATTERY)
-    def test_handoff_gate_variety_mode(self, clean, raw):
-        got = _reload_gate_mode(
-            clean, "handoff_ordering_gate", VARIETY, raw, "DISPATCH_VARIETY_MODE"
-        )
-        assert got == _old_resolve(raw, _DEFAULT[VARIETY], _INVALID_FALLBACK[VARIETY])

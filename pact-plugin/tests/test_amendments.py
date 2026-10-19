@@ -354,7 +354,7 @@ class TestUnreadRejections:
         metadata = {"teachback_rejection": rejection(reason="Name the mode key.", rev=...)}
         lines, seen = rules.unread_lines(metadata, "18", set())
         assert lines == ["REJECTION teachback_rejection on #18: Name the mode key.; "
-                         "run repact-payload 18 --key rejection"]
+                         "run repact inspect 18 --key rejection"]
         assert seen == {"teachback_rejection@1r0"}
         assert rules.unread_lines(metadata, "18", seen) == ([], seen)
         again = {"revision_number": 2, "teachback_rejection": rejection(reason="Still missing.", revision_number=2)}
@@ -379,7 +379,7 @@ class TestUnreadRejections:
         assert len(lines) == 1 and len(lines[0].splitlines()) == 1
         assert lines[0].startswith("REJECTION handoff_rejection on #19x: line one NEW LINE")
         assert len(lines[0]) < rules.REJECTION_TEXT_CHARS + 120 and "\x00" not in lines[0] and "\x1b" not in lines[0]
-        assert lines[0].endswith("run repact-payload 19x --key rejection")
+        assert lines[0].endswith("run repact inspect 19x --key rejection")
 
     @pytest.mark.parametrize("value", ["a string", ["list"], 5, True, NAN, {"reason": 5}, {"reason": None},
                                        {"revision_number": {"a": 1}}, {"reason": ["r"], "revision_number": NAN}])

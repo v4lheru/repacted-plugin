@@ -181,7 +181,7 @@ class TestDispatchGateBothModesUnderRelocatedConfig:
         team_dir = config_dir / "tasks" / team
         team_dir.mkdir(parents=True, exist_ok=True)
         (team_dir / "5.json").write_text(
-            json.dumps({"id": "5", "owner": owner, "status": "in_progress"}),
+            json.dumps({"id": "5", "owner": owner, "metadata": {"dispatch": {"name": owner}}, "status": "in_progress"}),
             encoding="utf-8",
         )
 

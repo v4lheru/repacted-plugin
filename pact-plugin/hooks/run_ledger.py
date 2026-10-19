@@ -18,8 +18,8 @@ pipe cut) by its counts, in this session and written during this call. With no s
 report is text (a grep of an old log, a quoted or pasted report, a fixture) and records
 nothing. A tcount run whose whole report a pipe cut (`tcount ... | grep Passed`) shows neither
 line: its row is adopted when this session wrote it during this call, in a directory the call
-names, for a command whose words the call spells (unseen_rows). The HANDOFF evidence
-gate (evidence_gate.py, unit 11) matches a HANDOFF's claimed counts against these records.
+names, for a command whose words the call spells (unseen_rows). The evidence check
+`repact accept` runs (shared/evidence_check.py) reads these records.
 
 When no count parses and the command is not tcount, it adds one line of context for the
 model: rerun with `tcount <cmd>`. This closes the rtk exit-0 trap at the source (D7).
@@ -52,6 +52,7 @@ import re
 import sys
 import time
 
+from shared.run_place import WORD_PIECE as _WORD_PIECE, run_dir, settled_word as _literal
 from shell.words import token_spans  # the reader every guard shares
 
 ADVISORY = ("No test count in this output. Before reporting a result, rerun with "
@@ -72,8 +73,6 @@ _CALL_STEP = re.compile(
     r"(?:^|[\s;&|(])(?P<name>[A-Za-z_]\w*)=(?P<value>" + _SHELL_WORD + r")?"
     r"|(?:^|[;&|(]\s*|\b(?:then|do|else)\s+)(?:cd|pushd)\s+(?:--\s+)?(?P<cd>" + _SHELL_WORD + r")"
     r"|\bgit\s+-C\s+(?P<git>" + _SHELL_WORD + ")", re.MULTILINE)
-_WORD_PIECE = re.compile(r"\"([^\"\n]*)\"|'([^'\n]*)'|([^\"']+)")
-_VARIABLE = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
 _SEGMENT = re.compile(r"&&|\|\||[;|\n]")
 _ASSIGNMENT_WORD = re.compile(r"[A-Za-z_]\w*=")
 _WRAPPER_WORDS = frozenset({"nice", "env", "time", "rtk", "proxy", "nohup", "command", "exec", "timeout"})
@@ -152,23 +151,6 @@ def actor_label(payload: dict, session_id: str | None) -> tuple[str | None, str 
         return None, None, None
     name, team = teammate_label(session_id)
     return None, name, team if team_exists(team) else None
-
-
-def _literal(word: str | None, values: dict[str, str]) -> str | None:
-    """The text a shell word stands for when the command's own text settles it, else None:
-    quotes removed, `$NAME` filled from `values`. A substitution, a glob, `~`, an escape or a
-    name this command never set leaves it unsettled."""
-    parts = []
-    for double, single, bare in _WORD_PIECE.findall(word or ""):
-        if single:
-            parts.append(single)
-            continue
-        text = _VARIABLE.sub(lambda match: values.get(match.group(1) or match.group(2), "$"), double or bare)
-        unquoted = _VARIABLE.sub("", bare)
-        if any(char in text for char in "$`\\") or any(char in unquoted for char in "*?[~{"):
-            return None
-        parts.append(text)
-    return "".join(parts) or None
 
 
 def _program_path(segment: str, values: dict[str, str]) -> str | None:
@@ -250,6 +232,17 @@ def call_dirs(command: str, cwd: str | None) -> list[str]:
     return dirs[:CALL_DIRS_MAX]
 
 
+def tcount_place(own: dict) -> str | None:
+    """run_dir of a hook row joined to tcount's own row: the real path of the directory tcount
+    ran in (its os.getcwd()), taken now so a link re-pointed later moves nothing; None when that
+    row names no absolute directory or one too long for a ledger line."""
+    cwd = own.get("cwd")
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or "\x00" in cwd:
+        return None
+    real = os.path.realpath(cwd)
+    return real if _fits_a_row(real) else None
+
+
 def build_records(payload: dict, command: str, runner: str) -> tuple[list[dict], bool]:
     """(ledger records, whether a count was parsed) for one test-run tool call: one record, or
     for a command that runs tcount, one per tcount run in its output (`tcount a && tcount b`),
@@ -289,18 +282,21 @@ def build_records(payload: dict, command: str, runner: str) -> tuple[list[dict],
         unseen = unseen_rows(command, label["call_dirs"], session_id, tail, set(), call_started(payload),
                              tcount_runs(command)) if runner == "tcount" else []
         if unseen:
-            return [{**{key: own.get(key) for key in own_fields}, **label, "log_path": own["log_path"]}
+            return [{**{key: own.get(key) for key in own_fields}, **label, "log_path": own["log_path"],
+                     "run_dir": tcount_place(own)}
                     for own in unseen], counts is not None
-        git_head, git_branch = git_context(cwd)
+        place = run_dir(command, cwd)
+        git_head, git_branch = git_context(place or cwd)    # the run's tree, not the session's
         tree = {"cwd": cwd, "git_head": git_head, "git_branch": git_branch}
-        return [{**parsed, **label, **tree, "log_path": None}], counts is not None
+        return [{**parsed, **label, **tree, "log_path": None, "run_dir": place}], counts is not None
     records = []
     for log_path in logged:
         own, hooked = tcount_row(log_path, tail), hook_row(log_path, tail)
         if hooked or not own or (own.get("session_id") and session_id and own["session_id"] != session_id):
             continue
         # `cd other-tree && tcount ...`: tcount's counts and tree, not the session's cwd
-        records.append({**{key: own.get(key) for key in own_fields}, **label, "log_path": log_path})
+        records.append({**{key: own.get(key) for key in own_fields}, **label, "log_path": log_path,
+                        "run_dir": tcount_place(own)})
     with_log = [shown_counts.as_ledger_fields() for shown_counts, _ in logged.values() if shown_counts]
     taken = set(logged)
     not_before = call_started(payload)
@@ -308,10 +304,12 @@ def build_records(payload: dict, command: str, runner: str) -> tuple[list[dict],
         own = quiet_row(fields, shown_exit, session_id, tail, taken, not_before)
         if own:
             taken.add(own["log_path"])
-            records.append({**{key: own.get(key) for key in own_fields}, **label, "log_path": own["log_path"]})
+            records.append({**{key: own.get(key) for key in own_fields}, **label, "log_path": own["log_path"],
+                            "run_dir": tcount_place(own)})
     for own in unseen_rows(command, label["call_dirs"], session_id, tail, taken, not_before,
                            tcount_runs(command) - len(taken)):
-        records.append({**{key: own.get(key) for key in own_fields}, **label, "log_path": own["log_path"]})
+        records.append({**{key: own.get(key) for key in own_fields}, **label, "log_path": own["log_path"],
+                        "run_dir": tcount_place(own)})
     return records, counts is not None
 
 

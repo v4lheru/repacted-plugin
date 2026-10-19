@@ -47,6 +47,9 @@ LITERAL = re.compile(r"(?:~|\$HOME|\$\{HOME\})/\.claude")
 # it survives edits above it.
 ALLOWED_EMITTED = {
     ("hooks/bootstrap_gate.py", "$HOME/.claude"),
+    # The `repact` shim's shell line: the same mandated fallback, applied by the user's shell
+    # each time the shim runs, so it follows CLAUDE_CONFIG_DIR at run time, not write time.
+    ("hooks/shared/repact_shim.py", 'config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"'),
 }
 
 GUARDED_FILES = (

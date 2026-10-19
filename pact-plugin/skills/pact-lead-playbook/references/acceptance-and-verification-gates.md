@@ -30,49 +30,28 @@ schemas, the wake signal) are in the persona and protocols; this is the judgment
 23. Read what a run PRINTS, not a report file it may not have written; a reporter flag can silently disable the file you parse. `stat` any artifact against the run.
 24. High risk is a class, not a judgement call: security code (auth, filters, redaction, sanitisers, guards), input validation and parsers, and shared contracts (core packages, public APIs, schemas) get adversarial boundary tests and ONE reviewer before the PR, whatever the lean defaults say.
 25. Resolve every HANDOFF `uncertainty` item before you accept: fixed, or a known limit written into the PR. Never accept over one silently; an item that names a defect in the deliverable is a rejection.
-26. Claude Code deletes every task file once all tasks are `completed`, HANDOFFs included. Before you complete the last open task, create the next task. A drained task is still readable: `repact-payload <id>` falls back to the session journal and says so in its header, so a verify brief may point at an accepted HANDOFF. A note you write on a completed task survives only as `amend_<n>`, `<resource>_grant` or `lead_<name>`.
+26. Claude Code deletes every task file once all tasks are `completed`, HANDOFFs included. Before you complete the last open task, create the next task. A drained task is still readable: `repact inspect <id> --key handoff` falls back to the session journal and says so in its header, so a verify brief may point at an accepted HANDOFF. A note you write on a completed task survives only as `amend_<n>`, `<resource>_grant` or `lead_<name>`.
 27. Commit and push state in a HANDOFF is as of its write time ("not pushed" was true then). Read git (`git log origin/<branch>..<branch>`) before you repeat it in a PR summary or to the user.
 
 ## Detail
 
-**The write-time checks.** Hooks run automatically on the teammate's `metadata.handoff`
-write and on `git commit`. None asks a model: each decides from facts
-(the run ledger, the HANDOFF's labels, the commit message). Modes (off, shadow, advisory, note,
-gate) are set per check in the plugin's checks file (bin, then checks.json), not in code; in shadow mode a check
-logs only and you see nothing. The `write_checks.py` hook RETURNS one thing to the teammate: a
-commit message that breaks the commit rules (returned every time it is issued, 1.4.1). An
-undisposed amend key (amendment_gate) and an `uncertainty` line with no `fixed:` /
-`known-limit:` / `not-applicable:` disposition (uncertainty_disposition; one item per line) are
-NOT returned since 1.4.1 (measured: 0 of 8 uncertainty returns and at most 3 of 7 amendment
-returns led to a real change): the HANDOFF is stored, the teammate gets one `Note on #<id>` line,
-and you get a `Note #<id>:` line per item. A HANDOFF item with a parsed count that is NO-RUN,
-MISMATCH or EXIT is never returned either (1.4.1: returns pushed teammates to
-re-run live probes only for a ledger entry): the teammate gets one `Note on #<id>` line and you
-get an `Evidence #<id>:` line per item at acceptance. Claims whose run was recorded with no
-parsed count reach you as one grouped line (`run recorded, count not parsed`) naming the logs to
-check; prose with no parsed count is never flagged. At acceptance you see one line per return,
-repeat and note, and you can always accept over a check; an acceptance with nothing found
-injects nothing. A NO-RUN or MISMATCH against the run ledger is a fact. A flagged claim needs a
-recorded run (`tcount`) or a rejection with the reason.
+**The write-time checks.** None asks a model: each decides from facts (the dispatch record, the run
+ledger, the commit message), never from the HANDOFF's prose. Modes (off, shadow, advisory, note,
+gate) are set per check in the plugin's checks file (bin, then checks.json), not in code; in
+shadow mode a check logs only and you see nothing. The `write_checks.py` hook RETURNS a commit
+message that breaks the commit rules, every time it is issued (1.4.1).
 
-**`handoff-evidence` (manual look or replay).** Built over the same module the hooks use,
-so a replay decides exactly what the hooks decided. Checked against its `--help` on 2026-10-03.
-```
-handoff-evidence handoff --team <T> --task <N> [--show]
-handoff-evidence handoff <path to the task JSON> [--show]
-```
-It reads the task JSON (TaskGet does not return metadata) and checks each item of EVERY string or
-list field of the HANDOFF except `open_questions` and `uncertainty` (speculative by construction):
-the canonical fields first, then any other field, `reasoning_chain` last.
-Per item it prints `<field>[i] <run check> <text>` under a header naming the mode and how
-many ledger runs are in scope. The run check against the ledger is MATCH (a recorded run has the
-claimed counts), MISMATCH (runs are recorded, none has them), NO-RUN (the ledger holds no run in
-scope), NO-LEDGER (no ledger at all; never a flag by itself), NO-COUNT (it reports a test run but
-states no count, e.g. only an exit code) or n/a (no count and no test run; a bare `638/638` counts as
-638 passed). An item is flagged on MISMATCH, EXIT, UNREADABLE, NO-FILE or UNDECIDED, on a cited
-file that is missing, or on a parsed count that is NO-RUN. `--cwd` and `--branch` narrow which
-ledger runs are in scope. Exit codes: 0 no flag, 1 flagged, 2 usage, 4 task not found. Nothing
-here is written back into the HANDOFF.
+**The evidence check (`repact accept`, mode handoff_evidence).** The hook library `evidence_check.py`
+compares the task's worktree with the tree recorded at dispatch. A code or config change needs a
+passing `tcount` run on the current tree, stamped after dispatch, from inside the worktree or on a
+tree it holds; a fix or feature (or a task with no or an unknown kind) also needs a failing run of
+a changed test file before the green one; a pinned acceptance command needs a run with the same
+test selection. A refusal names one of `evidence.no_run`, `evidence.stale_run`,
+`evidence.selection_mismatch`, `evidence.red_first_missing` or `evidence.needs_human` (the tree
+could not be read, or more files changed than the check reads). A refactor, config or docs task
+with no input change is accepted with that status, never shown as verified. In any mode but gate
+each problem is a note. A refusal is a fact about the ledger: a recorded run (`tcount`), or a
+rejection with the reason.
 
 **Before accepting any HANDOFF,** also read the task file's keys (a correction can sit in a sibling
 key, repacted:pact-field-notes `task-store-and-harvest.md`) and diff it against every directive you

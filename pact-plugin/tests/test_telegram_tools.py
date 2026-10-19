@@ -510,7 +510,7 @@ class TestToolTelegramStatus:
             result = await tool_telegram_status()
 
         assert "NOT CONFIGURED" in result
-        assert "telegram-setup" in result
+        assert "init telegram" in result
 
     @pytest.mark.asyncio
     async def test_configured_status_shows_connected(self):

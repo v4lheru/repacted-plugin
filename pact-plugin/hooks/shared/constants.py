@@ -62,10 +62,7 @@ def get_compact_summary_path() -> Path:
 
 # Filename prefix for an ARCHIVED compact summary. One definition, so the hook
 # that writes an archive cannot drift from the convention the secretary states
-# in prose. The two PROSE statements are pinned against each other by
-# tests/test_compact_summary_archive_contract.py; this is the code-side
-# spelling, deliberately kept out of that pin's `<placeholder>.txt` shape so
-# that defining it here does not change either file's stated-convention count.
+# in prose.
 COMPACT_SUMMARY_ARCHIVE_PREFIX = "compact-summary-"
 
 # Fixed-name slot for a stale summary that cannot be attributed to a session.
