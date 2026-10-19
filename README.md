@@ -25,31 +25,10 @@ You describe the work. A **lead** sizes it and hands the pieces to **specialists
 
 ## How it works
 
-```mermaid
-flowchart TD
-    you(["🧑 You<br/>describe the work"]) --> lead{"🎯 Lead<br/>scores novelty, scope,<br/>uncertainty and risk"}
-
-    lead -->|small fix| compact["⚡ comPACT<br/>one specialist"]
-    lead -->|feature| orch["🔁 orchestrate<br/>Prepare → Architect → Code → Test"]
-    lead -->|large or risky| plan["🗺️ plan-mode<br/>a plan you approve"]
-    plan --> orch
-
-    compact --> team
-    orch --> team
-
-    subgraph team ["👥 Specialists, each in its own git worktree"]
-        direction LR
-        prep["🔎 preparer"]
-        arch["📐 architect"]
-        code["💻 backend · frontend<br/>database · devops"]
-        test["🧪 test engineer"]
-        sec["🛡️ security · QA"]
-    end
-
-    team --> check["✅ Evidence check<br/>a recorded passing run<br/>of the files as they are now"]
-    check --> review["🔍 peer review"]
-    review --> merge(["🧑 You decide<br/>what merges"])
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.svg">
+  <img alt="You ask; the lead scores the request and picks comPACT, orchestrate or plan-mode; specialists build in their own worktrees; an evidence check gates the work; you merge." src="docs/assets/how-it-works-light.svg" width="100%">
+</picture>
 
 The lead scores every request, so a typo fix doesn't get the whole cycle and a risky change doesn't skip the plan.
 
@@ -57,51 +36,33 @@ The lead scores every request, so a typo fix doesn't get the whole cycle and a r
 
 ## What's inside
 
-| | Feature | What it does for you |
-|:-:|---|---|
-| 📋 | **[Task system](docs/concepts/task-files-and-waits.md)** | Every piece of work is a task with an owner, a brief and a status, saved on disk, not in chat. Corrections are written onto the task, so none get lost in the scrollback. |
-| 🗣️ | **[Teachback](docs/concepts/teachback.md)** | Before a specialist starts, it says the brief back in its own words. A misunderstanding is caught before any code is written. |
-| ✅ | **[Evidence-checked handoffs](docs/concepts/handoff.md)** | A finished task comes with a report (a HANDOFF). Code is accepted only with a recorded passing test run of the files as they are now. For a fix or a feature, a failing run must come first. |
-| 🔒 | **Protected task state** | Task files are guarded, so a specialist can't mark its own work as done by rewriting the file. Only the lead accepts. |
-| 🌳 | **[Parallel worktrees](docs/concepts/worktrees.md)** | Each feature gets its own git worktree, and each specialist starts with a fresh context. Two features are built at once without touching each other's files. |
-| 🗂️ | **Task log in your repo** | `.repacted/tasks.jsonl`, plus a readable `docs/progress.md`. Come back next week, run `repact work`, and the lead takes the next open task. |
-| 🤖 | **Autopilot** | `/repacted:autopilot` works through the task log on its own and stops when the list, the clock or the budget runs out. A task it can't finish is parked for you, not faked. |
-| 🧾 | **Change receipt** | `repact inspect <id>` shows what changed, which tests back it, and what is still open. |
-| 📥 | **Decision inbox** | `repact decide` lists every question that waits on you, each with the command that answers it. |
-| 🛡️ | **[Guards](docs/concepts/guards.md)** | These stop a leaked secret, a commit that holds a credential, and a force-push, merge or branch delete you didn't approve. Each refusal says why and what to do instead. |
-| 🧠 | **[Memory and knowledge base](docs/kb.md)** | Decisions and lessons go into a memory the lead can query. The optional knowledge base turns past sessions into lessons that you review before they are kept. |
-| 💰 | **Cost control** | A one-line cost preview before a workflow, and a spend cap per session in your team policy. |
-| 📜 | **Team policy** | One file per repo that can only tighten the rules, never loosen them. Bring your own specialist agents if you need them. |
-| 🧩 | **Packs** | Add a domain as a second plugin. An n8n pack ships today. |
-| 🏗️ | **Unattended CI** | A recipe that runs comPACT on a labelled GitHub issue and stops at a draft pull request for a person to review. |
-| 📱 | **Telegram (optional)** | Progress and questions can reach your phone. |
+| Feature | What it does for you |
+|---|---|
+| **[Task system](docs/concepts/task-files-and-waits.md)** | Every piece of work is a task with an owner, a brief and a status, saved on disk, not in chat. Corrections are written onto the task, so none get lost in the scrollback. |
+| **[Teachback](docs/concepts/teachback.md)** | Before a specialist starts, it says the brief back in its own words. A misunderstanding is caught before any code is written. |
+| **[Evidence-checked handoffs](docs/concepts/handoff.md)** | A finished task comes with a report (a HANDOFF). Code is accepted only with a recorded passing test run of the files as they are now. For a fix or a feature, a failing run must come first. |
+| **Protected task state** | Task files are guarded, so a specialist can't mark its own work as done by rewriting the file. Only the lead accepts. |
+| **[Parallel worktrees](docs/concepts/worktrees.md)** | Each feature gets its own git worktree, and each specialist starts with a fresh context. Two features are built at once without touching each other's files. |
+| **Task log in your repo** | `.repacted/tasks.jsonl`, plus a readable `docs/progress.md`. Come back next week, run `repact work`, and the lead takes the next open task. |
+| **Autopilot** | `/repacted:autopilot` works through the task log on its own and stops when the list, the clock or the budget runs out. A task it can't finish is parked for you, not faked. |
+| **Change receipt** | `repact inspect <id>` shows what changed, which tests back it, and what is still open. |
+| **Decision inbox** | `repact decide` lists every question that waits on you, each with the command that answers it. |
+| **[Guards](docs/concepts/guards.md)** | These stop a leaked secret, a commit that holds a credential, and a force-push, merge or branch delete you didn't approve. Each refusal says why and what to do instead. |
+| **[Memory and knowledge base](docs/kb.md)** | Decisions and lessons go into a memory the lead can query. The optional knowledge base turns past sessions into lessons that you review before they are kept. |
+| **Cost control** | A one-line cost preview before a workflow, and a spend cap per session in your team policy. |
+| **Team policy** | One file per repo that can only tighten the rules, never loosen them. Bring your own specialist agents if you need them. |
+| **Packs** | Add a domain as a second plugin. An n8n pack ships today. |
+| **Unattended CI** | A recipe that runs comPACT on a labelled GitHub issue and stops at a draft pull request for a person to review. |
+| **Telegram (optional)** | Progress and questions can reach your phone. |
 
 ---
 
 ## A task's life
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant L as 🎯 Lead
-    participant T as 📋 Task file
-    participant S as 🛠️ Specialist
-    participant E as ✅ Evidence check
-
-    L->>T: repact dispatch: brief, owner, risk score
-    S->>T: teachback: the brief in its own words
-    Note over L,S: A small task starts at once.<br/>A larger one waits for the lead's OK.
-    S->>S: builds in its own worktree,<br/>shows the test failing, then passing
-    S->>T: repact submit: the HANDOFF report
-    T->>E: is there a recorded passing run<br/>of these files as they are now?
-    E-->>L: the verdict
-    alt evidence holds
-        L->>T: repact accept
-    else something is off
-        L->>T: repact reject, with the corrections
-        T-->>S: the corrections are on the task, not in chat
-    end
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/task-life-dark.svg">
+  <img alt="A task goes Dispatch, Teachback, Build, HANDOFF, Evidence check, Accepted; a rejection writes corrections onto the task and sends it back to Build." src="docs/assets/task-life-light.svg" width="100%">
+</picture>
 
 Specialists run as plain subagents by default, or as Agent Teams if you turn that on. The task works the same way in both modes.
 
@@ -200,14 +161,14 @@ Every refusal has the same shape: **what** was refused and why, **→ what to do
 ## More
 
 <details>
-<summary><b>🧠 Build a knowledge base</b></summary>
+<summary><b>Build a knowledge base</b></summary>
 
 `repact-distill` turns notes the agents already wrote, and if you allow it your lead session transcripts, into proposed lessons for a folder you own. It is off by default (`distill.enabled`). A dry run shows what it would read and what it would cost, and sends nothing. It can send through `claude -p`, the Anthropic API or the Batch API. You or the lead review the proposals one at a time or 20 at a time, and you can promote accepted lessons into a repository for your team. Read the [knowledge base guide](docs/kb.md) first: it covers privacy, cost, and what to check before you distill work sessions.
 
 </details>
 
 <details>
-<summary><b>🧩 Packs</b></summary>
+<summary><b>Packs</b></summary>
 
 A pack is a second plugin in the same marketplace that adds skills and specialists. The first one adds n8n skills and a `pact-n8n` specialist that builds workflows over the n8n REST API:
 
@@ -218,21 +179,21 @@ A pack is a second plugin in the same marketplace that adds skills and specialis
 </details>
 
 <details>
-<summary><b>🏗️ Run comPACT unattended in CI</b></summary>
+<summary><b>Run comPACT unattended in CI</b></summary>
 
 A recipe and a workflow template run `/repacted:comPACT` on a labelled issue in GitHub Actions and stop at a draft pull request that a person reviews. Read the [unattended CI recipe](pact-plugin/docs/recipes/unattended-ci.md) before the first run: it covers the setup, what limits the run, and what it costs.
 
 </details>
 
 <details>
-<summary><b>⏱️ Hook latency</b></summary>
+<summary><b>Hook latency</b></summary>
 
 Hooks run on every tool call. On a recent Mac (Apple silicon, Python 3.14, 30 recorded runs), a Bash call adds about 250 ms at p50: the time its two hook processes take, from start to exit. `repact-report` prints p50 and p95 for each hook from your own sessions, and CI fails if a hook slows down past its budget.
 
 </details>
 
 <details>
-<summary><b>🗑️ Uninstall</b></summary>
+<summary><b>Uninstall</b></summary>
 
 ```
 claude plugin uninstall repacted@repacted
