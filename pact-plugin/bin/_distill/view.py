@@ -24,16 +24,18 @@ ALLOWLIST: what is not named here never enters the view.
        the bookkeeping types in KNOWN_OUTSIDE_TYPES. A user entry with any non-text block is out
        whole, so a tool result cannot ride along beside a text block.
   UNKNOWN an entry type or block type R0 does not name: counted per type and reported, never in.
-Fail-closed reading: a line over LINE_MAX_BYTES, invalid UTF-8, a JSON error (NaN and Infinity
-are refused, an over-long integer or a deeply nested array is an error) or a non-object is skipped
-and counted; a text over TEXT_MAX_BYTES (a paste, likely a log) or holding a lone surrogate is
-dropped and counted; a text block carrying a tool result's keys is a disguised tool result.
+Fail-closed reading: a line over LINE_MAX_BYTES, invalid UTF-8, a JSON error (NaN, Infinity and
+a float that overflows to infinity are refused, an integer over INT_MAX_DIGITS digits or a deeply
+nested array is an error) or a non-object is skipped and counted; a text over TEXT_MAX_BYTES (a
+paste, likely a log) or holding a lone surrogate is dropped and counted; a text block
+carrying a tool result's keys is a disguised tool result.
 
 PRIVACY: a View holds transcript text; only its counters may be printed.
 """
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -47,6 +49,7 @@ R0_VERSION = "r0-1"
 LINE_MAX_BYTES = 1 << 20              # one JSONL line; prose lines are far below this
 TEXT_MAX_BYTES = 32 * 1024            # one prompt or prose block: longer is a paste
 TRANSCRIPT_MAX_BYTES = 512 << 20      # a file past this is skipped, not read
+INT_MAX_DIGITS = 4300                 # CPython's default digit cap; some builds lack it
 DISTILLER_SLUG = "repact-distill-"    # backend.py's temp cwd: a distiller session, never a source
 
 # Entry types the census of real transcripts found that R0 leaves out on purpose.
@@ -145,6 +148,21 @@ def _reject_constant(name: str):
     raise ValueError(f"non-finite number {name}")
 
 
+def _parse_int(literal: str) -> int:
+    """An integer literal, refused past INT_MAX_DIGITS digits (the sign is not a digit)."""
+    if len(literal.lstrip("-")) > INT_MAX_DIGITS:
+        raise ValueError("integer over the digit cap")
+    return int(literal)
+
+
+def _parse_float(literal: str) -> float:
+    """A float literal, refused when it overflows to infinity (1e999), as NaN and Infinity are."""
+    value = float(literal)
+    if not math.isfinite(value):
+        raise ValueError("float overflows to infinity")
+    return value
+
+
 def _entries(path: Path, view: View) -> Iterator[dict]:
     """Each JSON object line, read with a byte cap per line; every bad line is counted."""
     try:
@@ -165,7 +183,8 @@ def _entries(path: Path, view: View) -> Iterator[dict]:
             if not line.strip():
                 continue
             try:
-                entry = json.loads(line.decode("utf-8"), parse_constant=_reject_constant)
+                entry = json.loads(line.decode("utf-8"), parse_constant=_reject_constant,
+                                   parse_int=_parse_int, parse_float=_parse_float)
             except (ValueError, RecursionError):   # UnicodeDecodeError is a ValueError
                 view.counts[MALFORMED_LINE] += 1
                 continue

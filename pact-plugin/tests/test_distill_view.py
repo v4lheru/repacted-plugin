@@ -128,7 +128,20 @@ def test_unknown_and_future_types_are_counted_and_never_included(tmp_path):
 
 # --- reading: fails closed, line by line ---------------------------------------------------
 
-def test_bad_lines_are_skipped_and_counted_and_reading_goes_on(tmp_path, monkeypatch):
+@pytest.fixture
+def no_interpreter_cap():
+    """Turn off the interpreter's own int-digit cap (3.11+, some 3.9/3.10 builds), as on a build
+    without it: the view's cap must hold on its own."""
+    previous = getattr(sys, "get_int_max_str_digits", lambda: None)()
+    if previous is not None:
+        sys.set_int_max_str_digits(0)
+    yield
+    if previous is not None:
+        sys.set_int_max_str_digits(previous)
+
+
+def test_bad_lines_are_skipped_and_counted_and_reading_goes_on(tmp_path, monkeypatch,
+                                                               no_interpreter_cap):
     monkeypatch.setattr(V, "LINE_MAX_BYTES", 300_000)
     big = json.dumps(user("HUGE-MARK " + "x" * 400_000, origin={"kind": "human"})).encode()
     view = view_of(
@@ -145,6 +158,42 @@ def test_bad_lines_are_skipped_and_counted_and_reading_goes_on(tmp_path, monkeyp
     )
     assert joined(view) == "still read after all that"
     assert view.counts == {"malformed line": 7, "line over the size cap": 1}
+
+
+def _number_line(literal: bytes, mark: str) -> bytes:
+    return b'{"type": "user", "n": ' + literal + b', "message": {"role": "user", "content": "' \
+        + mark.encode() + b'"}}'
+
+
+def test_integer_digit_cap_is_the_views_own_not_the_interpreters(tmp_path, no_interpreter_cap):
+    cap = V.INT_MAX_DIGITS
+    deep = b'{"a": ' * 50 + b"7" * (cap + 1) + b"}" * 50
+    view = view_of(
+        tmp_path,
+        _number_line(b"9" * cap, "AT-CAP"),
+        _number_line(b"-" + b"9" * cap, "NEG-AT-CAP"),
+        _number_line(b"9" * (cap + 1), "OVER-CAP"),
+        _number_line(b"-" + b"9" * (cap + 1), "NEG-OVER-CAP"),
+        _number_line(b"0" * 1, "ZERO"),
+        _number_line(deep, "DEEP-OVER-CAP"),
+        _number_line(b"[1, 2, {\"k\": [" + b"8" * (cap + 1) + b"]}]", "LIST-OVER-CAP"),
+    )
+    assert [t.text for t in view.turns] == ["AT-CAP", "NEG-AT-CAP", "ZERO"]
+    assert view.counts == {"malformed line": 4}
+
+
+def test_floats_that_overflow_to_infinity_are_refused_like_infinity(tmp_path, no_interpreter_cap):
+    view = view_of(
+        tmp_path,
+        _number_line(b"1e999", "EXP-INF"),
+        _number_line(b"-1e999", "NEG-EXP-INF"),
+        _number_line(b"9" * 5000 + b".0", "MANTISSA-INF"),
+        _number_line(b"0." + b"9" * 5000, "LONG-FRACTION"),      # finite: kept
+        _number_line(b"1e-999", "UNDERFLOW"),                    # 0.0, finite: kept
+        _number_line(b"1.5e308", "LARGE-FINITE"),
+    )
+    assert [t.text for t in view.turns] == ["LONG-FRACTION", "UNDERFLOW", "LARGE-FINITE"]
+    assert view.counts == {"malformed line": 3}
 
 
 def test_a_lone_surrogate_drops_the_text_and_is_counted(tmp_path):

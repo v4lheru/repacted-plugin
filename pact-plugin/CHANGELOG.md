@@ -2,6 +2,13 @@
 
 Release notes for rePACTed, newest first. Entries start at the first public release.
 
+## 2.1.1 (2026-10-19)
+
+Two fixes for checks that failed in the 2.1.0 test matrix. Known limit in the release notes.
+
+- `repact-doctor` no longer reports the `repact` command as a warning on a fresh install before your first session; it shows it as skipped until a session puts the command in place.
+- The knowledge-base transcript reader now refuses a line with an integer over 4,300 digits or a number too large for a float on every Python version, not only where Python itself caps integer digits.
+
 ## 2.1.0 (2026-10-19)
 
 A simpler team that is stricter about what counts as done. Upgrade steps and known limits are in the release notes.

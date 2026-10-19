@@ -237,8 +237,16 @@ def ensure_shim(home: Path, config_root: Path, env: Mapping[str, str]) -> Option
     return note
 
 
+def session_started(home: Path, config_root: Path) -> bool:
+    """Whether a session start has run here: its first step (shared/symlinks.py) links
+    protocols/pact-plugin under <home>/.claude and <config>, just before ensure_shim runs."""
+    return any(os.path.lexists(root / "protocols" / "pact-plugin")
+               for root in (home / ".claude", config_root))
+
+
 def doctor_lines(home: Path, config_root: Path, env: Mapping[str, str]) -> Tuple[str, str, List[str]]:
-    """(state, summary, detail) for the doctor's `repact command` line."""
+    """(state, summary, detail) for the doctor's `repact command` line. A missing shim before
+    any session start is skip, not amber: a fresh install has not had the chance to write it."""
     path = shim_path(home)
     state = classify(path)
     if not enabled(env, config_root):
@@ -252,6 +260,8 @@ def doctor_lines(home: Path, config_root: Path, env: Mapping[str, str]) -> Tuple
         return "skip", f"no installed repacted plugin to point {path} at ({why})", []
     if root is None:
         return "amber", f"`repact` cannot start: {why}", []
+    if state == "missing" and not session_started(home, config_root):
+        return "skip", f"{path} is written at the first session start; start one Claude Code session", []
     if state == "missing":
         return "amber", f"{path} is not written yet; start one Claude Code session", []
     if state == "stale":

@@ -328,7 +328,7 @@ pass init "applied once, second run: nothing to do"
 # --- doctor ------------------------------------------------------------------------------------
 L="$LOGS/doctor.log"
 ( cd "$PROJ" && capped "$L" python3 "$PLUGIN_DIR/bin/repact-doctor" --full ) || fail doctor "repact-doctor --full exited non-zero" "$L"
-grep -q '^mode: ' "$L" || fail doctor "no mode: line" "$L"
+grep -q '^execution: ' "$L" || fail doctor "no execution: line" "$L"
 grep -Eq '^host [^ ]+: (tested|untested) \(last tested [0-9.]+\)' "$L" || fail doctor "no host compat line" "$L"
 DOCTOR_JSON="$CLAUDE_PLUGIN_DATA/doctor.json"
 [ -f "$DOCTOR_JSON" ] || fail doctor "no doctor.json under CLAUDE_PLUGIN_DATA" "$L"
@@ -343,7 +343,7 @@ if red or amber:
 print("%d checks, no red, no amber off the allow list" % len(checks))' "$DOCTOR_JSON" "$DOCTOR_AMBER_ALLOWED" 2>&1) \
   || fail doctor "$verdict" "$L"
 scan doctor "$L"
-pass doctor "$verdict; $(grep '^mode: ' "$L" | head -n 1)"
+pass doctor "$verdict; $(grep '^execution: ' "$L" | head -n 1)"
 
 # --- hooks -------------------------------------------------------------------------------------
 L="$LOGS/hooks.log"

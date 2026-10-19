@@ -11,7 +11,7 @@
       "name": "repacted",
       "source": "./pact-plugin",
       "description": "rePACTed: a lead agent that plans, builds, tests and reviews your work with a team of specialists, every step tracked as a task",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "author": {
         "name": "Uros Pesic",
         "url": "https://github.com/v4lheru"

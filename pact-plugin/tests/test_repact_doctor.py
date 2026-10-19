@@ -796,6 +796,28 @@ def test_a_fresh_home_passes_with_the_mode_and_host_lines(tmp_path):
     assert "scope_mcp" not in run.stdout and real_home not in run.stdout
 
 
+def test_the_repact_command_is_skip_before_the_first_session_and_amber_after_it(tmp_path):
+    """A fresh install (the plugin recorded, no session started yet) has no shim by design: skip
+    with the hint. Once a session start has run (its protocols link is there) a missing shim is
+    amber again."""
+    home = tmp_path / "home"
+    config = home / ".claude"
+    root = tmp_path / "repacted-install"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "repact").write_text("#!/bin/sh\n")
+    (root / "bin" / "repact").chmod(0o755)
+    (config / "plugins").mkdir(parents=True)
+    (config / "plugins" / "installed_plugins.json").write_text(json.dumps(
+        {"plugins": {"repacted@repacted": [{"scope": "user", "installPath": str(root)}]}}))
+    env = {"HOME": str(home), "PATH": f"{home}/.local/bin{os.pathsep}/usr/bin"}
+    state, summary, _ = repact_shim.doctor_lines(home, config, env)
+    assert state == "skip" and "start one Claude Code session" in summary, (state, summary)
+    (config / "protocols").mkdir()
+    (config / "protocols" / "pact-plugin").symlink_to(root)
+    state, summary, _ = repact_shim.doctor_lines(home, config, env)
+    assert state == "amber" and "is not written yet; start one Claude Code session" in summary
+
+
 def test_the_mode_reads_the_settings_flag_and_an_unlisted_host_is_untested(world):
     host = load("_doctor_host_mode", PLUGIN_ROOT / "bin" / "_doctor_host.py")
     (world.config / "settings.json").write_text(json.dumps(
