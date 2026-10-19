@@ -2,18 +2,27 @@
 
 A [teachback](../glossary.md#teachback) is a teammate saying the brief back to the lead before it starts. It catches a wrong reading of the task while the fix is still cheap.
 
-## Two tasks per teammate
+## One task, two steps
 
-For each teammate, the lead creates a pair of tasks ([Task A and Task B](../glossary.md#task-a-b)):
+The lead makes one work task per teammate with `repact dispatch`. The teachback is stored on that same task, before the work. There is no separate teachback task.
 
-- **Task A**, the teachback task. The teammate writes its teachback here.
-- **Task B**, the work task. It is blocked by Task A, so it cannot start until the lead accepts.
+The brief the teammate gets names two files and the exact commands to run:
 
-The lead accepts by marking Task A `completed`. Then the teammate claims Task B and starts work.
+1. **Teachback.** It fills in the teachback file and runs `repact submit <id> --teachback <file>`.
+2. **Work, then report.** It does the work and hands in its [HANDOFF](handoff.md) with `repact submit <id>`.
+
+## Accepted automatically, or by the lead
+
+The work task carries the lead's [variety](../glossary.md#variety) scores: novelty, scope, uncertainty and risk, each from 1 to 4, and their total.
+
+- **Total below 10, and the teammate answers `yes`** (the scores fit the task): `repact submit` accepts the teachback on the spot and prints `Accepted automatically. Go on with the work.`
+- **Total 10 or more, or the teammate answers `concern` or `no`**: the teachback waits for the lead. The teammate stops and ends its turn with the one line `TEACHBACK SUBMITTED #<id>`. The lead reads it with `repact inspect <id> --key teachback` and accepts it with `repact accept <id>`, which prints the message that resumes the teammate.
+
+This works the same with plain subagents (the default) and with [Agent Teams](../glossary.md#agent-teams-flag). With Agent Teams, the waiting teammate runs [`repact-wait`](task-files-and-waits.md) instead of ending its turn, and the lead's accept wakes it.
 
 ## What a teachback holds
 
-The teammate writes one object to `metadata.teachback_submit` on Task A, with five fields:
+One JSON object with five fields:
 
 | Field | What it says |
 |---|---|
@@ -21,13 +30,15 @@ The teammate writes one object to `metadata.teachback_submit` on Task A, with fi
 | `most_likely_wrong` | The part of its reading most likely to be wrong |
 | `least_confident_item` | One assumption the lead should confirm |
 | `first_action` | The first thing it will do |
-| `variety_acknowledgment` | Whether the lead's [variety](../glossary.md#variety) scores fit this task: `yes`, `no` or `concern`, with a reason unless `yes` |
+| `variety_acknowledgment` | Whether the lead's scores fit this task: `yes`, `no` or `concern`, with a reason unless `yes` |
 
-The work task carries the lead's variety scores in `metadata.variety`: novelty, scope, uncertainty and risk, each from 1 to 4, and their total. When the total is 11 or more, the teachback must also hold `reasoning_reconstruction`, with three keys: `decision_attribution`, `assumption_trace` and `contingency_clause`.
+When the variety total is 11 or more, the teachback must also hold `reasoning_reconstruction`, with three keys: `decision_attribution`, `assumption_trace` and `contingency_clause`.
+
+`repact submit` checks the object and lists every problem in one message. Nothing is stored until it passes.
 
 ## Example
 
-A teammate is asked to add a `--verbose` flag to a toy CLI. It writes:
+A teammate is asked to add a `--verbose` flag to a toy CLI. The task's variety total is 6. It fills in its teachback file:
 
 ```json
 {
@@ -39,19 +50,18 @@ A teammate is asked to add a `--verbose` flag to a toy CLI. It writes:
 }
 ```
 
-A check reads the write and prints a [stored line](../glossary.md#stored-line):
+Then it runs the command from its brief:
 
 ```
-Teachback stored on #12 (owner backend-coder), digest 0dd58d248e04.
+repact submit 12 --as coder-1 --teachback briefs/12.teachback.json
+Teachback stored on #12. Accepted automatically. Go on with the work.
 ```
 
-Only after that line does the teammate tell the lead. Its message names the task id and the [digest](../glossary.md#digest), not the teachback itself. The lead reads the stored copy. Then the teammate sets a [wait marker](../glossary.md#wait-marker) and waits with [`repact-wait`](task-files-and-waits.md).
+## Correcting a teachback
 
-## Rejection
-
-If the reading is wrong, the lead writes `metadata.teachback_rejection` on Task A instead of completing it. That write wakes the teammate. It reads the [rejection](../glossary.md#rejection) with `repact-payload <id> --key rejection`. Then it writes the whole teachback again with `metadata.revision_number` set to 2, and tells the lead again.
+The lead does not reject a teachback. If the reading is wrong, it writes a correction on the task with `repact amend <id> --kind correction --text "..."` and sends it to the teammate. The teammate fixes its teachback file and runs `repact submit <id> --teachback <file>` again.
 
 ## Rules to remember
 
 - No code edits before the teachback is stored.
-- The teammate never completes Task A. The lead does.
+- The teammate never accepts its own teachback or completes its own task. `repact accept` is the lead's command.

@@ -34,7 +34,7 @@ The store is a SQLite file. Agents save and search only through the skill's CLI.
 
 ## Pins
 
-A [pin](../glossary.md#pin) is context you want in every session, such as "the CLI must stay on Python 3.9". Add one with `/repacted:pin-memory`. Remove pins with `/repacted:prune-memory`, which shows them page by page.
+A [pin](../glossary.md#pin) is context you want in every session, such as "the CLI must stay on Python 3.9". Add one with `/repacted:init pin`. Remove pins with `/repacted:init prune`, which shows them page by page.
 
 ## Example
 

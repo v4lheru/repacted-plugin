@@ -8,13 +8,13 @@ One session becomes the **lead**. It sizes your request, picks a workflow and ha
 
 - **You stay the reviewer, not the typist.** Hand over a fix or a feature and come back to work that was planned, built, tested and checked, with a report of what was done and what is still open. Nothing merges without you.
 - **Parallel work without a mess.** Each feature gets its own [git worktree](docs/concepts/worktrees.md) and each specialist its own fresh context, so two features, or two parts of one, are built at once without touching each other's files, and the lead's view stays small.
-- **Work lives in tasks, not in chat.** Every piece of work is a task with an owner, a brief and a status. Before a specialist starts, it says the brief back in its own words (a [teachback](docs/concepts/teachback.md)) and the lead checks it. When it finishes, it writes a report (a [HANDOFF](docs/concepts/handoff.md)) that the lead checks before it accepts the work. Corrections are written onto the task, so nothing gets lost in a scrollback.
+- **Work lives in tasks, not in chat.** Every piece of work is a task with an owner, a brief and a status. Before a specialist starts, it says the brief back in its own words (a [teachback](docs/concepts/teachback.md)); a small task goes on at once, a larger one waits for the lead. When it finishes, it hands in a report (a [HANDOFF](docs/concepts/handoff.md)), and the lead accepts the work only on a recorded passing test run of the files as they are now. Corrections are written onto the task, so nothing gets lost in a scrollback.
 - **The right amount of process.** The lead scores each request for novelty, scope, uncertainty and risk. A small fix gets one specialist (`/repacted:comPACT`), a feature gets the full cycle of prepare, architect, code and test (`/repacted:orchestrate`), and a large or risky change gets a plan first (`/repacted:plan-mode`).
-- **A project plan that survives sessions.** If you allow it, the project's task log lives in your repository (`.repacted/tasks.jsonl`, with a readable `docs/progress.md`). Come back next week, run `/repacted:next`, and the lead knows what is done and what comes next.
+- **A project plan that survives sessions.** If you allow it, the project's task log lives in your repository (`.repacted/tasks.jsonl`, with a readable `docs/progress.md`). Come back next week, run `/repacted:work` (or `repact work` from a terminal), and the lead takes the next open task. `/repacted:autopilot` works through the list on its own, until the list, the clock or the budget runs out.
 - **It remembers.** Decisions and lessons go into a memory the lead can query, and an optional [knowledge base](docs/kb.md) turns past sessions into reviewed lessons for you and your team.
 - **A safety net in every session.** [Guards](docs/concepts/guards.md) stop a leaked secret, a commit that holds a credential, and a force-push, merge or branch delete you did not approve. They work even without teams.
 
-Also: blocked work gets triaged (`/repacted:imPACT`), finished work gets a review (`/repacted:peer-review`), progress can reach you on Telegram, [packs](#packs) add new domains (an n8n pack ships), and a [recipe](#run-compact-unattended-in-ci) runs comPACT unattended in CI up to a pull request.
+Also: every question that waits on you is in one list (`/repacted:decide`), finished work gets a review (`/repacted:peer-review`), progress can reach you on Telegram, [packs](#packs) add new domains (an n8n pack ships), and a [recipe](#run-compact-unattended-in-ci) runs comPACT unattended in CI up to a pull request.
 
 ## Built on PACT
 
@@ -34,14 +34,14 @@ From a shell, the same two steps are `claude plugin marketplace add v4lheru/repa
 **Pin a version.** `/plugin marketplace add` has no option for a tag. Clone a release tag (named `repacted--v<version>`) and add the folder instead:
 
 ```
-git clone --branch repacted--v2.0.0 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
+git clone --branch repacted--v2.1.0 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
 claude plugin marketplace add ~/repacted-plugin
 claude plugin install repacted@repacted
 ```
 
 A folder marketplace runs the plugin from that folder. Keep the folder: if you move or delete it, the plugin breaks, and if you check out another tag in it, the version you run changes.
 
-## Turn on teams
+## Set up
 
 Open Claude Code in your project and run:
 
@@ -49,16 +49,18 @@ Open Claude Code in your project and run:
 /repacted:init --repo
 ```
 
-Init shows a diff first and changes your settings only after you say yes. It turns on the Agent Teams flag (an experimental Claude Code setting) and the task tools flag in your user `settings.json`, and with `--repo` it makes Claude Code start as the lead in this project. Every file it changes is first copied to `<file>.bak-<time>`. Leave out `--repo` to set up only your machine.
+Init shows a diff first and changes your settings only after you say yes. It turns on the task tools flag in your user `settings.json`, and with `--repo` it makes Claude Code start as the lead in this project. Every file it changes is first copied to `<file>.bak-<time>`. Leave out `--repo` to set up only your machine.
+
+Specialists run as plain subagents, so no other setting is needed. To run them as Agent Teams instead (an experimental Claude Code feature), add `--teams`: init then also writes the Agent Teams flag and `REPACT_EXECUTION=teams`.
 
 Restart Claude Code, then ask Claude to run `repact-doctor`. Near the end you see one of these lines:
 
 ```
-mode: guards-only (Agent Teams flag off)
-mode: full (Agent Teams on)
+execution: subagents (default)
+execution: teams (REPACT_EXECUTION=teams)
 ```
 
-In full mode, try it first with `/repacted:demo`: the lead fixes a failing test in a scratch copy of a toy project ([what happens](docs/examples/first-run.md)). Then give the lead your own work, for example:
+Try it first with `/repacted:demo`: the lead fixes a failing test in a scratch copy of a toy project ([what happens](docs/examples/first-run.md)). Then give the lead your own work, for example:
 
 ```
 /repacted:comPACT backend add a --verbose flag to the greet command
@@ -67,9 +69,18 @@ In full mode, try it first with `/repacted:demo`: the lead fixes a failing test 
 
 The [quickstart](docs/quickstart.md) walks through all of this in about ten minutes. It also lists the few files the plugin writes on its own at the first session.
 
+### Four commands for every day
+
+At the first session the plugin puts a `repact` command in `~/.local/bin`. Each one also runs as a slash command in Claude Code:
+
+- `repact work "<ask>"` or `/repacted:work <ask>`: start work on an ask; with no ask, take the next task from the log.
+- `repact inspect [id]` or `/repacted:inspect`: where the work stands, or one task's change receipt.
+- `repact decide` or `/repacted:decide`: every question that waits on you, with the command that answers it.
+- `repact resume` or `/repacted:resume`: pick up the last session.
+
 ### If specialist agents will not spawn
 
-If every specialist spawn is refused for a missing task assignment, the session has no task tools. Init sets `CLAUDE_CODE_ENABLE_TODO_TOOLS="1"`, which turns them on; start a new session after it. The [troubleshooting page](docs/troubleshooting.md#if-specialist-agents-will-not-spawn) has the check and the full story.
+If a spawn is refused with `no task dispatched`, the lead must run the `repact dispatch` command the refusal prints first. With Agent Teams, if every spawn is refused for a missing task assignment, the session has no task tools. Init sets `CLAUDE_CODE_ENABLE_TODO_TOOLS="1"`, which turns them on; start a new session after it. The [troubleshooting page](docs/troubleshooting.md#if-specialist-agents-will-not-spawn) has the check and the full story.
 
 ## Try the guards
 
@@ -85,7 +96,7 @@ You do not need a real `.env` file. The `env_guard` hook refuses the command bef
 env_guard: Blocked: this would print the contents of .env (a .env-class file) into the transcript; [...] → Pass the value to the command that needs it with `env-get FILE KEY -- <command>` (or `env-get --keys FILE` for the key names); do not print the file. [rule: env.read.operand]
 ```
 
-Every refusal has this shape: what was refused and why, then `→` and what to do instead, then the rule id. Ask Claude to run `repact-explain` to see the last refusals again.
+Every refusal has this shape: what was refused and why, then `→` and what to do instead, then the rule id. Ask Claude to run `repact inspect --refusals` to see the last refusals again.
 
 Other guards stop a credential leaving your machine, a commit that holds a secret, and a force-push, merge or branch delete until you approve it. The [guards page](docs/concepts/guards.md) lists them all.
 
@@ -94,7 +105,7 @@ Other guards stop a credential leaving your machine, a commit that holds a secre
 - The Claude Code CLI. Version 2.1.302 is tested, locally and in CI. Other Claude Code apps are not tested.
 - Python 3.9 or newer, as `python3` on your `PATH`, and git.
 - macOS (tested) or Linux (expected to work). On Windows, use WSL (expected to work, not tested). Native Windows is not supported: the hooks need POSIX file locks.
-- Optional: Telegram updates from agents. They are off until you run `/repacted:telegram-setup`.
+- Optional: Telegram updates from agents. They are off until you run `/repacted:init telegram`.
 
 ## Uninstall
 
@@ -116,7 +127,7 @@ rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/repacted"     # lock files for CLA
 ```
 
 - In each repository you used, the block from `<!-- PACT_MANAGED_START` to `<!-- PACT_MANAGED_END -->` in `.claude/CLAUDE.md`. Delete those lines, or the file if nothing else is in it.
-- Settings that init changed. Restore them from the `.bak-` copies, or remove by hand: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, `CLAUDE_CODE_ENABLE_TODO_TOOLS` and the allow rules init added in your user `settings.json`; with `--repo`, the `"agent"` line in `.claude/settings.json`, the `.repacted/` folder and the `.repacted/tasks.jsonl merge=union` line in `.gitattributes`.
+- Settings that init changed. Restore them from the `.bak-` copies, or remove by hand: `CLAUDE_CODE_ENABLE_TODO_TOOLS` and the allow rules init added in your user `settings.json`, plus `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and `REPACT_EXECUTION` if you used `--teams`; the `repact` file in `~/.local/bin`; with `--repo`, the `"agent"` line in `.claude/settings.json`, the `.repacted/` folder and the `.repacted/tasks.jsonl merge=union` line in `.gitattributes`.
 
 ## Learn more
 
@@ -128,7 +139,7 @@ rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/repacted"     # lock files for CLA
 
 ## Build a knowledge base
 
-From 2.0.0, `repact-distill` turns notes the agents already wrote, and if you allow it your lead session transcripts, into proposed lessons for a folder you own. It is off by default (`distill.enabled`). A dry run shows what it would read and cost and sends nothing. It can send through `claude -p`, the Anthropic API or the Batch API. You or the lead review the proposals one at a time or 20 at a time, and you can promote accepted lessons into a repository for your team. Read the [knowledge base guide](docs/kb.md) first: it covers privacy, cost and what to check before you distill work sessions.
+`repact-distill` turns notes the agents already wrote, and if you allow it your lead session transcripts, into proposed lessons for a folder you own. It is off by default (`distill.enabled`). A dry run shows what it would read and cost and sends nothing. It can send through `claude -p`, the Anthropic API or the Batch API. You or the lead review the proposals one at a time or 20 at a time, and you can promote accepted lessons into a repository for your team. Read the [knowledge base guide](docs/kb.md) first: it covers privacy, cost and what to check before you distill work sessions.
 
 ## Packs
 

@@ -2,7 +2,7 @@
 
 The demo shows rePACTed doing one small, real piece of work. It copies a tiny example project into a scratch directory, sends one specialist to fix its one failing test, and prints the session report. It writes nothing to your own repository.
 
-Before you start, finish steps 1 to 4 of the [quickstart](../quickstart.md), so `repact-doctor` prints `mode: full (Agent Teams on)`.
+Before you start, finish steps 1 to 4 of the [quickstart](../quickstart.md), so `repact-doctor` passes its checks. It works with plain subagents (the default) and with Agent Teams.
 
 ## Run it
 

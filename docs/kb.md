@@ -1,6 +1,6 @@
 # Build your knowledge base
 
-rePACTed can turn what your agents learned into short lessons in a folder you own. A model reads the notes, proposes lessons, and you or the lead review each one before it lands. This page walks you through it, from a first dry run to sharing a lesson with your team. You need rePACTed 2.0.0 or newer.
+rePACTed can turn what your agents learned into short lessons in a folder you own. A model reads the notes, proposes lessons, and you or the lead review each one before it lands. This page walks you through it, from a first dry run to sharing a lesson with your team. You need rePACTed 2.0.0 or newer; this page describes 2.1.0.
 
 **Off by default.** Nothing on this page sends anything anywhere until you turn it on. Read [Privacy](#privacy) and [Before you distill work sessions](#before-you-distill-work-sessions) first.
 
@@ -142,7 +142,7 @@ Add `--no-auto-accept` to queue every proposal for review, or `--no-propose` to 
 
 Each lesson the model proposes is checked first. A lesson that still holds a secret or a listed name is dropped. A lesson with a proper noun the checks do not know, phrasing that reads like an order to an agent, injection phrasing, or a copied `[REDACTED:...]` marker is **held**: it waits for you. Everything else waits in the queue too, until someone decides it.
 
-**Who decides.** At `/repacted:wrap-up`, the lead lists the queue and decides the items proposed in earlier sessions. The session that proposed an item never decides it. The lead may reject or defer a held item, but it cannot accept one. You can also decide any item yourself.
+**Who decides.** At `/repacted:wrap-up`, the lead lists the queue and decides the items proposed in earlier sessions. The session that proposed an item never decides it. The lead may reject or defer a held item, but it cannot accept one. You can also decide any item yourself. `repact decide` lists held items among the other questions that wait on you, and prints the command to run at your own terminal.
 
 List the queue:
 

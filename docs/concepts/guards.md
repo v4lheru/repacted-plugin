@@ -1,6 +1,6 @@
 # Guards
 
-A [guard](../glossary.md#guard) is a hook that reads a tool call before it runs. It can let the call through, refuse it, or hide a secret in its output. Guards work in every session, also in [guards-only mode](../glossary.md#guards-only-mode).
+A [guard](../glossary.md#guard) is a hook that reads a tool call before it runs. It can let the call through, refuse it, or hide a secret in its output. Guards work in every session, whether specialists run or not.
 
 ## The main guards
 
@@ -37,7 +37,7 @@ The merge guard refuses, and its way through tells Claude to ask you with `AskUs
 
 ## Example
 
-Claude tries `git push --force origin main`, and the merge guard refuses it. To see why, ask Claude to run [`repact-explain`](../glossary.md#repact-explain) `--last`:
+Claude tries `git push --force origin main`, and the merge guard refuses it. To see why, ask Claude to run [`repact inspect`](../glossary.md#repact-inspect) `--refusals last`:
 
 ```
 2026-01-15T09:32:00Z  merge_guard_pre  deny  mg.force_push.explicit
@@ -51,7 +51,7 @@ The `doc` line points to the [troubleshooting section](../troubleshooting.md#mg-
 
 ## Checking your setup
 
-The [doctor](../glossary.md#doctor), `repact-doctor`, prints one line per check, then `mode: guards-only (Agent Teams flag off)` or `mode: full (Agent Teams on)`.
+The [doctor](../glossary.md#doctor), `repact-doctor`, prints one line per check, then the [execution mode](../glossary.md#execution-mode) (`execution: subagents (default)`, or `execution: teams` when you turned Agent Teams on) and the tested-host line. The guards work the same in either mode.
 
 ## Limits
 

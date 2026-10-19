@@ -28,7 +28,7 @@ body:
     id: refusal
     attributes:
       label: Refusal line or error
-      description: "If a guard refused something, paste the whole line, including the `[rule: ...]` part. Ask Claude to run `repact-explain` to see it again."
+      description: "If a guard refused something, paste the whole line, including the `[rule: ...]` part. Ask Claude to run `repact inspect --refusals` to see it again."
       render: text
   - type: textarea
     id: doctor
