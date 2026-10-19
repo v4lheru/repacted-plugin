@@ -1,37 +1,149 @@
+<div align="center">
+
 # rePACTed
 
-You describe the work. rePACTed turns Claude Code into a small engineering team that plans it, builds it, tests it and reviews it, and keeps every step on disk.
+**Your Claude Code session becomes a small engineering team.**
 
-One session becomes the **lead**. It sizes your request, picks a workflow and hands the pieces to **specialists**: a preparer for research, an architect, backend, frontend, database and devops coders, a test engineer, a security reviewer and a QA engineer. You decide what gets merged; the rest runs on its own.
+[![Version](https://img.shields.io/badge/version-2.1.0-6f42c1)](pact-plugin/CHANGELOG.md)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#install)
+[![Fork of PACT](https://img.shields.io/badge/fork%20of-PACT-555)](https://github.com/Synaptic-Labs-AI/PACT-Plugin)
 
-## Why developers use it
+</div>
 
-- **You stay the reviewer, not the typist.** Hand over a fix or a feature and come back to work that was planned, built, tested and checked, with a report of what was done and what is still open. Nothing merges without you.
-- **Parallel work without a mess.** Each feature gets its own [git worktree](docs/concepts/worktrees.md) and each specialist its own fresh context, so two features, or two parts of one, are built at once without touching each other's files, and the lead's view stays small.
-- **Work lives in tasks, not in chat.** Every piece of work is a task with an owner, a brief and a status. Before a specialist starts, it says the brief back in its own words (a [teachback](docs/concepts/teachback.md)); a small task goes on at once, a larger one waits for the lead. When it finishes, it hands in a report (a [HANDOFF](docs/concepts/handoff.md)), and the lead accepts the work only on a recorded passing test run of the files as they are now. Corrections are written onto the task, so nothing gets lost in a scrollback.
-- **The right amount of process.** The lead scores each request for novelty, scope, uncertainty and risk. A small fix gets one specialist (`/repacted:comPACT`), a feature gets the full cycle of prepare, architect, code and test (`/repacted:orchestrate`), and a large or risky change gets a plan first (`/repacted:plan-mode`).
-- **A project plan that survives sessions.** If you allow it, the project's task log lives in your repository (`.repacted/tasks.jsonl`, with a readable `docs/progress.md`). Come back next week, run `/repacted:work` (or `repact work` from a terminal), and the lead takes the next open task. `/repacted:autopilot` works through the list on its own, until the list, the clock or the budget runs out.
-- **It remembers.** Decisions and lessons go into a memory the lead can query, and an optional [knowledge base](docs/kb.md) turns past sessions into reviewed lessons for you and your team.
-- **A safety net in every session.** [Guards](docs/concepts/guards.md) stop a leaked secret, a commit that holds a credential, and a force-push, merge or branch delete you did not approve. They work even without teams.
+> rePACTed is a fork of **[PACT](https://github.com/Synaptic-Labs-AI/PACT-Plugin)**, the agent team for Claude Code created by **[Professor Synapse](https://github.com/ProfSynapse)** at **Synaptic Labs** and built out by **[MJ Wojcik](https://github.com/michael-wojcik)**, its most active contributor. The core idea is theirs: a lead that runs a team of specialists through **P**repare, **A**rchitect, **C**ode and **T**est. rePACTed adds a task system with evidence checks, guards, a task log that lives in your repo, autopilot and a knowledge base. [Full credits ↓](#credits)
 
-Also: every question that waits on you is in one list (`/repacted:decide`), finished work gets a review (`/repacted:peer-review`), progress can reach you on Telegram, [packs](#packs) add new domains (an n8n pack ships), and a [recipe](#run-compact-unattended-in-ci) runs comPACT unattended in CI up to a pull request.
-
-## Built on PACT
-
-rePACTed stands on [PACT-Plugin](https://github.com/Synaptic-Labs-AI/PACT-Plugin) by Synaptic Labs. PACT gave it its core: the Prepare, Architect, Code, Test cycle and a lead that runs a team of specialists. rePACTed is an independent fork of PACT v4.8.1 that builds on that core with the project task log, the knowledge base, its secret and git guards, setup with `/repacted:init`, packs, team policy and the unattended CI recipe. It is not affiliated with or endorsed by Synaptic Labs. See [NOTICE](pact-plugin/NOTICE.md).
-
-## Install
-
-In Claude Code, run:
+You describe the work. A **lead** sizes it and hands the pieces to **specialists**, each in its own git worktree. The lead accepts each piece only with test evidence, and **nothing merges without you.**
 
 ```
 /plugin marketplace add v4lheru/repacted-plugin
 /plugin install repacted@repacted
 ```
 
-From a shell, the same two steps are `claude plugin marketplace add v4lheru/repacted-plugin` and `claude plugin install repacted@repacted`. Then restart Claude Code. Do not turn on rePACTed and the original PACT plugin at the same time: both would run their hooks on every event.
+---
 
-**Pin a version.** `/plugin marketplace add` has no option for a tag. Clone a release tag (named `repacted--v<version>`) and add the folder instead:
+## How it works
+
+```mermaid
+flowchart LR
+    you(["🧑 You<br/>describe the work"]) --> lead{"🎯 Lead<br/>scores novelty, scope,<br/>uncertainty and risk"}
+
+    lead -->|small fix| compact["⚡ comPACT<br/>one specialist"]
+    lead -->|feature| orch["🔁 orchestrate<br/>Prepare → Architect → Code → Test"]
+    lead -->|large or risky| plan["🗺️ plan-mode<br/>a plan you approve"]
+    plan --> orch
+
+    compact --> team
+    orch --> team
+
+    subgraph team ["👥 Specialists, each in its own git worktree"]
+        direction TB
+        prep["🔎 preparer"]
+        arch["📐 architect"]
+        code["💻 backend · frontend<br/>database · devops"]
+        test["🧪 test engineer"]
+        sec["🛡️ security · QA"]
+    end
+
+    team --> check["✅ Evidence check<br/>a recorded passing run<br/>of the files as they are now"]
+    check --> review["🔍 peer review"]
+    review --> merge(["🧑 You decide<br/>what merges"])
+```
+
+The lead scores every request, so a typo fix doesn't get the whole cycle and a risky change doesn't skip the plan.
+
+---
+
+## What's inside
+
+| | Feature | What it does for you |
+|:-:|---|---|
+| 📋 | **[Task system](docs/concepts/task-files-and-waits.md)** | Every piece of work is a task with an owner, a brief and a status, saved on disk, not in chat. Corrections are written onto the task, so none get lost in the scrollback. |
+| 🗣️ | **[Teachback](docs/concepts/teachback.md)** | Before a specialist starts, it says the brief back in its own words. A misunderstanding is caught before any code is written. |
+| ✅ | **[Evidence-checked handoffs](docs/concepts/handoff.md)** | A finished task comes with a report (a HANDOFF). Code is accepted only with a recorded passing test run of the files as they are now. For a fix or a feature, a failing run must come first. |
+| 🔒 | **Protected task state** | Task files are guarded, so a specialist can't mark its own work as done by rewriting the file. Only the lead accepts. |
+| 🌳 | **[Parallel worktrees](docs/concepts/worktrees.md)** | Each feature gets its own git worktree, and each specialist starts with a fresh context. Two features are built at once without touching each other's files. |
+| 🗂️ | **Task log in your repo** | `.repacted/tasks.jsonl`, plus a readable `docs/progress.md`. Come back next week, run `repact work`, and the lead takes the next open task. |
+| 🤖 | **Autopilot** | `/repacted:autopilot` works through the task log on its own and stops when the list, the clock or the budget runs out. A task it can't finish is parked for you, not faked. |
+| 🧾 | **Change receipt** | `repact inspect <id>` shows what changed, which tests back it, and what is still open. |
+| 📥 | **Decision inbox** | `repact decide` lists every question that waits on you, each with the command that answers it. |
+| 🛡️ | **[Guards](docs/concepts/guards.md)** | These stop a leaked secret, a commit that holds a credential, and a force-push, merge or branch delete you didn't approve. Each refusal says why and what to do instead. |
+| 🧠 | **[Memory and knowledge base](docs/kb.md)** | Decisions and lessons go into a memory the lead can query. The optional knowledge base turns past sessions into lessons that you review before they are kept. |
+| 💰 | **Cost control** | A one-line cost preview before a workflow, and a spend cap per session in your team policy. |
+| 📜 | **Team policy** | One file per repo that can only tighten the rules, never loosen them. Bring your own specialist agents if you need them. |
+| 🧩 | **Packs** | Add a domain as a second plugin. An n8n pack ships today. |
+| 🏗️ | **Unattended CI** | A recipe that runs comPACT on a labelled GitHub issue and stops at a draft pull request for a person to review. |
+| 📱 | **Telegram (optional)** | Progress and questions can reach your phone. |
+
+---
+
+## A task's life
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant L as 🎯 Lead
+    participant T as 📋 Task file
+    participant S as 🛠️ Specialist
+    participant E as ✅ Evidence check
+
+    L->>T: repact dispatch: brief, owner, risk score
+    S->>T: teachback: the brief in its own words
+    Note over L,S: A small task starts at once.<br/>A larger one waits for the lead's OK.
+    S->>S: builds in its own worktree,<br/>shows the test failing, then passing
+    S->>T: repact submit: the HANDOFF report
+    T->>E: is there a recorded passing run<br/>of these files as they are now?
+    E-->>L: the verdict
+    alt evidence holds
+        L->>T: repact accept
+    else something is off
+        L->>T: repact reject, with the corrections
+        T-->>S: the corrections are on the task, not in chat
+    end
+```
+
+Specialists run as plain subagents by default, or as Agent Teams if you turn that on. The task works the same way in both modes.
+
+---
+
+## Pick the right amount of process
+
+| Request | Lead's score | Workflow | What happens |
+|---|:-:|---|---|
+| "Fix the off-by-one in the pager" | 4-6 | `/repacted:comPACT` | One specialist, one test, done. |
+| "Add a config file for defaults" | 7-10 | `/repacted:orchestrate` | Prepare → Architect → Code → Test, with specialists in parallel where it's safe. |
+| "Move auth to a new provider" | 11-14 | `/repacted:plan-mode` | Specialists are consulted, a plan is written, and work starts once you approve it. |
+
+The score adds up four ratings from 1 to 4: novelty, scope, uncertainty and risk.
+
+---
+
+## Install
+
+In Claude Code:
+
+```
+/plugin marketplace add v4lheru/repacted-plugin
+/plugin install repacted@repacted
+```
+
+Then open your project and run:
+
+```
+/repacted:init --repo
+```
+
+Init shows a diff and changes nothing until you say yes. Every file it changes is first copied to `<file>.bak-<time>`. Restart Claude Code, then try **`/repacted:demo`**: the lead fixes a failing test in a scratch copy of a toy project ([what happens](docs/examples/first-run.md)).
+
+Don't turn on rePACTed and the original PACT plugin together: both would run their hooks on every event.
+
+<details>
+<summary><b>From a shell, pin a version, or use Agent Teams</b></summary>
+
+From a shell: `claude plugin marketplace add v4lheru/repacted-plugin` and then `claude plugin install repacted@repacted`.
+
+**Pin a version.** `/plugin marketplace add` has no option for a tag, so clone a release tag and add the folder instead:
 
 ```
 git clone --branch repacted--v2.1.0 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
@@ -39,84 +151,95 @@ claude plugin marketplace add ~/repacted-plugin
 claude plugin install repacted@repacted
 ```
 
-A folder marketplace runs the plugin from that folder. Keep the folder: if you move or delete it, the plugin breaks, and if you check out another tag in it, the version you run changes.
+Keep that folder: the plugin runs from it.
 
-## Set up
+**Agent Teams.** To run specialists as Agent Teams (an experimental Claude Code feature), use `/repacted:init --repo --teams`. Ask Claude to run `repact-doctor` and look for the `execution:` line: `subagents (default)` or `teams (REPACT_EXECUTION=teams)`.
 
-Open Claude Code in your project and run:
+**Specialists will not spawn?** If a spawn is refused with `no task dispatched`, the lead must first run the `repact dispatch` command the refusal prints. More in [troubleshooting](docs/troubleshooting.md#if-specialist-agents-will-not-spawn).
 
-```
-/repacted:init --repo
-```
+</details>
 
-Init shows a diff first and changes your settings only after you say yes. It turns on the task tools flag in your user `settings.json`, and with `--repo` it makes Claude Code start as the lead in this project. Every file it changes is first copied to `<file>.bak-<time>`. Leave out `--repo` to set up only your machine.
+---
 
-Specialists run as plain subagents, so no other setting is needed. To run them as Agent Teams instead (an experimental Claude Code feature), add `--teams`: init then also writes the Agent Teams flag and `REPACT_EXECUTION=teams`.
+## Every day
 
-Restart Claude Code, then ask Claude to run `repact-doctor`. Near the end you see one of these lines:
+At the first session, the plugin puts a `repact` command in `~/.local/bin`. Each command also works as a slash command.
 
-```
-execution: subagents (default)
-execution: teams (REPACT_EXECUTION=teams)
-```
-
-Try it first with `/repacted:demo`: the lead fixes a failing test in a scratch copy of a toy project ([what happens](docs/examples/first-run.md)). Then give the lead your own work, for example:
+| Command | What it does |
+|---|---|
+| `repact work "<ask>"` | Start work on an ask. With no ask, take the next task from the log. |
+| `repact inspect [id]` | Where the work stands, or one task's change receipt. |
+| `repact decide` | Every question that waits on you. |
+| `repact resume` | Pick up the last session. |
+| `/repacted:comPACT` | A small, self-contained change, done by one specialist. |
+| `/repacted:orchestrate` | A feature through the full cycle. |
+| `/repacted:plan-mode` | A plan first, for large or risky work. |
+| `/repacted:autopilot` | Work through the task log until the list, the clock or the budget runs out. |
+| `/repacted:peer-review` | A review of finished work before you merge. |
 
 ```
 /repacted:comPACT backend add a --verbose flag to the greet command
 /repacted:orchestrate add a config file that sets the default greeting
 ```
 
-The [quickstart](docs/quickstart.md) walks through all of this in about ten minutes. It also lists the few files the plugin writes on its own at the first session.
+---
 
-### Four commands for every day
+## See a guard work
 
-At the first session the plugin puts a `repact` command in `~/.local/bin`. Each one also runs as a slash command in Claude Code:
-
-- `repact work "<ask>"` or `/repacted:work <ask>`: start work on an ask; with no ask, take the next task from the log.
-- `repact inspect [id]` or `/repacted:inspect`: where the work stands, or one task's change receipt.
-- `repact decide` or `/repacted:decide`: every question that waits on you, with the command that answers it.
-- `repact resume` or `/repacted:resume`: pick up the last session.
-
-### If specialist agents will not spawn
-
-If a spawn is refused with `no task dispatched`, the lead must run the `repact dispatch` command the refusal prints first. With Agent Teams, if every spawn is refused for a missing task assignment, the session has no task tools. Init sets `CLAUDE_CODE_ENABLE_TODO_TOOLS="1"`, which turns them on; start a new session after it. The [troubleshooting page](docs/troubleshooting.md#if-specialist-agents-will-not-spawn) has the check and the full story.
-
-## Try the guards
-
-Guards work in every session, with or without teams. Ask Claude:
+Ask Claude to `Run cat .env`. You don't need a real `.env` file: the guard refuses the command before it runs.
 
 ```
-Run cat .env
+env_guard: Blocked: this would print the contents of .env (a .env-class file) into the transcript; [...]
+→ Pass the value to the command that needs it with `env-get FILE KEY -- <command>`; do not print the file. [rule: env.read.operand]
 ```
 
-You do not need a real `.env` file. The `env_guard` hook refuses the command before it runs. Claude gets this line (trimmed in the middle):
+Every refusal has the same shape: **what** was refused and why, **→ what to do instead**, and the **rule id**. `repact inspect --refusals` shows the recent ones. The [guards page](docs/concepts/guards.md) lists every guard, and what each one does not cover.
+
+---
+
+## More
+
+<details>
+<summary><b>🧠 Build a knowledge base</b></summary>
+
+`repact-distill` turns notes the agents already wrote, and if you allow it your lead session transcripts, into proposed lessons for a folder you own. It is off by default (`distill.enabled`). A dry run shows what it would read and what it would cost, and sends nothing. It can send through `claude -p`, the Anthropic API or the Batch API. You or the lead review the proposals one at a time or 20 at a time, and you can promote accepted lessons into a repository for your team. Read the [knowledge base guide](docs/kb.md) first: it covers privacy, cost, and what to check before you distill work sessions.
+
+</details>
+
+<details>
+<summary><b>🧩 Packs</b></summary>
+
+A pack is a second plugin in the same marketplace that adds skills and specialists. The first one adds n8n skills and a `pact-n8n` specialist that builds workflows over the n8n REST API:
 
 ```
-env_guard: Blocked: this would print the contents of .env (a .env-class file) into the transcript; [...] → Pass the value to the command that needs it with `env-get FILE KEY -- <command>` (or `env-get --keys FILE` for the key names); do not print the file. [rule: env.read.operand]
+/plugin install repacted-n8n@repacted
 ```
 
-Every refusal has this shape: what was refused and why, then `→` and what to do instead, then the rule id. Ask Claude to run `repact inspect --refusals` to see the last refusals again.
+</details>
 
-Other guards stop a credential leaving your machine, a commit that holds a secret, and a force-push, merge or branch delete until you approve it. The [guards page](docs/concepts/guards.md) lists them all.
+<details>
+<summary><b>🏗️ Run comPACT unattended in CI</b></summary>
 
-## Requirements
+A recipe and a workflow template run `/repacted:comPACT` on a labelled issue in GitHub Actions and stop at a draft pull request that a person reviews. Read the [unattended CI recipe](pact-plugin/docs/recipes/unattended-ci.md) before the first run: it covers the setup, what limits the run, and what it costs.
 
-- The Claude Code CLI. Version 2.1.302 is tested, locally and in CI. Other Claude Code apps are not tested.
-- Python 3.9 or newer, as `python3` on your `PATH`, and git.
-- macOS (tested) or Linux (expected to work). On Windows, use WSL (expected to work, not tested). Native Windows is not supported: the hooks need POSIX file locks.
-- Optional: Telegram updates from agents. They are off until you run `/repacted:init telegram`.
+</details>
 
-## Uninstall
+<details>
+<summary><b>⏱️ Hook latency</b></summary>
 
-From a shell:
+Hooks run on every tool call. On a recent Mac (Apple silicon, Python 3.14, 30 recorded runs), a Bash call adds about 250 ms at p50: the time its two hook processes take, from start to exit. `repact-report` prints p50 and p95 for each hook from your own sessions, and CI fails if a hook slows down past its budget.
+
+</details>
+
+<details>
+<summary><b>🗑️ Uninstall</b></summary>
 
 ```
 claude plugin uninstall repacted@repacted
 claude plugin marketplace remove repacted
 ```
 
-Uninstall also deletes the plugin's data folder. Add `--keep-data` to keep it. These stay behind; remove them by hand. The original PACT plugin uses the same `pact-sessions` folder and may use the same link names, so the lines that would also remove its files are commented out: if you do not use it, remove the `#` before running them; if you do, check where the links point first (`ls -l`) and keep `pact-sessions`.
+Uninstall also deletes the plugin's data folder; add `--keep-data` to keep it. The commands below remove what stays behind. The original PACT plugin uses the same `pact-sessions` folder and may use the same link names, so the lines that would also remove its files are commented out. If you don't use PACT, remove the `#` before running them. If you do, check where the links point first (`ls -l`) and keep `pact-sessions`.
 
 ```
 C="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -126,36 +249,38 @@ rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/repacted"     # lock files for CLA
 # rm -rf "$C/pact-sessions"                              # session journals and state
 ```
 
-- In each repository you used, the block from `<!-- PACT_MANAGED_START` to `<!-- PACT_MANAGED_END -->` in `.claude/CLAUDE.md`. Delete those lines, or the file if nothing else is in it.
-- Settings that init changed. Restore them from the `.bak-` copies, or remove by hand: `CLAUDE_CODE_ENABLE_TODO_TOOLS` and the allow rules init added in your user `settings.json`, plus `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and `REPACT_EXECUTION` if you used `--teams`; the `repact` file in `~/.local/bin`; with `--repo`, the `"agent"` line in `.claude/settings.json`, the `.repacted/` folder and the `.repacted/tasks.jsonl merge=union` line in `.gitattributes`.
+- **The managed block in each repository you used:** the lines from `<!-- PACT_MANAGED_START` to `<!-- PACT_MANAGED_END -->` in `.claude/CLAUDE.md`.
+- **Settings that init changed:** restore them from the `.bak-` copies, or remove them by hand:
+  - `CLAUDE_CODE_ENABLE_TODO_TOOLS` and the allow rules init added to your user `settings.json`;
+  - `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and `REPACT_EXECUTION`, if you used `--teams`;
+  - the `repact` file in `~/.local/bin`;
+  - with `--repo`: the `"agent"` line in `.claude/settings.json`, the `.repacted/` folder, and the `.repacted/tasks.jsonl merge=union` line in `.gitattributes`.
+
+</details>
+
+---
+
+## Requirements
+
+- **Claude Code CLI.** Version 2.1.302 is tested, locally and in CI. Other Claude Code apps are not tested.
+- **Python 3.9 or newer** as `python3` on your `PATH`, and **git**.
+- **macOS** (tested) or **Linux** (expected to work). On Windows, use WSL (expected to work, not tested). Native Windows is not supported, because the hooks need POSIX file locks.
 
 ## Learn more
 
-- [Quickstart](docs/quickstart.md): install, set up, first team, in about ten minutes.
-- [Concepts](docs/concepts/index.md): the lead, teammates, tasks, guards and memory.
-- [Glossary](docs/glossary.md): every word and key in one table.
-- [Troubleshooting](docs/troubleshooting.md): one section for each rule id.
-- [Knowledge base](docs/kb.md): distill lessons, review them and share them with your team.
+[Quickstart](docs/quickstart.md) · [Concepts](docs/concepts/index.md) · [Glossary](docs/glossary.md) · [Troubleshooting](docs/troubleshooting.md) · [Knowledge base](docs/kb.md) · [Changelog](pact-plugin/CHANGELOG.md)
 
-## Build a knowledge base
+---
 
-`repact-distill` turns notes the agents already wrote, and if you allow it your lead session transcripts, into proposed lessons for a folder you own. It is off by default (`distill.enabled`). A dry run shows what it would read and cost and sends nothing. It can send through `claude -p`, the Anthropic API or the Batch API. You or the lead review the proposals one at a time or 20 at a time, and you can promote accepted lessons into a repository for your team. Read the [knowledge base guide](docs/kb.md) first: it covers privacy, cost and what to check before you distill work sessions.
+## Credits
 
-## Packs
+rePACTed stands on **[PACT-Plugin](https://github.com/Synaptic-Labs-AI/PACT-Plugin)**. Thank you to:
 
-A pack is a second plugin in the same marketplace that adds skills and specialists. The first one adds n8n skills and a `pact-n8n` specialist for building workflows over the n8n REST API:
+- **[Professor Synapse](https://github.com/ProfSynapse) / Synaptic Labs**, who created PACT and the Prepare, Architect, Code, Test method behind it.
+- **[MJ Wojcik](https://github.com/michael-wojcik)**, PACT's most active contributor by far.
+- Everyone else who contributed to PACT.
 
-```
-/plugin install repacted-n8n@repacted
-```
-
-## Run comPACT unattended in CI
-
-A recipe and a workflow template run `/repacted:comPACT` on a labelled issue in GitHub Actions and stop at a draft pull request that a person reviews. Read the [unattended CI recipe](pact-plugin/docs/recipes/unattended-ci.md) before the first run: it covers the setup, what holds the run back and what it costs.
-
-## Hook latency
-
-Hooks run on every tool call. On a recent Mac (Apple silicon, Python 3.14, 30 recorded runs) a Bash call adds about 250 ms at p50: the wall time of its two hook processes, Pre plus Post, from spawn to exit. `repact-report` prints p50 and p95 for each hook from your own sessions, and CI fails if a hook slows down past its budget.
+rePACTed is an independent fork of PACT v4.8.1 (commit `0cd9e88b`). It is maintained by [Uros Pesic](https://github.com/v4lheru) and is not affiliated with or endorsed by Synaptic Labs. PACT's MIT license is kept unchanged in [LICENSE](LICENSE); see [NOTICE](pact-plugin/NOTICE.md).
 
 ## Contributing, security, license
 
