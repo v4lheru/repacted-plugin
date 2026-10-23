@@ -4,7 +4,7 @@
 
 **Your Claude Code session becomes a small engineering team.**
 
-[![Version](https://img.shields.io/badge/version-2.1.1-6f42c1)](pact-plugin/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.1.2-6f42c1)](pact-plugin/CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#install)
@@ -107,7 +107,7 @@ From a shell: `claude plugin marketplace add v4lheru/repacted-plugin` and then `
 **Pin a version.** `/plugin marketplace add` has no option for a tag, so clone a release tag and add the folder instead:
 
 ```
-git clone --branch repacted--v2.1.1 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
+git clone --branch repacted--v2.1.2 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
 claude plugin marketplace add ~/repacted-plugin
 claude plugin install repacted@repacted
 ```

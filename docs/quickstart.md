@@ -25,7 +25,7 @@ Use rePACTed and the original PACT plugin one at a time, never both at once. Bot
 **To pin a version**, clone a release tag and add the folder as the marketplace instead (if you already added the GitHub marketplace, first run `claude plugin marketplace remove repacted`):
 
 ```
-git clone --branch repacted--v2.1.1 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
+git clone --branch repacted--v2.1.2 https://github.com/v4lheru/repacted-plugin.git ~/repacted-plugin
 claude plugin marketplace add ~/repacted-plugin
 claude plugin install repacted@repacted
 ```
