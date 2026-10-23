@@ -47,8 +47,10 @@ To make the import work:
 From the repository root, with Python 3.9 or newer and pytest:
 
 ```
-python3 -m pytest -q pact-plugin/tests
+REPACT_PURITY_NO_DENYLIST=1 python3 -m pytest -q pact-plugin/tests
 ```
+
+`REPACT_PURITY_NO_DENYLIST=1` tells the purity check that this checkout has no private name list, as CI does; without it, that check fails with errors.
 
 For a change in one area, run only the test files that cover it. To check the plugin manifest, run:
 

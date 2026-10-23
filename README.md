@@ -14,7 +14,7 @@
 
 > rePACTed is a fork of **[PACT](https://github.com/Synaptic-Labs-AI/PACT-Plugin)**, the agent team for Claude Code created by **[Professor Synapse](https://github.com/ProfSynapse)** at **Synaptic Labs** and built out by **[MJ Wojcik](https://github.com/michael-wojcik)**, its most active contributor. The core idea is theirs: a lead that runs a team of specialists through **P**repare, **A**rchitect, **C**ode and **T**est. rePACTed adds a task system with evidence checks, guards, a task log that lives in your repo, autopilot and a knowledge base. [Full credits ↓](#credits)
 
-You describe the work. A **lead** sizes it and hands the pieces to **specialists**, each in its own git worktree. The lead accepts each piece only with test evidence, and **nothing merges without you.**
+You describe the work. A **lead** sizes it and hands the pieces to **specialists**, each in its own git worktree. The lead accepts each piece only with a recorded test run, and **asks you before anything merges.**
 
 ```
 /plugin marketplace add v4lheru/repacted-plugin
@@ -40,14 +40,14 @@ The lead scores every request, so a typo fix doesn't get the whole cycle and a r
 |---|---|
 | **[Task system](docs/concepts/task-files-and-waits.md)** | Every piece of work is a task with an owner, a brief and a status, saved on disk, not in chat. Corrections are written onto the task, so none get lost in the scrollback. |
 | **[Teachback](docs/concepts/teachback.md)** | Before a specialist starts, it says the brief back in its own words. A misunderstanding is caught before any code is written. |
-| **[Evidence-checked handoffs](docs/concepts/handoff.md)** | A finished task comes with a report (a HANDOFF). Code is accepted only with a recorded passing test run of the files as they are now. For a fix or a feature, a failing run must come first. |
-| **Protected task state** | Task files are guarded, so a specialist can't mark its own work as done by rewriting the file. Only the lead accepts. |
+| **[Evidence-checked handoffs](docs/concepts/handoff.md)** | A finished task comes with a report (a HANDOFF). Code is accepted only with a recorded `tcount` run that passes on the files as they are now. For a fix or a feature, a recorded failing run must come first. This shows that a run happened, not that the test covers the change. |
+| **Protected task state** | Task files are guarded against a specialist rewriting them to mark its own work as done; the guard catches the common routes ([limits](docs/concepts/guards.md#limits)). Acceptance is the lead's step, and it needs the recorded runs above. |
 | **[Parallel worktrees](docs/concepts/worktrees.md)** | Each feature gets its own git worktree, and each specialist starts with a fresh context. Two features are built at once without touching each other's files. |
 | **Task log in your repo** | `.repacted/tasks.jsonl`, plus a readable `docs/progress.md`. Come back next week, run `repact work`, and the lead takes the next open task. |
 | **Autopilot** | `/repacted:autopilot` works through the task log on its own and stops when the list, the clock or the budget runs out. A task it can't finish is parked for you, not faked. |
 | **Change receipt** | `repact inspect <id>` shows what changed, which tests back it, and what is still open. |
 | **Decision inbox** | `repact decide` lists every question that waits on you, each with the command that answers it. |
-| **[Guards](docs/concepts/guards.md)** | These stop a leaked secret, a commit that holds a credential, and a force-push, merge or branch delete you didn't approve. Each refusal says why and what to do instead. |
+| **[Guards](docs/concepts/guards.md)** | Guardrails that catch the common cases of a leaked secret, a commit that holds a credential, and a force-push, merge or branch delete you didn't approve. They read the command's words, so they have [limits](docs/concepts/guards.md#limits). Each refusal says why and what to do instead. |
 | **[Memory and knowledge base](docs/kb.md)** | Decisions and lessons go into a memory the lead can query. The optional knowledge base turns past sessions into lessons that you review before they are kept. |
 | **Cost control** | A one-line cost preview before a workflow, and a spend cap per session in your team policy. |
 | **Team policy** | One file per repo that can only tighten the rules, never loosen them. Bring your own specialist agents if you need them. |
@@ -97,7 +97,7 @@ Then open your project and run:
 
 Init shows a diff and changes nothing until you say yes. Every file it changes is first copied to `<file>.bak-<time>`. Restart Claude Code, then try **`/repacted:demo`**: the lead fixes a failing test in a scratch copy of a toy project ([what happens](docs/examples/first-run.md)).
 
-Don't turn on rePACTed and the original PACT plugin together: both would run their hooks on every event.
+Use rePACTed and the original PACT plugin one at a time, never both at once: both would run their hooks on every event. [Taking turns](docs/reference/bin.md#one-product-at-a-time) says how `repact` switches between them.
 
 <details>
 <summary><b>From a shell, pin a version, or use Agent Teams</b></summary>

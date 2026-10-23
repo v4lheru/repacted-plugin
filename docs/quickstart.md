@@ -20,7 +20,7 @@ claude plugin marketplace add v4lheru/repacted-plugin
 claude plugin install repacted@repacted
 ```
 
-Do not turn on rePACTed and the original PACT plugin at the same time. Both would run their hooks on every event. Restart Claude Code after the install.
+Use rePACTed and the original PACT plugin one at a time, never both at once. Both would run their hooks on every event ([taking turns](reference/bin.md#one-product-at-a-time)). Restart Claude Code after the install.
 
 **To pin a version**, clone a release tag and add the folder as the marketplace instead (if you already added the GitHub marketplace, first run `claude plugin marketplace remove repacted`):
 

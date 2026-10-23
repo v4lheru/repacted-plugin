@@ -56,7 +56,9 @@ The [doctor](../glossary.md#doctor), `repact-doctor`, prints one line per check,
 ## Limits
 
 - Guards read words, not intent. A command they cannot parse is refused or scanned as widely as possible.
-- A script built at run time, such as `eval "$(...)"`, is not followed.
+- A program name taken from the environment, a script file, or a download piped to a shell (`curl ... | sh`) is not read.
+- A command whose program or script is built at run time, such as `eval "$(...)"`, is refused. A small set of literal shell-setup forms is allowed, such as `eval "$(ssh-agent -s)"` and `<tool> completion <shell>`.
+- The merge approval step prevents accidental merges and pushes. It does not stop a determined process that has shell access.
 - The output scan covers Bash output only.
 
 Never edit a settings file to get past a refusal. Follow the `→` part, or ask the user.
