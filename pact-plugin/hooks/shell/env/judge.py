@@ -85,10 +85,36 @@ def _sub_paths(words: list[str], state: _State, cwd: str, shown: bool = False) -
     """The protected paths named by the substitutions these words carry ($(ls .env)), and
     with `shown` the names they print as text ($(printf '.e%s' nv) is .env)."""
     return [w for word in words for key in _SUB_KEY.findall(word) if key in state.subs
-            for step in _command_steps(state.subs[key])[0]
+            for steps in [_command_steps(state.subs[key])[0]]
+            for index, step in enumerate(steps)
             for w in _printing_words(step.words, state) + step.stdin
             + ((_printed_text(step, state) or "").split() if shown else [])
+            + (_decoded_text(steps, index, state).split() if shown else [])
             if token_protected(w, cwd)]
+
+
+_DECODE_OPTIONS = frozenset({"-d", "-D", "--decode"})
+
+
+def _decoded_text(steps: list[_Step], index: int, state: _State) -> str:
+    """What `base64 -d` prints when the text it decodes is a literal in the command: a
+    here-string, or echo or printf piped into it ($(echo LmVudg== | base64 -d) is .env)."""
+    command = strip_prefix(steps[index].words)
+    if not command or command[0].rsplit("/", 1)[-1] not in ("base64", "base32") \
+            or not set(command[1:]) & _DECODE_OPTIONS:
+        return ""
+    if steps[index].strings:
+        encoded = "\n".join(steps[index].strings)
+    elif index and "|" in steps[index].before:
+        encoded = _printed_text(steps[index - 1], state) or ""
+    else:
+        return ""
+    import base64                                   # lazy: env_guard runs before every call
+    decode = base64.b32decode if command[0].endswith("32") else base64.b64decode
+    try:
+        return decode("".join(encoded.split())).decode("utf-8", "replace")
+    except ValueError:                              # binascii.Error is a ValueError
+        return ""
 
 
 def _sub_verdict(key: str, cwd: str | None, captured: bool, state: _State) -> str | None:

@@ -54,7 +54,7 @@ SCRIPTS = {
                   "'PreToolUse', 'additionalContext': 'ran'}}))\n"),
 }
 SECURITY = ("env_guard", "merge_guard_pre", "egress_guard", "git_commit_check", "worktree_guard",
-            "write_checks", "task_write_guard", "ops_frame_guard")
+            "write_checks", "task_write_guard", "ops_frame_guard", "dispatch_gate")
 
 
 @pytest.fixture
@@ -118,6 +118,15 @@ def test_a_slow_write_checks_is_denied_not_allowed(run, tmp_path):
     done = run(["hangs"], stdin=b'{"tool_name": "TaskUpdate", "session_id": "s1"}',
                hangs={"timeout_s": 1, "on_timeout": real.on_timeout})
     _refusal(done, "hangs")
+
+
+def test_a_hung_dispatch_gate_that_answers_allow_is_still_a_deny(run, tmp_path):
+    """The spawn gate keeps the registry's on_timeout: a hang past its alarm on an Agent
+    call, even one that catches the alarm and prints an allow, refuses the spawn."""
+    real = {check.name: check for check in registry.checks_for("PreToolUse")}["dispatch_gate"]
+    done = run(["swallows_allow"], stdin=b'{"tool_name": "Agent", "session_id": "s1"}',
+               swallows_allow={"timeout_s": 1, "on_timeout": real.on_timeout})
+    assert _refusal(done, "swallows_allow")["permissionDecision"] == "deny"
 
 
 def test_a_check_that_swallows_its_timeout_and_allows_is_still_denied(run, tmp_path):

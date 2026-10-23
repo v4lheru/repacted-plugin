@@ -46,11 +46,12 @@ DEFAULT_TIMEOUT_S = 60
 USER_PROMPT_TIMEOUT_S = 30
 # A security check gets its own short alarm and a deny when it fires (`on_timeout="deny"`);
 # every number is about 100x the measured latency of the check. No security check may run
-# longer than SECURITY_TIMEOUT_CAP_S: a contract test pins it.
+# longer than SECURITY_TIMEOUT_CAP_S: a contract test pins it. dispatch_gate keeps the 60 s
+# it had as an advisory check: a hung spawn gate refuses the spawn instead of allowing it.
 SECURITY_TIMEOUT_CAP_S = 90
 SECURITY_TIMEOUTS_S = {"env_guard": 15, "merge_guard_pre": 15, "egress_guard": 60,
                        "git_commit_check": 90, "worktree_guard": 15, "write_checks": 60,
-                       "task_write_guard": 15, "ops_frame_guard": 15}
+                       "task_write_guard": 15, "ops_frame_guard": 15, "dispatch_gate": 60}
 # The host's entry timeout is the sum of the member alarms plus this margin, so the
 # dispatcher's own alarm always fires before the host pre-empts the process.
 ENTRY_MARGIN_S = 30
@@ -167,7 +168,7 @@ REGISTRY: dict[str, tuple[Check, ...]] = {
         _hook("process_table_guard", "Bash"),
         _security_hook("env_guard", "Read|NotebookRead|Grep|Bash"),
         _security_hook("egress_guard", "mcp__.*|WebFetch|Artifact|Bash"),
-        _hook("dispatch_gate", "Agent"),
+        _security_hook("dispatch_gate", "Agent"),
         _security_hook("worktree_guard", "Edit|Write|MultiEdit|NotebookEdit"),
         _security_hook("write_checks", "Bash"),
         # The workflow writes stay on the repact commands.

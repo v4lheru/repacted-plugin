@@ -118,7 +118,10 @@ def detect_stale_session_block(input_data: dict) -> str | None:
         # the load-bearing bootstrap instruction by concatenation, and an
         # escape to a consumer's fail-open suppresses the whole injection.
         return None
-    match = _RESUME_LINE_RE.search(content)
+    # Only the parser-located Current Session block, never a fenced example (upstream PACT #1656).
+    from shared.claude_md_manager import session_block_text
+
+    match = _RESUME_LINE_RE.search(session_block_text(content))
     if not match:
         return None
     recorded = match.group(1)

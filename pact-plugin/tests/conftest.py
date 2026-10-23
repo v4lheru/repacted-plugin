@@ -124,6 +124,11 @@ def pytest_configure(config):
         "from a local cache. On a COLD cache that read is a network "
         "download — deselect in a sandboxed or offline environment.",
     )
+    config.addinivalue_line(
+        "markers",
+        "real_approval_record: the merge guard reads the user's answer from the test's own "
+        "transcript instead of the _approval_on_record_for_binding_tests stand-in.",
+    )
 
     # RELOCATE THE MEMORY STORE BEFORE COLLECTION BEGINS.
     #
@@ -512,6 +517,23 @@ def _isolate_merge_token_dir_to_tmp(tmp_path, monkeypatch):
         module = sys.modules.get(name)
         if module is not None and hasattr(module, "TOKEN_DIR"):
             monkeypatch.setattr(module, "TOKEN_DIR", token_dir)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _approval_on_record_for_binding_tests(request, monkeypatch):
+    """Stand in for the user's answer in the session transcript, in-process only.
+
+    merge_guard_pre takes the consent from the transcript (shared/approval_record.py) and the
+    token only as the use ledger. Most merge-guard tests check how a token binds a command and
+    call the guard with no transcript, so here the answer counts as on record whenever a token
+    matches. Tests of the consent itself carry `@pytest.mark.real_approval_record` and write a
+    transcript. A hook run as a subprocess never sees this patch.
+    """
+    if request.node.get_closest_marker("real_approval_record") is None:
+        from shared import approval_record
+        monkeypatch.setattr(approval_record, "answer_on_record",
+                            lambda hook_input, approves, window_s, now=None: True)
     yield
 
 

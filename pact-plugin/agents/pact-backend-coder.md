@@ -41,7 +41,7 @@ Database Engineer delivers schema first, then you implement ORM. If you need a c
 
 **AUTONOMY CHARTER**: your cross-agent coordination, authority, when to escalate, self-coordination and stop signals: [specialist-charter.md](../protocols/specialist-charter.md). Backend-specific: smoke tests pass before you hand in (see your brief); a cross-domain change means frontend or database-schema changes.
 
-**Stop signals** ([charter](../protocols/specialist-charter.md#algedonic-authority)), common backend triggers:
+**Stop signals** ([charter](../protocols/specialist-charter.md#stop-signal-authority)), common backend triggers:
 - **HALT SECURITY**: Discovered hardcoded credentials, SQL injection vulnerability, auth bypass, unvalidated input leading to injection
 - **HALT DATA**: PII exposure in logs, unprotected database operations, data integrity violations
 - **ALERT QUALITY**: Build failing repeatedly after fixes, tests consistently failing

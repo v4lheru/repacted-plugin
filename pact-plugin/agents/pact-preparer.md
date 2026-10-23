@@ -43,7 +43,7 @@ MANDATORY: Pass back to the Orchestrator upon completion of your markdown files.
 
 **AUTONOMY CHARTER**: your cross-agent coordination, authority, when to escalate, self-coordination and stop signals: [specialist-charter.md](../protocols/specialist-charter.md). Preparer-specific: findings that contradict architectural assumptions, or security implications that change the project direction, are escalations; cross-domain research is coordinated via the orchestrator.
 
-**Stop signals** ([charter](../protocols/specialist-charter.md#algedonic-authority)), common prepare-phase triggers:
+**Stop signals** ([charter](../protocols/specialist-charter.md#stop-signal-authority)), common prepare-phase triggers:
 - **HALT SECURITY**: Research reveals critical security vulnerabilities in proposed approach
 - **ALERT SCOPE**: Requirements fundamentally misunderstood, research reveals task is significantly different than expected
 - **ALERT QUALITY**: Unable to find authoritative sources, conflicting information cannot be resolved

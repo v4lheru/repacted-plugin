@@ -6,7 +6,7 @@ The line comes from the repo's task log: the cached line when the cache's stamp 
 inline replay (hooks/shared/project_tasks.py loaded by path) when the log is small enough, and nothing
 plus a detached `repact-task summary --refresh` above that. It never writes, and it is silent with no
 log, when there is nothing to say, in a teammate's session, on a compaction restart and on any error.
-It shares the brief's existing latency pin (median delta under 25 ms over a do-nothing hook).
+It shares the brief's latency pin (under 3x a do-nothing hook's time, best of 15 runs each).
 
 Every run points HOME, CLAUDE_CONFIG_DIR and CLAUDE_PLUGIN_DATA at tmp_path; repos are temp git repos.
 """
@@ -15,7 +15,6 @@ from __future__ import annotations
 import datetime
 import json
 import os
-import statistics
 import subprocess
 import sys
 import time
@@ -29,10 +28,14 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 HOOK = PLUGIN_ROOT / "hooks" / "doctor_brief.py"
 SUPPRESS = {"suppressOutput": True}
 REAL_LOG_BYTES = 300 * 1024           # about the size of the busiest real task log (296 KB)
-# The brief's latency pin over a bare interpreter start, set on a 2026 laptop (13-20 ms here for
-# the real-size replay). GitHub's shared runners measured 25 ms (macOS) and 30-44 ms (ubuntu) for
-# the same linear replay: machine speed, not a slower brief, so CI (CI=true) gets three times it.
-PIN_MS = 25 * (3 if os.environ.get("CI") else 1)
+# The brief's latency pin, as a ratio over a bare interpreter start (best of 15 each), not
+# milliseconds: a 25 ms pin failed at 70 ms on a busy host, where load slows both runs alike.
+# Measured 1.5 for the real-size replay and 1.2 for the cached line (2026 laptop, under load);
+# the old 25 ms over a 15-20 ms start was about 2.3, and CI runners about 2.5. A brief that
+# doubled its own cost would pass at 2.1, so this catches a replay gone superlinear or a heavy
+# import, not a few ms; the ceiling only catches a hang.
+PIN_RATIO = 3.0
+CEILING_MS = 1000
 GREEN = [{"id": c, "name": c, "state": "green", "summary": "s", "detail": [], "ran_at": "x"}
          for c in ("links", "split", "index", "secrets", "actions")]
 RED = [{"id": "secrets", "name": "secrets", "state": "red", "summary": "credential values in 2 place(s)",
@@ -268,10 +271,13 @@ def test_the_main_checkout_finder_matches_the_readers(tmp_path):
 
 
 # ---------------------------------------------------------------------------------------------
-# latency: the whole hook, worst case, against the existing 25 ms pin
+# latency: the whole hook, worst case, against the brief pin (a ratio over a bare start)
 # ---------------------------------------------------------------------------------------------
 
-def _delta_ms(env, cwd, tmp_path):
+def _ratio(env, cwd, tmp_path):
+    """The hook's wall time over a do-nothing hook's, best of 15 interleaved pairs each. Load on
+    the host slows both alike, so the ratio holds where an absolute pin flakes (issue: 70 ms
+    measured against a 25 ms pin on a busy machine). Also returns the two best times in ms."""
     noop = tmp_path / "noop.py"
     noop.write_text("import json, sys\nsys.stdin.read()\nprint(json.dumps({'suppressOutput': True}))\n")
     event = json.dumps({"source": "startup", "cwd": str(cwd)}).encode()
@@ -282,7 +288,8 @@ def _delta_ms(env, cwd, tmp_path):
         return time.perf_counter() - start
 
     pairs = [(wall(noop), wall(HOOK)) for _ in range(15)]
-    return (statistics.median(h for _, h in pairs) - statistics.median(n for n, _ in pairs)) * 1000
+    base, hook = min(n for n, _ in pairs), min(h for _, h in pairs)
+    return hook / base, base * 1000, hook * 1000
 
 
 def test_the_inline_replay_at_the_threshold_prints_the_line(env, repo):
@@ -297,9 +304,10 @@ def test_the_inline_replay_of_a_real_size_log_fits_the_brief_pin(env, repo, tmp_
     write_doctor(env, RED)                                  # the doctor line renders too: worst case
     synthetic_log(repo, REAL_LOG_BYTES)
     assert tasks_part(run_brief(env, repo)).startswith("tasks: ")
-    delta = _delta_ms(env, repo, tmp_path)
-    print(f"doctor_brief + inline tasks replay at {REAL_LOG_BYTES} bytes: median delta {delta:.1f} ms")
-    assert delta < PIN_MS
+    ratio, base, hook = _ratio(env, repo, tmp_path)
+    print(f"doctor_brief + inline tasks replay at {REAL_LOG_BYTES} bytes: {hook:.1f} ms over "
+          f"{base:.1f} ms, ratio {ratio:.2f}")
+    assert ratio < PIN_RATIO and hook < CEILING_MS
 
 
 def test_the_cached_line_fits_the_brief_pin(env, repo, tmp_path):
@@ -309,9 +317,9 @@ def test_the_cached_line_fits_the_brief_pin(env, repo, tmp_path):
     cache_file(repo).parent.mkdir(parents=True, exist_ok=True)
     cache_file(repo).write_text(json.dumps({"stamp": list(R.log_stamp(R.log_path(repo))),
                                             "line": "tasks: FROM THE CACHE"}))
-    delta = _delta_ms(env, repo, tmp_path)
-    print(f"doctor_brief + cached tasks line: median delta {delta:.1f} ms")
-    assert delta < PIN_MS
+    ratio, base, hook = _ratio(env, repo, tmp_path)
+    print(f"doctor_brief + cached tasks line: {hook:.1f} ms over {base:.1f} ms, ratio {ratio:.2f}")
+    assert ratio < PIN_RATIO and hook < CEILING_MS
 
 
 def test_the_copied_paths_match_the_readers():

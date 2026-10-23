@@ -12,9 +12,10 @@ THE POPULATION IS THE CALL SITES, NOT THE TWO TWIN MODULES. COUNTING RULE,
 STATED BESIDE THE NUMBER: one entry for each CALL EXPRESSION of
 `_atomic_write_text` in a `.py` file below `hooks/` and `skills/`, tests
 excluded, imports and comment mentions not counted. An AST walk returns
-EIGHT, in three modules (two sites went with the 1.5.0 pin-gate cut):
+SEVEN, in three modules (two sites went with the 1.5.0 pin-gate cut, and
+upstream PACT #1656's planner merged two update_session_info writes into one):
 
-    hooks/shared/session_resume.py                3   update_session_info
+    hooks/shared/session_resume.py                2   update_session_info
     hooks/shared/claude_md_manager.py             3   strip_orphan_kernel_block
                                                       ensure_project_memory_md
                                                       migrate_to_managed_structure
@@ -217,8 +218,8 @@ class TestTheCoverageReportNamesItsMisses:
     # event this table SHOULD notice.
     #
     # THE VALUE IS A COUNT, because one function can hold more than one call.
-    # `update_session_info` holds three. A set of names would collapse those
-    # three into one and lose the cardinality this table exists to hold.
+    # `update_session_info` holds two. A set of names would collapse those
+    # two into one and lose the cardinality this table exists to hold.
     DRIVEN = {
         "skills/pact-memory/scripts/working_memory.py::sync_to_claude_md": 1,
         "skills/pact-memory/scripts/working_memory.py::sync_retrieved_to_claude_md": 1,
@@ -267,11 +268,12 @@ class TestTheCoverageReportNamesItsMisses:
             "is the same seam call, and the gap is real rather than argued "
             "away."
         ),
-        "session_resume.py:198 / :220 / :272 update_session_info": (
-            "THREE sites in ONE function, reached by three different document "
-            "shapes: a rewrite of an existing session block, an insertion "
-            "before a marker, and an append at the end. Driving all three "
-            "needs three seeds. NOT ATTEMPTED here."
+        "session_resume.py update_session_info (new file; planned rewrite)": (
+            "TWO sites in ONE function: creating a new project CLAUDE.md, and "
+            "writing the plan _plan_session_block returns for an existing one "
+            "(a rewrite of the session block, an insertion before a marker, or "
+            "an append at the end). Driving both needs separate seeds. NOT "
+            "ATTEMPTED here."
         ),
     }
 
@@ -285,12 +287,12 @@ class TestTheCoverageReportNamesItsMisses:
         for site, reason in self.UNDRIVEN.items():
             assert reason.strip(), f"{site} is recorded with no reason"
 
-    # Keys of UNDRIVEN carry their own count, because one of them holds three
+    # Keys of UNDRIVEN carry their own count, because one of them holds two
     # calls in one function.
     UNDRIVEN_COUNTS = {
         "hooks/shared/claude_md_manager.py::ensure_project_memory_md": 1,
         "hooks/shared/claude_md_manager.py::strip_orphan_kernel_block": 1,
-        "hooks/shared/session_resume.py::update_session_info": 3,
+        "hooks/shared/session_resume.py::update_session_info": 2,
     }
 
     _SEARCH_ROOTS = ("hooks", "skills")

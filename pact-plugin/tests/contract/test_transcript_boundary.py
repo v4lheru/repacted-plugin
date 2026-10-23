@@ -3,7 +3,8 @@ reading. The context ledger measures `transcript_path` by os.stat alone (the lea
 the refactor core design: size only, never opened), and the set of hooks that both name a
 transcript path and open files is the shrinking allowlist READERS: the run ledger
 (session_ledger), the compaction archive (postcompact_archive, compaction_owner) and the
-session cost cap (shared/cost_cap.py: shared/session_spend.py reads token counts only). A new hook
+session cost cap (shared/cost_cap.py: shared/session_spend.py reads token counts only) and the
+merge guard's approval record (shared/approval_record.py: the AskUserQuestion answers only). A new hook
 that names a transcript and opens anything lands here and must be added on purpose.
 
 Two AST walks over hooks/**/*.py: (1) `transcript_size` in shared/context_ledger.py calls
@@ -31,6 +32,7 @@ READERS = frozenset({
     "hooks/subagent_stop.py",
     "hooks/postcompact_archive.py", "hooks/session_ledger.py",
     "hooks/shared/compaction_owner.py", "hooks/shared/cost_cap.py",
+    "hooks/shared/approval_record.py",
 })
 
 

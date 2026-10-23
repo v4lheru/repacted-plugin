@@ -540,19 +540,30 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
                 pass
             raise
     finally:
-        os.close(parent_fd)
+        # The only step after the rename. A close that fails once the rename has put the new
+        # file in place is not a failed write, and after a failed write it must not replace
+        # the error that stopped it (upstream PACT #1650).
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def extract_managed_region(content: str) -> Optional[Tuple[str, int]]:
-    """Extract the PACT-managed region from CLAUDE.md content."""
-    start_idx = content.find(_MANAGED_START_MARKER)
-    if start_idx == -1:
+    """Extract the PACT-managed region from CLAUDE.md content: (region_text, offset after the
+    start marker), or None unless the fence-aware parser finds exactly one marker pair
+    (upstream PACT #1656). A fenced or inline-code copy of a marker is not the region."""
+    from shared.claude_md_markers import State, parse
+
+    doc = parse(content)
+    region = doc.find_block(_MANAGED_START_MARKER, _MANAGED_END_MARKER)
+    if region.state is not State.FOUND:
         return None
-    region_start = start_idx + len(_MANAGED_START_MARKER)
-    end_idx = content.find(_MANAGED_END_MARKER, region_start)
-    if end_idx == -1:
-        return None
-    return content[region_start:end_idx], region_start
+    first, last = region.spans[0]
+    region_start = doc.row_start(first) + len(doc.lines[first].content.rstrip(" \t"))
+    end_line = doc.lines[last].content
+    region_end = doc.row_start(last) + len(end_line) - len(end_line.lstrip(" "))
+    return content[region_start:region_end], region_start
 
 
 def marker_line_span(text: str, literal: str) -> tuple[int, int] | None:
@@ -577,11 +588,10 @@ def _resolve_write_window(content: str) -> tuple[str, int] | None:
 
     # Step 2 (managed-end then session-end markers) exists for availability, not security.
     region_text, region_start = region_result
-    if _MANAGED_END_MARKER in content:
-        session_end = marker_line_span(region_text, _SESSION_END_MARKER)
-        if session_end is not None:
-            inner_start = session_end[1]
-            return region_text[inner_start:], region_start + inner_start
+    session_end = marker_line_span(region_text, _SESSION_END_MARKER)
+    if session_end is not None:
+        inner_start = session_end[1]
+        return region_text[inner_start:], region_start + inner_start
 
     # STEP 3.
     return None

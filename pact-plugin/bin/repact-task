@@ -7,7 +7,10 @@ creates it. Refs are `T-` plus 8 hex; any unique prefix of 4 or more hex charact
 Every write is locked, validated and appended; nothing is ever rewritten.
 
 Exit codes: 0 ok, 64 usage, 65 refused (nothing written), 66 no log (run init), 74 unreadable log;
-`sync --check` exits 1 when a lead-attributed acceptance is missing from the log.
+`sync --check` exits 1 when a lead-attributed acceptance is missing from the log, and `fsck` exits 1
+when a recorded verified evidence item no longer verifies (a hand-written or merged line can claim
+it). `show` re-verifies the evidence of the one task it prints; the replay itself trusts the
+recorded flag, since it runs inline at session start and starts no git process.
 """
 from __future__ import annotations
 
@@ -88,7 +91,8 @@ class _Parser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     epilog = "commands:\n" + "\n".join(f"  {example}\n      {what}" for _, example, what in EXAMPLES)
     epilog += ("\n\nexit codes: 0 ok, 64 usage, 65 refused, 66 no log (run init), 74 unreadable log;"
-               "\n  sync --check exits 1 when a lead-attributed acceptance is missing from the log")
+               "\n  sync --check exits 1 when a lead-attributed acceptance is missing from the log;"
+               "\n  fsck exits 1 when a verified evidence item no longer verifies")
     parser = _Parser(prog="repact-task", description="The project's task graph, closed on evidence.",
                      epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", metavar="DIR",
@@ -235,7 +239,7 @@ def _ptask_status(ptask: str) -> Optional[str]:
     return status if isinstance(status, str) else None
 
 
-def _show(state, ref: str, completion: Optional[dict] = None) -> list:
+def _show(state, ref: str, completion: Optional[dict] = None, main: Optional[Path] = None) -> list:
     task = state.tasks[ref]
     out = [PT.render_line(state, task)]
     for key in ("title", "status", "priority", "rank", "owner", "tags", "parent", "depends_on",
@@ -249,6 +253,10 @@ def _show(state, ref: str, completion: Optional[dict] = None) -> list:
         out.append(f"  link {item['kind']}: {item['target']}" + (f" ({status})" if status else ""))
     for item in task["evidence"]:
         detail = "verified" if item["verified"] else "unverified"
+        if item["verified"] and main is not None:     # a recorded flag is a claim: check it again
+            holds, reason = W._evidence.verify_item(main, item)
+            if not holds:
+                detail = f"unverified: {reason}"
         if item.get("sha256"):
             detail += ", digest recorded"
         out.append(f"  evidence: {item['target']} ({detail})")
@@ -339,11 +347,12 @@ def _bridge():
     return bridge
 
 
-EXIT_MISSED = 1                  # `sync --check` only: a lead-attributed acceptance is missing
+EXIT_MISSED = 1                  # `sync --check` and `fsck`: a missing acceptance, stale evidence
 
 
 class Missed(Exception):
-    """`sync --check` found lead-attributed acceptances missing from the log: print, exit 1."""
+    """`sync --check` found lead-attributed acceptances missing from the log, or `fsck` found
+    verified evidence that no longer verifies: print, exit 1."""
 
     def __init__(self, lines):
         super().__init__("missed")
@@ -593,19 +602,23 @@ def run(args) -> list:
             parent = state.tasks.get(task["parent"] or "")
             if parent and parent["status"] in PT.SETTLED and task["status"] not in PT.SETTLED:
                 findings.append(f"{ref}: open child of settled parent {parent['ref']} ({parent['status']})")
-        unverifiable = set()
+        unverifiable, stale = set(), False
         for ref, task in sorted(state.tasks.items()):       # every verified claim, re-verified with git
             for item in task["evidence"] + task["prior_evidence"]:
                 if item["verified"]:
                     holds, reason = W._evidence.verify_item(store.main, item)
                     if not holds:
+                        stale = True
                         findings.append(f"{ref}: evidence {item['target']} no longer verifies ({reason})")
                     elif reason == W._evidence.UNVERIFIABLE:
                         unverifiable.add(ref)
         findings += completion_flags(_completion(Path.cwd()))
         notes = [f"note: run evidence of {len(unverifiable)} task(s) is {W._evidence.UNVERIFIABLE}: "
                  + _capped_refs(unverifiable)] if unverifiable else []
-        return (findings or ["fsck: clean"]) + notes + _drift(store.main)
+        lines = (findings or ["fsck: clean"]) + notes + _drift(store.main)
+        if stale:                                           # a done row that rests on nothing
+            raise Missed(lines)
+        return lines
     if args.command == "summary":
         line = store.refresh_cache() if args.refresh else \
             (PT.cached_summary(store.main) or PT.summary_line(state))
@@ -620,7 +633,7 @@ def run(args) -> list:
               2, {ref}, out)
         return out
     if args.command == "show":
-        return _show(state, ref, _completion(Path.cwd()))
+        return _show(state, ref, _completion(Path.cwd()), store.main)
     if args.command == "set":
         changes = [(name, getattr(args, name)) for name in ("status", "priority", "rank", "owner",
                                                             "title", "note")

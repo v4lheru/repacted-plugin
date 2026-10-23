@@ -21,7 +21,7 @@ from pathlib import Path
 from shared import compaction_owner, summary_head, workflow_state
 from shared.constants import BOOTSTRAP_MARKER_NAME
 from shared.pact_context import _build_session_path as build_session_path, project_slug
-from shared.claude_md_manager import file_lock, resolve_project_claude_md_path
+from shared.claude_md_manager import file_lock, resolve_project_claude_md_path, session_block_text
 from shared.constants import (
     COMPACT_SUMMARY_ARCHIVE_PREFIX,
     COMPACT_SUMMARY_HEAD_NAME,
@@ -132,9 +132,13 @@ def _extract_prev_session_dir(project_dir: str) -> str | None:
         # contract.
         try:
             with file_lock(claude_md):
-                content = claude_md.read_text(encoding="utf-8")
+                # Read-only: replacement characters cannot reach a write, and a stray byte
+                # must not fail the session start (upstream PACT #1650).
+                content = claude_md.read_text(encoding="utf-8", errors="replace")
         except TimeoutError:
             return None
+        # Only the parser-located Current Session block is read, never a fenced example.
+        content = session_block_text(content)
 
         # Resume line format: "- Resume: `claude --resume <session_id>`"
         resume_match = re.search(
@@ -209,10 +213,10 @@ def _extract_session_started(project_dir: str) -> str | None:
         if source == "new_default":
             return None
         with file_lock(claude_md):
-            content = claude_md.read_text(encoding="utf-8")
+            content = claude_md.read_text(encoding="utf-8", errors="replace")
     except (OSError, TimeoutError):
         return None
-    match = _SESSION_STARTED_RE.search(content)
+    match = _SESSION_STARTED_RE.search(session_block_text(content))
     return match.group(1) if match else None
 
 

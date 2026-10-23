@@ -2,7 +2,10 @@
 Location: pact-plugin/hooks/settings_guard.py
 Summary: The verdict on a write to Claude Code settings or the running plugin's hooks
          (settings.write), or to the workflow state the repact commands own: the task files
-         and the PACT session dirs (settings.task_state). Not a hook of its own: worktree_guard calls it for
+         and the PACT session dirs (settings.task_state), and a repo's tracked task log
+         `.repacted/tasks.jsonl` (settings.task_log), or to what stands for the user's merge
+         approval: the approval tokens, the session transcripts, and a shell run of a hook
+         entry (settings.consent). Not a hook of its own: worktree_guard calls it for
          Edit|Write|MultiEdit|NotebookEdit and env_guard for Bash, so one call meets it once.
 Used by: hooks/worktree_guard.py, hooks/env_guard.py; tested by tests/test_settings_guard.py.
 
@@ -14,6 +17,11 @@ settings change; unattended mode (REPACT_UNATTENDED or the session's flag) turns
 into a deny. A frame that cannot be read is denied. Task state is denied for every frame, the
 lead's included: no one approves a hand edit of it, since the repact commands are the way
 through and a lead that could write a task file could complete its own work unchecked.
+The task log is refused to an agent frame only: a coder could otherwise append a `done` line
+claiming evidence repact-task never checked, which a union merge then keeps; the lead's
+direct-edit lane and a session with no agent still write it. Consent state is denied for
+every frame: the user approves a gated git act by answering AskUserQuestion, never by an
+approval of a hand-written token or transcript line.
 
 The `shared` package is imported only once a protected place is hit, so the common call
 pays for the path check alone.
@@ -23,11 +31,14 @@ from __future__ import annotations
 
 import os
 
-from shell.settings import _TRIGGERS, CLAUDE_CLI_WORDS, TASK_STATE, protected_place, written_place
+from shell.settings import (_TRIGGERS, CLAUDE_CLI_WORDS, CONSENT_STATE, TASK_LOG, TASK_STATE,
+                            protected_place, written_place)
 from shell.words import Unreadable
 
 RULE_ID = "settings.write"
 RULE_TASK_STATE = "settings.task_state"
+RULE_TASK_LOG = "settings.task_log"
+RULE_CONSENT = "settings.consent"
 FILE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 
 
@@ -83,24 +94,38 @@ def _frame_agent_id(payload: dict):
     return payload.get("agent_id")
 
 
-def _frame_decision(payload: dict) -> str:
-    """deny for an agent frame or unattended mode, ask for the lead or an unmarked session."""
+def _agent_frame(payload: dict) -> bool:
+    """True for a frame with any agent marker, or an actor that resolves to a teammate."""
     from shared import actor as actor_module
 
     agent_id = _frame_agent_id(payload)
     agent_type = payload.get("agent_type")
     if agent_id or (agent_type is not None and not isinstance(agent_type, str)):
-        return "deny"
+        return True
     actor = actor_module.resolve_actor(payload)
     if agent_type and not actor.is_lead:
-        return "deny"
-    if actor.source == "registry" or (actor.source == "host" and not actor.is_lead):
+        return True
+    return actor.source == "registry" or (actor.source == "host" and not actor.is_lead)
+
+
+def _frame_decision(payload: dict) -> str:
+    """deny for an agent frame or unattended mode, ask for the lead or an unmarked session."""
+    if _agent_frame(payload):
         return "deny"
     return "deny" if _unattended(payload) else "ask"
 
 
 def _output(decision: str, what: str) -> dict:
-    if what in TASK_STATE:
+    if what in CONSENT_STATE:
+        reason = (f"Blocked: this call would write or run {what}. Reading it is fine. A gated "
+                  f"git act is approved only by the user's answer to AskUserQuestion, the "
+                  f"literal command in the chosen option; ask, then run the command unchanged. "
+                  f"[rule: {RULE_CONSENT}]")
+    elif what == TASK_LOG:
+        reason = (f"Blocked: this call would write {what}; an agent may not edit it by hand. "
+                  f"Reading it is fine. Run repact-task (done, set, reopen) for the change, or "
+                  f"hand the step to the lead. [rule: {RULE_TASK_LOG}]")
+    elif what in TASK_STATE:
         reason = (f"Blocked: this call would write {what}, which only the repact commands and "
                   f"the task tools write. Reading it is fine. Run the matching command instead: "
                   f"repact submit (the coder), repact accept, reject or amend (the lead), or "
@@ -128,8 +153,14 @@ def decide(payload: dict) -> dict | None:
                 if any(word in folded for word in _TRIGGERS) else None)
     if not what:
         return None
-    if what in TASK_STATE:
+    if what in TASK_STATE or what in CONSENT_STATE:
         return _output("deny", what)
+    if what == TASK_LOG:
+        try:
+            agent = _agent_frame(payload)
+        except Exception:   # noqa: BLE001 - an unreadable frame holds no lead authority
+            agent = True
+        return _output("deny", what) if agent else None
     try:
         decision = _frame_decision(payload)
     except Exception:   # noqa: BLE001 - an unreadable frame holds no lead authority

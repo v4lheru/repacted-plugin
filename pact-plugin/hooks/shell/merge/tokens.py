@@ -5,9 +5,12 @@ Summary: Authorization-token lifecycle of the merge guard: TTL, directory, prefi
 Used by: hooks/shared/merge_guard_common.py (the façade), merge_guard_pre/post and the
          other shell.merge modules per the imports below. Carved from merge_guard_common.py
          at 0edd3594; every decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-         Posture: honest-mistake prevention, not an adversarial sandbox; a faithful
-         single-command approval click must always mint. Threat model and design rules:
-         the design notes.
+         A token is the use ledger of one approval, not the consent: the consent is the
+         user's answer in the session transcript, which merge_guard_pre re-reads
+         (shared/approval_record.py) before it claims a use. Token files and transcripts are
+         protected places (shell/settings.py). Posture: same OS user as the model, so not an
+         adversarial sandbox; a faithful single-command approval click must always mint.
+         Threat model and design rules: the design notes.
 Map: TOKEN_TTL, TOKEN_DIR, TOKEN_PREFIX, MAX_USES, USE_MARKER_SUFFIX, ORPHAN_TOKEN_MAX_AGE_SECONDS, LAYER1_SUCCESS_STDOUT_PATTERNS, cleanup_consumed_tokens, cleanup_unused_tokens, _read_token, _expired_data, cleanup_orphan_tokens.
 
 Token lifecycle (pinned by TestTokenLifecycleInvariants):

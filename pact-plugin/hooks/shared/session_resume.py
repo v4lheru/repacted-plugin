@@ -36,6 +36,7 @@ from shared.claude_md_manager import (
     WORKING_MEMORY_COMMENT,
     ContainmentError,
     _atomic_write_text,
+    _read_replaced,
     ensure_dot_claude_parent,
     file_lock,
     resolve_project_claude_md_path,
@@ -72,6 +73,97 @@ _PROMPT_CONTROL_CHARS_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+")
 
 # Bound for phase strings in resume output.
 _PHASE_TRUNCATION_LIMIT = 80
+
+_RETRIEVED_CONTEXT_HEADING = re.compile(r"## Retrieved Context\s*$")
+
+
+def _content_span(doc, first: int, last: int) -> tuple[int, int]:
+    """(start, end) in the original text of rows first..last of the parsed `doc`, without the
+    last row's terminator, which stays put."""
+    return doc.row_start(first), doc.row_start(last) + len(doc.lines[last].content)
+
+
+def _session_block_refusal(reason: str) -> str:
+    """The status for a file whose Current Session block is not rewritten. The word
+    `skipped` routes it to the user-visible surface."""
+    return (
+        f"Session info skipped: {reason}. The Current Session block in "
+        "CLAUDE.md was left unchanged and is now stale."
+    )
+
+
+def _session_block_insertion(doc) -> tuple[int | None, str | None]:
+    """Where a new Current Session block goes: (offset, or None for end of file; refusal or None).
+
+    Never inside PACT_MEMORY: (a) with the managed and memory start markers found, before the
+    memory start marker's row; (b) a memory block with no managed region: before its start
+    row; (c) no memory block: before a column-0 `## Retrieved Context` heading; (d) else at
+    end of file. A marker or heading the parser cannot place refuses.
+    """
+    from shared.claude_md_markers import State
+
+    managed = doc.find_marker(MANAGED_START_MARKER)
+    memory_start = doc.find_marker(MEMORY_START_MARKER)
+    for located in (managed, memory_start):
+        if located.state in (State.DUPLICATE, State.MALFORMED):
+            return None, located.reason
+    if managed.state is State.FOUND and memory_start.state is State.FOUND:
+        return doc.row_start(memory_start.spans[0][0]), None
+    memory = doc.find_block(MEMORY_START_MARKER, MEMORY_END_MARKER)
+    if memory.state is State.FOUND:
+        return doc.row_start(memory.spans[0][0]), None
+    if memory.state is not State.ABSENT:
+        return None, memory.reason
+    heading = doc.find_section(_RETRIEVED_CONTEXT_HEADING, None)
+    if heading.state is State.FOUND:
+        return doc.row_start(heading.spans[0][0]), None
+    if heading.state is State.ABSENT:
+        return None, None
+    return None, heading.reason
+
+
+def _plan_session_block(content: str, session_block: str) -> tuple[str | None, str | None]:
+    """Plan the Current Session write for `content`: (new_content, status). Pure.
+
+    new_content is None when nothing is written: the block already holds these values (status
+    None), or the file is left alone and status says why. Every location comes from the
+    fence-aware parser, and the write must read back as one block exactly where it was put.
+    """
+    from shared.claude_md_markers import State, parse
+
+    doc = parse(content)
+    block = doc.find_block(SESSION_START_MARKER, SESSION_END_MARKER)
+    if block.state is State.FOUND:
+        # Plain slicing, so nothing in session_block is interpreted (a backslash stays one).
+        start, end = _content_span(doc, *block.spans[0])
+        new_content = content[:start] + session_block + content[end:]
+        if new_content == content:
+            return None, None
+        status = "Session info updated in project CLAUDE.md"
+    elif block.state is State.ABSENT:
+        at, refusal = _session_block_insertion(doc)
+        if refusal is not None:
+            return None, _session_block_refusal(refusal)
+        if at is None:
+            base = content if content.endswith("\n") else content + "\n"
+            start = len(base) + 1
+            new_content = base + "\n" + session_block + "\n"
+        else:
+            start = at
+            new_content = content[:at] + session_block + "\n\n" + content[at:]
+        status = "Session info added to project CLAUDE.md"
+    else:
+        return None, _session_block_refusal(block.reason)
+    written = parse(new_content)
+    check = written.find_block(SESSION_START_MARKER, SESSION_END_MARKER)
+    if check.state is State.FOUND and (
+        _content_span(written, *check.spans[0]) == (start, start + len(session_block))
+    ):
+        return new_content, status
+    return None, _session_block_refusal(
+        "the rewritten Current Session block did not read back as one block where it was "
+        f"written{': ' + check.reason if check.reason else ''}")
+
 
 def update_session_info(
     session_id: str,
@@ -165,49 +257,22 @@ def update_session_info(
 
                 content = target_file.read_text(encoding="utf-8")
 
-                # Case 1: markers exist (always inside PACT_MANAGED); replace the block.
-                if SESSION_START in content and SESSION_END in content:
-                    # A callable replacement: re.sub would expand \n, \d or \g<0> in a replacement string,
-                    # and session dirs may contain backslashes. Sanitizing cannot fix that; the callable does.
-                    new_content = re.sub(
-                        re.escape(SESSION_START) + r".*?" + re.escape(SESSION_END),
-                        lambda _match: session_block,
-                        content,
-                        count=1,
-                        flags=re.DOTALL,
-                    )
-                    if new_content != content:
-                        _atomic_write_text(target_file, new_content, Path(project_dir))
-                        return "Session info updated in project CLAUDE.md"
+                # Cases 1 and 2: the planner locates the block and its insertion point with the
+                # fence-aware parser (upstream PACT #1656), so a fenced copy of a marker is never
+                # written. A block it cannot place is left alone and the status names the line.
+                new_content, status = _plan_session_block(content, session_block)
+                if new_content is not None:
+                    _atomic_write_text(target_file, new_content, Path(project_dir))
+                return status
+
+            except UnicodeDecodeError:
+                # Never rewrite a file that is not valid UTF-8 (upstream PACT #1650); report it
+                # only when the block was due to change.
+                new_content, status = _plan_session_block(_read_replaced(target_file), session_block)
+                if new_content is None and status is None:
                     return None
-
-                # Case 2: no SESSION markers. Keep the block a sibling of PACT_MEMORY inside PACT_MANAGED:
-                # (a) managed file: insert before MEMORY_START_MARKER; (b) legacy file: before
-                # "## Retrieved Context"; (c) else append. Both markers are required, so a half-written
-                # migration takes branch (b) instead of a no-op replace.
-                if MANAGED_START_MARKER in content and MEMORY_START_MARKER in content:
-                    new_content = content.replace(
-                        MEMORY_START_MARKER,
-                        session_block + "\n\n" + MEMORY_START_MARKER,
-                        1,
-                    )
-                else:
-                    insert_marker = "## Retrieved Context"
-                    if insert_marker in content:
-                        new_content = content.replace(
-                            insert_marker,
-                            session_block + "\n\n" + insert_marker,
-                            1,
-                        )
-                    else:
-                        # Fallback: append at end
-                        if not content.endswith("\n"):
-                            content += "\n"
-                        new_content = content + "\n" + session_block + "\n"
-
-                _atomic_write_text(target_file, new_content, Path(project_dir))
-                return "Session info added to project CLAUDE.md"
-
+                return ("Session info skipped: the project CLAUDE.md is not valid UTF-8, so it "
+                        "was left unchanged. The Current Session block in CLAUDE.md is now stale.")
             except ContainmentError:
                 # Opaque skip, matching the removed is_symlink guard's message.
                 return "Session info skipped: path precondition not met."
@@ -876,7 +941,7 @@ def _compose_halt_line(event: dict) -> str | None:
     ids = [i for i in ids if i]
     id_note = f" (tasks: {', '.join(ids)})" if ids else ""
     return (
-        f"A HALT/algedonic signal was ACTIVE at refresh{id_note} — "
+        f"A HALT/stop signal was ACTIVE at refresh{id_note} — "
         f"verify against TaskList before proceeding; do not assume it "
         f"resolved."
     )

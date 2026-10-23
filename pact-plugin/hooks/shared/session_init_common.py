@@ -562,8 +562,42 @@ def launch_notices(
             system_messages.append(coexistence)
 
 
+def project_claude_md_upkeep(
+    frame_role: str | None, context_parts: list, system_messages: list,
+) -> None:
+    """Steps 3 and 3b: create the project CLAUDE.md, or migrate it to the managed structure.
+
+    Skipped for a teammate frame (upstream PACT #1650): a separate-process teammate starts
+    inside a worktree, and its start planted a managed CLAUDE.md there that every project-file
+    resolver then picked up. A lead, and an unknown frame (a lead launched without --agent),
+    keep both steps.
+    """
+    if frame_role == "teammate":
+        return
+    # 3. Ensure project has CLAUDE.md with memory sections
+    project_md_msg = ensure_project_memory_md()
+    if project_md_msg:
+        if "failed" in project_md_msg.lower() or "skipped" in project_md_msg.lower():
+            system_messages.append(project_md_msg)
+        else:
+            context_parts.append(project_md_msg)
+
+    # 3b. One-time migration: wrap existing project CLAUDE.md in
+    # PACT_MANAGED boundary and add PACT_MEMORY markers (#404).
+    # Runs after ensure_project_memory_md() so newly created files
+    # already have the new structure.
+    # Idempotent no-op when PACT_MANAGED_START marker is already present.
+    migration_msg = migrate_to_managed_structure()
+    if migration_msg:
+        if "failed" in migration_msg.lower() or "skipped" in migration_msg.lower():
+            system_messages.append(migration_msg)
+        else:
+            context_parts.append(migration_msg)
+
+
 def refresh_environment(
     source: str, is_context_reset: bool, context_parts: list, system_messages: list,
+    frame_role: str | None = None,
 ) -> None:
     """Steps 1-4c: plugin links, project CLAUDE.md, token hygiene, banner."""
     # 1. Refresh the plugin symlinks (enables @~/.claude/protocols/pact-plugin/
@@ -609,25 +643,8 @@ def refresh_environment(
     if shim_note:
         system_messages.append(shim_note)
 
-    # 3. Ensure project has CLAUDE.md with memory sections
-    project_md_msg = ensure_project_memory_md()
-    if project_md_msg:
-        if "failed" in project_md_msg.lower() or "skipped" in project_md_msg.lower():
-            system_messages.append(project_md_msg)
-        else:
-            context_parts.append(project_md_msg)
-
-    # 3b. One-time migration: wrap existing project CLAUDE.md in
-    # PACT_MANAGED boundary and add PACT_MEMORY markers (#404).
-    # Runs after ensure_project_memory_md() so newly created files
-    # already have the new structure.
-    # Idempotent no-op when PACT_MANAGED_START marker is already present.
-    migration_msg = migrate_to_managed_structure()
-    if migration_msg:
-        if "failed" in migration_msg.lower() or "skipped" in migration_msg.lower():
-            system_messages.append(migration_msg)
-        else:
-            context_parts.append(migration_msg)
+    # 3, 3b. The project CLAUDE.md: created or migrated by a non-teammate frame only.
+    project_claude_md_upkeep(frame_role, context_parts, system_messages)
 
     # Step 3c retired in v4.2.15 — orphan-stripper sunset; see git log for context.
 

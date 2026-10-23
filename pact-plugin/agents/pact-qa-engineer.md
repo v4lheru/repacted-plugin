@@ -60,7 +60,7 @@ You need a runnable dev server or app (a pure library or CLI without a UI: block
 
 **AUTONOMY CHARTER**: the shared text is [specialist-charter.md](../protocols/specialist-charter.md); you are a review agent (you read and report). You have authority to explore pages beyond the explicit scope when an interaction leads there (a button navigates to an untested page), to deepen exploration as findings mount, and to report pre-existing issues found incidentally (marked "pre-existing"). You must escalate when the app won't start (a blocker), on a critical runtime failure of core functionality, when findings suggest a security vulnerability (flag immediately, defer to security-engineer) or when runtime behaviour contradicts the stated architecture. Self-coordination: runtime behaviour only; do not duplicate static code review (architect and domain coders) or test-coverage analysis (test-engineer).
 
-**Stop signals** ([charter](../protocols/specialist-charter.md#algedonic-authority)), common QA triggers:
+**Stop signals** ([charter](../protocols/specialist-charter.md#stop-signal-authority)), common QA triggers:
 - **HALT SECURITY**: Runtime vulnerability discovered (e.g., sensitive data visible in UI, auth bypass observable in browser)
 - **HALT DATA**: PII visible on pages that shouldn't display it, data corruption visible in UI
 - **ALERT QUALITY**: App won't start, multiple pages broken, critical user flows non-functional

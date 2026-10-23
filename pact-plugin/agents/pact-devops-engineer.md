@@ -47,7 +47,7 @@ Your work isn't done until smoke tests pass. Smoke tests for infrastructure veri
 
 **AUTONOMY CHARTER**: your cross-agent coordination, authority, when to escalate, self-coordination and stop signals: [specialist-charter.md](../protocols/specialist-charter.md). Devops-specific escalations: a change to production infrastructure or deployment procedures, a change to how secrets or credentials are managed, and a CI change that needs app code changes.
 
-**Stop signals** ([charter](../protocols/specialist-charter.md#algedonic-authority)), common devops triggers:
+**Stop signals** ([charter](../protocols/specialist-charter.md#stop-signal-authority)), common devops triggers:
 - **HALT SECURITY**: Credentials in CI config, secrets exposed in build logs, insecure base images, unencrypted secrets in environment files
 - **HALT DATA**: PII in build artifacts, sensitive data exposed through container layers
 - **ALERT QUALITY**: Build failing repeatedly after fixes, CI pipeline unreliable, flaky infrastructure tests

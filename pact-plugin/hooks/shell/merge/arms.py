@@ -323,6 +323,7 @@ RULE_IDS = {
     "mg.unmintable.long_run": "A run of 512 or more characters cannot be bound to an approval.",
     "mg.token.mismatch": "The approved operation does not match this command.",
     "mg.token.consume_failed": "The authorization token could not be consumed.",
+    "mg.token.no_record": "A matching approval token has no answer from the user on record in the session transcript.",
 }
 OP_RULE_IDS = {
     "merge": "mg.merge.explicit",

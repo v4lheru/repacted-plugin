@@ -42,7 +42,7 @@ not duplicate static code review, architectural review or test-coverage analysis
 Your work isn't done until smoke tests pass. Smoke tests verify: "Does it compile? Does it run? Does
 the happy path not crash?" No comprehensive unit tests—that's TEST phase work.
 
-## Algedonic authority
+## Stop-signal authority
 
 Emit HALT/ALERT immediately, without orchestrator permission, on a viability threat. SECURITY or
 DATA is a HALT when exposure exists now or is unknown, an ALERT only when there is none; a committed

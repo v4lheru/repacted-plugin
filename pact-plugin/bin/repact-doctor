@@ -26,7 +26,7 @@ Checks, one line each (GREEN, AMBER, RED, or SKIP when it cannot run here):
   6 release position the release worktree's tag vs main's tags
   7 MCP scoping      scope_mcp.py's dry-run plan: servers that would still move
   8 open user actions  tasks open by D3's is_open_user_action (ALERT, HALT, BLOCKER, RELEASE GATE
-                     as a whole word, or an algedonic signal) and USER-OWNED backlog lines
+                     as a whole word, or a stop-signal task) and USER-OWNED backlog lines
   9 release gates    tags beyond the release, against docs/release-gates.json
  11 state ownership  every store in docs/architecture/state-ownership.md has its writer in the
                      plugin; a team whose task files vanished under a standing config.json while
@@ -41,6 +41,8 @@ host line against reference/compat.json (an untested host is a note).
                      remove this session's task-store HALT marker (hooks/task_store_probe.py
                      raised it after two host task writes that never reached disk); the
                      session is $CLAUDE_CODE_SESSION_ID. No check runs.
+                     Manual recovery: when the halt came from a task you deleted or renamed,
+                     or the task files are back on disk, run this, then spawn again.
 
 The result is cached at ${CLAUDE_PLUGIN_DATA}/doctor.json (mode 600). Only one run at a time:
 a second concurrent run exits 0 at once and changes nothing.

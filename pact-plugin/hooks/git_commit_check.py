@@ -59,6 +59,7 @@ try:
     from shared import commit_routes as routes
     from shared.log_values import logs_secret_value, logs_token_value  # noqa: F401
     from shell_words import PREFIX_WORDS, strip_prefix, tokens as shell_tokens
+    from shell.opaque import resolved_command
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
     _emit_load_failure_deny("module imports", _module_load_error)
 
@@ -847,6 +848,9 @@ def main():
         tool_input = input_data.get("tool_input", {})
         command = tool_input.get("command", "")
         cwd = input_data.get("cwd")
+        # G=git; $G commit, echo 'git commit' | sh: read with what the command fixes itself
+        # spelled out (shell/opaque.py); env_guard refuses what it cannot spell.
+        command = resolved_command(command) if isinstance(command, str) else command
 
         # Unread denies; read but no commit while naming `git commit` scans widest (note).
         named = re.search(r'\bgit\s+commit\b', command, re.I)
@@ -919,7 +923,10 @@ def _check_and_exit(command: str, commit: Commit) -> NoReturn:
         require_repository(call)
     staged_files = (committed_files(commit) or []) if commit.verb == "commit" else []
     patches = _patches(commit_patch(commit)) if staged_files else []
-    brought = [text for call in commit.routes for text in routes.patches(call, _run)]
+    # Bytes, as for commit_patch: routes decode them with "replace", so a file that is not
+    # UTF-8 is scanned (its valid lines still read) instead of failing the check.
+    brought = [text for call in commit.routes
+               for text in routes.patches(call, partial(_run, text=False))]
     staged_files += [path for path in added_lines(brought) if path not in staged_files]
     patches += brought
     added = {}

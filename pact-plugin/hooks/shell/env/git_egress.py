@@ -13,17 +13,18 @@ from __future__ import annotations
 import os
 import re
 
+from shell import git_alias
 from shell.words import strip_prefix
 from shell.env.names import (is_protected_name, is_template_name)
 from shell.env.places import (_Directory)
-from shell.env.programs import (_GIT_VALUE_OPTIONS)
-from shell.env.script import (_IGNORE_WRITE, _SUB_KEY, _State, _UNSEEN_IGNORE, _command_steps, _computed, _pull_substitutions, expand_literal_variables)
+from shell.env.programs import (EGRESS_PROGRAMS, _GIT_VALUE_OPTIONS)
+from shell.env.script import (SHELLS, _IGNORE_WRITE, _SUB_KEY, _State, _UNSEEN_IGNORE, _command_steps, _computed, _pull_substitutions, expand_literal_variables)
 from shell.env.search import (_positionals)
 
 def git_egress_pass(command: str, cwd: str) -> str | None:
     """Run the git egress checks over each simple command, in the directory git runs in
     (see _Directory and expand_literal_variables)."""
-    if "git" not in command:
+    if "git" not in command and "gh" not in command:
         return None
     reason = _git_pass(expand_literal_variables(command), cwd)
     if reason and not isinstance(reason, Notice) and "would stage" in reason \
@@ -65,7 +66,15 @@ def _git_pass(command: str, cwd: str | None) -> str | None:
         repo = places[0] if len(places) == 1 else None   # more than one: not known
         reasons = []
         command_words = strip_prefix(words)
-        if command_words and command_words[0].rsplit("/", 1)[-1] == "git":
+        inner = _shell_body(words, command_words)
+        if inner is not None and "git" in inner:          # bash -c 'git push', eval 'git push'
+            reasons.append(_git_pass(inner, repo))
+        program = command_words[0].rsplit("/", 1)[-1] if command_words else ""
+        if program == "gh":
+            reasons.append(_gh_push(command_words[1:], repo))
+        if program == "git":
+            reasons.append(_history_sent(command_words[1:], steps, steps.index(step)))
+        if program == "git":
             args = _known_directories(command_words[1:], state, repo)
             # Quote-deleted words: a -C path may have been cut at a space.
             reasons.append(git_egress_verdict(args, None if not exact and "-C" in args else repo,
@@ -88,6 +97,59 @@ def _git_pass(command: str, cwd: str | None) -> str | None:
             if reason and not isinstance(reason, Notice):
                 return reason
     return Notice("; ".join(notices)) if notices else None
+
+
+def _shell_body(words: list[str], command: list[str]) -> str | None:
+    """The script a runner prefix hands to a shell: `bash -c S`, `eval S`."""
+    leading = words[:len(words) - len(command)]
+    names = [word.rsplit("/", 1)[-1] for word in leading]
+    if "eval" in names:
+        return " ".join(words[names.index("eval") + 1:])
+    if command and any(name in SHELLS for name in names) and any(
+            word.startswith("-") and not word.startswith("--") and "c" in word
+            for word in leading):
+        return command[0]
+    return None
+
+
+def _gh_push(args: list[str], repo: str | None) -> str | None:
+    """`gh repo create NAME --source DIR --push` pushes DIR's commits: checked as a push of
+    HEAD from DIR."""
+    if args[:2] != ["repo", "create"] or "--push" not in args:
+        return None
+    source = "."
+    for i, word in enumerate(args):
+        if word == "--source" and i + 1 < len(args):
+            source = args[i + 1]
+        elif word.startswith("--source="):
+            source = word.split("=", 1)[1]
+    if repo is None or _EXPANDED_WORD.search(source):
+        return UNVERIFIED_PUSH.format(why="the directory it pushes from is not known here")
+    return _check_push(["origin", "HEAD"], os.path.join(repo, os.path.expanduser(source)))
+
+
+# git subcommands that write commits' contents to stdout.
+_HISTORY_WRITERS = frozenset({"format-patch", "bundle", "archive"})
+HISTORY_SENT = ("Blocked: this pipes git history ({sub}) into {program}, which sends it off "
+                "this machine without the push check reading it; push the branch instead (a "
+                "push is checked for secrets), or send it from your own terminal.")
+
+
+def _history_sent(args: list[str], steps: list, index: int) -> str | None:
+    """`git format-patch --stdout | curl -T -`: history piped into a program that sends it."""
+    sub = _git_split(args, None)[0]
+    if sub not in _HISTORY_WRITERS:
+        return None
+    for later in steps[index + 1:]:
+        if not _PIPE_BEFORE.search(later.before):
+            break
+        program = (strip_prefix(later.words)[:1] or [""])[0].rsplit("/", 1)[-1]
+        if program in EGRESS_PROGRAMS:
+            return HISTORY_SENT.format(sub=sub, program=program)
+    return None
+
+
+_PIPE_BEFORE = re.compile(r"(?<!\|)\|(?!\|)")
 
 
 # ── egress: git (ENV-GUARD-2, decision D29) ─────────────────────────────────────────────
@@ -492,8 +554,12 @@ def _inline_alias(args: list[str], sub: str) -> str | None:
     return None if value is None else " ".join([sub, *rest])
 
 
-def git_egress_verdict(args: list[str], repo: str | None, created: bool = False) -> str | None:
-    """A deny reason when this git command would stage, commit, push or show an egress file."""
+def git_egress_verdict(args: list[str], repo: str | None, created: bool = False,
+                       _depth: int = 0) -> str | None:
+    """A deny reason when this git command would stage, commit, push or show an egress file.
+    An alias from git config is spelled out and judged as what it runs (a `!` alias: its
+    script, read like a command in the repo)."""
+    where = repo
     sub, sub_args, repo = _git_split(args, repo)
     if _EXPANDED_WORD.search(sub):
         return EXPANDED_GIT
@@ -502,7 +568,26 @@ def git_egress_verdict(args: list[str], repo: str | None, created: bool = False)
         if alias.startswith("!"):
             return EXPANDED_GIT
         sub, sub_args = (alias.split() or [""])[0], alias.split()[1:] + sub_args
+    elif sub and sub not in git_alias.GIT_COMMANDS and where is not None \
+            and _depth < git_alias.MAX_DEPTH:                 # git config alias.p push; git p
+        expanded, script = git_alias.expand(args, where)
+        if script is not None:
+            return _git_pass(script, repo)
+        if expanded != args:
+            return git_egress_verdict(expanded, where, created, _depth + 1)
+    if sub == "submodule" and "foreach" in sub_args:          # runs its string in each one
+        script = sub_args[sub_args.index("foreach") + 1:]
+        while script[:1] and script[0] in ("--recursive", "-q", "--quiet"):
+            script = script[1:]
+        # Each submodule is its own repository, not known here: a push or commit there fails
+        # closed, as any git command whose directory is unknown does.
+        return _git_pass(" ".join(script), None) if script else None
     sub = "add" if sub == "stage" else sub                    # git stage is git add
+    if sub == "send-pack":                                    # git send-pack URL REF: a push
+        sub = "push"
+    elif sub == "subtree" and sub_args[:1] == ["push"]:      # sends a split of HEAD's history
+        remote = _positionals(sub_args[1:], frozenset({"--prefix", "-P", "-m", "--message"}))
+        sub, sub_args = "push", [(remote or ["origin"])[0], "HEAD"]
     if sub not in ("add", "commit", "push", "diff", "show", "log", "grep"):
         return None
     if sub in ("diff", "show", "log", "grep"):

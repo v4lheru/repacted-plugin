@@ -474,10 +474,20 @@ def test_the_deepest_nest_that_is_read_is_judged_and_fast(tree, shape):
 
 
 def test_many_heredocs_or_substitutions_do_not_cost_their_square(tree):
-    for command in ("cat <<E\nx\nE\n" * 2000, "echo $(date) " * 2000, "echo a; " * 4000):
-        start = time.perf_counter()
-        assert reason(command, tree, "clean") is None
-        assert time.perf_counter() - start < 3.0
+    # Growth, not a wall-clock limit: doubling the input must roughly double the time
+    # (linear gives ~2, quadratic ~4). Best of three per size; one generous ceiling.
+    def best(command):
+        times = []
+        for _ in range(3):
+            start = time.perf_counter()
+            assert reason(command, tree, "clean") is None
+            times.append(time.perf_counter() - start)
+        return min(times)
+
+    for unit, n in (("cat <<E\nx\nE\n", 1000), ("echo $(date) ", 1000), ("echo a; ", 2000)):
+        small, large = best(unit * n), best(unit * 2 * n)
+        assert large / max(small, 0.02) < 3.2, (unit, small, large)
+        assert large < 15.0, (unit, large)
 
 
 # ── READER: shell_words.read_script ─────────────────────────────────────────────────────

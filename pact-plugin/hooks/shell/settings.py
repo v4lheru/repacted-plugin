@@ -6,14 +6,23 @@ Summary: Which paths hold Claude Code settings or the running plugin's hooks, an
          (`~/.claude.json` or `<config dir>/.claude.json`), the running plugin's
          hooks/ (hooks.json with it) and .claude-plugin/, the plugin cache under the
          config dir, and the workflow state the repact commands own: `<config dir>/tasks/`
-         and `<config dir>/pact-sessions/` (TASK_STATE). A source checkout of the plugin anywhere else is not protected. Paths
+         and `<config dir>/pact-sessions/` (TASK_STATE), and any repo's task log folder
+         `.repacted/` (TASK_LOG: settings_guard refuses it to agent frames only), and what
+         stands for the user's merge approval (CONSENT_STATE): the approval tokens
+         `<config dir>/merge-authorized-*`, the transcript folder `<config dir>/projects/`
+         (every `*.jsonl` in it, and the rest but a project's `memory/` folder, which the
+         agent writes), and a run of one of the running plugin's hook
+         entries (`hooks/*.py`, dispatch.py among them) from the shell. A source checkout of
+         the plugin anywhere else is not protected. Paths
          are compared after symlinks resolve, case-folded and NFC-normalised (APFS reads
          `Settings.JSON` as `settings.json`).
 Used by: hooks/settings_guard.py (the verdict and the frame), tested by
          tests/test_settings_guard.py.
-Map: protected_place, written_place, the places (_places, _within), word reading
+Map: protected_place, written_place, the places (_places, _within), hook runs (_hook_entry,
+     _runs_hook_entry), word reading
      (_pieces, _braces, _expand, _candidates), globs (_glob, _could_be, _globbed), program
-     classes (READERS, _writes, claude_cli_writes), _scan.
+     classes (READERS, _writes, claude_cli_writes), tree writers (_tree_roots,
+     _root_holds), _scan.
 
 Standard library, shell.words and shell.env.script only (no `shared` import: it runs before
 every Bash call; the launcher shim's text comes in from the caller, settings_guard).
@@ -46,10 +55,29 @@ spell is refused as UNSPELLED when the command also names the config dir (in any
 by a cd into it) or pact-sessions; a bare `tasks` does not count,
 since repos have their own tasks/ folders.
 
+Folders as destinations: a write into the transcript or task log folder is refused like a
+write of a file in it, whatever the file is called, and a tree writer (cp -R, rsync -r, ditto,
+tar x, unzip, cpio -i, 7z x) is judged by the root its tree lands under (its destination, -C,
+-d or -o, else the directory it runs in): a root that holds the transcript folder, a task
+log folder or settings counts as a write of them (`cp -R stage/. ~/.claude/`, `cd <config>
+&& tar xf t.tar`). git and patch roots are judged for the transcript folder and settings, not
+for a checkout's `.repacted/`: what they write is named by a diff or the index.
+
+Consent state (CONSENT_STATE): the merge guard takes the user's approval from the transcript
+the host writes (shared/approval_record.py), and keeps a token file as its use ledger; the
+host and its hooks write both. A hook entry reads its payload from stdin, so running one from
+the shell hands it a payload the model wrote. Refused for every frame; reading stays allowed
+(cat, grep, jq, the Read tool), but an interpreter or unknown program that names a transcript
+is judged as a writer, as for task state. A copy of the plugin elsewhere can still run its
+mint hook: the token it writes carries no answer in the transcript, so it approves nothing.
+
 Honest limit: it reads the command as written. A script file that opens the path itself, a
 name the shell assembles at run time from parts this reader does not expand (in a command that
 never names the config dir), the file an xargs reads its words from, and a symlink made by a
-program it does not see are not caught. Quotes are gone by the time a word is
+program it does not see are not caught. An unknown program that names the transcript or
+task log folder (`zip -r out.zip <folder>`) is judged as a writer of it, as for task state;
+an archiver not listed above that extracts in the directory it runs in, and index lines git
+reads from a file (`git update-index --index-info < f`), are not read. Quotes are gone by the time a word is
 judged, so a quoted glob, or a regex such as `.*` given to `sed -i` from the home directory,
 is judged as a glob and may be refused.
 """
@@ -73,7 +101,7 @@ _SEPARATORS = frozenset({"|", "||", "&", "&&", ";", ";;", "(", ")", "\n", "|&"})
 _REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>", ">&"})
 # Words that make a name in the command a candidate at all (after brace expansion).
 _TRIGGERS = ("settings", "hooks", "claude-plugin", "plugins", ".claude", "checks.json", "tasks",
-             "pact-sessions")
+             "pact-sessions", "merge-authorized", "/projects", ".repacted")
 # Under <config>/plugins: the loader's records, whose installPath or source picks the code
 # that runs. bin/checks.json (the gate modes) and plugins/data (the run ledger and gate
 # state) are protected beside them; the plugin's own processes write there, not a Bash word.
@@ -89,7 +117,20 @@ SESSION_STATE = "the PACT session state (ops log, unattended flag, journal)"
 UNSPELLED = ("a path held in a variable or a command's output this check cannot spell, in a "
              "command that names the Claude config dir or pact-sessions")
 TASK_STATE = frozenset({TASK_FILES, SESSION_STATE, UNSPELLED})
+# A repo's tracked task log, in any checkout: repact-task appends to it after checking the
+# evidence; settings_guard refuses a hand write of it to an agent frame (rule settings.task_log).
+TASK_LOG = "the repo's task log (.repacted/, which repact-task writes)"
+_TASK_LOG_TAIL = "/.repacted/tasks.jsonl"
+_TASK_LOG_DIR = "/.repacted"
 _STATE_DIRS = (("tasks", "tasks", TASK_FILES), ("sessions", "pact-sessions", SESSION_STATE))
+# What stands for the user's merge approval: settings_guard denies these for every frame
+# (rule settings.consent). The token prefix is shell.merge.tokens.TOKEN_PREFIX, spelled here
+# because this module imports no merge code.
+APPROVALS = "the merge approval tokens (which only the approval hook writes)"
+TRANSCRIPTS = "a session transcript (which only Claude Code writes)"
+HOOK_RUN = "a run of the running plugin's hook entry (which only Claude Code runs)"
+CONSENT_STATE = frozenset({APPROVALS, TRANSCRIPTS, HOOK_RUN})
+APPROVAL_PREFIX = "merge-authorized-"
 _TASK_FILE_TAIL = re.compile(r"/tasks/[^/]+/[^/]+\.json$")
 # A plugin tool's option whose value is a file it writes: judged even for a plugin tool.
 _OUTPUT_OPTIONS = ("--out", "--output", "-o")
@@ -149,7 +190,8 @@ FIND_WRITES = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fpri
 _FIND_RUNS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})     # judged by the program run
 _FIND_LEADING = frozenset({"-H", "-L", "-P", "-E", "-X", "-d", "-s", "-x"})   # before the roots
 GIT_WRITES = frozenset({"checkout", "restore", "mv", "rm", "reset", "apply", "am", "clean",
-                        "config", "stash", "switch", "worktree", "archive"})
+                        "config", "stash", "switch", "worktree", "archive", "update-index",
+                        "checkout-index", "read-tree", "merge-file"})
 _GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
 # Copies: only the destination is written (the last operand, or a --target-directory), and
 # it may be a directory the source lands in. mv also removes its sources (REMOVERS).
@@ -198,6 +240,7 @@ def _places(environ) -> dict:
     resolved["skills"] = os.path.realpath(root / "skills")
     for key, name, _what_it_is in _STATE_DIRS:
         resolved[key] = os.path.realpath(os.path.join(resolved["config"], name))
+    resolved["projects"] = os.path.realpath(os.path.join(resolved["config"], "projects"))
     files = {_norm(os.path.join(plugins, name)) for name in LOADER_FILES} | {_norm(resolved["checks"])}
     user_config = {_norm(os.path.realpath(os.path.join(d, USER_CONFIG)))
                    for d in (os.path.expanduser(home), resolved["config"])}
@@ -234,6 +277,11 @@ def _what(path: str, cwd: str, places: dict) -> str | None:
             return "a Claude Code settings file"
         if parent == places["config"] and name.startswith("settings") and name.endswith(".json"):
             return "a Claude Code settings file"
+        if parent == places["config"] and name.startswith(APPROVAL_PREFIX):
+            return APPROVALS
+        if _within(candidate, places["projects"]) and (name.endswith(".jsonl")
+                                                       or not _in_memory(candidate, places)):
+            return TRANSCRIPTS
         if _within(candidate, places["hooks"]):
             return "the running plugin's hooks"
         if _within(candidate, places["manifest"]):
@@ -249,7 +297,17 @@ def _what(path: str, cwd: str, places: dict) -> str | None:
         for key, _name, what in _STATE_DIRS:
             if _within(candidate, places[key]):
                 return what
+        if candidate.endswith(_TASK_LOG_DIR) or _TASK_LOG_DIR + "/" in candidate:
+            return TASK_LOG
     return None
+
+
+def _in_memory(candidate: str, places: dict) -> bool:
+    """Whether a normalised path lies in a project's auto-memory folder,
+    `<config>/projects/<project>/memory/`, which the agent writes; the rest of projects/ is
+    the host's transcripts and their tool results."""
+    rest = candidate[len(places["projects"].rstrip("/")) + 1:].split("/")
+    return len(rest) >= 2 and rest[1] == "memory"
 
 
 def _holds_place(path: str, cwd: str, places: dict) -> bool:
@@ -348,7 +406,8 @@ def _could_be(pattern: str, cwd: str, places: dict, holds: bool = False) -> str 
                       ("cache", "the plugin cache"),
                       ("data", "the plugin data (run ledger and gate state)"),
                       ("own_data", "the plugin data (run ledger and gate state)"),
-                      ("tasks", TASK_FILES), ("sessions", SESSION_STATE)):
+                      ("tasks", TASK_FILES), ("sessions", SESSION_STATE),
+                      ("projects", TRANSCRIPTS)):
         if key in places and fits(places[key], True):
             return what
     if any(fits(name, False) for name in places["files"]):
@@ -398,7 +457,11 @@ def _expand(piece: str, places: dict, cwd: str, environ) -> str:
 
 
 def _pieces(word: str) -> list[str]:
-    return [piece for piece in [word] + _PIECE_SPLIT.split(word) if piece]
+    """The word, its parts between separators, and the value glued to a short option
+    (`-C/path`, `-o~/dir`)."""
+    glued = [word[2:]] if word[:1] == "-" and word[1:2] != "-" and word[2:3] in ("/", "~", ".", "$") \
+        else []
+    return [piece for piece in [word] + _PIECE_SPLIT.split(word) + glued if piece]
 
 
 def _unknown_tail(piece: str) -> str | None:
@@ -411,6 +474,10 @@ def _unknown_tail(piece: str) -> str | None:
         return SESSION_STATE
     if _TASK_FILE_TAIL.search(lowered):
         return TASK_FILES
+    if lowered.endswith(_TASK_LOG_DIR) or _TASK_LOG_DIR + "/" in lowered:
+        return TASK_LOG
+    if tail.startswith(APPROVAL_PREFIX):
+        return APPROVALS
     if (tail.startswith("settings") and tail.endswith(".json")) or tail == "hooks.json" \
             or "/.claude-plugin" in lowered or "/plugins/cache" in lowered \
             or "/plugins/data/" in lowered or tail in LOADER_FILES or tail == USER_CONFIG:
@@ -662,6 +729,33 @@ def _is_launcher_shim(path: str, shim: str | None) -> bool:
         return False
 
 
+def _hook_entry(word: str, cwd: str, places: dict, environ) -> bool:
+    """Whether `word` is a file directly in the running plugin's hooks/ ending .py: a hook
+    entry the host runs with a payload on stdin (hooks/shared/ and below are libraries)."""
+    word = _expand(word, places, cwd, environ)
+    if not word or "$" in word or len(word) >= 1024:
+        return False
+    real = os.path.realpath(os.path.join(cwd, word))
+    return _norm(os.path.dirname(real)) == places["hooks"] and real.endswith(".py") \
+        and os.path.isfile(real)
+
+
+def _runs_hook_entry(command: list[str], cwd: str, places: dict, environ) -> bool:
+    """Whether this simple command runs a hook entry: its program word, or an interpreter's
+    script operand (`python3 hooks/dispatch.py PreToolUse`)."""
+    if not command:
+        return False
+    program = command[0].rsplit("/", 1)[-1]
+    if not _SCRIPT_RUNNERS.fullmatch(program):
+        return _hook_entry(command[0], cwd, places, environ)
+    for word in command[1:]:
+        if word in _CODE_OPTIONS:
+            return False
+        if not word.startswith("-"):
+            return _hook_entry(word, cwd, places, environ)
+    return False
+
+
 def plugin_tool(command: list[str], cwd: str, places: dict, environ) -> bool:
     """Whether this simple command runs a program the plugin ships: its program word, or an
     interpreter's script operand (`python3 "$CLAUDE_PLUGIN_ROOT/bin/repact-task"`)."""
@@ -722,6 +816,105 @@ def _into_directory(destinations: list[str], sources: list[str], dirs: list[str]
             what = _what(os.path.join(target, name), dirs[0], places)
             if what:
                 return what
+    return None
+
+
+# Programs that write a whole tree under a root (a copy's destination, an extract's -C, or the
+# directory they run in): the root is judged as well as the words (_tree_roots).
+_ARCHIVERS = frozenset({"tar", "gtar", "bsdtar"})
+_UNZIP_READS = frozenset({"-l", "-v", "-t", "-p", "-c", "-z", "-Z"})
+_SEVEN_ZIP = frozenset({"7z", "7za", "7zz"})
+_ROOT_OPTIONS = {"tar": ("-C", "--directory"), "unzip": ("-d",), "cpio": ("-D", "--directory"),
+                 "patch": ("-d", "--directory"), "git": ("-C", "--work-tree")}
+
+
+def _option_values(args: list[str], names: tuple) -> list[str]:
+    """The values of these options: `-C X`, `-CX`, `--directory=X`, `--directory X`."""
+    found = []
+    for i, word in enumerate(args):
+        for name in names:
+            if word == name and i + 1 < len(args):
+                found.append(args[i + 1])
+            elif name.startswith("--") and word.startswith(name + "="):
+                found.append(word[len(name) + 1:])
+            elif not name.startswith("--") and word.startswith(name) and len(word) > len(name):
+                found.append(word[len(name):])
+    return found
+
+
+def _short_flags(args: list[str]) -> str:
+    return "".join(word[1:] for word in args if word[:1] == "-" and word[1:2] != "-")
+
+
+def _tree_roots(program: str, args: list[str], cwd: str) -> list[str]:
+    """The roots a tree writer writes under: a recursive copy's landing place (the
+    destination, or destination/name for a source not written `dir/.`), an extract's -C,
+    -d or -o, else the directory it runs in; git's -C and --work-tree for a writing git."""
+    flags = _short_flags(args)
+    if program in ("cp", "gcp", "rsync", "ditto"):
+        recursive = program == "ditto" or any(c in flags for c in "Rra") or any(
+            word in ("--recursive", "--archive") for word in args)
+        if not recursive:
+            return []
+        destinations, sources = _copy_words(args)
+        roots = []
+        for target in (d for d in destinations if not d.startswith("-")):
+            names = [os.path.basename(s.rstrip("/")) for s in sources]
+            whole = program == "ditto" or not names or any(
+                s.endswith(("/.", "/")) if program == "rsync" else s.endswith("/.")
+                for s in sources) or any(_MAGIC.search(n) or "$" in n for n in names)
+            exists = os.path.isdir(os.path.join(cwd, target))
+            roots += [target] if whole or not exists else [os.path.join(target, n) for n in names]
+        return roots
+    if program in _ARCHIVERS:
+        first = args[0] if args and not args[0].startswith("-") else ""
+        extract = "x" in first or "x" in flags or any(
+            word in ("--extract", "--get") for word in args)
+        return (_option_values(args, _ROOT_OPTIONS["tar"]) or ["."]) if extract else []
+    if program == "unzip":
+        if any(word in _UNZIP_READS for word in args):
+            return []
+        return _option_values(args, _ROOT_OPTIONS["unzip"]) or ["."]
+    if program == "cpio":
+        if "p" in flags or "--pass-through" in args:
+            operands = [word for word in args if not word.startswith("-")]
+            return operands[-1:]
+        extract = "i" in flags or "--extract" in args
+        return (_option_values(args, _ROOT_OPTIONS["cpio"]) or ["."]) if extract else []
+    if program in _SEVEN_ZIP:
+        operands = [word for word in args if not word.startswith("-")]
+        if operands[:1] not in (["x"], ["e"]):
+            return []
+        return [word[2:] for word in args if word.startswith("-o") and len(word) > 2] or ["."]
+    if program in ("patch", "git"):
+        return _option_values(args, _ROOT_OPTIONS[program])
+    return []
+
+
+def _root_holds(root: str, dirs: list[str], places: dict, environ,
+                task_log: bool = True) -> str | None:
+    """What a tree written under `root` can reach: the root itself protected, or a root that
+    holds the transcripts (`<config>/projects`), settings or the running plugin, or (with
+    `task_log`) a task log folder (`.repacted/`). git and patch write the paths their diff or
+    index names, so a checkout root holding `.repacted/` does not count for them."""
+    spelled = _expand(root, places, dirs[0], environ)
+    if "$" in spelled or "`" in spelled:
+        places["unspelled"] = True
+        return None
+    if not spelled or len(spelled) >= 1024:
+        return None
+    if _MAGIC.search(spelled):
+        return _globbed(spelled, dirs[0], places, holds=True)
+    what = _what(spelled, dirs[0], places)
+    if what:
+        return what
+    resolved = _norm(os.path.realpath(os.path.join(dirs[0], spelled)))
+    if _within(places["projects"], resolved):
+        return TRANSCRIPTS
+    if task_log and os.path.isdir(os.path.join(dirs[0], spelled, ".repacted")):
+        return TASK_LOG
+    if _holds_place(spelled, dirs[0], places):
+        return "a directory that holds settings or the running plugin"
     return None
 
 
@@ -861,6 +1054,8 @@ def _scan(text: str, cwd: str, places: dict, environ, depth: int = 0) -> str | N
             continue
         runs_scripts = runs_scripts or any(_SCRIPT_RUNNERS.fullmatch(w.rsplit("/", 1)[-1])
                                            for w in words[:len(words) - len(command) + 1])
+        if _runs_hook_entry(command, dirs[0], places, environ):
+            return HOOK_RUN
         if claude_cli_writes(program, args):
             return CLAUDE_CLI
         if not _writes(program, args):
@@ -868,12 +1063,22 @@ def _scan(text: str, cwd: str, places: dict, environ, depth: int = 0) -> str | N
         named = _named(program, args)
         own = plugin_tool(command, dirs[0], places, environ)
         outputs = {args[i] for i in _output_values(args)} if own else set()
+        if program == "git" and "update-index" in args and any(
+                word in ("--index-info", "--stdin") for word in args):
+            lines = [re.sub(r"\\[tn]", " ", word) for word in feed]   # printf's \t and \n
+            what = _feeds_state(lines, dirs, places, environ)   # index lines piped in
+            if what:
+                return what
         if program == "find":
             what = _find_writes(args, dirs, places, environ)
             if what:
                 return what
         if command and _runs_under_xargs(words):
             what = _feeds_state(feed, dirs, places, environ)
+            if what:
+                return what
+        for root in _tree_roots(program, args, dirs[0]):
+            what = _root_holds(root, dirs, places, environ, program not in ("git", "patch"))
             if what:
                 return what
         if program in COPIERS:
@@ -886,7 +1091,8 @@ def _scan(text: str, cwd: str, places: dict, environ, depth: int = 0) -> str | N
             named = destinations + (sources if program in ("mv", "ln") else [])
         for word in named:
             what = _candidates(word, dirs, places, environ, holds=program in REMOVERS)
-            if what and not (own and what in TASK_STATE and word not in outputs):
+            if what and not (own and (what in TASK_STATE or what in (TASK_LOG, TRANSCRIPTS))
+                             and word not in outputs):
                 return what
             if not own or word in outputs:
                 places["unspelled"] |= _unspelled(word, places, dirs[0], environ)

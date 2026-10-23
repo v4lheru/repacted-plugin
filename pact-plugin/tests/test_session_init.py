@@ -722,7 +722,7 @@ class TestRefreshSurfacingMatrix:
         additional = output["hookSpecificOutput"]["additionalContext"]
         assert "Refreshed workstream detected" in additional
         assert f"refresh_ts={self._REFRESH_TS}" in additional
-        assert "A HALT/algedonic signal was ACTIVE at refresh (tasks: 7)" in additional
+        assert "A HALT/stop signal was ACTIVE at refresh (tasks: 7)" in additional
 
     @pytest.mark.parametrize(
         "agent_type, sid_matches_seeded",

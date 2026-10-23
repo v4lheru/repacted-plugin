@@ -2,7 +2,16 @@
 
 Release notes for rePACTed, newest first. Entries start at the first public release.
 
-## 2.1.1 (2026-10-19)
+## 2.1.2 (2026-10-23)
+
+Fixes from an outside review of 2.1.1, and the upstream PACT 4.8.2 to 4.8.6 fixes that apply. Known limits in the release notes.
+
+- A merge, force-push, branch delete or push to main now needs your answer to the approval question for that exact command, given in the main session in the last 15 minutes. Only an option you picked counts.
+- The checks read more of a command before they judge it: a command whose program or script is built while it runs is refused, a git alias is expanded, and a variable set to one plain value is read as that value. Common shell setup lines such as `eval "$(ssh-agent -s)"` and `<tool> completion <shell>` stay allowed.
+- Specialists can no longer write the task log, the approval records or the session transcripts, including through folder copies and archives.
+- A spawn is refused, not allowed, when the dispatch check times out. Deleting a task no longer stops all spawning, and the stop message is in plain words.
+- `repact-task fsck` fails and `repact-task show` says `unverified` when a task's recorded evidence no longer checks out.
+- CLAUDE.md markers inside a code fence are no longer mistaken for the managed block (upstream PACT 4.8.3).
 
 Two fixes for checks that failed in the 2.1.0 test matrix. Known limit in the release notes.
 

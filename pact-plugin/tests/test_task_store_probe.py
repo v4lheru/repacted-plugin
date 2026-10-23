@@ -69,6 +69,24 @@ def test_a_miss_on_a_task_seen_before_halts_at_once(world):
     assert _probe(world, _frame("TaskUpdate", "1")) == {"team": TEAM, "task_id": "1", "misses": 1}
 
 
+@pytest.mark.parametrize("status", ["deleted", "completed"])
+def test_a_seen_task_closed_or_deleted_is_an_expected_absence(world, status):
+    """Deleting a task removes its file: that update, and any later one on the same task, is
+    no miss. A seen task whose file vanishes on a plain update still halts at once."""
+    for task_id in ("1", "2"):
+        _write(world, task_id)
+        _probe(world, _frame("TaskUpdate", task_id))
+    (world["root"] / TEAM / "1.json").unlink()
+    closing = _frame("TaskUpdate", "1")
+    closing["tool_input"]["status"] = status
+    assert _probe(world, closing) is None
+    assert _probe(world, _frame("TaskUpdate", "1")) is None
+    marker = read_probe_marker(world["session_dir"])
+    assert (marker["misses"], marker["halt"]) == (0, False)
+    (world["root"] / TEAM / "2.json").unlink()
+    assert _probe(world, _frame("TaskUpdate", "2")) == {"team": TEAM, "task_id": "2", "misses": 1}
+
+
 def test_a_present_but_malformed_file_is_a_miss(world):
     _write(world, "1")
     _probe(world, _frame("TaskUpdate", "1"))
@@ -97,7 +115,7 @@ def test_the_dispatcher_entry_journals_and_returns_the_halt(world, monkeypatch):
 
     assert probe_module.dispatch_check(_frame("TaskCreate", "9"), Ctx()) is None
     result = probe_module.dispatch_check(_frame("TaskCreate", "8"), Ctx())
-    assert result.system_message.startswith("⚠️ ALGEDONIC HALT") and "tasks/session-probe/8.json" in result.system_message
+    assert result.system_message.startswith("⚠️ HALT: task store not writing") and "tasks/session-probe/8.json" in result.system_message
     assert result.journaled and result.rule == "dispatch.task_store_absent"
     assert rows == [("task_store_absent", {"team": TEAM, "task_id": "8", "misses": 2})]
     assert probe_module.dispatch_check({"tool_name": "Bash"}, Ctx()) is None

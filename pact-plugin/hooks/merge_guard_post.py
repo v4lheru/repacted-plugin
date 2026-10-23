@@ -2,7 +2,10 @@
 """PostToolUse hook (matcher AskUserQuestion|Bash): mints and retires merge-guard tokens.
 
 AskUserQuestion: when the clicked option carries exactly one dangerous command, write a
-short-lived token bound to its (op, target, privileged flags); merge_guard_pre requires it.
+short-lived token bound to its (op, target, privileged flags); merge_guard_pre requires it as
+the use ledger and, as the consent, re-reads the same answer from the session transcript
+through _mint_contexts_from_bundle. Running this hook on a written payload mints a token that
+approves nothing.
 Bash (Layer 1, invariant I-2): after a successful destructive command, retire the matching
 token (.consumed). Observer-style: never blocks a tool call.
 

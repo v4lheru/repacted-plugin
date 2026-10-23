@@ -799,7 +799,8 @@ def _scan_lines_for_event(
                 ):
                     continue
                 return event
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
+            # RecursionError: a line nested too deep to parse is malformed too.
             continue
     return None
 

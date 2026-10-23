@@ -137,6 +137,9 @@ RULES = {
     "env.git.push_sends": "A push sends a .env-class or credential file.",
     "env.git.push_secret": "A push adds a line carrying a secret-shaped value.",
     "env.git.expanded": "A git command is named by a shell expansion or alias.",
+    "env.opaque": "The command's program, subcommand or script is built at run time.",
+    "env.read.archive": "An archive written to a pipe would carry a .env-class file.",
+    "env.git.history_sent": "git history is piped into a program that sends it.",
 }
 RULE_MARKS = (
     ("env.send.file", "off the machine;"),
@@ -160,6 +163,9 @@ RULE_MARKS = (
     ("env.git.push_sends", "Blocked: this push sends"),
     ("env.git.push_secret", "Blocked: this push adds a"),
     ("env.git.expanded", "this git command is named by a shell expansion"),
+    ("env.opaque", "so no check can read what this command runs"),    # shell/opaque.RULE_MARK
+    ("env.read.archive", "this archive would carry"),
+    ("env.git.history_sent", "this pipes git history"),
 )
 assert {rule for rule, _ in RULE_MARKS} == set(RULES)
 

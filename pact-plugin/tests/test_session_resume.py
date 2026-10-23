@@ -654,7 +654,7 @@ class TestUpdateSessionInfoFailureSignal:
         result = update_session_info("sess-123", "pact-sess123")
 
         assert result is not None
-        assert "UnicodeDecodeError" in result
+        assert "not valid UTF-8" in result
         assert "codec" not in result
         assert "0xff" not in result
         assert "/" not in result
@@ -1904,7 +1904,7 @@ class TestRefreshHaltLine:
         result = _interpret_refreshed_event(
             _refresh_event(halt_active=True, halt_task_ids=["7", "12"])
         )
-        assert "A HALT/algedonic signal was ACTIVE at refresh" in result
+        assert "A HALT/stop signal was ACTIVE at refresh" in result
         assert "(tasks: 7, 12)" in result
         assert "do not assume it resolved" in result
 
@@ -1924,7 +1924,7 @@ class TestRefreshHaltLine:
         result = _interpret_refreshed_event(
             _refresh_event(halt_active=True, halt_task_ids=[])
         )
-        assert "A HALT/algedonic signal was ACTIVE at refresh —" in result
+        assert "A HALT/stop signal was ACTIVE at refresh —" in result
         assert "(tasks:" not in result
 
     def test_halt_true_non_str_elements_filtered(self):
@@ -1956,7 +1956,7 @@ class TestRefreshHaltLine:
         )
         assert result.startswith("STALE checkpoint from")
         assert "older than 48h" in result
-        assert "A HALT/algedonic signal was ACTIVE at refresh (tasks: 3)" in result
+        assert "A HALT/stop signal was ACTIVE at refresh (tasks: 3)" in result
         assert f"refresh_ts={old_ts}" in result
 
     def test_fresh_prompt_has_no_stale_prefix(self):

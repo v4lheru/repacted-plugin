@@ -4,8 +4,27 @@
     "version": "4.8.1",
     "date": "2026-09-26"
   },
-  "reviewed_through": null,
-  "reviews": [],
+  "reviewed_through": "4dd9007ded9e870abec38af1eadd4d77578c4997",
+  "reviews": [
+    {
+      "version": "v4.8.6",
+      "sha": "4dd9007ded9e870abec38af1eadd4d77578c4997",
+      "date": "2026-10-23",
+      "report": "upstream/reviews/v4.8.6.md",
+      "adopted": [],
+      "ported": [
+        "#1650",
+        "#1656"
+      ],
+      "ignored": [
+        "#1662"
+      ],
+      "deferred": [
+        "#1659",
+        "#1663"
+      ]
+    }
+  ],
   "picks": [
     {
       "pr": "#1587",

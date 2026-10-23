@@ -204,6 +204,15 @@ def _restore_line_ending(content: str, line_ending: str) -> str:
     return content.replace("\r\n", "\n").replace("\n", line_ending)
 
 
+def _read_replaced(path: Path) -> str:
+    """`path` decoded as UTF-8 with replacement characters, "" when unreadable. For
+    planning only: a rewrite always decodes strictly."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
     """Replace `target`'s contents atomically (temp + fsync + rename), iff the directory the
     write binds into is contained within `project_root` (#1247).
@@ -346,7 +355,13 @@ def _atomic_write_text(target: Path, content: str, project_root: Path) -> None:
                 pass
             raise
     finally:
-        os.close(parent_fd)
+        # The only step after the rename. A close that fails once the rename has put the new
+        # file in place is not a failed write, and after a failed write it must not replace
+        # the error that stopped it (upstream PACT #1650).
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _strip_legacy_lines(content: str) -> str:
@@ -411,6 +426,75 @@ def _strip_legacy_lines(content: str) -> str:
     return "".join(out_parts)
 
 
+# The obsolete kernel block's markers. The start is a prefix: the marker line
+# carries a version (`<!-- PACT_START: v3 -->`).
+_KERNEL_START_MARKER = "<!-- PACT_START:"
+_KERNEL_END_MARKER = "<!-- PACT_END -->"
+
+
+def _marker_span(doc, row: int) -> tuple[int, int]:
+    """(start, end) in the original text of the marker comment on `row` of the parsed
+    `doc`, without the up-to-3-space indent before it or the blanks after it."""
+    content = doc.lines[row].content
+    start = doc.row_start(row)
+    return start + len(content) - len(content.lstrip(" ")), start + len(content.rstrip(" \t"))
+
+
+def _plan_kernel_strip(content: str, target_file: Path) -> tuple[str | None, str | None]:
+    """Decide the kernel strip for `content`: (notice, new_content). Pure.
+
+    `new_content` is `content` without the kernel block, or None when nothing is written;
+    `notice` then says why (None when there is no block). The block is located by the
+    fence-aware parser (upstream PACT #1656), so a fenced or inline-code example is not it.
+    A duplicate, unpaired or unplaceable block, or a removal that would leave part of the
+    file unreadable, is left alone and named.
+    """
+    from .claude_md_markers import State, parse, uncertainty_added
+
+    doc = parse(content)
+    block = doc.find_block(_KERNEL_START_MARKER, _KERNEL_END_MARKER)
+    if block.state is State.ABSENT:
+        # Normal idempotent no-op for already-migrated installs.
+        return None, None
+    if block.state is State.UNKNOWN and not (
+        doc.may_hold(_KERNEL_START_MARKER) or doc.may_hold(_KERNEL_END_MARKER)
+    ):
+        # An uncertain region (an unclosed fence) that holds no kernel marker text.
+        return None, None
+    if block.state is not State.FOUND:
+        return (
+            f"Migration skipped: {target_file}: {block.reason}. To avoid data "
+            "loss the file was left unchanged; inspect it and remove or "
+            "repair the PACT_START / PACT_END kernel markers."
+        ), None
+
+    first, last = block.spans[0]
+    pre_marker = content[:_marker_span(doc, first)[0]]
+    post_marker = content[_marker_span(doc, last)[1]:]
+
+    # Preserve one blank line at the removal boundary so the user's spacing around
+    # the obsolete block survives the strip. A leading byte order mark stays first.
+    bom = "\ufeff" if pre_marker.startswith("\ufeff") else ""
+    pre_clean = pre_marker[len(bom):].rstrip("\r\n")
+    post_clean = post_marker.lstrip("\r\n")
+    if pre_clean and post_clean:
+        new_content = bom + pre_clean + "\n\n" + post_clean
+    elif pre_clean:
+        new_content = bom + pre_clean + "\n"
+    else:
+        new_content = bom + post_clean
+    # The block can hold the line that closes an HTML block opened above it; removing
+    # it would leave the rest of the file unreadable.
+    reason = uncertainty_added(doc, parse(new_content))
+    if reason:
+        return (
+            f"Migration skipped: {target_file}: {reason}. To avoid data loss the "
+            "file was left unchanged; inspect it and close the HTML block that "
+            "line opens."
+        ), None
+    return None, new_content
+
+
 def strip_orphan_kernel_block() -> str | None:
     """SUNSET BEFORE v5.0.0: strip the obsolete PACT_START/PACT_END kernel block from ~/.claude/CLAUDE.md.
 
@@ -428,56 +512,20 @@ def strip_orphan_kernel_block() -> str | None:
             # Never resolve the target and reuse it: the write would follow the leaf.
             try:
                 content = target_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # Never rewrite a file that is not valid UTF-8 (replacement characters would
+                # corrupt it); say so only when a strip was due (upstream PACT #1650).
+                notice, new_content = _plan_kernel_strip(_read_replaced(target_file), target_file)
+                if new_content is None:
+                    return notice
+                return (f"Migration skipped: {target_file} is not valid UTF-8, so it was "
+                        "left unchanged; remove the PACT_START / PACT_END kernel block by hand.")
             except OSError:
                 return None
 
-            START_MARKER = "<!-- PACT_START:"
-            END_MARKER = "<!-- PACT_END -->"
-
-            has_start = START_MARKER in content
-            has_end = END_MARKER in content
-
-            if not has_start and not has_end:
-                # Normal idempotent no-op for already-migrated installs.
-                return None
-
-            if has_start != has_end:
-                # One marker only: no-op to avoid data loss, and report it.
-                which = "PACT_START" if has_start else "PACT_END"
-                missing = "PACT_END" if has_start else "PACT_START"
-                return (
-                    f"Migration skipped: {target_file} contains "
-                    f"{which} but no matching {missing}. To avoid data "
-                    f"loss, inspect the file and either remove the "
-                    f"orphan {which} marker or restore the matching "
-                    f"{missing} marker."
-                )
-
-            pre_marker, rest = content.split(START_MARKER, 1)
-            if END_MARKER not in rest:
-                # END marker exists in content but appears textually
-                # before START. Same defensive handling.
-                return (
-                    f"Migration skipped: {target_file} contains "
-                    "both PACT_START and PACT_END markers but PACT_END "
-                    "appears before PACT_START. Inspect the file and "
-                    "reorder or remove the orphan markers."
-                )
-
-            _, post_marker = rest.split(END_MARKER, 1)
-
-            # Preserve one blank line at the removal boundary so the
-            # user's spacing around the obsolete block survives the strip.
-            pre_clean = pre_marker.rstrip("\r\n")
-            post_clean = post_marker.lstrip("\r\n")
-            if pre_clean and post_clean:
-                new_content = pre_clean + "\n\n" + post_clean
-            elif pre_clean:
-                new_content = pre_clean + "\n"
-            elif post_clean:
-                new_content = post_clean
-            else:
-                new_content = ""
+            notice, new_content = _plan_kernel_strip(content, target_file)
+            if new_content is None:
+                return notice
 
             try:
                 # Anchor is the global config dir, a different trust boundary from a project root (R4).
@@ -516,16 +564,34 @@ def strip_orphan_kernel_block() -> str | None:
 def extract_managed_region(content: str) -> tuple[str, int] | None:
     """Extract the PACT-managed region: (region_text, start_offset after the start marker), or None.
 
-    The region holds only plugin-generated content, so consumers need no fence awareness.
+    None unless the fence-aware parser finds exactly one marker pair (upstream PACT #1656): a
+    fenced or inline-code copy of a marker is not the region, and neither is a pair the parser
+    cannot place. The region holds only plugin-generated content, so consumers need no fence
+    awareness.
     """
-    start_idx = content.find(MANAGED_START_MARKER)
-    if start_idx == -1:
+    from .claude_md_markers import State, parse
+
+    doc = parse(content)
+    region = doc.find_block(MANAGED_START_MARKER, MANAGED_END_MARKER)
+    if region.state is not State.FOUND:
         return None
-    region_start = start_idx + len(MANAGED_START_MARKER)
-    end_idx = content.find(MANAGED_END_MARKER, region_start)
-    if end_idx == -1:
-        return None
-    return content[region_start:end_idx], region_start
+    first, last = region.spans[0]
+    region_start = _marker_span(doc, first)[1]
+    return content[region_start:_marker_span(doc, last)[0]], region_start
+
+
+def session_block_text(content: str) -> str:
+    """The Current Session block of `content`, markers included, when the fence-aware parser
+    finds exactly one; else "". Readers of its Resume, Session dir and Started lines search
+    this text, never the whole file, so a fenced example is not read (upstream PACT #1656)."""
+    from .claude_md_markers import State, parse
+
+    doc = parse(content)
+    block = doc.find_block(SESSION_START_MARKER, SESSION_END_MARKER)
+    if block.state is not State.FOUND:
+        return ""
+    first, last = block.spans[0]
+    return content[_marker_span(doc, first)[0]:_marker_span(doc, last)[1]]
 
 
 def resolve_project_claude_md_path(
@@ -644,12 +710,22 @@ def migrate_to_managed_structure() -> str | None:
             # Containment in _atomic_write_text (inside the lock) replaces the old leaf is_symlink guard.
             try:
                 content = target_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # Never rewrite a file that is not valid UTF-8; say so only when the
+                # migration was due (upstream PACT #1650).
+                if _migration_refusal(_read_replaced(target_file)) is not None:
+                    return None
+                return ("Migration skipped: the project CLAUDE.md is not valid UTF-8, "
+                        "so it was left unchanged.")
             except OSError:
                 return None
 
-            # Idempotent guard: already migrated
-            if MANAGED_START_MARKER in content:
-                return None
+            # Idempotent guard (already migrated) and the refusals: located by the
+            # fence-aware parser, so a fenced example of a marker is not the block.
+            refusal = _migration_refusal(content)
+            if refusal is not None:
+                return (f"Migration skipped: project CLAUDE.md: {refusal}. To avoid data "
+                        "loss the file was left unchanged.") if refusal else None
 
             new_content = _build_migrated_content(content)
 
@@ -678,33 +754,48 @@ def migrate_to_managed_structure() -> str | None:
         )
 
 
+def _migration_refusal(content: str) -> str | None:
+    """None when the migration may run on `content`; "" when it is already migrated (the
+    managed pair is found); else why the file is left alone: a managed, session or memory
+    pair the fence-aware parser cannot place (upstream PACT #1656). Pure."""
+    from .claude_md_markers import State, parse
+
+    doc = parse(content)
+    managed = doc.find_block(MANAGED_START_MARKER, MANAGED_END_MARKER)
+    if managed.state is State.FOUND:
+        return ""
+    if managed.state is not State.ABSENT:
+        return managed.reason
+    for start, end in ((SESSION_START_MARKER, SESSION_END_MARKER),
+                       (MEMORY_START_MARKER, MEMORY_END_MARKER)):
+        located = doc.find_block(start, end)
+        if located.state not in (State.FOUND, State.ABSENT):
+            return located.reason
+    return None
+
+
 def _build_migrated_content(content: str) -> str:
     """Transform old-format CLAUDE.md content into the managed structure (pure; idempotent).
 
     User content above the first PACT section lands below PACT_MANAGED_END.
     """
+    from .claude_md_markers import State, parse
+
+    doc = parse(content)
     # Idempotency guard: already migrated → no-op
-    if MANAGED_START_MARKER in content:
+    if doc.find_block(MANAGED_START_MARKER, MANAGED_END_MARKER).state is State.FOUND:
         return content
 
-    # Extract session block if present (between markers)
+    # Extract the session block when the parser finds exactly one (a fenced example of
+    # the markers is not it).
     session_block = ""
-    content_sans_routing = content
-    content_sans_session = content_sans_routing
-    session_start = SESSION_START_MARKER
-    session_end = SESSION_END_MARKER
-    if session_start in content_sans_routing and session_end in content_sans_routing:
-        pattern = re.compile(
-            re.escape(session_start) + r".*?" + re.escape(session_end),
-            re.DOTALL,
-        )
-        match = pattern.search(content_sans_routing)
-        if match:
-            session_block = match.group(0)
-            content_sans_session = (
-                content_sans_routing[:match.start()]
-                + content_sans_routing[match.end():]
-            )
+    content_sans_session = content
+    session = doc.find_block(SESSION_START_MARKER, SESSION_END_MARKER)
+    if session.state is State.FOUND:
+        first, last = session.spans[0]
+        start, end = _marker_span(doc, first)[0], _marker_span(doc, last)[1]
+        session_block = content[start:end]
+        content_sans_session = content[:start] + content[end:]
 
     # What remains after extracting routing + session is candidate for
     # memory sections and user content.

@@ -266,7 +266,7 @@ def main():
 
         launch_notices(input_data, project_dir, source, is_context_reset, system_messages)
 
-        refresh_environment(source, is_context_reset, context_parts, system_messages)
+        refresh_environment(source, is_context_reset, context_parts, system_messages, frame_role)
         parts_ledger.account("environment", context_parts)
 
         # 4d/4e. PACT runtime config: settings-health self-check + inject the

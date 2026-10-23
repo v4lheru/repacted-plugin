@@ -76,6 +76,8 @@ SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish"})
 # Words on a heredoc's operator line that run its body as commands or read names from it.
 _BODY_RUNNERS = SHELLS | {"eval", "source", ".", "ssh"} | NAME_CONSUMERS
 _STRING_LITERAL = re.compile(r"""(['"])(.*?)\1""")
+# The seam between two string literals joined by + or written side by side.
+_JOINED_LITERALS = re.compile(r"""(['"])\s*\+?\s*\1""")
 # An exit or an error carries its message to stderr: raise SystemExit(text), die, throw.
 _SCRIPT_PRINTS = re.compile(r"\b(?:print|printf|puts|echo|say|pp|p|pprint|console\.\w+|"
                             r"sys\.std(?:out|err)|write|dumps?|display|cat|exit|SystemExit|"
@@ -142,7 +144,11 @@ def _script_prints_file(script: str, cwd: str | None, prints: bool = False) -> s
     runs = bool(_SCRIPT_RUNS.search(script))
     if not (prints or runs or _SCRIPT_PRINTS.search(script)):
         return None
-    for literal in _STRING_LITERAL.finditer(script):
+    # "." + "env", '.e' 'nv': literals joined by + or written side by side are one string.
+    joined = _JOINED_LITERALS.sub("", script)
+    literals = [*_STRING_LITERAL.finditer(script)] + (
+        [*_STRING_LITERAL.finditer(joined)] if joined != script else [])
+    for literal in literals:
         for piece in literal.group(2).split():
             if (runs or not any(char in piece for char in "*?[")) and token_protected(piece, cwd):
                 return piece

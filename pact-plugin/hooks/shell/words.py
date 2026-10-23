@@ -756,6 +756,121 @@ def words(command: str) -> list[str] | None:
     return tokens(command)
 
 
+# ─── What a typed word expands (shell/opaque.py) ─────────────────────────────────────────
+def expanding_text(typed: str) -> str:
+    """The part of a typed word the shell expands: each single-quoted string outside double
+    quotes removed. A backslash keeps the character after it, and an open quote keeps the
+    rest, so the text errs toward reading more expansions, never fewer."""
+    out, i, n, double = [], 0, len(typed), False
+    while i < n:
+        char = typed[i]
+        if char == "\\":
+            out.append(typed[i:i + 2])
+            i += 2
+            continue
+        if char == '"':
+            double = not double
+        elif char == "'" and not double:
+            end = typed.find("'", i + 1)
+            if end < 0:
+                out.append(typed[i:])
+                break
+            i = end + 1
+            continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def unquoted_text(typed: str) -> str:
+    """The characters of a typed word the shell may glob: quoted strings, escaped
+    characters and ${...} expansions left out."""
+    out, i, n = [], 0, len(typed)
+    while i < n:
+        char = typed[i]
+        if char == "\\":
+            i += 2
+        elif char == "'":
+            close = typed.find("'", i + 1)
+            i = n if close < 0 else close + 1
+        elif char == '"':
+            i += 1
+            while i < n and typed[i] != '"':
+                i += 2 if typed[i] == "\\" else 1
+            i += 1
+        elif typed.startswith("${", i):
+            close = typed.find("}", i)
+            i = n if close < 0 else close + 1
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
+def is_single_quoted(typed: str) -> bool:
+    """True for a typed word that is wholly one single-quoted string."""
+    return len(typed) > 1 and typed[0] == "'" == typed[-1]
+
+
+def _name_char(char: str, first: bool) -> bool:
+    return char.isascii() and (char.isalpha() or char == "_" or not first and char.isdigit())
+
+
+def _expansion_at(text: str, i: int) -> tuple[str, int] | None:
+    """(name, end) of a plain `$NAME`, `${NAME}`, `$1`, `${12}`, `$@` or `$*` at text[i]."""
+    j, n = i + 1, len(text)
+    if j < n and text[j] == "{":
+        close = text.find("}", j + 1)
+        inner = text[j + 1:close] if close > 0 else ""
+        plain = inner and _name_char(inner[0], True) and all(_name_char(c, False) for c in inner)
+        if plain or inner.isdigit() or inner in ("@", "*"):
+            return inner, close + 1
+        return None
+    if j < n and _name_char(text[j], True):
+        k = j + 1
+        while k < n and _name_char(text[k], False):
+            k += 1
+        return text[j:k], k
+    if j < n and (text[j].isdigit() or text[j] in "@*"):
+        return text[j], j + 1
+    return None
+
+
+def spell(text: str, values: dict) -> str:
+    """`text` with each $NAME and ${NAME} outside single quotes written as values[NAME]."""
+    if not values:
+        return text
+    out, i, quote, n = [], 0, "", len(text)
+    while i < n:
+        char = text[i]
+        if quote == "'":
+            out.append(char)
+            quote = "" if char == "'" else quote
+            i += 1
+            continue
+        if char == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if char == "$" and quote != '"' and text.startswith("$'", i):    # $'..' opens at its quote
+            out.append("$")
+            i += 1
+            continue
+        if char == "'" and quote != '"':
+            quote = "'"
+        elif char == '"':
+            quote = "" if quote == '"' else '"'
+        elif char == "$":
+            found = _expansion_at(text, i)
+            if found and found[0] in values:
+                out.append(values[found[0]])
+                i = found[1]
+                continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
 # ─── The merge guard's lenient scanners (from shared/merge_guard_common.py at 0edd3594) ───
 def quoted_inner(token: str) -> str | None:
     """The text inside a token that is wholly one quoted string ('..' or \"..\"), else None."""

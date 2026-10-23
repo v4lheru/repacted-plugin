@@ -15,7 +15,9 @@ prompt dispatch prints is exempt), then
 (10) the session cost cap on a spawn (1)-(9) let through, of any type but COST_CAP_EXEMPT
 (shared/cost_cap.py; a spend that cannot be read lets the spawn through with a
 once-per-session note, never a silent pass).
-Fail-closed on load failure and on a runtime exception. DENY -> exit 2; ALLOW -> exit 0;
+Fail-closed on load failure, on a runtime exception and on a timeout (the registry runs it
+with on_timeout="deny", so a hang past its alarm refuses the spawn); only the cost cap's own
+read is fail-open, loudly, as (10) says. DENY -> exit 2; ALLOW -> exit 0;
 WARN -> additionalContext. Every decision is journaled with the prompt redacted.
 
 Map: _emit_load_failure_deny, _redact, _team_member_names, _resolves_a_registered_team,

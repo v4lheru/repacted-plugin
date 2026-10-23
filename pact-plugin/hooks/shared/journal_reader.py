@@ -77,8 +77,8 @@ def read_events_at(
                 if not ts_ge(event.get("ts"), since):
                     continue
                 events.append(event)
-            except (json.JSONDecodeError, ValueError):
-                continue  # Skip malformed lines
+            except (json.JSONDecodeError, ValueError, RecursionError):
+                continue  # Skip malformed lines, one nested too deep to parse included
         return events
 
     except Exception:

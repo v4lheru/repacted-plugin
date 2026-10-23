@@ -10,6 +10,7 @@ Map: judge, _pattern_words, _find_filters, _listed_names_verdict, _quiet_group, 
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 
@@ -22,7 +23,7 @@ from shell.env.judge import (_body_as_script, _heredoc_verdict, _printed_text, _
 from shell.env.names import (GLOB_BUDGET_MESSAGE, _WRITE_REDIRECT, glob_budget_overspent,
                              mentions_class, reset_glob_budget, token_protected)
 from shell.env.places import (_Directory, _PIPE, _merge, _names_only_search, _search_skip, resolve_path_substitutions)
-from shell.env.programs import (GREP_PROGRAMS, NAME_CONSUMERS, PARSE_MESSAGE, PRINTERS, READERS, RG_PROGRAMS, SILENT_STDIN, SUGGESTION, UNREADABLE_MESSAGE, WALK_LIMIT)
+from shell.env.programs import (EGRESS_PROGRAMS, FIND_ACTIONS, GREP_PROGRAMS, NAME_CONSUMERS, OPERAND_READERS, PARSE_MESSAGE, PRINTERS, READERS, RG_PROGRAMS, SILENT_STDIN, SUGGESTION, UNREADABLE_MESSAGE, WALK_LIMIT)
 from shell.env.script import (_BODY, _BODY_KEY, _SUB_KEY, _State, _Step, _command_steps, _literal_rounds, _pull_substitutions, _read, _spell_rounds, bind_names, loop_bindings, normalize_env_get)
 from shell.env.search import (_TooLarge, _named_message, _search_roots, first_protected_file, recursive_search)
 from shell.env import judge as _judge
@@ -87,6 +88,8 @@ def judge(command: str, cwd: str | None, state: _State, captured: bool = False) 
             if named and strip_prefix(step.words)[:1] != ["env-get"]:
                 return _named_message(named[0])
         return _listed_names_verdict(placed)
+    if not captured:
+        return _find_exec_verdict(placed) or _archive_verdict(placed)
     return None
 
 
@@ -140,29 +143,154 @@ def _listed_names_verdict(placed: list) -> str | None:
         source, source_places = placed[index - 1]
         listing = strip_prefix(source.words)
         lister, args = (listing[0].rsplit("/", 1)[-1], listing[1:]) if listing else ("", [])
+        shallow = ()
         if lister == "find":
             search = _find_filters(args)
             search = search and (*search, True)
+        elif lister == "ls":
+            search, shallow = _ls_listing(args)
         else:
             search = recursive_search(lister, args)
         if not search:
             continue
         roots, excludes, includes, hidden = search
         for here in source_places:
-            try:
-                known = _search_roots(roots, here)
-                found = known and first_protected_file(known, here, excludes, hidden, includes)
-            except _TooLarge:
-                known = []
-                found = f"one of more than {WALK_LIMIT} entries"
-            if known is None:
-                found = "a name from a path not known here"
+            found = _reach(roots, here, excludes, hidden, includes, shallow)
             if found:
                 return (f"Blocked: {lister} hands the names it lists to {program}, which prints "
                         f"each file, and it would list {found} (.env class); exclude the class "
                         f"from the listing (find: ! -name '.env*' ! -name '*.env' ! -name .envrc "
                         f"! -name .netrc; grep/rg: the --exclude or -g '!' forms), or "
                         f"{SUGGESTION}.")
+    return None
+
+
+def _reach(roots: list[str], here: str | None, excludes, hidden: bool, includes=(),
+           skip_dirs=()) -> str | None:
+    """The first protected file a walk of `roots` from `here` reaches, a description of why
+    the walk could not be made (an unchecked tree is not a clean one), or None."""
+    try:
+        known = _search_roots(roots, here)
+        found = known and first_protected_file(known, here, excludes, hidden, includes, skip_dirs)
+    except _TooLarge:
+        return f"one of more than {WALK_LIMIT} entries"
+    return "a name from a path not known here" if known is None else found or None
+
+
+def _ls_listing(args: list[str]) -> tuple:
+    """((roots, excludes, includes, hidden), skip_dirs) for an ls that lists hidden names
+    (-a, -A, --all, --almost-all), else (None, ()): `ls -a | xargs cat` reads every name
+    ls prints. Without -R only the named directories are listed."""
+    short = "".join(word[1:] for word in args if word.startswith("-") and not word.startswith("--"))
+    hidden = bool(set(short) & set("aAf")) or any(word in ("--all", "--almost-all") for word in args)
+    if not hidden:
+        return None, ()
+    roots = [word for word in args if not word.startswith("-")] or ["."]
+    recursive = "R" in short or "--recursive" in args
+    return (roots, [], [], True), (() if recursive else ("*",))
+
+
+# Programs that print or send the file find hands them (grep has its own names-only rule).
+_FIND_EXEC_READERS = READERS | OPERAND_READERS | EGRESS_PROGRAMS
+
+
+def _find_exec_verdict(placed: list) -> str | None:
+    """`find . -type f -exec cat {} \;`: the program -exec runs prints every file the find
+    lists, so the find is walked as the search it amounts to (its -name filters honoured)."""
+    for step, places in placed:
+        command = strip_prefix(step.words)
+        if not command or command[0].rsplit("/", 1)[-1] != "find":
+            continue
+        args = command[1:]
+        for i, word in enumerate(args):
+            if word not in FIND_ACTIONS or i + 1 >= len(args):
+                continue
+            program = args[i + 1].rsplit("/", 1)[-1]
+            rest = args[i + 2:]
+            if not (program in _FIND_EXEC_READERS or program in GREP_PROGRAMS | RG_PROGRAMS
+                    and not _names_only_search(rest)):
+                continue
+            search = _find_filters(args[:i])
+            if not search:
+                continue
+            roots, excludes, includes = search
+            for here in places:
+                found = _reach(roots, here, excludes, True, includes)
+                if found:
+                    return (f"Blocked: this recursive search would read {found} (.env class) "
+                            f"and hand it to {program} through find {word}, which prints or "
+                            "sends it; exclude the class (! -name '.env*' ! -name '*.env' ! "
+                            f"-name .envrc ! -name .netrc), or {SUGGESTION}.")
+    return None
+
+
+ARCHIVE_MESSAGE = ("Blocked: this archive would carry {found} (a .env-class file) into {program}, "
+                   "which prints or sends it; leave the class out (--exclude '.env*' --exclude "
+                   "'*.env' --exclude .envrc --exclude .netrc), or " + SUGGESTION + ".")
+
+
+def _tar_to_stdout(args: list[str]) -> tuple[list[str], list[str]] | None:
+    """(paths, exclude patterns) of a tar that creates an archive on stdout (`tar cf - .`,
+    `tar -c .`), else None."""
+    words = list(args)
+    if words and not words[0].startswith("-"):              # old style: tar cf - .
+        words[0] = "-" + words[0]
+    creates, archive, paths, excludes, base, i = False, None, [], [], "", 0
+    while i < len(words):
+        word = words[i]
+        following = words[i + 1] if i + 1 < len(words) else ""
+        name, equals, value = word.partition("=")
+        if word == "--create":
+            creates = True
+        elif name in ("--exclude", "--file", "--directory"):
+            value = value if equals else following
+            i += 0 if equals else 1
+            if name == "--exclude":
+                excludes.append(value)
+            elif name == "--file":
+                archive = value
+            else:
+                base = value
+        elif word == "-C":
+            base, i = following, i + 1
+        elif word.startswith("-") and not word.startswith("--") and len(word) > 1:
+            letters = word[1:]
+            creates = creates or "c" in letters
+            if "f" in letters:
+                glued = letters[letters.index("f") + 1:]
+                archive = glued or following
+                i += 0 if glued else 1
+        elif not word.startswith("-"):
+            paths.append(os.path.join(base, word) if base else word)
+        i += 1
+    if not creates or archive not in (None, "-", "/dev/stdout"):
+        return None
+    return paths or [base or "."], excludes
+
+
+def _archive_verdict(placed: list) -> str | None:
+    """`tar cf - . | strings`, `tar cf - . | curl -T -`: an archive written to a pipe carries
+    every file it packs to the next program, unless that program unpacks it (`| tar x`)."""
+    for index, (step, places) in enumerate(placed):
+        command = strip_prefix(step.words)
+        if not command or command[0].rsplit("/", 1)[-1] not in ("tar", "bsdtar", "gtar"):
+            continue
+        if not _PIPE.search(step.after) or index + 1 >= len(placed):
+            continue
+        made = _tar_to_stdout(command[1:])
+        if made is None:
+            continue
+        consumer = strip_prefix(placed[index + 1][0].words)
+        program = consumer[0].rsplit("/", 1)[-1] if consumer else "the next command"
+        if program in ("tar", "bsdtar", "gtar") and any(
+                "x" in word.lstrip("-") and not word.startswith("--") or word == "--extract"
+                for word in consumer[1:2] + [w for w in consumer[2:] if w.startswith("-")]):
+            continue
+        paths, excludes = made
+        for here in places:
+            found = _reach(paths, here, excludes, True)
+            if found:
+                return ARCHIVE_MESSAGE.format(found=found, program=program)
     return None
 
 

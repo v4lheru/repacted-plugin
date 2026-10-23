@@ -72,7 +72,7 @@
   },
   {
    "path": "pact-plugin/hooks/shell/merge/tokens.py",
-   "line": 53,
+   "line": 56,
    "class": "secret/secret-assignment",
    "id": "270e15af6af17fd6",
    "scope": "core"

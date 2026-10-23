@@ -489,8 +489,9 @@ def _load(path: Path) -> Optional[dict]:
 #
 # hooks/task_store_probe.py writes `<session_dir>/task-store-probe.json` after each
 # TaskCreate or TaskUpdate frame: `misses` counts consecutive frames whose task file was
-# absent, `seen` the task keys that existed at an earlier probe, `halt` whether the probe
-# has declared the store dark. dispatch_gate reads `halt` to refuse Agent spawns; a later
+# absent, `seen` the task keys that existed at an earlier probe, `closed` the keys a TaskUpdate
+# deleted or closed (their absence is expected), `halt` whether the probe has declared the
+# store dark. dispatch_gate reads `halt` to refuse Agent spawns; a later
 # probe that finds the file clears it.
 
 PROBE_MARKER = "task-store-probe.json"
@@ -500,8 +501,8 @@ HALT_RULE = "dispatch.task_store_absent"
 
 
 def halt_sentence(team: str, task_id: str) -> str:
-    return (f"⚠️ ALGEDONIC HALT: the host did not write tasks/{team}/{task_id}.json; gates, "
-            "waits and HANDOFFs cannot work. Stop dispatching; run repact-doctor.")
+    return (f"⚠️ HALT: task store not writing: the host did not write tasks/{team}/{task_id}.json; "
+            "gates, waits and HANDOFFs cannot work. Stop dispatching; run repact-doctor.")
 
 
 def read_probe_marker(session_dir: str) -> dict:

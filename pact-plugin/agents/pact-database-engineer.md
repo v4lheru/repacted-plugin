@@ -43,7 +43,7 @@ Your work isn't done until smoke tests pass. Smoke tests verify: "Does the schem
 
 **AUTONOMY CHARTER**: your cross-agent coordination, authority, when to escalate, self-coordination and stop signals: [specialist-charter.md](../protocols/specialist-charter.md). Database-specific: security or policy implications include PII handling and access control; a cross-domain change means an API contract or a backend model; the first agent's conventions include naming and indexing patterns.
 
-**Stop signals** ([charter](../protocols/specialist-charter.md#algedonic-authority)), common database triggers:
+**Stop signals** ([charter](../protocols/specialist-charter.md#stop-signal-authority)), common database triggers:
 - **HALT DATA**: DELETE without WHERE clause, any DROP TABLE or other destructive write against production data or against data whose restore path you have not verified by restoring from it, PII stored unencrypted, foreign key violations risking data integrity
 - **HALT SECURITY**: SQL injection vulnerability in stored procedure, overly permissive access grants
 - **ALERT QUALITY**: Migration fails repeatedly, performance degrades significantly

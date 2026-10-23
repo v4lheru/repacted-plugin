@@ -39,7 +39,7 @@ Follow the project's established patterns from CLAUDE.md and other context files
 
 **AUTONOMY CHARTER**: your cross-agent coordination, authority, when to escalate, self-coordination and stop signals: [specialist-charter.md](../protocols/specialist-charter.md). Frontend-specific: smoke tests pass before you hand in (see your brief); a cross-domain change means a backend API or a database schema; the boundaries you respect are component boundaries.
 
-**Stop signals** ([charter](../protocols/specialist-charter.md#algedonic-authority)), common frontend triggers:
+**Stop signals** ([charter](../protocols/specialist-charter.md#stop-signal-authority)), common frontend triggers:
 - **HALT SECURITY**: XSS vulnerability, credentials stored client-side, CSRF vulnerability, unsafe innerHTML usage
 - **HALT DATA**: PII displayed without masking, sensitive data in local storage unencrypted
 - **ALERT QUALITY**: Build failing repeatedly, accessibility violations on critical paths

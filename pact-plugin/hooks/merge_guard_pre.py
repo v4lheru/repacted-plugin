@@ -3,14 +3,18 @@
 authorization token exists.
 
 The read side of the merge guard: merge_guard_post.py mints the token when the operator approves
-the command in AskUserQuestion. Gated: merge, PR close, glab mr merge/close/delete, force push,
+the command in AskUserQuestion. A token is only the use ledger (one approval, MAX_USES, retired
+after success): the consent is the user's answer in the session transcript the host writes
+(shared/approval_record.py), re-read here through the mint rules and matched to this exact
+command. A token with no such answer, an answer older than TOKEN_TTL, or a subagent or teammate
+frame authorizes nothing. Gated: merge, PR close, glab mr merge/close/delete, force push,
 branch delete, push to main/master, remote ref and mass delete, and API calls (gh api, curl,
 wget, glab api) that merge, delete refs, write contents or weaken branch protection.
 Classifiers live in shared/merge_guard_common.py.
 
 Map (file order): _emit_load_failure_deny; find_valid_token; find_valid_tokens; _safe_remove;
-_consume_token; _both_present_equal; _token_matches_command; _git_quiet;
-_deletes_only_disposable_branches; _unresolved_repo_hint; check_merge_authorization; main. Design notes: the design notes.
+_consume_token; _both_present_equal; _token_matches_command; _approved_on_record; _git_quiet;
+_deletes_only_disposable_branches; _alias_danger; _unresolved_repo_hint; check_merge_authorization; main. Design notes: the design notes.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -36,6 +41,8 @@ from _fail_closed import emit_load_failure_deny
 try:
     import shared.pact_context as pact_context
     from shared.pact_context import get_session_id
+    # Called as approval_record.answer_on_record: tests/conftest.py patches it there.
+    from shared import approval_record
 
     # Shared constants and cleanup — single source of truth for both hooks
     sys.path.insert(0, str(Path(__file__).parent))
@@ -64,7 +71,11 @@ try:
         _mask_shell_quotes as mask_quotes,
         _single_destructive_leg,
         _single_detectable_leg,
+        _slice_stripped_legs,
+        _normalize_line_continuations,
     )
+    from shell.merge.classify import _leg_payloads, _leg_words
+    from shell import git_alias
     # Re-exports consumed by the test suite through this module's namespace
     # (module-level seam: tests import these via merge_guard_pre).
     # Read-floor danger predicates promoted to shared (GAP1/GAP5) — re-imported here.
@@ -420,6 +431,21 @@ def _token_matches_command(token: dict, command: str) -> bool:
     return False
 
 
+def _approved_on_record(command: str, hook_input: dict | None) -> bool:
+    """True when the session transcript holds the user's answer, within TOKEN_TTL, whose
+    clicked option the mint rules (merge_guard_post) bind to exactly this command. A matching
+    token proves only that the mint ran, which the model can do itself; this is the consent."""
+    def approves(questions: list, answers: dict) -> bool:
+        try:
+            from merge_guard_post import _mint_contexts_from_bundle
+        except BaseException:   # noqa: BLE001 - the mint rules unreadable: no approval
+            return False
+        contexts, _refusals = _mint_contexts_from_bundle(questions, answers)
+        return any(_token_matches_command({"context": context}, command) for context in contexts)
+
+    return approval_record.answer_on_record(hook_input, approves, TOKEN_TTL)
+
+
 _BRANCH_DELETE_FLAGS = frozenset({"--delete", "--force"})
 _GIT_CHECK_TIMEOUT_S = 3.0
 
@@ -478,11 +504,46 @@ _REFUSAL_MARKS = (
     ("mg.unmintable.shape", "it cannot be bound to an approval"),
     ("mg.token.consume_failed", "could not consume authorization token"),
     ("mg.token.mismatch", "An authorization token exists but its approved operation"),
+    ("mg.token.no_record", "holds no answer from the user approving it"),
     ("mg.push.to_main.expanded", "This push names its destination with a shell expansion"),
 )
 
 
 _HINT_COMMAND_LIMIT = 200
+
+
+def _alias_danger(command: str, cwd: str | None, depth: int = 0) -> str | None:
+    """Why a git leg of `command` reaches a gated act through a git alias, else None: a call
+    that runs an alias (`-c alias.*` or the repo's or the user's git config) whose expansion
+    the merge check refuses, or a `git config ... alias.<name> <value>` that sets one. The
+    arms read `git push`, never `git fp`, and an approval binds the literal command, so
+    either is refused as a shape no approval can bind. A leg's shell -c or eval string is
+    read too, two levels deep."""
+    def gated(text: str) -> bool:
+        return bool(is_dangerous_command(text) or unmintable_danger(text))
+
+    for leg in _slice_stripped_legs(_normalize_line_continuations(command)):
+        words = _leg_words(leg)
+        if not words:
+            continue
+        if depth < 2:
+            for inner, _wrapper in _leg_payloads(words):
+                reason = _alias_danger(inner, cwd, depth + 1)
+                if reason:
+                    return reason
+        if os.path.basename(words[0]) != "git":
+            continue
+        args = words[1:]
+        for value in git_alias.defined_values(args):
+            if gated(value[1:] if value.startswith("!") else f"git {value}"):
+                return "a git config call that sets an alias running a gated git act"
+        expanded, script = git_alias.expand(args, cwd)
+        if script is not None and (gated(script) or depth < 2
+                                   and _alias_danger(script, cwd, depth + 1)):
+            return "a git command run through a shell alias that runs a gated git act"
+        if script is None and expanded != args and gated(shlex.join(["git", *expanded])):
+            return "a git command run through an alias that runs a gated git act"
+    return None
 
 
 def _leg_binding(command: str) -> tuple[dict, dict | None]:
@@ -566,18 +627,20 @@ def _rule_of_refusal(reason: str, command: str) -> str:
 
 
 def check_merge_authorization(command: str, token_dir: Path | None = None,
-                              cwd: str | None = None) -> str | None:
+                              cwd: str | None = None,
+                              hook_input: dict | None = None) -> str | None:
     """Check if a dangerous command is authorized: None, or the refusal with its rule-id
     tail `[rule: <id>]` (RULE_IDS in shell.merge.arms; the text before the tail is the
-    refusal as written)."""
-    reason = _refusal(command, token_dir, cwd)
+    refusal as written). `hook_input` is the PreToolUse payload: its transcript and
+    frame decide whether the user's answer is on record; None means it is not."""
+    reason = _refusal(command, token_dir, cwd, hook_input)
     if reason is None:
         return None
     return f"{reason} [rule: {_rule_of_refusal(reason, command)}]"
 
 
 def _refusal(command: str, token_dir: Path | None = None,
-             cwd: str | None = None) -> str | None:
+             cwd: str | None = None, hook_input: dict | None = None) -> str | None:
     """The refusal text of a dangerous command that is not authorized, else None."""
     # Words the shell decodes to plain text are spelled plainly first (CANONICAL SPELLING in
     # merge_guard_common): `git "pu"sh` meets the arms that gate `git push`, and the post
@@ -595,6 +658,11 @@ def _refusal(command: str, token_dir: Path | None = None,
             "it does. Show the user the exact command and ask them to run it themselves with "
             "`! <command>`, or drop the repeated flags and run the command again."
         )
+    # A git alias hides the act from the arms: its expansion is judged before the plain read
+    # can let the command through.
+    alias = _alias_danger(probe, cwd)
+    if alias is not None:
+        return _unmintable_refusal(alias)
     if not is_dangerous_command(probe):
         return None
     if probe != command:
@@ -651,6 +719,17 @@ def _refusal(command: str, token_dir: Path | None = None,
         # The token whose FULL binding (op, target, flags, repo) matches this command; a
         # token for another PR, repo or flag set never authorizes it.
         if _token_matches_command(token, command):
+            # The token is not the consent: the user's answer in the transcript is. Checked
+            # before the use is claimed, so a token with no answer behind it stays unused.
+            if not _approved_on_record(command, hook_input):
+                return (
+                    "An approval token matches this command, but this session's transcript "
+                    "holds no answer from the user approving it in the last 15 minutes. A "
+                    "token alone is not the user's consent, and a subagent or teammate never "
+                    "has an answer on record: gated git acts are the lead's. Ask the user with "
+                    "AskUserQuestion, the literal command in the chosen option, then run it "
+                    "unchanged; from a subagent or teammate, hand the command to the lead."
+                )
             # Consume the token — one approval = one operation
             # Uses rename for idempotent consumption: if a concurrent
             # invocation already consumed it, that's the success case.
@@ -734,7 +813,7 @@ def main():
             sys.exit(0)
 
         cwd = input_data.get("cwd") if isinstance(input_data.get("cwd"), str) else None
-        error = check_merge_authorization(command, cwd=cwd)
+        error = check_merge_authorization(command, cwd=cwd, hook_input=input_data)
 
         if error:
             # hookEventName is required by the harness; missing it silently fails open

@@ -264,3 +264,20 @@ def test_hostile_file_name_is_still_scanned(repo):
     commit_file(repo, "dir with space/ü -n;$(x).py", f'TOKEN = "{FAKE}"\n', "odd name")
     git(repo, "checkout", "-q", "main")
     refused(run(repo, "git cherry-pick odd"), "line 1")
+
+
+@pytest.mark.parametrize("command", ["git merge --ff-only bytes", "git merge --squash bytes",
+                                     "git cherry-pick bytes"])
+def test_bytes_that_are_not_utf8_are_scanned_not_a_runtime_failure(repo, command):
+    # Regression: a merge bringing a file that is not valid UTF-8 crashed the scan
+    # (UnicodeDecodeError) and was refused as a runtime failure; the token beside the bad
+    # bytes must still be found.
+    git(repo, "checkout", "-q", "-b", "bytes", "main")
+    (repo / "notes.md").write_bytes(b"caf\xe9 \xff\xfe\n" * 40 + b'TOKEN = "' + FAKE.encode()
+                                    + b'" \xe9\n')
+    git(repo, "add", "notes.md")
+    git(repo, "commit", "-q", "-m", "bytes")
+    git(repo, "checkout", "-q", "main")
+    done = run(repo, command)
+    assert "runtime failure" not in done.stdout + done.stderr
+    refused(done, "notes.md line 41")

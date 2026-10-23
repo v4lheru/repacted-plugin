@@ -19,7 +19,7 @@ Telegram is an **optional** add-on. Not all PACT users have it installed. **Befo
 
 **When to notify** (target ~3-5 per session):
 - Task or phase completions
-- Blockers found or algedonic signals
+- Blockers found or stop signals (HALT, ALERT)
 - PR ready for review or merged
 - Deployments pushed
 

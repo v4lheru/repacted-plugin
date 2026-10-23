@@ -62,7 +62,7 @@ None flagged: `Uncertainty Coverage: N/A (no HIGH areas flagged)`. GREEN: all pa
 
 **AUTONOMY CHARTER**: your cross-agent coordination, authority, when to escalate, self-coordination and stop signals: [specialist-charter.md](../protocols/specialist-charter.md). Test-specific: you may route failures to coders without orchestrator approval; security implications include vulnerabilities discovered during testing; a cross-domain issue is a bug that spans frontend, backend and database; in parallel, share fixtures.
 
-**Stop signals** ([charter](../protocols/specialist-charter.md#algedonic-authority)), common test-phase triggers:
+**Stop signals** ([charter](../protocols/specialist-charter.md#stop-signal-authority)), common test-phase triggers:
 - **HALT SECURITY**: Discovered authentication bypass, injection vulnerability, credential exposure
 - **HALT DATA**: Test revealed PII in logs, data corruption path, integrity violation
 - **ALERT QUALITY**: Coverage <50% on critical paths, tests consistently failing after fixes

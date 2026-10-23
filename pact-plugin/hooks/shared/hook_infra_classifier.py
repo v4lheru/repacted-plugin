@@ -201,7 +201,7 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # removed the pin-staleness clear and every edge only it reached.
     "session_init": frozenset({
         "_fail_closed", "amendments", "autopilot_run", "background_launch", "background_work",
-        "canonical_json", "claude_md_manager", "coexistence", "commit_rules",
+        "canonical_json", "claude_md_manager", "claude_md_markers", "coexistence", "commit_rules",
         "compaction_owner", "constants", "cost_cap", "dispatch_helpers", "execution",
         "failure_cause", "failure_log", "gh_helpers", "git_helpers", "handoff_schema",
         "intentional_wait", "journal_reader", "marker_schema", "merge_guard_common",
@@ -246,6 +246,9 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
         "transcript_activity",
         "project_agents",  # via dispatch_helpers: the registry reads the project's own agents
         "cost_cap", "plugin_paths", "session_spend",  # the session cost cap (rule 10)
+        # via stale_session: the Resume line is read only inside the parser-located
+        # session block (upstream PACT #1656); failure_cause comes with claude_md_manager.
+        "claude_md_manager", "claude_md_markers", "failure_cause",
     }),  # pact_config reached here via the *_MODE resolver edge
          # (dispatch_gate -> shared.pact_config.get_enum for
          # PACT_DISPATCH_INLINE_MISSION_MODE); get_enum lets the team policy raise
@@ -278,12 +281,15 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
          # (resolve_project_claude_md_path)) and are now gone from this closure.
          # bootstrap_marker_writer's OWN closure (below) is unchanged.
     "bootstrap_marker_writer": frozenset({
-        "_fail_closed", "amendments", "claude_md_manager", "compaction_owner", "constants",
+        "_fail_closed", "amendments", "claude_md_manager", "claude_md_markers",
+        "compaction_owner", "constants",
         "failure_cause", "gh_helpers", "git_helpers", "handoff_schema", "journal_reader",
         "marker_schema", "pact_context", "paths", "plugin_identity", "project_scope",
         "session_journal", "session_registry", "session_resume", "state_file", "summary_head",
         "task_store", "task_utils",
     }),  # summary_head and amendments reached through compaction_owner (1.5.0 D8).
+         # claude_md_markers reached through claude_md_manager / session_resume, which
+         # locate PACT's CLAUDE.md markers with it (upstream PACT #1656).
          # task_utils reached through session_resume's open-task reader (the
          # unpaused-exit and paused prompts).  # handoff_schema reached TRANSITIVELY, via session_resume's
          # resolve_handoff_field on the resume-brief decision summary — this
@@ -317,7 +323,8 @@ _SEAM_HOOK_HELPER_CLOSURE: dict[str, frozenset[str]] = {
         "plugin_paths", "task_files", "team_labels",  # via frame: the team that holds a task file
     }),  # regenerated from the live derivation.
     "merge_guard_pre": frozenset({
-        "_fail_closed", "constants", "error_output", "journal_reader", "merge_guard_common",
+        "_fail_closed", "approval_record", "constants", "error_output", "journal_reader",
+        "merge_guard_common",
         "pact_context", "paths", "plugin_identity", "session_registry", "shell_words",
         "state_file", "task_store", "tool_response",
     }),  # both merge guards reach merge_guard_common (the shared token SSOT)

@@ -189,7 +189,7 @@ def _journal_carries_unharvested_handoffs(session_dir: str) -> bool | None:
                 # Parse every line; no substring pre-filter (an escaped `type` would be missed and the dir removed).
                 try:
                     event = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError, RecursionError):
                     # A torn line is not an absent event (crash mid-write); decide at the end of the file.
                     if line.strip():
                         saw_torn_line = True
@@ -223,6 +223,8 @@ def cleanup_old_sessions(
 ) -> None:
     """Remove stale session dirs under project_slug (and old_slug when it differs) with a dual TTL.
 
+    A dir's age runs from the newer of its own mtime and its newest direct child's; a dir whose
+    children cannot be observed is kept.
     Checkpointed sessions use paused_max_age_days (180), others max_age_days (30). A dir past
     its TTL is removed only when _journal_carries_unharvested_handoffs is False (True and None
     keep it). Slugs go through the writers' sanitiser. Skips the current session and non-UUID
@@ -271,7 +273,14 @@ def _reap_slug_dir(
             if entry.name == current_session_id:
                 continue
             try:
-                age_days = (time.time() - entry.stat().st_mtime) / 86400
+                # Age by the newer of the dir's own mtime and its newest child's: a journal
+                # append or in-place rewrite does not move the dir's mtime, so a live session
+                # would otherwise age out. None means no child could be observed: keep the dir.
+                child_mtime = _dir_max_child_mtime(entry, glob="*")
+                if child_mtime is None:
+                    continue
+                newest = max(entry.stat().st_mtime, child_mtime)
+                age_days = (time.time() - newest) / 86400
                 # Select TTL per entry: checkpointed sessions (paused OR
                 # refreshed) get the extended threshold; active sessions
                 # get the standard one.
@@ -298,19 +307,21 @@ def _dir_max_child_mtime(entry: Path, glob: str = "*.json") -> float | None:
     when age cannot be observed (callers skip). In-place rewrites do not bump the parent's
     mtime, hence the child walk. Uses lstat; never raises.
     """
-    latest = 0.0
+    latest = None
     saw_any_child = False
     try:
         for child in entry.glob(glob):
             saw_any_child = True
             try:
                 # lstat: a symlinked child must not pin the parent's age to its target.
-                latest = max(latest, child.lstat().st_mtime)
+                mtime = child.lstat().st_mtime
             except OSError:
                 continue
+            latest = mtime if latest is None else max(latest, mtime)
     except OSError:
         pass
-    if latest > 0.0:
+    # Any observed child answers, even an mtime at or below 0 (1970 or earlier).
+    if latest is not None:
         return latest
     # Empty dir -> parent mtime; children seen but none stat-able -> None (do not false-reap).
     if saw_any_child:
@@ -526,8 +537,8 @@ def _prune_registry_dead_teams(
                             # SAFETY GUARANTEE 6 of 6 — an unobservable TEAM (PermissionError, NotADirectoryError) bails
                             # out pruning nothing; it must never reach the handler that drops the line.
                             return 0
-            except ValueError:
-                # Malformed JSON only. Do NOT widen this back to OSError: that is
+            except (ValueError, RecursionError):
+                # Malformed JSON only (a line nested too deep to parse included). Do NOT widen this back to OSError: that is
                 # the route by which an unobservable team becomes a dropped line.
                 keep = False
             if keep:

@@ -28,8 +28,11 @@ The launcher or the script run under xargs (or parallel, or find -exec) with no 
 written after its global options (`echo accept 5 | xargs repact`, `xargs -I{} repact {} 5`) is
 refused in every frame (rule ops_frame_guard.verb_unseen): the runner adds
 words the command does not show, so a coder frame could pass for the lead's.
-Known limits: a route hidden in a variable, an alias, a copy of the script, an encoding or a
-script file; the ops CLI run by a Python import or runpy inside `python -c` code; a program other than find that runs its arguments; a direct Python import of
+A variable the command sets to one literal is read as that literal (shell/opaque.py), and
+env_guard refuses a program built at run time (a substitution, a decoded or built script, a
+variable set to anything else). In a frame that does not run the lead's operations, copying or
+linking the launcher or the script to another name is refused (rule ops_frame_guard.lead_copy).
+Known limits: a route hidden in a variable the environment holds, an alias, a script file; the ops CLI run by a Python import or runpy inside `python -c` code; a program other than find that runs its arguments; a direct Python import of
 shared/ops; and a coder whose host frame carries no agent mark (runs_lead_ops falls back to
 the lead).
 """
@@ -49,6 +52,7 @@ from shell.words import runner_prefix
 from shell.words import strip_prefix
 from shell.words import substitution_spans
 from shell.words import tokens
+from shell.opaque import resolved_command
 
 LEAD_VERBS = ("dispatch", "accept", "reject", "amend")
 CODER_VERBS = ("submit",)
@@ -57,6 +61,9 @@ SCRIPT = ("_repact_ops.py",)
 RULE = "ops_frame_guard.lead_only"
 SUBMIT_RULE = "ops_frame_guard.lead_submit"
 UNSEEN_RULE = "ops_frame_guard.verb_unseen"
+COPY_RULE = "ops_frame_guard.lead_copy"
+# Programs that put a file under another name, where it runs as that name.
+COPIERS = frozenset({"cp", "ln", "link", "install", "ditto", "rsync", "mv", "gcp", "gln"})
 # What lead_op_of returns for the launcher run under xargs or find -exec with no verb in sight.
 UNSEEN = "(verb unseen)"
 # Runners that add words read from stdin or a file to the command they run.
@@ -251,13 +258,40 @@ def _submit_reason(command: str, actor) -> Optional[str]:
             f"is relayed by the SubagentStop backstop. [rule: {SUBMIT_RULE}]")
 
 
+def copies_launcher(command: str) -> bool:
+    """True when `command` copies or links the launcher or the script (a source operand of
+    cp, ln, install, ...) to a name of its own: it would then run under a name no rule knows."""
+    text = unicodedata.normalize("NFKC", command).casefold()
+    try:
+        commands = _simple_commands(read_script(text)[0])
+    except Unreadable:
+        commands = [segment.split() for segment in _SEGMENT.split(text.replace("'", "")
+                                                                  .replace('"', ""))]
+    for words in commands:
+        command_words = strip_prefix(words)
+        if not command_words or _base(command_words[0]) not in COPIERS:
+            continue
+        operands = [word for word in command_words[1:] if not word.startswith("-")]
+        for source in operands[:-1] if len(operands) > 1 else operands:
+            if _matches(_base(source.strip("()$`'\"")), LAUNCHER + SCRIPT):
+                return True
+    return False
+
+
 def decide(payload: dict, actor) -> Optional[str]:
     """The deny reason, or None. `actor` is the frame's shared.actor.Actor."""
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str):
         return None
-    verb = lead_op_of(command)
+    resolved = resolved_command(command)
+    if not actor.runs_lead_ops() and (copies_launcher(command) or copies_launcher(resolved)):
+        who = actor.name or "an agent"
+        return (f"ops_frame_guard: this Bash call copies or links the `repact` launcher (or "
+                f"_repact_ops.py) to another name in {who}'s frame, where it would run the lead's "
+                f"commands under a name this check does not know, so it was refused. Run "
+                f"`repact <command>` by its own name. [rule: {COPY_RULE}]")
+    verb = lead_op_of(command) or lead_op_of(resolved)
     if verb is None:
         return _submit_reason(command, actor)
     if verb == UNSEEN:
@@ -289,7 +323,7 @@ def dispatch_check(payload: dict, ctx=None):
     if not reason:
         return None
     return registry.Result(decision="block", reason=reason,
-                           rule=next((rule for rule in (SUBMIT_RULE, UNSEEN_RULE)
+                           rule=next((rule for rule in (SUBMIT_RULE, UNSEEN_RULE, COPY_RULE)
                                       if f"[rule: {rule}]" in reason), RULE))
 
 

@@ -242,3 +242,18 @@ class TestCommands:
         text = run_cli(repo, "--help").stdout
         for name in SUBCOMMANDS:
             assert re.search(rf"repact-task {name}\b", text), name
+
+
+def test_a_done_line_whose_commit_does_not_resolve_shows_unverified_and_fails_fsck(repo):
+    """A hand-written or union-merged `done` line that claims verified:true for a commit this repo
+    does not hold: `show` re-verifies and says unverified, and fsck exits non-zero naming it."""
+    ref = _ref(run_cli(repo, "add", "Fix the pager", "--priority", "P2"))
+    head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert run_cli(repo, "done", ref, "--evidence", f"commit:{head}").returncode == 0
+    assert run_cli(repo, "fsck").returncode == 0
+    log = repo / ".repacted" / "tasks.jsonl"
+    log.write_text(log.read_text().replace(head, "d" * 40))
+    show = run_cli(repo, "show", ref).stdout
+    assert f"evidence: commit:{'d' * 40} (unverified: no such commit in this repo)" in show, show
+    fsck = run_cli(repo, "fsck")
+    assert fsck.returncode == 1 and f"{ref}: evidence commit:{'d' * 40} no longer verifies" in fsck.stdout

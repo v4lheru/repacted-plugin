@@ -176,9 +176,10 @@ class TestRegistry:
             assert {check.timeout_s for check in checks if check.name not in own} == {expected}, event
             assert all(check.timeout_s == own[check.name] for check in checks if check.name in own)
         # Bash: 11 checks, 6 of them security checks at their own alarms, plus the margin
-        # (worktree_guard and task_write_guard are on the file and task tools only).
+        # (worktree_guard, task_write_guard and dispatch_gate are on the file, task and Agent
+        # tools only).
         bash_security = sum(v for k, v in registry.SECURITY_TIMEOUTS_S.items()
-                            if k not in ("worktree_guard", "task_write_guard"))
+                            if k not in ("worktree_guard", "task_write_guard", "dispatch_gate"))
         assert registry.entry_timeout("PreToolUse") == (
             5 * registry.DEFAULT_TIMEOUT_S + bash_security + registry.ENTRY_MARGIN_S)
         assert registry.entry_timeout("UserPromptSubmit") == (   # 3 checks since 2.1.0

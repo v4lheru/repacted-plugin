@@ -98,6 +98,8 @@ RULES: dict[str, Rule] = {
     "task_write_guard.error": _error("task_write_guard", "task write"),
     "ops_frame_guard.timeout": _timeout("ops_frame_guard", "command", 15),
     "ops_frame_guard.error": _error("ops_frame_guard", "command"),
+    "dispatch_gate.timeout": _timeout("dispatch_gate", "agent spawn", 60),
+    "dispatch_gate.error": _error("dispatch_gate", "agent spawn"),
     # the task write guard (hooks/task_write_guard.py)
     "task_write.completed": Rule(
         explain=("a task made by `repact dispatch` is completed only by `repact accept`, which "
@@ -144,6 +146,15 @@ RULES: dict[str, Rule] = {
                  "work, and a HANDOFF a subagent returned is relayed by the SubagentStop backstop."),
         why=("The lead could otherwise store a coder's teachback or HANDOFF itself and then "
              "accept its own words."),
+    ),
+    "ops_frame_guard.lead_copy": Rule(
+        explain=("This Bash call copies or links the `repact` launcher or _repact_ops.py to "
+                 "another name in a frame that does not run the lead's commands, where it would "
+                 "run them under a name the frame check does not know, so it was refused."),
+        doc=f"{REFUSALS_DOC}#ops-frame-guard-lead-copy",
+        instead="Run `repact <command>` by its own name; hand in your own work with `repact submit <id>`.",
+        why=("A copy of the launcher under another name ran the lead's commands from a coder's "
+             "frame unseen."),
     ),
     "dispatch.task_store_absent": Rule(
         explain=("the host did not write the task file it reported creating or updating "
@@ -460,6 +471,30 @@ RULES: dict[str, Rule] = {
         instead=("Run the repact command for the step (submit, accept, reject or amend), or "
                  "TaskUpdate for a task no repact command made."),
     ),
+    "settings.task_log": Rule(
+        explain=("A Write, Edit, NotebookEdit or Bash call from an agent would write the repo's "
+                 "task log (.repacted/tasks.jsonl), by a path in the command (a glob, a variable "
+                 "or a symlink counts by what it names). The lead and a session with no agent "
+                 "may still edit it; reading it is allowed to everyone."),
+        doc=f"{REFUSALS_DOC}#settings-task-log",
+        why=("A row closes only on evidence repact-task checked; a line written by hand could "
+             "mark a task done with evidence nothing checked, and a union merge keeps it."),
+        instead=("Run repact-task (done, set, reopen) for the change, or hand the step to the "
+                 "lead."),
+    ),
+    "settings.consent": Rule(
+        explain=("A Write, Edit, NotebookEdit or Bash call would write a merge approval token "
+                 "(<config dir>/merge-authorized-*) or a session transcript (<config "
+                 "dir>/projects/**/*.jsonl), or a Bash call would run one of the running "
+                 "plugin's hook entries (hooks/*.py, dispatch.py among them); every frame is "
+                 "refused, the lead's too. Reading them is allowed."),
+        doc=f"{REFUSALS_DOC}#settings-consent",
+        why=("The merge guard takes the user's approval from the transcript Claude Code writes "
+             "and keeps the token as its use ledger; a hand-written token or line, or a hook "
+             "run on a payload the model wrote, would stand in for the user's click."),
+        instead=("Ask the user to approve the exact command with AskUserQuestion, then run it "
+                 "unchanged."),
+    ),
     "egress.url.credential": Rule(
         explain=("A git command named a remote URL whose user part carries a credential (a "
                  "password, a variable such as `$TOKEN`, or a known token), so it was refused."),
@@ -496,6 +531,9 @@ _SHELL_SENTENCES = {
     "env.git.push_sends": "A push sends a .env-class or credential file.",
     "env.git.push_secret": "A push adds a line carrying a secret-shaped value.",
     "env.git.expanded": "A git command is named by a shell expansion or alias.",
+    "env.opaque": "The command's program, subcommand or script is built at run time.",
+    "env.read.archive": "An archive written to a pipe would carry a .env-class file.",
+    "env.git.history_sent": "git history is piped into a program that sends it.",
     # merge_guard_pre (hooks/shell/merge/arms.py RULE_IDS)
     "mg.merge.explicit": "A PR or MR merge requires an approval bound to this exact command.",
     "mg.close.explicit": "A PR or MR close requires an approval bound to this exact command.",
@@ -514,6 +552,7 @@ _SHELL_SENTENCES = {
     "mg.unmintable.long_run": "A run of 512 or more characters cannot be bound to an approval.",
     "mg.token.mismatch": "The approved operation does not match this command.",
     "mg.token.consume_failed": "The authorization token could not be consumed.",
+    "mg.token.no_record": "A matching approval token has no answer from the user on record in the session transcript.",
     # merge_guard_pre allow-side mask trace (hooks/shell/merge/arms.py MASK_RULE_IDS)
     "mg.inert.data_program": "A quoted argument of a program that only reads or prints its arguments (DATA_PROGRAMS) is data, not a command.",
     "mg.inert.json_literal": "A quoted argument that parses as a JSON object or array is data to every program but a shell.",
@@ -555,6 +594,12 @@ _SHELL_INSTEAD = {
                             "test fixture or doc example, ask the user to confirm the value is not real before "
                             "adding the pragma the refusal names on that line."),
     "env.git.expanded": "Write the git subcommand out (no variable or alias) and run it again.",
+    "env.opaque": ("Write the program and its subcommand out as plain words, and put a script in a "
+                   "file or a quoted heredoc, then run it again."),
+    "env.read.archive": ("Leave the class out of the archive (--exclude '.env*' --exclude '*.env' "
+                         "--exclude .envrc --exclude .netrc), or write the archive to a file."),
+    "env.git.history_sent": ("Push the branch instead (a push is checked for secrets), or send the "
+                             "patch or bundle from your own terminal."),
     "mg.merge.explicit": _APPROVE,
     "mg.close.explicit": _APPROVE,
     "mg.force_push.explicit": _APPROVE,
@@ -575,6 +620,8 @@ _SHELL_INSTEAD = {
     "mg.token.mismatch": ("Run exactly the command the user approved (same target, repository, flags and no added "
                           "pipe or redirect), or ask for approval of this one."),
     "mg.token.consume_failed": "Run repact-doctor, then ask the user to approve the command again.",
+    "mg.token.no_record": ("Ask the user to approve this exact command with AskUserQuestion and run it within "
+                           "15 minutes; from a subagent or teammate, hand the command to the lead."),
     "mg.inert.data_program": _INERT,
     "mg.inert.json_literal": _INERT,
     "mg.inert.heredoc_consumer": _INERT,

@@ -51,7 +51,7 @@ It stops a list naming one pin (a phrase count) and missing a sibling (a size bu
 
 **AUTONOMY CHARTER**: your cross-agent coordination, authority, when to escalate, self-coordination and stop signals: [specialist-charter.md](../protocols/specialist-charter.md). Architect-specific: a discovery that contradicts project principles or constraints, and a design decision that needs user input (a major trade-off, a technology choice), are escalations; your decisions set conventions for coders, so document interface contracts for downstream specialists.
 
-**Stop signals** ([charter](../protocols/specialist-charter.md#algedonic-authority)), common architect-phase triggers:
+**Stop signals** ([charter](../protocols/specialist-charter.md#stop-signal-authority)), common architect-phase triggers:
 - **HALT SECURITY**: Proposed architecture has fundamental security flaws, design exposes attack surface
 - **HALT ETHICS**: Design would enable deceptive or harmful functionality
 - **ALERT SCOPE**: Design reveals requirements are fundamentally misunderstood or contradictory

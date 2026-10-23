@@ -34,6 +34,7 @@ from shell.env.git_egress import (Notice)
 from shell.env.names import (mentions_class, path_is_protected)
 from shell.env.programs import (GREP_EXCLUSION, GREP_HINT, PARSE_MESSAGE, _ALLOW_OUTPUT)
 from shell.env.script_verdict import (bash_verdict)
+from shell.opaque import (opaque_reason, resolved_command)
 from shell.env.search import (_deny, _named_message)
 from shell.env.programs import (  # noqa: F401  # re-export: façade
     DUMP_MESSAGE,
@@ -348,7 +349,18 @@ def decide(payload: dict) -> dict | None:
         return grep_output(tool_input, cwd)
     if tool == "Bash":
         command = tool_input.get("command")
+        # Judged as typed first, so a refusal the command earns as written keeps its own
+        # rule; then words no check can read refuse, for every Bash guard (shell/opaque.py);
+        # then the command is judged with what it fixes itself spelled out.
         reason = bash_verdict(command, cwd) if isinstance(command, str) else None
+        if reason and not isinstance(reason, Notice):
+            return _deny(reason)
+        hidden = opaque_reason(command) if isinstance(command, str) else None
+        if hidden:
+            return _deny(hidden)
+        resolved = resolved_command(command) if isinstance(command, str) else command
+        if resolved != command and (not reason or isinstance(reason, Notice)):
+            reason = bash_verdict(resolved, cwd) or reason
         if reason and not isinstance(reason, Notice):
             return _deny(reason)
         import settings_guard   # loaded here, so the entry's own imports stay stdlib

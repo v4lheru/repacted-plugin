@@ -541,3 +541,45 @@ def test_a_claude_cli_write_of_the_user_config_or_plugin_state_is_refused_to_an_
 @pytest.mark.parametrize("command", CLI_READS)
 def test_a_read_only_claude_cli_call_passes(home, command):
     assert guard.decide(_bash(command, home, agent_id="a1b2c3", agent_type="Explore")) is None
+
+
+def test_an_agent_frame_cannot_write_the_tracked_task_log(home, tmp_path):
+    """The repo's `.repacted/tasks.jsonl` is written by repact-task alone: an agent frame's
+    file-tool write or shell append is refused, in the spellings a guard misses most often
+    (relative, case-folded, a variable, a cd, an interpreter, a glob, a symlink); the lead
+    and a reader still pass, and env_guard carries the Bash leg."""
+    repo = tmp_path / "repo"
+    (repo / ".repacted").mkdir(parents=True)
+    log = repo / ".repacted" / "tasks.jsonl"
+    log.write_text("{}\n", encoding="utf-8")
+    coder = {"agent_id": "abackend-0123456789abcdef", "agent_type": "repacted:pact-backend-coder"}
+    line = '{"op":"done","evidence":[{"target":"commit:%s","verified":true}]}' % ("d" * 40)
+    file_writes = [("Write", str(log)), ("Edit", ".repacted/tasks.jsonl"),
+                   ("Edit", ".Repacted/TASKS.JSONL"), ("MultiEdit", str(repo / "x" / ".." / ".repacted" / "tasks.jsonl"))]
+    for tool, path in file_writes:
+        output = guard.decide({"tool_name": tool, "cwd": str(repo), "tool_input": {"file_path": path},
+                               **coder})
+        assert _decision(output) == "deny", (tool, path)
+        assert output["hookSpecificOutput"]["permissionDecisionReason"].endswith(
+            "[rule: settings.task_log]"), (tool, path)
+    for command in (f"echo '{line}' >> .repacted/tasks.jsonl",
+                    "printf x | tee -a .repacted/tasks.jsonl",
+                    "cd .repacted && echo x >> tasks.jsonl",
+                    "f=.repacted/tasks.jsonl; echo x >> $f",
+                    "echo x >> \"$PWD/.repacted/tasks.jsonl\"",
+                    "python3 -c \"open('.repacted/tasks.jsonl','a').write('x')\"",
+                    "sed -i '' s/a/b/ .repacted/tasks.jsonl",
+                    "cp /tmp/forged.jsonl .repacted/tasks.jsonl",
+                    "echo x >> .repacted/task?.jsonl",
+                    "ln -sf %s /tmp/l && echo x >> /tmp/l" % log,
+                    "git checkout -- .repacted/tasks.jsonl"):
+        assert _decision(guard.decide(_bash(command, repo, **coder))) == "deny", command
+    for frame in ({}, {"agent_type": LEAD}):
+        assert guard.decide(_bash("echo x >> .repacted/tasks.jsonl", repo, **frame)) is None
+        assert guard.decide({"tool_name": "Edit", "cwd": str(repo), "tool_input": {"file_path": str(log)},
+                             **frame}) is None
+    for command in ("cat .repacted/tasks.jsonl", "tail -n 5 .repacted/tasks.jsonl",
+                    "echo x >> .repacted.bak", "echo x >> tasks.jsonl"):
+        assert guard.decide(_bash(command, repo, **coder)) is None, command
+    run = _run("env_guard.py", _bash("echo x >> .repacted/tasks.jsonl", repo, **coder), home)
+    assert run.returncode == 2 and "[rule: settings.task_log]" in run.stdout

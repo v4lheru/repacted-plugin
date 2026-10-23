@@ -2998,7 +2998,7 @@ class TestStripOrphanKernelBlock(_StripOrphanBlockTestBase):
         result = self.call_stripper()
         assert result is not None
         assert "skipped" in result.lower()
-        assert "PACT_END appears before PACT_START" in result
+        assert "has no start marker before it" in result
 
     def test_leaf_symlink_out_of_config_allowed_victim_untouched(self, tmp_path):
         """A leaf symlink escaping the config dir is ALLOWED; the strip lands on
