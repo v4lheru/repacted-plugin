@@ -31,6 +31,13 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 - **Why:** A security check that does not answer in time fails closed: the call is refused rather than let through unchecked.
 - **Way through:** Run the same outbound command again once; if it is refused again, run repact-doctor.
 
+<a id="egress-ws-timeout"></a>
+### `egress_ws.timeout`
+
+- **Rule:** `egress_ws` did not answer within 60 s, so the Monitor socket was refused rather than let through unchecked; retry once, then run repact-doctor.
+- **Why:** A security check that does not answer in time fails closed: the call is refused rather than let through unchecked.
+- **Way through:** Run the same Monitor socket again once; if it is refused again, run repact-doctor.
+
 <a id="git-commit-check-timeout"></a>
 ### `git_commit_check.timeout`
 
@@ -96,6 +103,13 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 - **Why:** A security check that crashes or exits oddly fails closed, for the same reason as a timeout.
 - **Way through:** Run repact-doctor to see why the check failed, fix what it names, then retry.
 
+<a id="egress-ws-error"></a>
+### `egress_ws.error`
+
+- **Rule:** `egress_ws` failed without a decision (it raised, was killed or exited oddly), so the Monitor socket was refused rather than let through unchecked; run repact-doctor.
+- **Why:** A security check that crashes or exits oddly fails closed, for the same reason as a timeout.
+- **Way through:** Run repact-doctor to see why the check failed, fix what it names, then retry.
+
 <a id="git-commit-check-error"></a>
 ### `git_commit_check.error`
 
@@ -138,6 +152,13 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 - **Why:** A security check that crashes or exits oddly fails closed, for the same reason as a timeout.
 - **Way through:** Run repact-doctor to see why the check failed, fix what it names, then retry.
 
+<a id="owner-prompt-error"></a>
+### `owner_prompt.error`
+
+- **Rule:** Recording the prompt this ScheduleWakeup or CronCreate call schedules failed with an error, so the call was refused.
+- **Why:** While unattended mode is on, a message the owner types turns it off; a prompt the model scheduled must never count as that message.
+- **Way through:** Retry the call; if it fails again, check that the session directory is writable.
+
 ## Session and team state
 
 <a id="dispatch-task-store-absent"></a>
@@ -146,6 +167,13 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 - **Rule:** The host did not write the task file it reported creating or updating twice in a row, so gates, waits and HANDOFFs cannot see task state; Agent spawns are refused until a later task write lands on disk.
 - **Why:** Gates, waits and HANDOFF checks read the task and team files on disk; without them a teammate's work is invisible.
 - **Way through:** Make one more TaskUpdate and check its file appeared under the tasks directory, then run `repact-doctor --clear task-store` and spawn again.
+
+<a id="dispatch-monitor-rewrite"></a>
+### `dispatch.monitor_rewrite`
+
+- **Rule:** A hook answered this Monitor command with a rewrite, and Claude Code runs a Monitor command as written, so it was refused instead of running unchecked.
+- **Why:** Claude Code applies a hook's deny and ask to a Monitor command but not its allow or rewrite, so a rewrite meant to make the command safe would be lost.
+- **Way through:** Run the rewritten command the refusal quotes, in Monitor or Bash, or follow its hint.
 
 <a id="team-config-absent"></a>
 ### `team_config_absent`
@@ -586,9 +614,9 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 <a id="evidence-red-first-missing"></a>
 ### `evidence.red_first_missing`
 
-- **Rule:** A fix or a feature task has no failing tcount run, since dispatch and before its first passing run on the current inputs, of a test file that passing run covers.
-- **Why:** The ledger keeps commands, not test ids, so a red run counts for a file its command names; it shows a red run existed, not that the intended assertion failed. A refactor, config or docs task does not need one; a missing or unknown kind is judged as a feature.
-- **Way through:** Run the new test with tcount before the fix (name its file or node id in the command) and see it fail, then fix and run it again. If a passing run on these files came first: make a temporary revert commit of the fix, run the named test with tcount and see it fail, restore the fix, then ask the lead for a waiver: `repact accept <id> --waive "<reason naming that red run>"`. The waiver does not check the run; unattended, it parks the task for the owner.
+- **Rule:** A fix or a feature task has no failing tcount run, since dispatch and before its first passing run on the current inputs (or on those inputs with the fix reverted), of a test file that passing run covers.
+- **Why:** The ledger keeps commands, not test ids, so a red run counts for a file its command names (a dotnet --filter names the .cs files that declare its class; worker and build flags never narrow a run); it shows a red run existed, not that the intended assertion failed. A refactor, config or docs task does not need one; a missing or unknown kind is judged as a feature.
+- **Way through:** Run the new test with tcount before the fix (name its file or node id in the command; for dotnet, a --filter on its test class) and see it fail, then fix and run it again. If a passing run on these files came first: make a temporary revert commit of the fix (test files kept), run the named test with tcount and see it fail, restore the fix; that red counts. Only if that cannot be done, ask the lead for a waiver: `repact accept <id> --waive "<reason naming that red run>"`. The waiver does not check the run; unattended, it parks the task for the owner.
 
 <a id="evidence-needs-human"></a>
 ### `evidence.needs_human`
@@ -741,12 +769,19 @@ A problem that is not a refusal comes after the list: [If specialist agents will
 - **Why:** Each command stamps its id into its one task write and logs every side write, so a rerun skips what landed and finishes the rest.
 - **Way through:** Run the same command again; if it fails again, run repact-doctor.
 
+<a id="owner-prompt-unrecorded"></a>
+### `owner_prompt.unrecorded`
+
+- **Rule:** The prompt this ScheduleWakeup or CronCreate call schedules could not be recorded in the session directory, and an unrecorded wake-up could later read as the owner typing in the session.
+- **Why:** While unattended mode is on, a message the owner types turns it off; a prompt the model scheduled must never count as that message.
+- **Way through:** Fix or remove unattended.scheduled.json in the session directory, then schedule again.
+
 <a id="unattended-off-owner-only"></a>
 ### `unattended.off_owner_only`
 
-- **Rule:** Turning unattended mode off answers every question an unattended run parked, so it is the owner's, at their own terminal, and this call came from inside a Claude Code session or without an interactive terminal.
-- **Why:** The session stays unattended until it ends or the owner turns it off, so one command from inside the run cannot make its waivers look attended.
-- **Way through:** Leave the mode on and go on with other work; the owner runs `repact-unattended off --session-dir <dir>` in their own terminal and types off.
+- **Rule:** Turning unattended mode off answers every question an unattended run parked, so only the owner turns it off, and this call came from inside a Claude Code session or without an interactive terminal.
+- **Why:** The session stays unattended until it ends or the owner turns it off, so one command from inside the run, or a prompt the run scheduled, cannot make its waivers look attended.
+- **Way through:** Leave the mode on and go on with other work; the owner's next message typed in the session turns it off.
 
 ## Notes, not refusals
 
