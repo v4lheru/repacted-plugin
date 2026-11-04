@@ -3,6 +3,8 @@ name: pact-secretary
 description: "Saves agents' decisions and lessons; answers project history questions."
 color: "#708090"
 model: inherit
+autoCompactWindow: 120000
+effort: low
 permissionMode: acceptEdits
 memory: user
 ---

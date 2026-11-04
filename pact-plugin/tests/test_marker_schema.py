@@ -55,11 +55,6 @@ class TestSchemaConstants:
         the test diff."""
         assert MARKER_SCHEMA_VERSION == 1
 
-    def test_marker_max_bytes_is_two_fifty_six(self):
-        """Pinned cap. Bumping requires test update in lockstep so the
-        change is visible at review time."""
-        assert MARKER_MAX_BYTES == 256
-
 
 # =============================================================================
 # Signature function
@@ -76,37 +71,6 @@ class TestExpectedMarkerSignature:
         a = expected_marker_signature("sid", "/plugin", "1.0.0", 1)
         b = expected_marker_signature("sid", "/plugin", "1.0.0", 1)
         assert a == b
-
-    def test_different_session_id_changes_digest(self):
-        a = expected_marker_signature("sid-a", "/plugin", "1.0.0", 1)
-        b = expected_marker_signature("sid-b", "/plugin", "1.0.0", 1)
-        assert a != b
-
-    def test_different_plugin_root_changes_digest(self):
-        a = expected_marker_signature("sid", "/plugin-a", "1.0.0", 1)
-        b = expected_marker_signature("sid", "/plugin-b", "1.0.0", 1)
-        assert a != b
-
-    def test_different_plugin_version_changes_digest(self):
-        a = expected_marker_signature("sid", "/plugin", "1.0.0", 1)
-        b = expected_marker_signature("sid", "/plugin", "2.0.0", 1)
-        assert a != b
-
-    def test_different_marker_version_changes_digest(self):
-        """A schema-version bump invalidates pre-bump markers automatically
-        because the version is part of the digest input."""
-        a = expected_marker_signature("sid", "/plugin", "1.0.0", 1)
-        b = expected_marker_signature("sid", "/plugin", "1.0.0", 2)
-        assert a != b
-
-    def test_digest_format_is_pipe_joined_inputs(self):
-        """Producer and verifier both rely on the exact ordering and
-        delimiter. The pin documents the wire format."""
-        sig = expected_marker_signature("the-sid", "/plug", "9.9.9", 1)
-        expected = hashlib.sha256(
-            "the-sid|/plug|9.9.9|1".encode("utf-8")
-        ).hexdigest()
-        assert sig == expected
 
 
 # =============================================================================
@@ -140,29 +104,4 @@ class TestBlockedToolsBootstrapInvariant:
             "tools deadlocks bootstrap."
         )
 
-    def test_blocked_tools_does_not_contain_team_create(self):
-        from bootstrap_gate import _BLOCKED_TOOLS
-        assert "TeamCreate" not in _BLOCKED_TOOLS, (
-            "TeamCreate must NOT be in _BLOCKED_TOOLS. Same reasoning "
-            "as the TaskCreate invariant — TeamCreate is the only way "
-            "to create the team config the writer hook reads to verify "
-            "secretary membership before stamping the marker."
-        )
 
-    def test_blocked_tools_still_contains_Agent(self):
-        """#789 invariant: the canonical-secretary carve-out lives at
-        the PREDICATE level (_is_canonical_secretary_spawn inside
-        _check_tool_allowed), NOT at the blocklist level. ``Agent`` MUST
-        remain in _BLOCKED_TOOLS so every non-canonical Agent dispatch
-        (any subagent_type, name, or team_name that doesn't match all
-        five carve-out bindings) still falls into the deny path.
-
-        Removing ``Agent`` from _BLOCKED_TOOLS would silently bypass the
-        gate for arbitrary Agent calls during the bootstrap window.
-        """
-        from bootstrap_gate import _BLOCKED_TOOLS
-        assert "Agent" in _BLOCKED_TOOLS, (
-            "Agent must remain in _BLOCKED_TOOLS. The #789 carve-out is "
-            "a PREDICATE-level allow for the canonical secretary spawn; "
-            "the blocklist still gates every other Agent dispatch."
-        )

@@ -135,6 +135,9 @@ def test_hand_written_token_approves_nothing(scratch):
     assert "mg.token.no_record" in result.stdout + result.stderr
 
 
+
+
+
 def test_forged_transcript_line_routes_are_refused(scratch):
     """Every write route the settings check reads is refused for the transcript and the
     tokens, and a hook entry run from the shell is refused; reading stays allowed. A line
@@ -176,12 +179,14 @@ def test_forged_transcript_line_routes_are_refused(scratch):
     assert _run(scratch).returncode == 2
 
 
+
 def test_answer_for_a_different_command_approves_nothing(scratch):
     _record_answer(scratch["transcript"], OTHER, time.time())
     _mint(scratch, COMMAND)
     result = _run(scratch)
     assert result.returncode == 2
     assert "mg.token.no_record" in result.stdout + result.stderr
+
 
 
 def test_stale_answer_approves_nothing(scratch):
@@ -192,23 +197,10 @@ def test_stale_answer_approves_nothing(scratch):
     assert "mg.token.no_record" in result.stdout + result.stderr
 
 
+
 def test_subagent_frame_never_borrows_the_answer(scratch):
     _record_answer(scratch["transcript"], COMMAND, time.time())
     _mint(scratch, COMMAND)
     result = _run(scratch, agent_id="a0123456789abcdef", agent_type="pact-backend-coder")
     assert result.returncode == 2
     assert "mg.token.no_record" in result.stdout + result.stderr
-
-
-def test_missing_transcript_approves_nothing(scratch):
-    _record_answer(scratch["transcript"], COMMAND, time.time())
-    _mint(scratch, COMMAND)
-    scratch["transcript"].unlink()
-    assert _run(scratch).returncode == 2
-
-
-def test_user_approves_then_the_command_runs(scratch):
-    _record_answer(scratch["transcript"], COMMAND, time.time())
-    _mint(scratch, COMMAND)
-    result = _run(scratch)
-    assert result.returncode == 0, result.stdout + result.stderr

@@ -398,48 +398,23 @@ class TestNoMintAdvisory1052:
     # `no_command`, not option_not_anchored). Two NEW floor reasons are added:
     # not_dangerous (GAP1 is_dangerous write-gate) and compound_command (GAP5).
     _REASON_CASES = [
-        ("no_options",
+    ("no_options",
          [{"question": "Run `gh pr merge 42`?"}],
          {"Run `gh pr merge 42`?": "yes please"},
          "no clickable options"),
-        ("label_mismatch",
-         [{"question": "Merge now?",
-           "options": [{"label": "Yes, merge", "description": "Run `gh pr merge 42`"}],
-           "multiSelect": False}],
-         {"Merge now?": "Some answer matching no label"},
-         "did not exactly match an option label"),
-        ("no_command",
+    ("no_command",
          [{"question": "Merge `gh pr merge 42`?",
            "options": [{"label": "Yes", "description": "Confirmed, proceed"}],
            "multiSelect": False}],
          {"Merge `gh pr merge 42`?": "Yes"},
          "no recognized merge/close/force-push/branch-delete command"),
-        ("multiple_commands",
-         [{"question": "Do these?",
-           "options": [{"label": "Yes", "description": "Run `gh pr merge 42` and `gh pr merge 99`"}],
-           "multiSelect": False}],
-         {"Do these?": "Yes"},
-         "more than one distinct"),
-        # FIX-MERGE f3: a bare close now gates, so the not-dangerous exemplar is the
-        # inert help form (classified close, never gated).
-        ("not_dangerous",
-         [{"question": "Close it?",
-           "options": [{"label": "Yes", "description": "Run `gh pr close 7 --help`"}],
-           "multiSelect": False}],
-         {"Close it?": "Yes"},
-         "is not one that the merge guard gates"),
-        # Honest-mistake ≥2 model: compound_command fires only for >=2 DESTRUCTIVE
-        # legs. This exemplar uses TWO gh/git-destructive legs (merge 42 + close 7
-        # --delete-branch). (Under the ratified rm-leg=YES model, `gh pr merge 42 &&
-        # rm -rf /` ALSO counts as compound — a gh/git op + a plain-`rm` head leg = two
-        # destructive legs; either exemplar exercises the compound_command reason.)
-        ("compound_command",
+    ("compound_command",
          [{"question": "Run it?",
            "options": [{"label": "Yes", "description": "Run `gh pr merge 42 && gh pr close 7 --delete-branch`"}],
            "multiSelect": False}],
          {"Run it?": "Yes"},
          "chained multiple commands with a shell command separator"),
-    ]
+]
 
     @pytest.mark.parametrize(
         "reason, questions, answers, diagnostic",

@@ -41,7 +41,10 @@ CODE_SUFFIXES = frozenset((
 # An extensionless file in one of these directories is a script (bin/tcount, hooks/x).
 SCRIPT_DIRS = frozenset(("bin", "hooks", "scripts"))
 _TEST_NAME = re.compile(r"(?:^test_.+|.+_test|.+\.(?:test|spec))\.[A-Za-z0-9]+$|^conftest\.py$")
-_TEST_DIRS = frozenset(("tests", "test", "__tests__", "spec"))
+_TEST_DIRS = frozenset(("tests", "test", "__tests__", "spec"))       # matched case-insensitively
+# .NET: a test project directory (App.Tests, Acme.Reporting.Tests.V2) and a FooTests.cs file.
+_DOTNET_TEST_DIR = re.compile(r".+\.Tests?(?:\..+)?")
+_DOTNET_TEST_NAME = re.compile(r".+Tests?\.(?:cs|fs|vb)")
 # The guards' .env class (shell/env/names.is_protected_name, a test pins they agree) and the
 # credential files a key or token lives in.
 _SECRET_NAME = re.compile(
@@ -85,11 +88,13 @@ def is_input_path(path: str) -> bool:
 
 def is_test_path(path: str) -> bool:
     """True for a code file that is a test: test_x.py, x_test.go, x.test.ts, x.spec.js,
-    conftest.py, or any code file under a tests/, test/, __tests__/ or spec/ directory."""
+    conftest.py, FooTests.cs, or any code file under a tests/, test/, __tests__/ or spec/
+    directory (any case) or a .NET test project directory (App.Tests/)."""
     pure = PurePosixPath(str(path).replace("\\", "/"))
     if not is_code_path(str(pure)):
         return False
-    return bool(_TEST_NAME.match(pure.name)) or any(part in _TEST_DIRS for part in pure.parts[:-1])
+    return bool(_TEST_NAME.match(pure.name) or _DOTNET_TEST_NAME.fullmatch(pure.name)) or any(
+        part.lower() in _TEST_DIRS or _DOTNET_TEST_DIR.fullmatch(part) for part in pure.parts[:-1])
 
 
 def _env(index: Optional[str] = None) -> dict:

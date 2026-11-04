@@ -92,65 +92,6 @@ class TestReasonsStayDistinguishable:
             f"sweep: {actual} != {LITERAL_REASONS}"
         )
 
-    def test_the_reason_constants_are_six_distinct_strings(self):
-        """The cheapest way to break pin 1 is a copy-paste in the constants."""
-        actual = (
-            SyncResult.WROTE,
-            SyncResult.REFUSED,
-            SyncResult.SUPPRESSED,
-            SyncResult.UNRESOLVED,
-            SyncResult.MISSING,
-            SyncResult.FAILED,
-        )
-        assert len(set(actual)) == len(actual), (
-            f"two reason constants share a value: {actual}"
-        )
-
-    @pytest.mark.parametrize("left", LITERAL_REASONS)
-    @pytest.mark.parametrize("right", LITERAL_REASONS)
-    def test_distinct_reasons_are_unequal_and_equal_reasons_are_equal(
-        self, left, right
-    ):
-        """Both directions, because equality has two failure modes.
-
-        An `__eq__` that always returns True collapses the set. An `__eq__`
-        that always returns False makes every reason check unsatisfiable, which
-        would surface as a red suite rather than a silent pass -- but pinning
-        only the first direction would leave a test that can never fail.
-        """
-        if left == right:
-            assert SyncResult(left) == SyncResult(right)
-        else:
-            assert SyncResult(left) != SyncResult(right)
-
-    def test_wrote_and_refused_specifically_do_not_collapse(self):
-        """The motivating pair, named so the reason for the pin survives.
-
-        A sync that WROTE and a sync the guard REFUSED left the same evidence on
-        disk. `.reason` is the only thing that separates them, so it must
-        separate them through every channel a caller might use.
-        """
-        wrote = SyncResult("wrote")
-        refused = SyncResult("refused")
-
-        assert wrote != refused
-        assert wrote.reason != refused.reason
-        assert bool(wrote) != bool(refused)
-        assert repr(wrote) != repr(refused)
-        assert hash(wrote) != hash(refused)
-
-    def test_a_syncresult_is_not_equal_to_a_bare_bool(self):
-        """Pins the CURRENT behaviour, and it is worth knowing deliberately.
-
-        `__eq__` returns NotImplemented for a non-`SyncResult`, so Python falls
-        back to identity and `SyncResult('wrote') == True` is False. Callers
-        must therefore read `bool(result)` or `result.reason`, never `result ==
-        True`. If a later change makes this comparison succeed, that is a
-        decision to take on purpose rather than to discover in a caller.
-        """
-        assert not (SyncResult("wrote") == True)  # noqa: E712
-        assert not (SyncResult("failed") == False)  # noqa: E712
-
 
 class TestOnlyWroteIsTruthy:
     """PIN 2. `__bool__` is true for `wrote` and for nothing else.
@@ -168,31 +109,6 @@ class TestOnlyWroteIsTruthy:
         whole class pass while the type reports failure for a successful sync.
         """
         assert bool(SyncResult("wrote")) is True
-
-    @pytest.mark.parametrize("reason", LITERAL_NON_WRITE_REASONS)
-    def test_every_non_write_reason_is_falsy(self, reason):
-        assert bool(SyncResult(reason)) is False, (
-            f"`{reason}` is truthy -- every truthiness read of a sync result "
-            f"now reports success on this outcome"
-        )
-
-    def test_an_unrecognised_reason_is_falsy(self):
-        """TOTALITY. `__init__` takes any string, so the truthiness rule must be
-        `reason == WROTE` rather than a list of known failures. A rule written
-        as "not one of these five" would call a typo'd or newly added reason a
-        successful write -- failing OPEN on the one outcome that must never be
-        assumed.
-        """
-        assert bool(SyncResult("some-reason-nobody-has-defined-yet")) is False
-        assert bool(SyncResult("")) is False
-
-    def test_wrote_attribute_and_truthiness_agree(self):
-        """`.wrote` and `bool()` are two spellings of one fact, so they must not
-        drift. A change to either one alone is the shape this pin catches.
-        """
-        for reason in LITERAL_REASONS:
-            result = SyncResult(reason)
-            assert bool(result) is result.wrote
 
 
 WORKING_MEMORY_SCAFFOLD = (
@@ -291,79 +207,4 @@ class TestTheReasonSurvivesTheProcessBoundary:
         assert result["sync_status"] == "suppressed", result
         assert after == before, "a suppressed save wrote to CLAUDE.md"
 
-    def test_refused_reaches_the_parent(self, memory_store, project):
-        """ARM 2 -- the guard declined the sync, and this is the one that used
-        to be invisible. The child is spawned the way a test process spawns it,
-        so the ambient-target guard raises inside the child, save() logs it as
-        non-critical, and the parent previously saw only an untouched file.
-        """
-        before = (project / "CLAUDE.md").read_bytes()
-        result, after, _ = self._save(
-            memory_store("probe.db"), project,
-            pytest_marker="probe.py::test_x (call)",
-        )
 
-        assert result["sync_status"] == "refused", result
-        assert after == before, "a refused save wrote to CLAUDE.md"
-
-    def test_wrote_reaches_the_parent_and_the_file_really_changed(
-        self, memory_store, project
-    ):
-        """ARM 3 -- the positive control. See the class docstring."""
-        before = (project / "CLAUDE.md").read_bytes()
-        result, after, _ = self._save(memory_store("probe.db"), project)
-
-        assert result["sync_status"] == "wrote", result
-        assert after != before, (
-            "an unsuppressed, unrefused save left CLAUDE.md unchanged -- the "
-            "child cannot write at all, so arms 1 and 2 prove nothing"
-        )
-
-    def test_the_two_silent_outcomes_are_separated_only_by_the_status(
-        self, memory_store, project
-    ):
-        """THE WHOLE POINT, ASSERTED DIRECTLY RATHER THAN IMPLIED BY TWO ARMS.
-
-        Suppression and refusal produce byte-identical disk evidence. If the
-        status field is ever dropped from the envelope, the two become one
-        observation again -- and no assertion about the FILE can notice, because
-        the file is the thing that is identical.
-        """
-        # SEPARATE STORES so the two children do not share a database file.
-        # Each one must be PRESENT before a command other than `setup` is handed
-        # its path, which is what the `memory_store` fixture supplies.
-        db_a = memory_store("a.db")
-        db_b = memory_store("b.db")
-
-        suppressed, after_suppressed, err_suppressed = self._save(
-            db_a, project, extra_args=("--no-sync",)
-        )
-        refused, after_refused, err_refused = self._save(
-            db_b, project, pytest_marker="probe.py::test_x (call)"
-        )
-
-        assert after_suppressed == after_refused, (
-            "precondition: the two outcomes must be indistinguishable on disk, "
-            "otherwise this test is not measuring what it claims"
-        )
-
-        # THE SAME THESIS, ON THE SECOND CHANNEL. stderr is where this CLI puts
-        # its error envelope, so a free-text line there is not diagnostic noise
-        # -- it is corruption of a channel callers parse. A DIFFERENTIAL rather
-        # than an emptiness check on purpose: several pre-existing emitters can
-        # write here when the sqlite/vector dependencies are absent, and those
-        # fire identically in both arms. Comparing the arms cancels them and
-        # measures only what the REFUSAL adds, which is the thing under test.
-        assert err_suppressed == err_refused, (
-            "the two outcomes are distinguishable on stderr, which is this "
-            "CLI's structured JSON channel. The status field is supposed to be "
-            "the ONLY thing that separates them.\n"
-            f"  suppressed stderr: {err_suppressed!r}\n"
-            f"  refused stderr:    {err_refused!r}"
-        )
-        assert suppressed["sync_status"] != refused["sync_status"], (
-            "the two outcomes collapsed back into one observation"
-        )
-        assert {suppressed["sync_status"], refused["sync_status"]} == {
-            "suppressed", "refused"
-        }

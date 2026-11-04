@@ -79,6 +79,7 @@ RULES: dict[str, Rule] = {
     "env_guard.timeout": _timeout("env_guard", "command", 15),
     "merge_guard_pre.timeout": _timeout("merge_guard_pre", "git command", 15),
     "egress_guard.timeout": _timeout("egress_guard", "outbound command", 60),
+    "egress_ws.timeout": _timeout("egress_ws", "Monitor socket", 60),
     "git_commit_check.timeout": _timeout("git_commit_check", "commit", 90),
     "worktree_guard.timeout": _timeout("worktree_guard", "file write", 15),
     "write_checks.timeout": Rule(
@@ -91,6 +92,7 @@ RULES: dict[str, Rule] = {
     "env_guard.error": _error("env_guard", "command"),
     "merge_guard_pre.error": _error("merge_guard_pre", "git command"),
     "egress_guard.error": _error("egress_guard", "outbound command"),
+    "egress_ws.error": _error("egress_ws", "Monitor socket"),
     "git_commit_check.error": _error("git_commit_check", "commit"),
     "worktree_guard.error": _error("worktree_guard", "file write"),
     "write_checks.error": _error("write_checks", "commit"),
@@ -163,6 +165,15 @@ RULES: dict[str, Rule] = {
         doc=f"{REFUSALS_DOC}#dispatch-task-store-absent",
         instead=("Make one more TaskUpdate and check its file appeared under the tasks "
                  "directory, then run `repact-doctor --clear task-store` and spawn again."),
+    ),
+    "dispatch.monitor_rewrite": Rule(
+        explain=("A hook answered this Monitor command with a rewrite, and Claude Code runs a "
+                 "Monitor command as written, so it was refused instead of running unchecked."),
+        doc=f"{REFUSALS_DOC}#dispatch-monitor-rewrite",
+        instead=("Run the rewritten command the refusal quotes, in Monitor or Bash, or follow "
+                 "its hint."),
+        why=("Claude Code applies a hook's deny and ask to a Monitor command but not its "
+             "allow or rewrite, so a rewrite meant to make the command safe would be lost."),
     ),
     "team_config_absent": Rule(
         explain=("the session's team has no teams/<team>/config.json on disk, so a teammate "
@@ -322,17 +333,20 @@ RULES: dict[str, Rule] = {
     ),
     "evidence.red_first_missing": Rule(
         explain=("A fix or a feature task has no failing tcount run, since dispatch and before "
-                 "its first passing run on the current inputs, of a test file that passing run "
-                 "covers."),
+                 "its first passing run on the current inputs (or on those inputs with the fix "
+                 "reverted), of a test file that passing run covers."),
         doc=f"{REFUSALS_DOC}#evidence-red-first-missing",
         instead=("Run the new test with tcount before the fix (name its file or node id in the "
-                 "command) and see it fail, then fix and run it again. If a passing run on these "
-                 "files came first: make a temporary revert commit of the fix, run the named test "
-                 "with tcount and see it fail, restore the fix, then ask the lead for a waiver: "
-                 "`repact accept <id> --waive \"<reason naming that red run>\"`. The waiver does "
-                 "not check the run; unattended, it parks the task for the owner."),
+                 "command; for dotnet, a --filter on its test class) and see it fail, then fix and "
+                 "run it again. If a passing run on these files came first: make a temporary revert "
+                 "commit of the fix (test files kept), run the named test with tcount and see it "
+                 "fail, restore the fix; that red counts. Only if that cannot be done, ask the lead "
+                 "for a waiver: `repact accept <id> --waive \"<reason naming that red run>\"`. The "
+                 "waiver does not check the run; unattended, it parks the task for the owner."),
         why=("The ledger keeps commands, not test ids, so a red run counts for a file its command "
-             "names; it shows a red run existed, not that the intended assertion failed. A "
+             "names (a dotnet --filter names the .cs files that declare its class; worker and "
+             "build flags never narrow a run); it shows a red run existed, not that the intended "
+             "assertion failed. A "
              "refactor, config or docs task does not need one; a missing or unknown kind is "
              "judged as a feature."),
     ),
@@ -382,15 +396,34 @@ RULES: dict[str, Rule] = {
         why=("An unattended lead could otherwise drop or close the row and hide the question it "
              "parked for the owner."),
     ),
+    "owner_prompt.unrecorded": Rule(
+        explain=("The prompt this ScheduleWakeup or CronCreate call schedules could not be "
+                 "recorded in the session directory, and an unrecorded wake-up could later read "
+                 "as the owner typing in the session."),
+        doc=f"{REFUSALS_DOC}#owner-prompt-unrecorded",
+        instead=("Fix or remove unattended.scheduled.json in the session directory, then "
+                 "schedule again."),
+        why=("While unattended mode is on, a message the owner types turns it off; a prompt "
+             "the model scheduled must never count as that message."),
+    ),
+    "owner_prompt.error": Rule(
+        explain=("Recording the prompt this ScheduleWakeup or CronCreate call schedules failed "
+                 "with an error, so the call was refused."),
+        doc=f"{REFUSALS_DOC}#owner-prompt-error",
+        instead="Retry the call; if it fails again, check that the session directory is writable.",
+        why=("While unattended mode is on, a message the owner types turns it off; a prompt "
+             "the model scheduled must never count as that message."),
+    ),
     "unattended.off_owner_only": Rule(
         explain=("Turning unattended mode off answers every question an unattended run parked, "
-                 "so it is the owner's, at their own terminal, and this call came from inside a "
-                 "Claude Code session or without an interactive terminal."),
+                 "so only the owner turns it off, and this call came from inside a Claude Code "
+                 "session or without an interactive terminal."),
         doc=f"{REFUSALS_DOC}#unattended-off-owner-only",
-        instead=("Leave the mode on and go on with other work; the owner runs "
-                 "`repact-unattended off --session-dir <dir>` in their own terminal and types off."),
+        instead=("Leave the mode on and go on with other work; the owner's next message typed in "
+                 "the session turns it off."),
         why=("The session stays unattended until it ends or the owner turns it off, so one "
-             "command from inside the run cannot make its waivers look attended."),
+             "command from inside the run, or a prompt the run scheduled, cannot make its "
+             "waivers look attended."),
     ),
     # git_commit_check (hooks/git_commit_check.py STASH_RULE)
     "git_commit_check.shared_stash": Rule(

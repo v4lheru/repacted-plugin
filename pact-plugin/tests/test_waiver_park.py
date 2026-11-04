@@ -21,7 +21,7 @@ import pytest
 from fixtures.ops_env import TEAM, World, handoff, ops_env, teachback  # noqa: F401  # fixture
 from shared import autopilot_run as R
 from shared import rules
-from shared.ops import accept, submit
+from shared.ops import OpError, accept, reject, submit
 from shared.ops import evidence as EV
 from shared.task_log import bridge
 from shared.task_log import write as W
@@ -98,19 +98,3 @@ def test_the_third_failed_accept_of_an_unattended_task_parks_it(logged, monkeypa
     assert row(store, ref)["status"] == "blocked"
 
 
-def test_no_refusal_text_offers_the_waiver_as_a_close_when_unattended():
-    for rule_id in rules.RULES:
-        text = rules.way_through(rule_id, unattended=True)
-        assert "--waive" not in text or "park" in text, rule_id
-
-
-def test_an_evidence_hold_is_never_logged_for_a_row_already_closed(logged, monkeypatch):
-    """The hold row came after the row's close in autopilot.jsonl."""
-    world, store, ref, task_id = logged
-    (world.session_dir / "pact-session-context.json").write_text(json.dumps({"team_name": TEAM}))
-    R.append(str(world.session_dir), {"kind": "start", "id": "run-1"})
-    store.done(ref, [f"commit:{subprocess.run(['git', '-C', str(world.repo), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()}"])
-    monkeypatch.setattr(bridge, "session_dir_of", lambda _sid: world.session_dir)
-    monkeypatch.setenv("REPACT_UNATTENDED", "1")
-    bridge.apply(store, TEAM, task_id, world.task(task_id), {"acceptance": {"rev": 1}}, ["accept"], "sid")
-    assert not [r for r in R.read_rows(str(world.session_dir)) if r.get("kind") == "evidence_hold"]

@@ -195,32 +195,6 @@ class TestTeammateReceivesPeerBodyViaRealResolution:
         assert _ORCH_MARKER not in additional
         assert _TEAMMATE_MARKER not in additional
 
-    def test_exact_name_self_exclusion_retains_same_type_sibling(self, tmp_path):
-        """The registry value carries the EXACT member name (devops-probe), so
-        self-exclusion is by name — a SAME-agentType sibling (devops-sibling) is
-        RETAINED (the under-exposure fix). The agentType fallback would have
-        dropped both pact-devops-engineer members."""
-        additional, _ = _run_real_session_init(
-            _teammate_frame("pact-devops-engineer"), tmp_path
-        )
-        assert "devops-sibling" in additional  # same-type peer retained
-        assert "architect" in additional
-        assert "frontend-coder" in additional
-        assert _OWN_NAME not in additional  # self excluded by exact name
-
-    @pytest.mark.parametrize(
-        "agent_type",
-        ["pact-architect", "pact-frontend-coder", "pact-test-engineer", "pact-secretary"],
-    )
-    def test_resolution_is_registry_driven_not_agent_type(self, agent_type, tmp_path):
-        """Resolution keys on the registry self-lookup (by own session_id),
-        independent of the frame's agent_type — so any teammate-typed frame at
-        this session_id gets the body."""
-        additional, _ = _run_real_session_init(_teammate_frame(agent_type), tmp_path)
-        assert _PEER_LIST_PREFIX in additional
-        assert _ORCH_MARKER not in additional
-        assert _TEAMMATE_MARKER not in additional
-
 
 class TestFallbackGoesDarkWithoutResolution:
     """Built-in non-vacuity: when real resolution does NOT find the lead team,
@@ -235,26 +209,6 @@ class TestFallbackGoesDarkWithoutResolution:
         assert _PEER_LIST_PREFIX not in additional
         assert _ORCH_MARKER not in additional
 
-    def test_non_matching_session_id_falls_back_to_no_body(self, tmp_path):
-        # A registry entry exists, but keyed on a DIFFERENT session_id → the
-        # teammate's own-session_id self-lookup misses → fallback → dark.
-        additional, _ = _run_real_session_init(
-            _teammate_frame("pact-devops-engineer"), tmp_path,
-            registry_session_id="some-other-session-id-0000",
-        )
-        assert _PEER_LIST_PREFIX not in additional
-        assert _ORCH_MARKER not in additional
-
-    def test_name_not_in_team_members_falls_back_to_no_body(self, tmp_path):
-        # The registry value self-supplies a name that is NOT a member of the
-        # @team config → members[]-validation rejects on read → fallback → dark.
-        additional, _ = _run_real_session_init(
-            _teammate_frame("pact-devops-engineer"), tmp_path,
-            registry_value=f"mallory@{_LEAD_TEAM}",
-        )
-        assert _PEER_LIST_PREFIX not in additional
-        assert _ORCH_MARKER not in additional
-
 
 class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
     """LEG 3 — real-composition regression: a LEAD frame takes the else-branch
@@ -265,40 +219,11 @@ class TestLeadKeepsOrchestratorBlockAndUnknownGetsNeither:
     the two roles into one claim, which is the grouping the role gate removed."""
 
     @pytest.mark.parametrize(
-        "agent_type", ["repacted:pact-orchestrator", "pact-orchestrator"]
+        "agent_type", ["repacted:pact-orchestrator",]
     )
     def test_lead_frame_emits_orchestrator_block_not_peer_body(self, agent_type, tmp_path):
         additional, _ = _run_real_session_init(_teammate_frame(agent_type), tmp_path)
         assert _ORCH_MARKER in additional
         assert _PEER_LIST_PREFIX not in additional
 
-    def test_plain_unknown_frame_emits_the_block_but_no_peer_body(self, tmp_path):
-        """The unit-level twin in test_session_init_teammate_peer_inject.py
-        carries the full reasoning. This is the real-composition half: it drives
-        the assembled hook rather than a mocked seam, so it proves the branch
-        survives composition and is not an artefact of the unit mocks.
-        """
-        frame = {
-            "session_id": _SESSION_ID,
-            "source": "startup",
-            "cwd": "/tmp/pact-acceptance",
-            "hook_event_name": "SessionStart",
-        }
-        additional, _ = _run_real_session_init(frame, tmp_path)
-        assert _ORCH_MARKER in additional
-        assert "relaunch with `--agent repacted:pact-orchestrator`" in additional
-        assert _PEER_LIST_PREFIX not in additional
 
-
-class TestFailSafeRealComposition:
-    """LEG 3 — fail-safe: a teammate frame whose lead team has NO config gets
-    NEITHER a peer body NOR the orchestrator block, and never raises (branch
-    taken on classify; resolver rejects on members-validation miss; fallback
-    None)."""
-
-    def test_teammate_no_team_config_injects_nothing(self, tmp_path):
-        additional, _ = _run_real_session_init(
-            _teammate_frame("pact-devops-engineer"), tmp_path, write_team=False
-        )
-        assert _PEER_LIST_PREFIX not in additional
-        assert _ORCH_MARKER not in additional

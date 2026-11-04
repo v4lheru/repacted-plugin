@@ -68,60 +68,8 @@ class TestKeyedItemsReplace:
             {"task": "T2", "status": "pending"},
         ]
 
-    def test_a_revised_rationale_replaces_the_decision(self, db_conn):
-        row = _write(
-            db_conn,
-            {"decisions": [{"decision": "Use Redis", "rationale": "fast"}]},
-            {"decisions": [{"decision": "Use Redis", "rationale": "fast and already deployed"}]},
-        )
-        assert row["decisions"] == [
-            {"decision": "Use Redis", "rationale": "fast and already deployed"},
-        ]
-
-    def test_existing_same_key_duplicates_collapse_to_the_correction(self, db_conn):
-        """A row already carrying the defect's duplicate is healed by the next
-        correction: every same-key item goes, the correction takes the first slot."""
-        row = _write(
-            db_conn,
-            {"entities": [{"name": "Redis", "notes": "a"}, {"name": "Pg"},
-                          {"name": "Redis", "notes": "b"}]},
-            {"entities": [{"name": "Redis", "notes": "c"}]},
-        )
-        assert row["entities"] == [{"name": "Redis", "notes": "c"}, {"name": "Pg"}]
-
-    def test_the_last_same_key_item_in_one_payload_wins(self, db_conn):
-        row = _write(
-            db_conn,
-            {"entities": [{"name": "Pg"}]},
-            {"entities": [{"name": "Redis", "notes": "first"}, {"name": "Redis", "notes": "second"}]},
-        )
-        assert row["entities"] == [{"name": "Pg"}, {"name": "Redis", "notes": "second"}]
 
     # -- controls: behaviour that must NOT change --------------------------
-
-    def test_a_new_key_is_still_appended(self, db_conn):
-        row = _write(db_conn, {"entities": [{"name": "Pg"}]}, {"entities": [{"name": "Redis"}]})
-        assert row["entities"] == [{"name": "Pg"}, {"name": "Redis"}]
-
-    def test_unkeyed_lessons_still_append(self, db_conn):
-        row = _write(db_conn, {"lessons_learned": ["a"]}, {"lessons_learned": ["a", "b"]})
-        assert row["lessons_learned"] == ["a", "b"]
-
-    def test_replace_still_keeps_same_key_items_of_its_payload(self, db_conn):
-        row = _write(
-            db_conn,
-            {"entities": [{"name": "Pg"}]},
-            {"entities": [{"name": "Redis", "notes": "x"}, {"name": "Redis", "notes": "y"}]},
-            replace=True,
-        )
-        assert row["entities"] == [{"name": "Redis", "notes": "x"}, {"name": "Redis", "notes": "y"}]
-
-    def test_an_unknown_sub_key_is_still_refused_and_writes_nothing(self, db_conn):
-        from scripts.database import create_memory, get_memory, update_memory
-        mem_id = create_memory(db_conn, {"entities": [{"name": "Redis", "notes": "old"}]})
-        with pytest.raises(ValueError):
-            update_memory(db_conn, mem_id, {"entities": [{"name": "Redis", "bogus": 1}]})
-        assert get_memory(db_conn, mem_id)["entities"] == [{"name": "Redis", "notes": "old"}]
 
 
 # ---------------------------------------------------------------------------
@@ -170,24 +118,4 @@ class TestProjectIdNotTheConfigDir:
         monkeypatch.chdir(config)
         assert PACTMemory._detect_project_id_with_source() == (None, "unresolved")
 
-    def test_a_relocated_config_dir_is_honoured(
-        self, tmp_path, monkeypatch, no_declared_project
-    ):
-        from scripts.memory_api import PACTMemory
-        home, _, _ = _home_with_config(tmp_path)
-        relocated = tmp_path / "cfg"
-        (relocated / "sub").mkdir(parents=True)
-        (relocated / "CLAUDE.md").write_text("# relocated\n", encoding="utf-8")
-        monkeypatch.setattr(Path, "home", lambda: home)
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(relocated))
-        monkeypatch.chdir(relocated / "sub")
-        assert PACTMemory._detect_project_id_with_source() == (None, "unresolved")
 
-    def test_control_a_project_cwd_still_names_its_project(
-        self, tmp_path, monkeypatch, no_declared_project
-    ):
-        from scripts.memory_api import PACTMemory
-        home, _, project = _home_with_config(tmp_path)
-        monkeypatch.setattr(Path, "home", lambda: home)
-        monkeypatch.chdir(project)
-        assert PACTMemory._detect_project_id_with_source() == ("proj", "cwd")

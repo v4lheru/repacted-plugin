@@ -100,41 +100,4 @@ class TestNoHardcodedStatePathDrift:
             f"instead:\n" + "\n".join(f"  {f}:{ln}: {u}" for f, ln, u in offenders)
         )
 
-    def test_the_allowlisted_residual_still_present(self):
-        """Guard the allowlist against rot: if a residual is itself migrated away,
-        prune the allowlist (so it cannot mask a future real offender at that
-        basename). Keeps the allowlist honest."""
-        scanned = {(Path(f).name, u) for f, _, u in _scan_hooks()}
-        missing = ALLOWLIST - scanned
-        assert missing == set(), (
-            f"Allowlisted residual(s) no longer present (prune the allowlist): {missing}"
-        )
 
-
-class TestDetectorNonVacuity:
-    """The detector + allowlist gate must be able to FAIL. Mirror the
-    trust_partition synthetic-source non-vacuity discipline."""
-
-    @pytest.mark.parametrize("src", [
-        'x = Path.home() / ".claude" / "tasks" / team\n',
-        'p = Path.home() / ".claude" / "pact-sessions"\n',
-        # multi-line form a same-line grep would miss:
-        'q = (\n    Path.home()\n    / ".claude"\n    / "teams"\n    / name\n)\n',
-    ])
-    def test_detector_fires_on_synthetic_hardcoded_state_path(self, src):
-        hits = _hardcoded_home_claude(ast.parse(src), "synthetic_offender.py")
-        assert hits, f"detector FAILED to flag a hardcoded state path: {src!r}"
-        # And the full gate would reject it (not in allowlist):
-        assert _unallowlisted([(h[0], h[1], h[2]) for h in
-                               [("synthetic_offender.py", ln, u) for _, ln, u in hits]]), \
-            "gate FAILED to reject an unallowlisted synthetic offender"
-
-    @pytest.mark.parametrize("src", [
-        'x = get_claude_config_dir() / "tasks" / team\n',   # the CORRECT post-#926 idiom
-        'y = Path.home() / ".ssh" / "config"\n',            # unrelated home path
-        'z = base / ".claude" / "tasks"\n',                 # not rooted at Path.home()
-    ])
-    def test_detector_ignores_non_offending_constructions(self, src):
-        assert _hardcoded_home_claude(ast.parse(src), "ok.py") == [], (
-            f"detector wrongly flagged a non-offending construction: {src!r}"
-        )

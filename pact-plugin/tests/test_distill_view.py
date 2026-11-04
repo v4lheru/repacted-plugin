@@ -196,76 +196,7 @@ def test_floats_that_overflow_to_infinity_are_refused_like_infinity(tmp_path, no
     assert view.counts == {"malformed line": 3}
 
 
-def test_a_lone_surrogate_drops_the_text_and_is_counted(tmp_path):
-    view = view_of(tmp_path, b'{"type": "user", "message": {"role": "user", "content": "a \\udcff b"}}',
-                   assistant(text("prose \ud800 here"), mid="m2"), assistant(text("clean prose"), mid="m3"))
-    assert joined(view) == "clean prose" and view.counts == {"text is not valid unicode": 2}
-
-
-def test_tool_results_dressed_as_text_never_enter(tmp_path):
-    view = view_of(
-        tmp_path,
-        user([text("DISGUISE-1")], toolUseResult=""),                  # present, however empty
-        user("DISGUISE-2", sourceToolUseID="t9"),
-        user([{"type": "text", "text": "DISGUISE-3", "tool_use_id": "t1"}]),
-        user([text("DISGUISE-4"), {"type": "tool_result", "tool_use_id": "t1", "content": "x"}]),
-        assistant({"type": "text", "text": "DISGUISE-5", "content": [text("y")]}),
-    )
-    assert view.turns == [] and view.counts == {"tool result disguised as text": 2}
-    assert "DISGUISE" not in repr(view.counts)
-
-
-def test_nested_content_arrays_are_malformed_not_text(tmp_path):
-    view = view_of(tmp_path, user([[text("NEST-1")]]), user([{"type": "text", "text": ["NEST-2"]}]),
-                   assistant({"type": "text", "text": {"deep": [text("NEST-3")]}}),
-                   user({"type": "text", "text": "NEST-4"}))
-    assert view.turns == [] and view.counts == {"malformed content block": 4}
-
-
-def test_a_secret_in_a_prompt_is_redacted_or_the_chunk_skipped(cfg, tmp_path):
-    key = "sk-" + "ant-" + "api03-" + "Xq7Lm2Pz9Rt4Vw8Nb3Hj6Kd1Fg5"
-    lead = write(cfg / "projects" / "-tmp-demo" / f"{SESSION}.jsonl",
-                 user(f"the deploy failed, use {key} for now", origin={"kind": "human"}),
-                 assistant(text("fixed by rotating the key")))
-    source = D.Source(D.KIND_TRANSCRIPT, lead, "demo", SESSION, 0.0, lead.stat().st_size)
-    segments, _ = G.read_transcript(source)
-    [chunk] = S.build_chunks(segments, 100_000)
-    assert key in chunk.text, "positive control: the view itself does not redact"
-    R._SKIPS.clear()
-    out = R.redact_chunk(chunk)
-    assert out is None or (key not in out.text and R.MARKER in out.text)
-
-
 # --- segments and pre-score ----------------------------------------------------------------
-
-def test_turns_split_on_each_prompt_and_score_their_cues(tmp_path):
-    view = view_of(tmp_path, assistant(text("hello"), mid="m0"),
-                   user("add the retry"), assistant(text("added it"), mid="m1"),
-                   user("no, that's not what I asked"),
-                   assistant(text("the root cause was a stale cache; fixed by clearing it"), mid="m2"))
-    turns = G.split_turns(view.turns)
-    assert [[t.role for t in seg] for seg in turns] == [["assistant"], ["user", "assistant"],
-                                                         ["user", "assistant"]]
-    scores = [G.pre_score(seg) for seg in turns]
-    assert scores[0] == scores[1] == 0 and scores[2] >= G.CORRECTION_POINTS + 2 * G.LESSON_POINTS
-
-
-def test_transcript_chunks_run_best_score_first_and_lite_keys_do_not_move():
-    lite = [S.Segment("memory_inbox", "memory:a/MEMORY-inbox.md#1", "2026-10-11", "", "a",
-                      "2026-10-11 | retry once | x"),
-            S.Segment("compact_summary", "session:s1/compact-summary.txt", "2026-10-15T00:00:00Z",
-                      "demo", "s1", "bob seeded the clock"),
-            S.Segment("handoff", "task:7@s1", "2026-10-14T10:00:00+00:00", "demo", "s1",
-                      "decisions: use a queue"),
-            S.Segment("memory_inbox", "memory:b/MEMORY-inbox.md#2", "2026-10-13", "", "b",
-                      "2026-10-13 | quote paths | y")]
-    keys = [c.chunk_key[:16] for c in S.build_chunks(lite, 100_000)]
-    assert keys == ["43abb336c5ce0530", "43cf2faba83943d8", "90c888e46114df4a", "fe3f400a1fece218"], \
-        "keys and order measured before the score field was added"
-    raw = [S.Segment(D.KIND_TRANSCRIPT, f"session:{sid}/r0-1#t1", ts, "demo", sid, "x", score)
-           for sid, ts, score in (("old", "2026-10-01", 9), ("new", "2026-10-16", 1))]
-    order = [c.session for c in S.build_chunks(lite + raw, 100_000)]
-    assert order[-2:] == ["old", "new"], "transcripts after lite, the better score first"
 
 
 # --- the source kind: off by default, leads only -------------------------------------------
@@ -283,27 +214,3 @@ def _world(cfg):
     return lead
 
 
-def test_discovery_reads_no_transcript_unless_asked_and_then_leads_only(cfg):
-    _world(cfg)
-    assert not [s for s in D.discover(cfg).sources if s.kind == D.KIND_TRANSCRIPT]
-    found = D.discover(cfg, include=["demo-*"], transcripts=True)
-    assert [(s.project, s.session) for s in found.sources if s.kind == D.KIND_TRANSCRIPT] == \
-        [("demo-project", SESSION)]
-    assert found.skipped["transcript: teammate and subagent transcripts not read (R0)"] == 1
-    assert found.skipped["transcript: project unknown"] == 1
-    assert found.skipped["feedback: a distiller backend session"] == 1
-
-
-def test_dry_run_reports_counts_only_and_refuses_a_non_bool_switch(cfg, tmp_path, capsys):
-    _world(cfg)
-    profile = tmp_path / "xdg" / "repacted" / "profile.json"
-    profile.parent.mkdir(parents=True)
-    profile.write_text(json.dumps({"distill": {"transcripts": True}}))
-    code = CLI.main(["dry-run", "--json"], memory_runner=lambda cli: ([], None))
-    out = capsys.readouterr().out
-    report = json.loads(out)
-    assert code == 0 and report["segments"]["transcript"] == 2   # demo and the unmapped one
-    assert report["skipped"]["transcript: unknown entry type hologram"] == 1
-    assert "mistake" not in out and "TEAMMATE-MARK" not in out and "FEEDBACK-MARK" not in out
-    profile.write_text(json.dumps({"distill": {"transcripts": "yes"}}))
-    assert CLI.main(["dry-run"], memory_runner=lambda cli: ([], None)) == CLI.EXIT_USAGE

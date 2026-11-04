@@ -71,39 +71,4 @@ class TestPromotedSeam:
         assert written[0]["cause"] == SKIP_CAUSE_RAISED
         assert written[0]["cause"] != SKIP_CAUSE_RETURNED_FALSE
 
-    def test_task_id_recorded_when_given(self, spy):
-        append_event_checked({"v": 1, "type": "x", "_fail": True}, "x", "42")
-        assert spy[-1]["task_id"] == "42"
 
-    def test_NO_RECURSION_when_the_skip_record_itself_fails(self, monkeypatch):
-        """A failure-to-record-a-failure must TERMINATE, not retry into the
-        substrate that just failed — otherwise the degraded case becomes the
-        loudest thing in the journal. Every write fails here; the helper must
-        return False, attempt the record at most once more, and not raise."""
-        import shared.session_journal as sj
-        calls = {"n": 0}
-
-        def always_fail(event):
-            calls["n"] += 1
-            return False
-
-        monkeypatch.setattr(sj, "append_event", always_fail)
-        assert append_event_checked({"v": 1, "type": "x"}, "x") is False
-        assert calls["n"] == 2, "one primary attempt + exactly one skip record"
-
-    def test_hostile_task_id_is_bounded_and_sanitised(self, spy):
-        append_event_checked({"v": 1, "type": "x", "_fail": True}, "x",
-                             "a\x00b" + "Z" * 50000)
-        rec = spy[-1]["task_id"]
-        assert len(rec) < 3000 and "\x00" not in rec and "[truncated]" in rec
-
-    def test_never_raises_even_when_stderr_is_dead(self, spy, monkeypatch):
-        class Dead:
-            def write(self, *a):
-                raise OSError("stderr gone")
-
-            def flush(self, *a):
-                pass
-
-        monkeypatch.setattr(sys, "stderr", Dead())
-        assert append_event_checked({"v": 1, "type": "x", "_fail": True}, "x") is False

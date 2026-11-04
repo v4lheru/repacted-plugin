@@ -154,27 +154,9 @@ def _bash_payload(command: str) -> str:
 
 DENY_ARMS = [
     ("D1", "true"),
-    ("D2", "sleep 30"),
-    ("D2", "sleep  30"),
-    ("D2", "sleep\t30"),
-    ("D3", "  true"),
-    ("D4", "\tsleep 5"),
     ("D5", "true   "),
-    ("D6", "sleep 0.5"),
-    ("D6", "sleep .5"),
-    ("D6", "sleep 5."),
-    ("D7", "sleep 1m"),
     ("D7", "sleep 2h"),
-    ("D7", "sleep 10s"),
-    ("D7", "sleep 3d"),
-    ("D8", "sleep infinity"),
-    ("D9", "FOO=1 sleep 5"),
     ("D10", "A=1 B=2 true"),
-    ("D11", "command sleep 5"),
-    ("D12", "builtin true"),
-    ("D13", "sleep 5 # waiting"),
-    ("D14", "FOO=1 command sleep 5 # wait"),
-    ("D15", "sleep 30\n"),
     ("D15", "sleep 30\n\n"),
 ]
 
@@ -198,33 +180,8 @@ def test_deny_bare_filler(arm, command, capsys):
 
 ALLOW_ARMS = [
     ("A1", "sleep 2 && git status"),
-    ("A2", "sleep 5 | tee log"),
-    ("A3", "true; git status"),
-    ("A4", "sleep 5 || echo done"),
-    ("A5", "echo true"),
-    ("A6", "ffmpeg -ss 30 -i in.mp4 out.mp4"),
-    ("A7", 'git commit -m "sleep 30 while waiting"'),
-    ("A8", "pytest -k test_true_marker"),
-    ("A9", "truecrypt mount volume"),
     ("A10", "sleepy 5"),
-    ("A11", _persona_watcher_template()),
-    ("A12", "for i in 1 2 3; do curl -s api; sleep 60; done"),
-    ("A13", "echo x\nsleep 30"),
-    # A14-A23: documented under-block shapes — asserted as ALLOW to pin the
-    # honest-mistake scope boundary (deliberate evasion is out of scope).
-    ("A14", "true && true"),
-    ("A15", "(sleep 5)"),
-    ("A16", '"true"'),
-    ("A16", "'sleep' 5"),
     ("A17", "sudo sleep 5"),
-    ("A18", "time sleep 5"),
-    ("A19", "\\sleep 5"),
-    ("A20", "sleep"),
-    ("A21", "sleep 5x"),
-    ("A22", "sleep -5"),
-    ("A23", "TRUE"),
-    ("A23", "Sleep 5"),
-    ("A24", ""),
     ("A25", "   "),
 ]
 

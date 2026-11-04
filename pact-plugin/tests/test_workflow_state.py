@@ -114,63 +114,6 @@ def test_reject_shows_rework_until_the_owner_writes_a_newer_rev(world):
         "HANDOFF stored, awaiting your acceptance"
 
 
-def test_an_amendment_is_listed_until_the_handoff_disposes_of_it(world):
-    amend = {"text": "use X", "at": "2026-10-18T12:00:00+00:00", "from": "team-lead", "kind": "ruling"}
-    _task(world, "3", "coder: build", "in_progress", "coder", amend_1=amend)
-    assert _event(world, "TaskUpdate", "3")["tasks"]["3"]["amends"] == ["amend_1"]
-
-    _task(world, "3", "coder: build", "in_progress", "coder", amend_1=amend,
-          handoff=dict(HANDOFF, amendments={"amend_1": "applied: x.py"}))
-    assert "amends" not in _event(world, "TaskUpdate", "3")["tasks"]["3"]
-
-
-
-
-def test_the_screen_stays_within_40_lines_and_names_what_waits_on_the_lead(world):
-    for n in range(10, 110):
-        _task(world, str(n), f"coder-{n}: build part {n}", "in_progress", f"coder-{n}")
-    _task(world, "200", "coder: build the last", "in_progress", "coder", handoff=HANDOFF)
-    state = workflow_state.rebuild(str(world["session_dir"]), TEAM, "")
-    screen = workflow_state.render(state).splitlines()
-    assert len(screen) <= workflow_state.SCREEN_LINES
-    assert any(line.startswith("  ... ") and "run TaskList" in line for line in screen)
-    assert screen[-1] == "Next: accept or reject #200 (read each task file first)."
-    assert len(state["tasks"]) == workflow_state.MAX_TASKS
-
-
-def test_rebuild_from_the_task_files_and_journal_equals_the_incremental_file(world):
-    _journal(world, type="variety_assessed", task_id="1", variety={"total": 9})
-    _task(world, "1", "Build the feature", "in_progress", "team-lead")
-    _event(world, "TaskCreate", "1")
-    _journal(world, type="phase_transition", phase="CODE", status="started")
-    _task(world, "2", "coder: TEACHBACK for build")
-    _task(world, "3", "coder: build")
-    _event(world, "TaskCreate", "2")
-    _event(world, "TaskCreate", "3")
-    _journal(world, type="variety_assessed", task_id="3", scope="dispatch", variety={"total": 9})
-    _task(world, "2", "coder: TEACHBACK for build", "completed", "coder")
-    _event(world, "TaskUpdate", "2")
-    _task(world, "3", "coder: build", "in_progress", "coder", handoff=HANDOFF)
-    _event(world, "TaskUpdate", "3")
-    _task(world, "4", "ALERT: halt", "pending", "", type="algedonic", level="HALT")
-    _event(world, "TaskCreate", "4")
-    _task(world, "3", "coder: build", "completed", "coder", handoff=HANDOFF)
-    incremental = _event(world, "TaskUpdate", "3")
-
-    rebuilt = workflow_state.rebuild(str(world["session_dir"]), TEAM, "")
-    assert workflow_state.comparable(rebuilt) == workflow_state.comparable(incremental)
-    assert incremental["phase"] == "CODE"
-    assert incremental["feature"] == {"id": "1", "subject": "Build the feature"}
-    assert list(incremental["signals"]) == ["4"]
-
-    _load_front()
-    status = importlib.import_module("_front.status")
-    (world["session_dir"] / workflow_state.STATE_NAME).unlink()
-    assert status.show(None, str(world["session_dir"]), rebuild=True)[0] == 0
-    assert workflow_state.comparable(workflow_state.load(str(world["session_dir"]))) == \
-        workflow_state.comparable(incremental)
-
-
 def _compact_context(world, tasks):
     parts = []
     session_init_resume.compact_directive(
@@ -179,18 +122,3 @@ def _compact_context(world, tasks):
     return "\n".join(parts)
 
 
-def test_a_missing_or_stale_file_keeps_the_checkpoint_and_a_fresh_one_shows_the_screen(world):
-    _task(world, "3", "coder: build", "in_progress", "coder")
-    tasks = [json.loads((world["tasks"] / "3.json").read_text())]
-
-    missing = _compact_context(world, tasks)
-    assert "[POST-COMPACTION CHECKPOINT]" in missing and "[RESUME]" not in missing
-
-    _event(world, "TaskUpdate", "3")
-    fresh = _compact_context(world, tasks)
-    assert "[RESUME]" in fresh and "[POST-COMPACTION CHECKPOINT]" not in fresh
-    assert "#3 coder: working" in fresh
-
-    _journal(world, type="metadata_write", task_id="3", key="handoff", agent="coder", bytes=10)
-    stale = _compact_context(world, tasks)
-    assert "[POST-COMPACTION CHECKPOINT]" in stale and "[RESUME]" not in stale

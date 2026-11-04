@@ -3,6 +3,7 @@ name: pact-preparer
 description: "Researches docs, APIs and best practices before design or code."
 color: "#008080"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

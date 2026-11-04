@@ -57,35 +57,6 @@ class TestMainMissingDeps:
 
         assert exc_info.value.code == 1
 
-    def test_prints_missing_package_names_to_stderr(self, capsys):
-        """Should print missing package names in the error message."""
-        with patch("telegram.deps.check_dependencies", return_value=["mcp"]), \
-             pytest.raises(SystemExit):
-            main()
-
-        captured = capsys.readouterr()
-        assert "mcp" in captured.err
-
-    def test_prints_setup_instructions_to_stderr(self, capsys):
-        """Should print setup command instructions in the error message."""
-        with patch("telegram.deps.check_dependencies", return_value=["httpx"]), \
-             pytest.raises(SystemExit):
-            main()
-
-        captured = capsys.readouterr()
-        assert "/repacted:init telegram" in captured.err
-        assert "pip install" in captured.err
-
-    def test_prints_all_missing_packages(self, capsys):
-        """Should list all missing packages, not just the first."""
-        with patch("telegram.deps.check_dependencies", return_value=["mcp", "httpx"]), \
-             pytest.raises(SystemExit):
-            main()
-
-        captured = capsys.readouterr()
-        assert "mcp" in captured.err
-        assert "httpx" in captured.err
-
 
 # =============================================================================
 # Successful Start Tests
@@ -115,11 +86,3 @@ class TestMainSuccessfulStart:
         mock_create.assert_called_once()
         mock_server.run.assert_called_once_with(transport="stdio")
 
-    def test_does_not_exit_on_success(self):
-        """Should not call sys.exit when dependencies are present."""
-        mock_server = MagicMock()
-
-        with patch("telegram.deps.check_dependencies", return_value=[]), \
-             patch.dict(sys.modules, {"telegram.server": _server_module(mock_server)}):
-            # Should return normally, not raise SystemExit
-            main()

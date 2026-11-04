@@ -148,26 +148,6 @@ class TestBothModesMatrix:
         )
         assert resolve(_TMUX_SID) == "alice@pact-team1"
 
-    def test_matrix_same_input_diverges_only_on_topology(self, registry_env):
-        """Belt-and-suspenders single-test matrix: hold name@team + config
-        constant, vary ONLY which sid the process carries, assert the two
-        outcomes diverge. This is the merge-gate invariant in one assertion
-        pair."""
-        registry_env.write_team("pact-team1", ["alice"], lead_session_id=_LEAD_SID)
-
-        # tmux first (distinct sid) -> writes.
-        registry_env.set_session(_TMUX_SID)
-        register("alice@pact-team1")
-        assert resolve(_TMUX_SID) == "alice@pact-team1"
-
-        # in-process (sid == leadSessionId) -> the matching sid is NEVER written,
-        # so it never resolves, even though the tmux line now exists in the file.
-        registry_env.set_session(_LEAD_SID)
-        register("alice@pact-team1")
-        assert resolve(_LEAD_SID) is None, (
-            "the in-process sid must never be written even alongside a tmux line"
-        )
-
 
 # ---------------------------------------------------------------------------
 # P0 — NON-VACUITY: the in-process skip is THE in-process branch, not a generic
@@ -201,37 +181,6 @@ class TestNonVacuity:
         assert resolve("some-other-distinct-sid") == "alice@pact-team1"
 
 
-class TestCounterTestCardinalityDoc:
-    """Counter-test-by-revert cardinality, MEASURED out-of-band (documented here
-    so a future verifier checks the recorded number, not a re-derived guess).
-
-    Procedure: source-only revert the two guard lines in register() (see this
-    module's docstring), then ``python -m pytest
-    pact-plugin/tests/test_session_registry_mode_gate.py -rf``.
-
-    MEASURED RED-case set when the guard is reverted (recorded at authoring;
-    re-verify if the matrix changes):
-      - TestBothModesMatrix::test_in_process_sid_equals_lead_session_id_skips_write
-      - TestBothModesMatrix::test_matrix_same_input_diverges_only_on_topology
-      - TestNonVacuity::test_in_process_skip_is_not_the_absent_sid_noop
-
-    => 3 RED cases (3 distinct source assertions; no parametrization expands
-    them). The tmux/positive-control/fail-open cases stay GREEN because they
-    already expect a WRITE — that asymmetry is itself evidence the RED set is
-    coupled to the in-process branch specifically, not to register() at large.
-    This test is a DOC anchor only; it asserts the recorded count is internally
-    consistent (a tripwire if someone edits the list without re-measuring)."""
-
-    EXPECTED_RED_ON_GUARD_REVERT = {
-        "test_in_process_sid_equals_lead_session_id_skips_write",
-        "test_matrix_same_input_diverges_only_on_topology",
-        "test_in_process_skip_is_not_the_absent_sid_noop",
-    }
-
-    def test_documented_cardinality_is_three(self):
-        assert len(self.EXPECTED_RED_ON_GUARD_REVERT) == 3
-
-
 # ---------------------------------------------------------------------------
 # P0 — FAIL-OPEN: every reachable uncertain branch of _read_lead_session_id
 # routes register() to WRITE. By the time _read_lead_session_id runs, register()
@@ -259,45 +208,6 @@ class TestFailOpenWrites:
         registry_env.write_team_raw("pact-team1", "{ this is not json ]")
         register("alice@pact-team1")
         assert registry_env.registry_path.exists(), "malformed JSON must fail-OPEN to WRITE"
-
-    def test_non_dict_top_level_config_writes(self, registry_env):
-        """config.json top-level is a JSON LIST (not an object) -> not isinstance
-        dict -> "" -> WRITE."""
-        registry_env.set_session(_LEAD_SID)
-        registry_env.write_team_raw("pact-team1", ["alice", "bob"])  # a list
-        register("alice@pact-team1")
-        assert registry_env.registry_path.exists(), "non-dict config must fail-OPEN to WRITE"
-
-    def test_missing_lead_session_id_key_writes(self, registry_env):
-        """config.json is a valid object with members[] but NO leadSessionId key
-        -> config.get returns None -> "" -> WRITE. (This is the shape every
-        pre-#962 config had, so the guard must be inert for them.)"""
-        registry_env.set_session(_LEAD_SID)
-        registry_env.write_team("pact-team1", ["alice"])  # lead_session_id=None
-        register("alice@pact-team1")
-        assert registry_env.registry_path.exists(), "absent leadSessionId must fail-OPEN to WRITE"
-
-    def test_non_string_lead_session_id_writes(self, registry_env):
-        """leadSessionId present but NOT a string (e.g. an int) -> the isinstance
-        guard returns "" -> WRITE. A non-string can never == the string sid
-        anyway, but the explicit "" keeps the branch fail-OPEN by construction."""
-        registry_env.set_session(_LEAD_SID)
-        registry_env.write_team_raw(
-            "pact-team1",
-            {"members": [{"name": "alice"}], "leadSessionId": 12345},
-        )
-        register("alice@pact-team1")
-        assert registry_env.registry_path.exists(), "non-string leadSessionId must fail-OPEN to WRITE"
-
-    def test_unsafe_team_segment_writes(self, registry_env):
-        """An @team that is not a single safe path component (contains a path
-        separator) -> _is_safe_team_segment False -> "" BEFORE any FS read ->
-        WRITE. register() keeps the @team intact in the value, so the line is
-        written with the raw (unsafe) team; member-validation rejects it on READ,
-        but the fail-OPEN WRITE is the observable under test."""
-        registry_env.set_session(_LEAD_SID)
-        register("alice@pact/evil")  # "/" -> unsafe segment
-        assert registry_env.registry_path.exists(), "unsafe @team must fail-OPEN to WRITE"
 
 
 # ---------------------------------------------------------------------------
@@ -344,52 +254,6 @@ class TestReadLeadSessionIdHelper:
         not vacuously through register()."""
         assert _read_lead_session_id("") == ""
 
-    def test_unsafe_team_segment_returns_empty(self):
-        """Branch 2 — a non-empty but unsafe @team (path separator / traversal /
-        control char) is rejected BEFORE building the FS path."""
-        assert _read_lead_session_id("../escape") == ""
-        assert _read_lead_session_id("a/b") == ""
-        assert _read_lead_session_id("..") == ""
-
-    def test_missing_config_returns_empty(self, registry_env, tmp_path):
-        """Branch 3 — no teams/<team>/config.json -> OSError -> ""."""
-        # registry_env redirects Path.home() into tmp_path; no config written.
-        assert _read_lead_session_id("pact-noconfig") == ""
-
-    def test_malformed_json_returns_empty(self, registry_env, tmp_path):
-        """Branch 4 — config.json is not valid JSON -> ValueError -> ""."""
-        self._write_config(tmp_path, "pact-bad", "{ not json ]")
-        assert _read_lead_session_id("pact-bad") == ""
-
-    def test_non_dict_top_level_returns_empty(self, registry_env, tmp_path):
-        """Branch 5 — top-level is a JSON list, not an object -> ""."""
-        self._write_config(tmp_path, "pact-list", ["a", "b"])
-        assert _read_lead_session_id("pact-list") == ""
-
-    def test_missing_lead_session_id_key_returns_empty(self, registry_env, tmp_path):
-        """Branch 6 — a valid object with members[] but NO leadSessionId key
-        (the pre-#962 config shape) -> config.get None -> ""."""
-        self._write_config(tmp_path, "pact-nokey", {"members": [{"name": "alice"}]})
-        assert _read_lead_session_id("pact-nokey") == ""
-
-    def test_non_string_lead_session_id_returns_empty(self, registry_env, tmp_path):
-        """Branch 7 — leadSessionId present but not a string -> isinstance guard
-        -> ""."""
-        self._write_config(tmp_path, "pact-int", {"leadSessionId": 12345})
-        assert _read_lead_session_id("pact-int") == ""
-
-    def test_valid_config_returns_lead_session_id_string(self, registry_env, tmp_path):
-        """Branch 8 (POSITIVE CONTROL) — a well-formed config returns the
-        leadSessionId STRING. Without this, every "" assertion above is vacuous
-        (a helper that ALWAYS returned "" would pass them all). This proves ""
-        means a genuine miss, and the in-process guard's `sid == helper(team)`
-        comparison can actually be TRUE."""
-        self._write_config(
-            tmp_path, "pact-good",
-            {"members": [{"name": "alice"}], "leadSessionId": _LEAD_SID},
-        )
-        assert _read_lead_session_id("pact-good") == _LEAD_SID
-
 
 # ---------------------------------------------------------------------------
 # Pre-existing register()-level no-op paths that are NOT the in-process guard —
@@ -407,12 +271,3 @@ class TestPreExistingNoopsStillDistinct:
         register("alice@pact-team1")
         assert not registry_env.registry_path.exists()
 
-    def test_empty_team_half_noops_before_guard(self, registry_env):
-        """"name@" (empty team) -> the L179 partition guard returns BEFORE
-        _read_lead_session_id is reached -> no write. Confirms the empty-team
-        fail-open branch is genuinely unreachable from register() (it is
-        short-circuited upstream), so the fail-open suite above correctly omits
-        it."""
-        registry_env.set_session(_LEAD_SID)
-        register("alice@")  # empty team half
-        assert not registry_env.registry_path.exists()

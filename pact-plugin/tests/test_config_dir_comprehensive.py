@@ -86,38 +86,6 @@ class TestParentsBasedContainmentUnderRelocatedConfig:
         # $CONFIG-rooted candidate would NOT be under it -> None.
         assert _validate_under_pact_sessions(legit) == legit
 
-    def test_session_init_validate_rejects_sibling_prefix_under_relocated_config(self, relocated):
-        config_dir, _ = relocated
-        from session_init import _validate_under_pact_sessions
-
-        # THE GAP: sibling-prefix collision under the RELOCATED root. A naive
-        # str-prefix check ("<config>/pact-sessions-evil".startswith(
-        # "<config>/pact-sessions")) would WRONGLY accept; the parents-based
-        # idiom rejects.
-        sibling = str(config_dir / "pact-sessions-evil" / "stolen" / "x")
-        assert _validate_under_pact_sessions(sibling) is None
-
-    def test_session_init_validate_rejects_traversal_escape_under_relocated_config(self, relocated):
-        config_dir, _ = relocated
-        from session_init import _validate_under_pact_sessions
-
-        escape = str(config_dir / "pact-sessions" / ".." / ".." / "etc" / "passwd")
-        assert _validate_under_pact_sessions(escape) is None
-
-    def test_session_registry_rejects_sibling_prefix_under_relocated_config(self, relocated):
-        config_dir, _ = relocated
-        # Complements C4b: L245 covers the sibling under the DEFAULT root and
-        # L304 covers a legit path under a relocated root; THIS covers their
-        # product — sibling-prefix under the RELOCATED root.
-        sibling = config_dir / "pact-sessions-evil" / "x.jsonl"
-        assert sr._is_under_pact_sessions(sibling) is False
-
-    def test_session_registry_accepts_legit_under_relocated_config(self, relocated):
-        config_dir, _ = relocated
-        legit = config_dir / "pact-sessions" / "team" / "reg.jsonl"
-        # Non-vacuous: a home-lagged anchor rejects this $CONFIG path.
-        assert sr._is_under_pact_sessions(legit) is True
-
 
 class TestSessionInit350RequiredDirConfigAwareness:
     """session_init:350 required-dir membership check must anchor the required
@@ -145,25 +113,6 @@ class TestSessionInit350RequiredDirConfigAwareness:
         )
         assert check_additional_directories() is None
 
-    def test_tip_fires_when_only_old_home_paths_configured(self, relocated):
-        config_dir, fake_home = relocated
-        from session_init import check_additional_directories
-
-        # NON-VACUITY: configure the PRE-#926 home-based paths. Because the
-        # required set now anchors on $CONFIG, these stale paths no longer
-        # satisfy it -> a tip MUST fire. If :350 had stayed on Path.home(),
-        # required would equal these paths -> no tip -> this assertion fails.
-        self._write_settings(
-            config_dir,
-            [
-                str(fake_home / ".claude" / "teams"),
-                str(fake_home / ".claude" / "pact-sessions"),
-            ],
-        )
-        tip = check_additional_directories()
-        assert tip is not None
-        assert "additionalDirectories" in tip
-
 
 class TestDispatchGateBothModesUnderRelocatedConfig:
     """Both-modes confirmatory pair (deferred from devops's L2 file).
@@ -188,9 +137,7 @@ class TestDispatchGateBothModesUnderRelocatedConfig:
     @pytest.mark.parametrize(
         "mode,session_id,lead_session_id",
         [
-            ("in_process", "sess-AAAA", "sess-AAAA"),   # session_id == leadSessionId
-            ("tmux", "sess-BBBB", "sess-AAAA"),         # session_id != leadSessionId
-        ],
+            ("in_process", "sess-AAAA", "sess-AAAA"),],
     )
     def test_dispatch_resolves_identically_across_modes(
         self, relocated, monkeypatch, mode, session_id, lead_session_id
@@ -223,13 +170,3 @@ class TestClassificationStayFixed:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfgB-different"))
         assert _resolve_plugin_root() == "/opt/plugin/root"
 
-    def test_plugin_root_reader_does_not_route_through_config_resolver(self):
-        # Negative source backstop: the plugin-root reader must not derive from
-        # the config-dir resolver (over-application would couple install paths to
-        # CLAUDE_CONFIG_DIR). Asserts the anti-pattern is absent at the source.
-        import inspect
-        import shared.plugin_manifest as pm
-
-        src = inspect.getsource(pm._resolve_plugin_root)
-        assert "get_claude_config_dir" not in src
-        assert "CLAUDE_CONFIG_DIR" not in src

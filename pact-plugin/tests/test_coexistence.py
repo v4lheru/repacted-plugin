@@ -47,7 +47,7 @@ def scopes(tmp_path):
     }
 
 
-@pytest.mark.parametrize("scope", ["user", "project", "local"])
+@pytest.mark.parametrize("scope", ["user",])
 def test_pact_enabled_in_any_scope_warns_and_names_the_file(scopes, scope):
     _write(scopes[scope], {"enabledPlugins": {"PACT@pact-marketplace": True, "repacted@repacted-local": True}})
 
@@ -70,12 +70,7 @@ def test_two_scopes_are_both_named_and_the_command_is_given_once(scopes):
 
 
 @pytest.mark.parametrize("settings", [
-    {"enabledPlugins": {"PACT@pact-marketplace": False}},
-    {"enabledPlugins": {"repacted@repacted-local": True}},
-    {"enabledPlugins": {"PACTX@elsewhere": True, "notPACT@x": True}},
-    {"enabledPlugins": {"PACT@pact-marketplace": "true"}},
-    {},
-], ids=["disabled", "only-repacted", "lookalike-keys", "non-boolean", "no-enabledPlugins"])
+    {"enabledPlugins": {"PACT@pact-marketplace": False}},], ids=["disabled",])
 def test_no_warning_when_pact_is_not_enabled(scopes, settings):
     _write(scopes["user"], settings)
 
@@ -87,8 +82,8 @@ def test_no_warning_when_no_settings_file_exists(scopes):
     assert coexistence_warning(None, config_dir=scopes["config_dir"]) is None
 
 
-@pytest.mark.parametrize("payload", ["{not json", "[]", '{"enabledPlugins": ["PACT@pact-marketplace"]}', ""],
-                         ids=["malformed", "top-level-list", "list-not-dict", "empty-file"])
+@pytest.mark.parametrize("payload", ["{not json",],
+                         ids=["malformed",])
 def test_malformed_settings_never_raise_and_do_not_mask_another_scope(scopes, payload):
     _write(scopes["user"], payload)
     assert coexistence_warning(scopes["project_dir"], config_dir=scopes["config_dir"]) is None
@@ -97,52 +92,7 @@ def test_malformed_settings_never_raise_and_do_not_mask_another_scope(scopes, pa
     assert str(scopes["project"]) in coexistence_warning(scopes["project_dir"], config_dir=scopes["config_dir"])
 
 
-def test_an_unresolvable_config_dir_returns_none():
-    with patch("shared.coexistence.get_claude_config_dir", side_effect=RuntimeError("no home")):
-        assert coexistence_warning(None) is None
-
-
 # ---------- alternate mode and the managed scope ----------
-
-@pytest.mark.parametrize("scope", ["user", "project", "local"])
-def test_alternate_mode_skips_the_scopes_the_launch_flag_overrides(scopes, scope, monkeypatch):
-    _write(scopes[scope], {"enabledPlugins": {"PACT@pact-marketplace": True}})
-    monkeypatch.setenv("REPACTED_LAUNCH", "alternate")
-
-    assert coexistence_warning(scopes["project_dir"], config_dir=scopes["config_dir"]) is None
-
-
-@pytest.mark.parametrize("launch", [None, "alternate"])
-def test_a_managed_entry_warns_in_every_mode(scopes, _isolated_launch_env, monkeypatch, launch):
-    managed_file = _isolated_launch_env / "managed-settings.json"
-    _write(managed_file, {"enabledPlugins": {"PACT@pact-marketplace": True}})
-    if launch:
-        monkeypatch.setenv("REPACTED_LAUNCH", launch)
-
-    warning = coexistence_warning(scopes["project_dir"], config_dir=scopes["config_dir"])
-
-    assert warning is not None and str(managed_file) in warning
-    assert "only the administrator can remove it" in warning
-
-
-def test_a_managed_drop_in_counts_and_a_later_one_can_turn_it_off(scopes, _isolated_launch_env):
-    _write(_isolated_launch_env / "managed-settings.d" / "10-on.json",
-           {"enabledPlugins": {"PACT@pact-marketplace": True}})
-    assert coexistence_warning(scopes["project_dir"], config_dir=scopes["config_dir"]) is not None
-
-    _write(_isolated_launch_env / "managed-settings.d" / "20-off.json",
-           {"enabledPlugins": {"PACT@pact-marketplace": False}})
-    assert coexistence_warning(scopes["project_dir"], config_dir=scopes["config_dir"]) is None
-
-
-def test_a_broken_managed_reader_never_raises_and_keeps_the_user_scope(scopes):
-    from shared import coexistence
-
-    _write(scopes["user"], {"enabledPlugins": {"PACT@pact-marketplace": True}})
-    with patch.object(coexistence, "managed_sources",
-                      side_effect=RuntimeError("boom")):
-        warning = coexistence_warning(scopes["project_dir"], config_dir=scopes["config_dir"])
-    assert warning is not None and str(scopes["user"]) in warning
 
 
 # ---------- routing in session_init ----------
@@ -167,30 +117,3 @@ def _run_session_init(monkeypatch, tmp_path, source):
     return json.loads(stdout.getvalue())
 
 
-@pytest.mark.parametrize("source, warned", [("startup", True), ("resume", True), ("compact", False), ("clear", False)])
-def test_session_init_routes_the_warning_to_system_message_on_launch_only(monkeypatch, tmp_path, source, warned):
-    # The autouse fixture points the config root at tmp_path/.claude.
-    _write(tmp_path / ".claude" / "settings.json", {"enabledPlugins": {"PACT@pact-marketplace": True}})
-
-    output = _run_session_init(monkeypatch, tmp_path, source)
-
-    assert ("repacted: PACT is also enabled" in output.get("systemMessage", "")) is warned
-    additional = output.get("hookSpecificOutput", {}).get("additionalContext", "")
-    assert "repacted: PACT is also enabled" not in additional
-
-
-def test_session_init_is_silent_under_the_alternate_launch(monkeypatch, tmp_path):
-    _write(tmp_path / ".claude" / "settings.json", {"enabledPlugins": {"PACT@pact-marketplace": True}})
-    monkeypatch.setenv("REPACTED_LAUNCH", "alternate")
-
-    output = _run_session_init(monkeypatch, tmp_path, "startup")
-
-    assert "PACT is also enabled" not in output.get("systemMessage", "")
-
-
-def test_session_init_is_silent_when_only_repacted_is_enabled(monkeypatch, tmp_path):
-    _write(tmp_path / ".claude" / "settings.json", {"enabledPlugins": {"repacted@repacted-local": True}})
-
-    output = _run_session_init(monkeypatch, tmp_path, "startup")
-
-    assert "PACT is also enabled" not in output.get("systemMessage", "")

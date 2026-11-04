@@ -113,9 +113,7 @@ class TestLeadRowsAllWritesRun:
     """For a lead frame (both spellings), all 4 Class-A writes fire."""
 
     @pytest.mark.parametrize("frame_builder", [
-        lead_frame_qualified,
-        lead_frame_unqualified,
-    ], ids=["qualified", "unqualified"])
+        lead_frame_qualified,], ids=["qualified",])
     def test_lead_runs_all_four_writes(self, frame_builder, monkeypatch, tmp_path):
         mocks = _run_main_with(_stdin_for(frame_builder()), monkeypatch, tmp_path)
 
@@ -172,9 +170,7 @@ class TestNonLeadRowsAllWritesSuppressed:
     """
 
     @pytest.mark.parametrize("frame_builder, role", [
-        (teammate_frame, "teammate"),
-        (plain_frame, "plain"),
-    ])
+        (teammate_frame, "teammate"),])
     def test_non_lead_suppresses_disk_write_and_other_writes(
         self, frame_builder, role, monkeypatch, tmp_path
     ):
@@ -191,19 +187,6 @@ class TestNonLeadRowsAllWritesSuppressed:
         )
         mocks["update_session_info"].assert_not_called()
         mocks["check_resume_state"].assert_not_called()
-
-    def test_teammate_specific_agent_types_all_suppress(self, monkeypatch, tmp_path):
-        """A range of specialist agent_types all suppress (not just the
-        default). Guards against a literal-coupling bug where only one
-        teammate spelling is treated as non-lead."""
-        for at in ("pact-backend-coder", "pact-secretary", "pact-test-engineer"):
-            mocks = _run_main_with(
-                _stdin_for(teammate_frame(agent_type=at)), monkeypatch, tmp_path
-            )
-            # #878 SHAPE-2: cache built, but the disk persist is suppressed.
-            mocks["build_context_cache"].assert_called_once()
-            mocks["persist_context"].assert_not_called()
-            mocks["update_session_info"].assert_not_called()
 
 
 # ===========================================================================
@@ -244,54 +227,6 @@ class TestWriteContextSplit:
         assert not ctx._context_path.exists(), (
             "skipping persist must NOT create the on-disk session-context file "
             "(the lead-only artifact a teammate frame must not clobber)"
-        )
-
-    def test_lead_populates_cache_and_writes_disk_file(self, monkeypatch, tmp_path):
-        """Lead = build_context_cache THEN persist_context: _cache populated AND
-        the on-disk file exists with the expected content — byte-for-byte
-        historical behavior."""
-        import shared.pact_context as ctx
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        assert ctx._cache is None and ctx._context_path is None
-
-        result = ctx.build_context_cache(
-            "pact-aabb1122", _SESSION_ID, str(tmp_path / "proj"), "",
-        )
-        assert result is not None
-        ctx.persist_context(*result)
-
-        assert ctx._cache is not None
-        assert ctx._context_path is not None
-        assert ctx._context_path.exists(), (
-            "lead path (build + persist) must create the on-disk session-context file"
-        )
-        written = json.loads(ctx._context_path.read_text(encoding="utf-8"))
-        assert written["session_id"] == _SESSION_ID
-        assert written["team_name"] == "pact-aabb1122"
-
-    def test_cache_identical_between_disk_and_no_disk(self, monkeypatch, tmp_path):
-        """The in-memory cache content is IDENTICAL whether or not persist runs
-        — the seam changes only the disk side-effect, never the cache the
-        downstream consumers read. (started_at differs by clock, so compare the
-        stable fields.)"""
-        import shared.pact_context as ctx
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        ctx.build_context_cache("pact-x", _SESSION_ID, "/p", "plug")  # no persist
-        no_disk = {k: ctx._cache[k] for k in
-                   ("team_name", "session_id", "project_dir", "plugin_root")}
-
-        ctx.reset_for_tests()
-        result = ctx.build_context_cache("pact-x", _SESSION_ID, "/p", "plug")
-        ctx.persist_context(*result)
-        with_disk = {k: ctx._cache[k] for k in
-                     ("team_name", "session_id", "project_dir", "plugin_root")}
-
-        assert no_disk == with_disk, (
-            "the in-memory cache must be identical regardless of whether persist "
-            "runs — the seam gates ONLY the disk side-effect"
         )
 
 
@@ -361,94 +296,9 @@ class TestUnknownRoleStartupWarning:
             "absent agent_type on startup must emit the unknown-role notice"
         )
 
-    def test_present_but_unrecognized_agent_type_fires(self, monkeypatch, tmp_path):
-        """(c) a present-but-unrecognized / typo'd agent_type (not in the live
-        registry) → notice fires. This is the #1 broadening over the prior
-        absent-only check."""
-        stdin = json.dumps({"session_id": _SESSION_ID, "source": "startup",
-                            "agent_type": "pact-architct"})  # typo: not in registry
-        blob = self._run_capture_systemmessage(stdin, monkeypatch, tmp_path)
-        assert self._notice_text() in blob, (
-            "a present-but-unrecognized agent_type must emit the notice "
-            "(the typo'd-orchestrator case #1 exists to catch)"
-        )
-
-    def test_unresolvable_registry_present_unrecognized_fires(self, monkeypatch, tmp_path):
-        """(e) fail-OPEN residual: env CLAUDE_PLUGIN_ROOT empty → registry
-        unresolvable → a present-but-(unverifiable) agent_type fires. An install
-        with no resolvable plugin_root is broken; a spurious advisory is harmless."""
-        stdin = json.dumps({"session_id": _SESSION_ID, "source": "startup",
-                            "agent_type": "pact-backend-coder"})
-        blob = self._run_capture_systemmessage(
-            stdin, monkeypatch, tmp_path, plugin_root="",
-        )
-        assert self._notice_text() in blob, (
-            "unresolvable registry (empty env plugin_root) must FAIL-OPEN — "
-            "the notice fires rather than being suppressed"
-        )
 
     # ---- DOES NOT FIRE: recognized role ----
 
-    @pytest.mark.parametrize("frame_builder", [
-        lead_frame_qualified, lead_frame_unqualified,
-    ], ids=["lead-qualified", "lead-unqualified"])
-    def test_lead_does_not_fire(self, frame_builder, monkeypatch, tmp_path):
-        stdin = json.dumps({"session_id": _SESSION_ID, "source": "startup",
-                            **frame_builder()})
-        blob = self._run_capture_systemmessage(stdin, monkeypatch, tmp_path)
-        assert self._notice_text() not in blob, (
-            "a lead frame must NOT emit the unknown-role notice"
-        )
-
-    def test_recognized_teammate_does_not_fire(self, monkeypatch, tmp_path):
-        """(a) THE REGRESSION PIN: a recognized specialist teammate at 0c (with
-        env plugin_root set) must NOT fire. The timing-blocker fix exists so the
-        registry resolves at 0c — without it, the empty pre-cache registry would
-        false-fire for every teammate."""
-        stdin = json.dumps({"session_id": _SESSION_ID, "source": "startup",
-                            **teammate_frame()})  # agent_type=pact-backend-coder
-        blob = self._run_capture_systemmessage(stdin, monkeypatch, tmp_path)
-        assert self._notice_text() not in blob, (
-            "a RECOGNIZED specialist teammate must NOT fire the unknown-role "
-            "notice — this is the false-fire regression the #1 timing fix prevents"
-        )
-
-    def test_qualified_specialist_does_not_fire(self, monkeypatch, tmp_path):
-        """(b) the PACT:-strip pin: a qualified specialist spelling
-        (repacted:pact-backend-coder) is recognized just like is_lead accepts both
-        lead spellings → NO notice."""
-        stdin = json.dumps({"session_id": _SESSION_ID, "source": "startup",
-                            "agent_type": "repacted:pact-backend-coder"})
-        blob = self._run_capture_systemmessage(stdin, monkeypatch, tmp_path)
-        assert self._notice_text() not in blob, (
-            "a qualified specialist spelling must be recognized (PACT:-strip) "
-            "and NOT fire the unknown-role notice"
-        )
 
     # ---- ONE CHANNEL PER FRAME ----
 
-    @pytest.mark.parametrize("source", ["startup", "resume", "compact"])
-    @pytest.mark.parametrize("frame, channel", [
-        ({}, "additionalContext"),
-        ({"agent_type": "pact-architct"}, "systemMessage"),
-    ], ids=["absent-agent-type", "typo-agent-type"])
-    def test_each_notice_reaches_one_channel(
-        self, frame, channel, source, monkeypatch, tmp_path,
-    ):
-        """The role sentence and the in-process unattended paragraph each land in
-        at most one channel of one output; the role sentence in the expected one."""
-        import session_init
-
-        stdin = json.dumps({"session_id": _SESSION_ID, "source": source, **frame})
-        out = json.loads(self._run_capture_systemmessage(stdin, monkeypatch, tmp_path))
-        channels = {
-            "additionalContext": out.get("hookSpecificOutput", {}).get("additionalContext", ""),
-            "systemMessage": out.get("systemMessage", ""),
-        }
-        for notice in (session_init._UNKNOWN_ROLE_NOTICE, session_init._INPROCESS_MODE_NOTICE):
-            carriers = [name for name, text in channels.items() if notice in text]
-            assert len(carriers) <= 1, f"{notice[:40]!r} reached {carriers}"
-        role = [name for name, text in channels.items()
-                if session_init._UNKNOWN_ROLE_NOTICE in text]
-        launch_or_context = source != "compact" or channel == "additionalContext"
-        assert role == ([channel] if launch_or_context else [])

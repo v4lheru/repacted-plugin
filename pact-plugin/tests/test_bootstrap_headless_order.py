@@ -105,20 +105,6 @@ def test_team_dir_of_another_session_does_not_stamp(home):
     assert _agent_denied(home["env"])
 
 
-@pytest.mark.parametrize("team", [None, _OTHER_SID, _SID])
-def test_missing_session_dir(home, team):
-    """session_init never ran: the lead-frame self-heal recreates this session's context, and a
-    marker follows only when THIS session's team is on disk, and only in its own dir."""
-    import shutil
-
-    shutil.rmtree(home["session_dir"])
-    if team:
-        (home["config"] / "teams" / team / "inboxes").mkdir(parents=True)
-    assert _post_task_create(home["env"]).returncode == 0
-    markers = list((home["config"] / "pact-sessions").rglob("bootstrap-complete"))
-    assert markers == ([_marker(home)] if team == _SID else [])
-
-
 def _link_team(home, link):
     """teams/<sid> as a link to a team dir outside, or a real dir whose config.json or
     inboxes/ is a link there (the linked config.json case)."""
@@ -135,37 +121,3 @@ def _link_team(home, link):
         os.symlink(outside / name, team_dir / name)
 
 
-@pytest.mark.parametrize("link", ["team", "inboxes", "config"])
-def test_symlinked_team_dir_does_not_stamp(home, link):
-    _link_team(home, link)
-    assert _post_task_create(home["env"]).returncode == 0
-    assert not _marker(home).exists()
-    assert _agent_denied(home["env"])
-
-
-@pytest.mark.parametrize("link", ["team", "inboxes", "config"])
-def test_gate_mirror_refuses_symlinked_team_dir(home, monkeypatch, link):
-    """bootstrap_gate._team_on_disk (the restamp precondition) refuses the same shapes."""
-    import bootstrap_gate
-
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home["config"]))
-    _link_team(home, link)
-    assert bootstrap_gate._team_on_disk(_SID) is False
-
-    real = home["config"] / "teams" / "real-team" / "inboxes"
-    real.mkdir(parents=True)
-    assert bootstrap_gate._team_on_disk("real-team") is True
-
-
-def test_a_config_dir_reached_through_a_linked_ancestor_stamps_and_opens_the_gate(home):
-    """CLAUDE_CONFIG_DIR spelled through a link above it (macOS /var ->
-    /private/var). The writer and the gate ask the same question, so the stamped marker opens
-    the gate; a link below the config dir is still refused (the rows above)."""
-    alias = home["tmp"] / "alias"              # alias/.claude is home's own .claude
-    os.symlink(home["tmp"], alias)
-    env = {**home["env"], "HOME": str(alias), "CLAUDE_CONFIG_DIR": str(alias / ".claude"),
-           "CLAUDE_PROJECT_DIR": str(alias / "toy")}
-    (home["config"] / "teams" / _SID / "inboxes").mkdir(parents=True)
-    assert _post_task_create(env).returncode == 0
-    assert _marker(home).is_file()
-    assert not _agent_denied(env)

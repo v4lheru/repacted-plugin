@@ -3,6 +3,7 @@ name: pact-n8n
 description: "Use to build, fix or deploy n8n workflows over the REST API (no MCP)."
 color: "#FF7F50"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

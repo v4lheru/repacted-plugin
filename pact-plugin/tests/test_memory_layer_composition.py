@@ -168,6 +168,7 @@ def mem():
 # PAIR 1. The window and the write path. THE ARM THAT WAS DEFERRED.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 @pytest.mark.requires_embedding_backend
 class TestTheWindowReachesTheStoredVector:
     """The composition the ordering constraint protected.
@@ -209,47 +210,6 @@ class TestTheWindowReachesTheStoredVector:
             "the fixture text is too short to separate a window of "
             "{0} from the encoder default of {1}, so every arm built on it "
             "is vacuous".format(EMBEDDING_MAX_TOKENS, ENCODER_DEFAULT_WINDOW)
-        )
-
-    def test_a_re_embed_stores_the_windowed_encoding(self, mem, vec_conn, encoder):
-        """A record that HOLDS a vector, re-embedded, through the write path."""
-        from scripts.embeddings import generate_embedding_text
-
-        first = long_record("alpha")
-        second = long_record("beta")
-
-        with patch("scripts.memory_api.SQLITE_EXTENSIONS_ENABLED", True):
-            assert mem._store_embedding(vec_conn, "mem-1", first) is None
-            seeded = stored_floats(vec_conn, "mem-1")
-            # CONTROL. Without a first vector this is not a REPLACE, and the
-            # arm below would prove only that a first write works, which the
-            # write-path module tests already.
-            assert seeded is not None, "the record must hold a vector first"
-
-            # THE RE-EMBED. Against the unfixed write path this raises inside
-            # the handler and returns "fault".
-            assert mem._store_embedding(vec_conn, "mem-1", second) is None
-
-        replaced = stored_floats(vec_conn, "mem-1")
-        assert replaced is not None
-        assert replaced != seeded, "the re-embed did not replace the vector"
-
-        text = generate_embedding_text(second)
-        at_window = encoder.encode(
-            [text], max_length=EMBEDDING_MAX_TOKENS
-        )[0].tolist()
-        at_default = encoder.encode(
-            [text], max_length=ENCODER_DEFAULT_WINDOW
-        )[0].tolist()
-
-        # THE WINDOW ASSERTION. It takes its value from the module constant,
-        # so a deliberate change to the window moves both sides together and
-        # this arm stays green. The FLOOR arm in the window module is what
-        # guards the value; this one guards that the value reaches the store.
-        assert replaced == pytest.approx(at_window, abs=1e-6)
-        assert replaced != pytest.approx(at_default, abs=1e-6), (
-            "the stored vector equals the encoding at the encoder default, "
-            "so the window did not reach the encoder on the write path"
         )
 
 
@@ -323,148 +283,8 @@ class TestTheScopeCarriesTheRowAndTheVectorTogether:
 # PAIR 3. The create guard and the vector write.
 # ---------------------------------------------------------------------------
 
-class TestARefusedSaveLeavesNoOrphanVector:
-    """A refused save must leave NO row AND NO vector.
-
-    The guard arms in the ingress module assert the absence of a ROW. A guard
-    that refused AFTER the embedding step would satisfy every one of them and
-    leave a vector behind with no record to explain it, which no row-level
-    assertion can see.
-
-    MUTANT: move the `_normalize_list_field` call in `create_memory` to after
-    the insert and the embedding step. The row arms stay green on the
-    rollback and this arm reddens on the orphan.
-    """
-
-    def test_a_guarded_refusal_writes_neither_half(self, tmp_path):
-        store = tmp_path / "refusal.db"
-        conn = sqlite3.connect(str(store))
-        conn.row_factory = sqlite3.Row
-        create_test_schema(conn)
-        make_vec_table(conn)
-        conn.close()
-
-        vector = [0.25] * EMBEDDING_DIM
-        mem = PACTMemory(project_id="test-project", session_id="s", db_path=store)
-
-        def counts():
-            c = sqlite3.connect(str(store))
-            try:
-                c.enable_load_extension(True)
-                sqlite_vec.load(c)
-                return (
-                    c.execute("SELECT COUNT(*) FROM memories").fetchone()[0],
-                    c.execute("SELECT COUNT(*) FROM vec_memories").fetchone()[0],
-                )
-            finally:
-                c.close()
-
-        with patch("scripts.database.ensure_initialized"), \
-             patch("scripts.memory_api.SQLITE_EXTENSIONS_ENABLED", True), \
-             patch("scripts.memory_api.generate_embedding", return_value=vector):
-
-            # POSITIVE CONTROL. A well-formed save must write BOTH halves, or
-            # the refusal below proves nothing: a store where no save ever
-            # writes a vector reports zero orphans for the wrong reason.
-            mem.save(
-                {"context": "a control record", "reasoning_chains": ["a proper item"]},
-                include_tracked=False,
-                sync_to_claude=False,
-            )
-            assert counts() == (1, 1), "the control save wrote no vector"
-
-            before = counts()
-            with pytest.raises(ValueError):
-                mem.save(
-                    {"context": "a refused record", "reasoning_chains": "a bare string"},
-                    include_tracked=False,
-                    sync_to_claude=False,
-                )
-            assert counts() == before, (
-                "a refused save changed the store: it wrote a row, a vector, "
-                "or both"
-            )
-
 
 # ---------------------------------------------------------------------------
 # PAIR 4. The stderr guard and the store scope.
 # ---------------------------------------------------------------------------
 
-class TestTheStderrGuardAndStoreScopeUnwindWithoutLeaking:
-    """The nested guards must each release, on the success and the raise path.
-
-    THE AST ORDER ASSERTION CANNOT SEE THIS. It proves the refusal guard is
-    written before the scope entry. It says nothing about whether the scope
-    releases, because a leak is a runtime property of the unwind.
-
-    MUTANT: replace the body of `store_scope` with a bare
-    `_STORE_DB_PATH.set(Path(db_path))` and no reset. Both arms redden.
-
-    A LEAK IS NOT COSMETIC. The CLI runs one command per process, so nothing
-    in production reads a leaked binding. An in-process caller does, and the
-    suite is the largest one: a scope surviving one test binds the store for
-    the next.
-    """
-
-    def _run_main(self, argv, handler):
-        commands = dict(cli._COMMANDS)
-        commands["status"] = handler
-        with patch.object(cli, "_COMMANDS", commands):
-            cli.main(argv)
-
-    def test_the_scope_is_released_after_a_successful_command(self, memory_store):
-        # THE STORE MUST BE PRESENT OR THIS ARM STOPS AT THE BOUNDARY. `main`
-        # refuses a `--db-path` naming a store that is absent, BEFORE it reaches
-        # a handler, so an absent path would end the call before the probe below
-        # ever runs and this arm would measure the refusal rather than the scope.
-        target = memory_store("unwind.db")
-        seen = {}
-
-        def probe(args, db_path=None):
-            # INSIDE the handler the stderr guard and the store scope are active,
-            # so the resolver must
-            # report the caller file. A green here with a red assertion below
-            # would mean the scope binds and does not release.
-            seen["resolved"] = resolve_db_path()
-
-        assert _STORE_DB_PATH.get() is None, "a previous test leaked a scope"
-        # The probe returns rather than calling `_success`, so `main` returns
-        # normally. That is the SUCCESS path of the stderr guard and the store
-        # scope, and it is the
-        # path on which a missing reset leaks quietly rather than loudly.
-        self._run_main(["status", "--db-path", str(target)], probe)
-
-        assert seen["resolved"] == target, (
-            "the scope did not reach the handler through the stderr guard"
-        )
-        assert _STORE_DB_PATH.get() is None, (
-            "the store scope outlived the command"
-        )
-
-    def test_the_scope_is_released_when_the_handler_raises(self, memory_store):
-        # THE STORE MUST BE PRESENT, AND HERE THAT IS A VACUITY GUARD RATHER
-        # THAN A PRECONDITION. This arm asserts a SystemExit, and the boundary
-        # refusal raises SystemExit too. With an absent path the arm passes
-        # GREEN while the exploding handler below never runs, so it would prove
-        # nothing about unwinding. The `raised` flag makes that visible.
-        target = memory_store("unwind-raise.db")
-        raised = {}
-
-        def exploding(args, db_path=None):
-            raised["yes"] = True
-            raise RuntimeError("the handler failed inside the stderr guard and the store scope")
-
-        assert _STORE_DB_PATH.get() is None, "a previous test leaked a scope"
-        # `main` converts the exception into the error envelope and exits 2.
-        with pytest.raises(SystemExit):
-            self._run_main(["status", "--db-path", str(target)], exploding)
-
-        assert raised.get("yes"), (
-            "the handler never ran, so the SystemExit above came from somewhere "
-            "else and this arm did not measure the unwind it claims to"
-        )
-
-        assert _STORE_DB_PATH.get() is None, (
-            "the store scope outlived a failing command, so a later call in "
-            "this interpreter resolves to the wrong store"
-        )

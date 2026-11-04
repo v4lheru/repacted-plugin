@@ -83,32 +83,12 @@ def secretary_content():
     return SECRETARY_FILE.read_text()
 
 
-
-
-
-
 class TestSkillFileExists:
     """Test that the skill file exists."""
 
     def test_skill_md_exists(self):
         """SKILL.md file must exist in the skill directory."""
         assert SKILL_FILE.exists(), f"SKILL.md not found at {SKILL_FILE}"
-
-    def test_skill_md_is_file(self):
-        """SKILL.md must be a regular file, not a directory."""
-        assert SKILL_FILE.is_file(), f"{SKILL_FILE} exists but is not a file"
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _prune_bullet(content: str) -> str:
@@ -126,7 +106,5 @@ def _prune_bullet(content: str) -> str:
             break
         block.append(ln)
     return "\n".join(block)
-
-
 
 

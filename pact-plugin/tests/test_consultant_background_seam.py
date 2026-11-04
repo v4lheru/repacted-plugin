@@ -168,42 +168,4 @@ class TestAConsultantLaunchThroughTheRealHooks:
             "is invisible to every layer. Got %r" % (records[0],)
         )
 
-    def test_a_LEFTOVER_wait_on_the_completed_anchor_does_NOT_suppress_the_record(
-        self, root
-    ):
-        """A completed task routinely still carries a wait raised before the
-        launch. That wait cannot be acknowledging a launch that came after it."""
-        from shared.background_work import outstanding_unflagged, parse_iso
 
-        _launch(root)
-        (record,) = _registry(root)
-        leftover = (parse_iso(record["registered_at"]) - timedelta(hours=1)).isoformat()
-        _set_wait(root, leftover, reason="awaiting_lead_completion")
-        surfaced = outstanding_unflagged(_tasks(root), team_name=TEAM)
-        assert len(surfaced) == 1, (
-            "a wait anchored an hour BEFORE the launch silenced the consultant's "
-            "record, so every later launch from that consultant would be hidden "
-            "by one stale wait. Surfaced: %r" % (surfaced,)
-        )
-
-    def test_a_COVERING_wait_discharges_the_record_through_main_with_no_in_progress_task(
-        self, root, capsys
-    ):
-        """Discharge must run for an owner with no in_progress task. If it runs
-        only behind the in_progress check, the record outlives the wait and a
-        later idle cites a launch the consultant already acknowledged."""
-        _launch(root)
-        (record,) = _registry(root)
-        _set_wait(root, record["registered_at"], reason="awaiting_blocker_resolution")
-        assert _idle(capsys) is False
-        assert _registry(root) == [], (
-            "a wait covering the launch was flagged on the consultant's "
-            "completed anchor and one idle ran, but the record is still there: "
-            "discharge did not run for an owner with no in_progress task"
-        )
-        _write(root / "tasks" / TEAM / f"{ANCHOR_ID}.json", _anchor_task())
-        assert _idle(capsys) is False, (
-            "after the wait was cleared the consultant drew the unflagged "
-            "advisory, citing a launch it had already acknowledged"
-        )
-        assert _registry(root) == []

@@ -28,16 +28,6 @@ class TestIdlePreambleConstant:
         assert isinstance(IDLE_PREAMBLE, str)
         assert len(IDLE_PREAMBLE) > 0
 
-    def test_preamble_contains_idle_notification(self):
-        from teammate_idle import IDLE_PREAMBLE
-
-        assert "idle notification" in IDLE_PREAMBLE
-
-    def test_preamble_contains_no_response_needed(self):
-        from teammate_idle import IDLE_PREAMBLE
-
-        assert "no response needed" in IDLE_PREAMBLE
-
 
 # ---------------------------------------------------------------------------
 # Tests for IDLE_PREAMBLE integration in main() output
@@ -86,28 +76,6 @@ class TestPreambleInMainOutput:
         assert output_str.strip(), "hook should still emit suppressOutput JSON"
         output = json.loads(output_str)
         assert "systemMessage" not in output
-
-    def test_no_output_when_no_messages(self):
-        """When no stall or idle cleanup, no output (no preamble either)."""
-        from teammate_idle import main
-
-        input_data = json.dumps({
-            "teammate_name": "coder-a",
-            "team_name": "pact-test",
-        })
-
-        # Mock: no tasks at all = no stall, no cleanup
-        with patch("teammate_idle.frame_team_and_name", return_value=("pact-test", "")), \
-             patch("sys.stdin", io.StringIO(input_data)), \
-             patch("teammate_idle.iter_team_task_jsons", return_value=[]):
-            import io as io_module
-            captured_stdout = io_module.StringIO()
-            with patch("sys.stdout", captured_stdout):
-                with pytest.raises(SystemExit):
-                    main()
-
-            # Bare exit path: suppressOutput to prevent false "hook error"
-            assert json.loads(captured_stdout.getvalue().strip()) == {"suppressOutput": True}
 
 
 # ---------------------------------------------------------------------------

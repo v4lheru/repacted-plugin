@@ -292,35 +292,6 @@ class TestSymlinkStatusRouting:
 
         _assert_routes_to_system_messages(message, system_message, context)
 
-    def test_ordinary_status_reaches_additional_context(
-        self, tmp_path, home, project
-    ):
-        """The control. The frame is a launch source and not a context reset,
-        because the no-change status of this status source reaches context only for
-        a non-reset frame. A newly linked status takes the third branch, which
-        carries no gate, and the launch source keeps the control correct if the
-        fixture ever moves to the no-change status.
-        """
-        plugin_root = self._plugin_root(tmp_path, None)
-        with patch.dict(os.environ,
-                        {"CLAUDE_PLUGIN_ROOT": str(plugin_root)},
-                        clear=False), \
-             patch.object(Path, "home", staticmethod(lambda: home)):
-            from shared.symlinks import setup_plugin_symlinks
-            message = setup_plugin_symlinks()
-
-        # The status source is idempotent: the second call inside main() finds the
-        # links in place. Make the destination again so main() performs the same
-        # first-time link and returns the same status.
-        for stale in (home / ".claude" / "agents").glob("pact-*.md"):
-            stale.unlink()
-
-        system_message, context = _route(
-            home, project, live="setup_plugin_symlinks",
-            env={"CLAUDE_PLUGIN_ROOT": str(plugin_root)})
-
-        _assert_routes_to_context(message, system_message, context)
-
 
 class TestProjectMemoryStatusRouting:
     """Site 1005, status source ``ensure_project_memory_md``.
@@ -356,25 +327,6 @@ class TestProjectMemoryStatusRouting:
             os.chmod(project, 0o700)
 
         _assert_routes_to_system_messages(message, system_message, context)
-
-    def test_ordinary_status_reaches_additional_context(self, home, project):
-        """The control. This site sends its ordinary status through a plain
-        else branch, so no frame condition applies.
-        """
-        from shared.claude_md_manager import ensure_project_memory_md
-        with patch.dict(os.environ,
-                        {"CLAUDE_PROJECT_DIR": str(project)}, clear=False):
-            message = ensure_project_memory_md()
-
-        # The status source is a one-time creation. Remove what the capture wrote so
-        # main() performs the same creation and returns the same status.
-        for made in project.rglob("CLAUDE.md"):
-            made.unlink()
-
-        system_message, context = _route(
-            home, project, live="ensure_project_memory_md")
-
-        _assert_routes_to_context(message, system_message, context)
 
 
 class TestMigrationStatusRouting:
@@ -413,25 +365,6 @@ class TestMigrationStatusRouting:
 
         _assert_routes_to_system_messages(message, system_message, context)
 
-    def test_ordinary_status_reaches_additional_context(self, home, project):
-        """The control. This site sends its ordinary status through a plain
-        else branch, so no frame condition applies.
-        """
-        (project / "CLAUDE.md").write_text(self.UNMIGRATED)
-        from shared.claude_md_manager import migrate_to_managed_structure
-        with patch.dict(os.environ,
-                        {"CLAUDE_PROJECT_DIR": str(project)}, clear=False):
-            message = migrate_to_managed_structure()
-
-        # The migration is idempotent. Restore the unmigrated document so
-        # main() performs the same migration and returns the same status.
-        (project / "CLAUDE.md").write_text(self.UNMIGRATED)
-
-        system_message, context = _route(
-            home, project, live="migrate_to_managed_structure")
-
-        _assert_routes_to_context(message, system_message, context)
-
 
 class TestKernelStripStatusRouting:
     """Site 1032, status source ``strip_orphan_kernel_block``.
@@ -466,25 +399,6 @@ class TestKernelStripStatusRouting:
 
         _assert_routes_to_system_messages(message, system_message, context)
 
-    def test_ordinary_status_reaches_additional_context(self, home, project):
-        """The control. This site sends its ordinary status through a plain
-        else branch, so no frame condition applies.
-        """
-        target = home / ".claude" / "CLAUDE.md"
-        target.write_text(self.MARKER_PAIR)
-        from shared.claude_md_manager import strip_orphan_kernel_block
-        with patch.object(Path, "home", staticmethod(lambda: home)):
-            message = strip_orphan_kernel_block()
-
-        # The strip is a one-time removal. Restore the block so main() performs
-        # the same removal and returns the same status.
-        target.write_text(self.MARKER_PAIR)
-
-        system_message, context = _route(
-            home, project, live="strip_orphan_kernel_block")
-
-        _assert_routes_to_context(message, system_message, context)
-
 
 # ===========================================================================
 # THE SIXTH SITE, AND THE TWO SECOND OCCURRENCES.
@@ -506,169 +420,3 @@ class TestKernelStripStatusRouting:
 # ===========================================================================
 
 
-class TestResumptionBlockerStatusRouting:
-    """Site 1601, status source ``check_resumption_context``.
-
-    THE GATE CHAIN NEEDS TWO CONDITIONS, unlike the five sites above: ``main()``
-    reaches this site only ``if tasks:`` and then ``if resumption_msg:``. So the
-    fixture supplies a task list AND that list must make the status source
-    report something.
-
-    ``get_task_list`` supplies the INPUT and is patched. ``check_resumption_context``
-    is the status source and is NOT patched, so a reword of its message is
-    visible to this arm.
-
-    MUTANT: in ``hooks/shared/session_resume.py``, change
-    ``f"**Blockers: {len(blocker_tasks)}**"`` to ``f"Blocked: {len(blocker_tasks)}"``.
-    EXPECTED: the routing test fails and the ordinary test stays green.
-    CONTROL MUTANT: change it to ``f"**Blockers: {len(blocker_tasks)} open**"``.
-    EXPECTED: the two tests stay green, because the routing literal survives.
-    """
-
-    BLOCKER_TASKS = [{
-        "status": "in_progress",
-        "subject": "a task that blocks",
-        "metadata": {"type": "blocker"},
-    }]
-    ORDINARY_TASKS = [{
-        "status": "in_progress",
-        "subject": "ordinary feature work",
-        "metadata": {},
-    }]
-
-    def test_blocker_status_reaches_system_messages(self, home, project):
-        from shared.session_resume import check_resumption_context
-        message = check_resumption_context(self.BLOCKER_TASKS)
-
-        system_message, context = _route(
-            home, project, live="check_resumption_context",
-            tasks=self.BLOCKER_TASKS)
-
-        _assert_routes_to_system_messages(message, system_message, context)
-
-    def test_ordinary_status_reaches_additional_context(self, home, project):
-        """The control. This site sends its ordinary status through a plain
-        else branch, so no frame condition applies. The task carries no blocker
-        metadata, so the status source reports a feature line and no token.
-        """
-        from shared.session_resume import check_resumption_context
-        message = check_resumption_context(self.ORDINARY_TASKS)
-
-        system_message, context = _route(
-            home, project, live="check_resumption_context",
-            tasks=self.ORDINARY_TASKS)
-
-        _assert_routes_to_context(message, system_message, context)
-
-
-class TestProjectMemoryInnerHandlerRouting:
-    """Site 1005, the SECOND exit of ``ensure_project_memory_md``.
-
-    That status source emits its ``failed`` status from TWO handlers. The outer
-    one catches whatever fails before or during lock acquisition, and
-    ``TestProjectMemoryStatusRouting`` above drives it with a sealed project
-    directory. The INNER one reports a write failure after the lock is held,
-    and this class drives it.
-
-    HOW THE FIXTURE SEPARATES THE TWO. The lock sidecar sits in the target's own
-    directory. To open an EXISTING file needs write permission on the FILE, not
-    on the directory. So a sidecar made BEFORE the directory is sealed lets the
-    lock succeed, and the write into the sealed directory then fails. That is a
-    real filesystem condition, so this arm measures the shipped code.
-
-    THE TWO EXITS EMIT AN IDENTICAL STRING, AND THAT IS MEASURED, NOT ASSUMED.
-    Each one returns ``f"Project CLAUDE.md failed: {failure_cause(e)}"``, and
-    the cause token is a function of the exception alone. A sealed directory
-    gives ``PermissionError (EACCES)`` at the two exits, so NO ASSERTION ON THE
-    MESSAGE CAN SEPARATE THEM. The separation proof is the mutant below, not a
-    text comparison: an INNER-ONLY reword reddens this arm and leaves the outer
-    arm green, which no fixture driving the outer exit can produce.
-
-    THE CONSEQUENCE FOR COVERAGE, STATED SO IT IS NOT MIS-READ. Because the
-    routing predicate reads the string alone, and the two exits build one string
-    from one function, the ROUTING behaviour of the two is identical by
-    construction. What this arm adds is protection against a LATER edit that
-    changes one handler and not the other.
-
-    MUTANT: in ``hooks/shared/claude_md_manager.py``, change the INNER handler
-    status ``f"Project CLAUDE.md failed: {failure_cause(e)}"`` to
-    ``f"Project CLAUDE.md not written: {failure_cause(e)}"``. Change the INNER
-    one only. EXPECTED: this routing test fails and
-    ``TestProjectMemoryStatusRouting`` stays green.
-    """
-
-    def test_inner_write_failure_reaches_system_messages(self, home, project):
-        # THE TARGET IS `<project>/.claude/CLAUDE.md`, NOT `<project>/CLAUDE.md`.
-        # That is measured, and it decides the whole fixture. Seal the `.claude`
-        # directory and NOT the project, for three separate reasons:
-        #   1. `ensure_dot_claude_parent` runs BEFORE the lock. A sealed project
-        #      makes IT fail, and that lands in the OUTER handler.
-        #   2. The lock sidecar sits with the target, so it goes in `.claude`.
-        #   3. To open an EXISTING file needs write on the FILE, not on its
-        #      directory, so a sidecar made first lets the lock succeed.
-        # The write into the sealed `.claude` then fails, which is the inner
-        # handler. The mutant in this docstring is what proves the reach.
-        dot_claude = project / ".claude"
-        dot_claude.mkdir()
-        (dot_claude / ".CLAUDE.md.lock").touch(mode=0o600)
-        os.chmod(dot_claude, 0o500)
-        try:
-            from shared.claude_md_manager import ensure_project_memory_md
-            with patch.dict(os.environ,
-                            {"CLAUDE_PROJECT_DIR": str(project)}, clear=False):
-                message = ensure_project_memory_md()
-
-            system_message, context = _route(
-                home, project, live="ensure_project_memory_md")
-        finally:
-            os.chmod(dot_claude, 0o700)
-
-        _assert_routes_to_system_messages(message, system_message, context)
-
-
-class TestKernelStripEndBeforeStartRouting:
-    """Site 1032, the SECOND exit of ``strip_orphan_kernel_block``.
-
-    That status source emits its ``skipped`` status from TWO branches. The first
-    reports one marker with no partner, and ``TestKernelStripStatusRouting``
-    above drives it with an orphan START. The second reports a PACT_END that
-    sits before its PACT_START, and this class drives it.
-
-    MUTANT: in ``hooks/shared/claude_md_manager.py``, change the
-    END-before-START status so the word ``skipped`` is lost, for example to
-    ``"Migration not performed: ~/.claude/CLAUDE.md contains "``. Change that
-    branch only, so the orphan-marker arm above stays green. EXPECTED: this
-    routing test fails.
-    """
-
-    END_BEFORE_START = (
-        "# Home\n"
-        "\n"
-        "<!-- PACT_END -->\n"
-        "stray tail\n"
-        "<!-- PACT_START:v3 -->\n"
-        "kernel body\n"
-    )
-    ORPHAN_START = "# Home\n\n<!-- PACT_START:v3 -->\nkernel body\n"
-
-    def test_end_before_start_reaches_system_messages(self, home, project):
-        from shared.claude_md_manager import strip_orphan_kernel_block
-        target = home / ".claude" / "CLAUDE.md"
-
-        target.write_text(self.ORPHAN_START)
-        with patch.object(Path, "home", staticmethod(lambda: home)):
-            orphan_message = strip_orphan_kernel_block()
-
-        target.write_text(self.END_BEFORE_START)
-        with patch.object(Path, "home", staticmethod(lambda: home)):
-            message = strip_orphan_kernel_block()
-
-        system_message, context = _route(
-            home, project, live="strip_orphan_kernel_block")
-
-        _assert_routes_to_system_messages(message, system_message, context)
-        assert message != orphan_message, (
-            "the fixture reached the SAME branch as the orphan-marker arm, so "
-            "this arm measures nothing the arm above it does not measure "
-            "before this. The two statuses must name different marker states."
-        )

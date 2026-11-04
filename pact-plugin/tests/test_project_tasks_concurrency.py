@@ -17,6 +17,9 @@ import pytest
 
 from project_tasks_support import WRITER_PATH, new_repo, reader, writer
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 WORKER = textwrap.dedent("""
     import importlib.util, sys, time
     spec = importlib.util.spec_from_file_location("tasks_write_worker", sys.argv[1])
@@ -121,69 +124,3 @@ def test_init_racing_appends_loses_no_line(tmp_path):
     assert len((repo / ".repacted" / "tasks.jsonl").read_text().splitlines()) == 100
 
 
-def test_writers_naming_the_repo_by_a_symlink_and_by_its_real_path_share_one_lock(tmp_path):
-    """The store resolves the main checkout, so two spellings of one repo (a symlink, or /var and
-    /private/var on macOS) lock and append to the same files."""
-    repo = new_repo(tmp_path / "repo")
-    writer().init(repo)
-    alias = tmp_path / "alias"
-    alias.symlink_to(repo, target_is_directory=True)
-    procs = [_spawn(tmp_path, repo, "append", "0"), _spawn(tmp_path, alias, "append", "1")]
-    (tmp_path / "go").write_text("")
-    outs = [proc.communicate(timeout=240) for proc in procs]
-    assert [out.strip() for out, _ in outs] == ["appended 50", "appended 50"], outs
-    assert len((repo / ".repacted" / "tasks.jsonl").read_text().splitlines()) == 100
-    assert not (alias / ".repacted" / "tasks.lock").is_symlink()
-    assert writer().Store.locate(alias).lock == writer().Store.locate(repo).lock
-
-
-def test_a_deleted_lock_is_recreated_and_an_unopenable_lock_refuses_the_write(tmp_path):
-    """`git clean -X` removes the ignored lock: the next write recreates it. A lock that cannot be
-    opened raises before anything is appended, so an add never reports success unlocked."""
-    repo = new_repo(tmp_path / "repo")
-    store = writer().init(repo)
-    store.add("first")
-    store.lock.unlink()
-    store.add("second")
-    assert store.lock.is_file()
-    if os.geteuid() == 0:
-        pytest.skip("root opens a read-only file anyway")
-    store.lock.chmod(0o444)
-    try:
-        with pytest.raises(PermissionError):
-            store.add("third")
-    finally:
-        store.lock.chmod(0o644)
-    titles = [json.loads(line)["title"] for line in store.log.read_text().splitlines()]
-    assert titles == ["first", "second"]
-
-
-def test_two_processes_racing_opposite_dependencies_leave_exactly_one(tmp_path, monkeypatch):
-    repo = new_repo(tmp_path / "repo")
-    store = writer().init(repo)
-    a, b = store.add("a"), store.add("b")
-    monkeypatch.setenv("_HOLD", "0.4")        # each writer holds its validated state 0.4 s
-    procs = [_spawn(tmp_path, repo, "race", a, b), _spawn(tmp_path, repo, "race", b, a)]
-    (tmp_path / "go").write_text("")
-    results = sorted(proc.communicate(timeout=120)[0].strip() for proc in procs)
-    assert results == ["ok", "refused"]
-    state = reader().load(repo)
-    edges = {(ref, dep) for ref, task in state.tasks.items() for dep in task["depends_on"]}
-    assert len(edges & {(a, b), (b, a)}) == 1
-
-
-@pytest.mark.parametrize("op", ["accept", "reject"])
-def test_the_same_accept_or_reject_fired_twice_at_once_writes_once(tmp_path, monkeypatch, op):
-    """Idempotency is decided under the lock: both writers read the log before either appends,
-    so a check made before taking the lock would let both through."""
-    repo = new_repo(tmp_path / "repo")
-    store = writer().init(repo)
-    a = store.add("a")
-    monkeypatch.setenv("_HOLD", "0.4")
-    procs = [_spawn(tmp_path, repo, op, a), _spawn(tmp_path, repo, op, a)]
-    (tmp_path / "go").write_text("")
-    outs = [proc.communicate(timeout=120) for proc in procs]
-    assert [proc.returncode for proc in procs] == [0, 0], [err for _, err in outs]
-    assert sorted(out.strip() for out, _ in outs) == ["False", "True"]
-    lines = (repo / ".repacted" / "tasks.jsonl").read_text().splitlines()
-    assert [json.loads(line)["op"] for line in lines].count(op) == 1

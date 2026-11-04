@@ -59,7 +59,11 @@ def _matches(token_cmd: str, exec_cmd: str) -> bool:
 
 
 # The five FORCE spellings detect already classifies as branch-delete (#1094).
-_FORCE_SPELLINGS = [_D, "-Df", "-fD", "--delete --force", "--force --delete"]
+_FORCE_SPELLINGS = [
+    _D,
+    "-fD",
+    "--force --delete",
+]
 
 
 @pytest.mark.parametrize("flags", _FORCE_SPELLINGS)

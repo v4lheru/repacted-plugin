@@ -3,6 +3,7 @@ name: pact-security-engineer
 description: "Reviews code like an attacker and reports vulnerabilities to fix."
 color: "#8B0000"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

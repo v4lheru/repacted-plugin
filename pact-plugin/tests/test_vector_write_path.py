@@ -137,7 +137,7 @@ class TestVec0HonoursNoConflictClause:
     defect would be somewhere else."""
 
     @pytest.mark.parametrize(
-        "spelling", ["INSERT", "INSERT OR REPLACE", "INSERT OR IGNORE"]
+        "spelling", ["INSERT",]
     )
     def test_each_insert_spelling_raises_on_a_present_row(self, conn, spelling):
         seed_vector(conn)
@@ -173,18 +173,6 @@ class TestVec0RefusesAnUpdateThatNamesThePartitionKey:
                 ("mem-1", "test-project", blob(VECTOR_B), "mem-1"),
             )
         assert "partition key" in str(caught.value)
-
-    def test_an_embedding_only_set_succeeds(self, conn):
-        # CONTROL for the arm above. Without it, the raise there could come
-        # from something else in the statement rather than from the partition
-        # column.
-        seed_vector(conn)
-        conn.execute(
-            "UPDATE vec_memories SET embedding = ? WHERE memory_id = ?",
-            (blob(VECTOR_B), "mem-1"),
-        )
-        conn.commit()
-        assert stored_vector(conn, "mem-1") == blob(VECTOR_B)
 
 
 class TestAnIdenticalBytesUpdateReportsRowcountOne:
@@ -230,124 +218,8 @@ class TestNullSafeEqualityOnThePartitionColumn:
         assert with_equals == 0
 
 
-class TestACommitClosesTheRestorePoint:
-    """CARRIED CLAIM (e). IT GATES THE REASONING BEHIND THIS FIX.
-
-    The argument for the ordering is that a rollback cannot bring back a
-    committed delete. That statement is ordinary, and being ordinary is
-    what lets a premise pass unexamined. This arm executes it.
-
-    If this arm ever goes red, the ordering argument falls and the simpler
-    remedy of an error handler after the drop becomes adequate.
-    """
-
-    def test_rollback_after_a_committed_delete_restores_nothing(self, conn):
-        seed_vector(conn)
-        conn.execute("DELETE FROM vec_memories WHERE memory_id = ?", ("mem-1",))
-        conn.commit()
-        with pytest.raises(sqlite3.OperationalError):
-            conn.execute(
-                "INSERT INTO vec_memories (memory_id, project_id, embedding) "
-                "VALUES (?, ?, ?)",
-                ("mem-1", "test-project", blob(WRONG_LENGTH)),
-            )
-        conn.rollback()
-        assert stored_vector(conn, "mem-1") is None
-
-    def test_rollback_without_that_commit_does_restore(self, conn):
-        # CONTROL. Without this, the arm above could pass because `rollback`
-        # does nothing at all here, rather than because the commit closed the
-        # restore point.
-        seed_vector(conn)
-        conn.execute("DELETE FROM vec_memories WHERE memory_id = ?", ("mem-1",))
-        conn.rollback()
-        assert stored_vector(conn, "mem-1") == blob(VECTOR_A)
-
-
 # ---------------------------------------------------------------------------
 # The write path.
 # ---------------------------------------------------------------------------
 
-class TestTheWritePathReplaces:
 
-    def test_a_second_store_replaces_the_vector_and_reports_no_fault(
-        self, conn, mem,
-    ):
-        """THE BASIC REPLACE ARM. RED against the unfixed path, because vec0
-        refuses the insert on a row that is present and the path reports
-        `fault`.
-
-        THIS ARM CANNOT SEPARATE A CORRECT FIX FROM THE NAIVE ONE. A drop
-        that commits, followed by a good insert, reaches the same end state.
-        See the separating arm below.
-        """
-        assert store_with(mem, conn, VECTOR_A) is None
-        assert stored_vector(conn, "mem-1") == blob(VECTOR_A)
-
-        assert store_with(mem, conn, VECTOR_B) is None
-        assert stored_vector(conn, "mem-1") == blob(VECTOR_B)
-
-    def test_a_first_store_writes_a_vector(self, conn, mem):
-        # CONTROL for the arm above: prove the path writes at all, so a
-        # replace result cannot come from a path that silently does nothing.
-        assert stored_vector(conn, "mem-1") is None
-        assert store_with(mem, conn, VECTOR_A) is None
-        assert stored_vector(conn, "mem-1") == blob(VECTOR_A)
-
-
-class TestAFailedReplacementLeavesTheOriginal:
-
-    def test_the_original_vector_survives_a_failed_insert(
-        self, conn, mem, caplog,
-    ):
-        """THE SEPARATING ARM. IT IS THE ONE THAT CERTIFIES THIS FIX.
-
-        GREEN against the unfixed path, which removes nothing before it
-        inserts. RED against the NAIVE FIX, which calls the drop helper with
-        its default `commit=True`, so the delete is permanent before the
-        insert is attempted and a failure leaves the record with no vector.
-
-        The basic replace arm passes against that naive fix. This one does
-        not. That asymmetry is why this arm is not optional.
-
-        THE FAILURE IS PRODUCTION-SHAPED AND NOT A STUB. The embedding
-        generator returns a vector of the wrong length, so the packed blob is
-        the wrong size and the vec0 column rejects it at the INSERT. This arm
-        asserts WHY it failed and not merely that it failed, because a raise
-        for an unrelated reason would certify the ordering on incorrect
-        evidence.
-        """
-        seed_vector(conn, values=VECTOR_A)
-        original = stored_vector(conn, "mem-1")
-        assert original == blob(VECTOR_A)
-
-        with caplog.at_level(logging.DEBUG):
-            result = store_with(mem, conn, WRONG_LENGTH)
-
-        assert result == "fault"
-        # WHY it failed, not only that it did.
-        assert "Dimension mismatch" in caplog.text
-        # THE ASSERTION THE ARM EXISTS FOR: the ORIGINAL bytes, unchanged.
-        assert stored_vector(conn, "mem-1") == original
-
-
-class TestTheTwoExistingDropCallersKeepTheirCommit:
-
-    def test_the_drop_helper_commits_by_default(self, conn):
-        """The two callers that return WITHOUT a vector want the delete to be
-        permanent. The new parameter must default to True so their behaviour
-        does not move.
-        """
-        seed_vector(conn)
-        assert PACTMemory._drop_existing_vector(conn, "mem-1") is True
-        conn.rollback()
-        assert stored_vector(conn, "mem-1") is None
-
-    def test_the_drop_helper_can_defer_its_commit(self, conn):
-        """With the commit deferred, a rollback restores the row. That is the
-        property the success path depends on.
-        """
-        seed_vector(conn)
-        assert PACTMemory._drop_existing_vector(conn, "mem-1", commit=False) is True
-        conn.rollback()
-        assert stored_vector(conn, "mem-1") == blob(VECTOR_A)

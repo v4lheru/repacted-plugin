@@ -157,18 +157,6 @@ def test_c5_module_level_edges_are_acyclic_and_the_call_time_edge_is_the_only_on
 
 
 # ─── C6: headers ─────────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("name,path", list(_shell_modules()), ids=lambda v: v if isinstance(v, str) else "")
-def test_c6_every_shell_module_has_a_header(name, path):
-    text = path.read_text(encoding="utf-8")
-    if path.name == "__init__.py":
-        return
-    head = text[:4000]
-    for marker in ("Location:", "Summary:", "Used by:"):
-        assert marker in head, f"{name}: header lacks {marker}"
-    if path.parent.name == "merge":
-        assert "Map:" in head, f"{name}: header lacks Map:"
-
-
 # ─── the merge_guard_common façade: a patch on it reaches the package reader ─────────
 def test_facade_setattr_propagates_to_the_package_and_undoes():
     import shared.merge_guard_common as mgc

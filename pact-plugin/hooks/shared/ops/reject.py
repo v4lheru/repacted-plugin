@@ -12,7 +12,7 @@ bridge's rejection_rev, repact-wait's open-rejection test). A teachback is not r
 the lead sends a correction with `repact amend --kind correction` and the coder resubmits.
 The rejection limit and the park live in accept; attended, a rejection clears a park.
 Unattended, a parked task is refused: the park is the owner's question, so the
-lead cannot answer it by rejecting; the owner turns the mode off at their terminal (or decides
+lead cannot answer it by rejecting; the owner turns the mode off by typing in the session (or decides
 the parked row from repact decide) and the lead rejects then. Every stored
 rejection (this op's, and accept's fact rejection) lands a `rejection` side row in ops.jsonl:
 the third-rejection park counts those rows (accept.rejections), not metadata.revision_number.

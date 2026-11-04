@@ -368,7 +368,11 @@ def _add_frame(counters: dict, event: str, frame: str, agent: str, sizes: dict,
     if budget is not None and told != "hard" and row["est_context"] >= _lowest_line(limits):
         own = budget()
     tier = _tier_of(row["est_context"], own)
-    if TIER_RANK[tier] > TIER_RANK[told]:
+    # The lead is never told about its own context: the host's auto-compaction carries
+    # it, and the lead never stops work to ask the user to compact.
+    if TIER_RANK[tier] > TIER_RANK[told] and frame == "lead":
+        row["tier"] = tier
+    elif TIER_RANK[tier] > TIER_RANK[told]:
         row["tier"] = tier
         counters.setdefault("pending", []).append(_lead_line(tier, agent, row))
         if tier in ("stop", "hard"):
@@ -454,25 +458,17 @@ def record(event: str, payload: dict, parsed: list, frame: str) -> list:
 BAND_TEXT = ("your context is past the stop line (~{size}): start no new work. You may run "
              "the tests for what you have already written and fix what they show; then write "
              "your HANDOFF with a `remaining:` list. Past the hard line (~{hard}) you stop.")
-# The lead's own band: its limit is on this context, not on the job, and only the user can
-# run the checkpoint that carries the work into a fresh one.
-LEAD_BAND_TEXT = ("your context is past the stop line (~{size}): do no new work in THIS context. "
-                  "Finish the step in hand, record each new order from the user as a task and "
-                  "give it to a fresh agent, and tell the user once to type "
-                  "/repacted:pause checkpoint then /compact. Past the hard line (~{hard}) delegate everything.")
 HARD_TEXT = ("your context is past the hard line (~{size}); write your HANDOFF now and end "
              "the turn")
 
 
-def _actor_line(row: dict, lead: bool = False) -> str:
+def _actor_line(row: dict) -> str:
     """The actor's own line for the tier it owes: the hard text at the hard line, the band
-    text at the stop line (a row written before the band existed says True: the band). The
-    lead's band has its own wording; a teammate's is unchanged."""
+    text at the stop line (a row written before the band existed says True: the band)."""
     size = _kb(_int(row, "est_context"))
     if row.get("stop_pending") == "hard":
         return HARD_TEXT.format(size=size)
-    band = LEAD_BAND_TEXT if lead else BAND_TEXT
-    return band.format(size=size, hard=_kb(_int(row, "hard_line") or hard_line(LINES)))
+    return BAND_TEXT.format(size=size, hard=_kb(_int(row, "hard_line") or hard_line(LINES)))
 
 
 def consume(text: str, agent: str, frame: str) -> tuple:
@@ -488,7 +484,8 @@ def consume(text: str, agent: str, frame: str) -> tuple:
     agents = counters.get("agents") if isinstance(counters.get("agents"), dict) else {}
     row = agents.get(agent) if isinstance(agents.get(agent), dict) else None
     if row is not None and row.get("stop_pending"):
-        context.append(_actor_line(row, lead=frame == "lead"))
+        if frame != "lead":  # a row from before the lead went silent: drop it unsaid
+            context.append(_actor_line(row))
         row["stop_pending"] = False
     changed = bool(system or context)
     return (json.dumps(counters, sort_keys=True) if changed else text), changed, (system, context)

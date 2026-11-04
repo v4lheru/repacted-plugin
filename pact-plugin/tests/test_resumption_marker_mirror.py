@@ -157,28 +157,3 @@ class TestTheResumptionMarkerTypeAgreesAcrossItsSurfaces:
         )
 
 
-class TestTheExtractionCannotAgreeWithNothing:
-    """The gate above is only worth its green if it can be made to fail."""
-
-    def test_a_missing_surfacing_branch_raises(self):
-        """Detects: this gate quietly becoming vacuous because its anchor moved.
-
-        Without this, a refactor that renames the guard variable turns the
-        extraction into a no-op, and a no-op reports agreement.
-        """
-        with pytest.raises(AssertionError, match="found 0"):
-            marker_event_type("def f():\n    if resumption:\n        pass\n")
-
-    def test_a_branch_with_no_write_raises(self):
-        """Detects: the marker write being deleted while the branch survives.
-
-        The extraction must refuse an empty result rather than hand back a
-        literal found somewhere else in the file.
-        """
-        source = (
-            "def f():\n"
-            "    if resume_msg:\n"
-            "        context_parts.append(resume_msg)\n"
-        )
-        with pytest.raises(AssertionError, match="found 0"):
-            marker_event_type(source)

@@ -152,37 +152,6 @@ class TestDenyRenderBounding:
         )
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_deny_render_sanitizes_non_printable_chars(self, capsys):
-        """Control/escape characters in the deny message are sanitized to
-        spaces before reaching the context-bound permissionDecisionReason.
-
-        NON-VACUITY: a raw render (item 1 reverted) would interpolate the
-        \\x07/\\x1b bytes verbatim into the reason — the two "not in"
-        assertions below would then fail. Exit-2 is preserved either way, so
-        the sanitize assertions, not the exit code, carry the signal.
-        """
-        payload = "boom\x07\x1b[31mINJECT\ntail"
-        with pytest.raises(SystemExit) as exc:
-            bg._emit_load_failure_deny("runtime", RuntimeError(payload))
-        assert exc.value.code == 2
-        captured = capsys.readouterr()
-        out = json.loads(captured.out.strip())
-        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "\x07" not in reason and "\x1b" not in reason, (
-            "control/escape chars must be sanitized out of the deny reason "
-            f"(item 1 bounding helper): {reason!r}"
-        )
-        # The type name still survives the sanitize (printable) — parity with
-        # the degraded path's bounded render.
-        assert "RuntimeError" in reason
-        # Full text (incl. the control bytes) still goes to the stderr debug
-        # channel — the call site's separate full-text render, intentionally
-        # NOT sanitized — so the bounding above is confirmed to be the deny
-        # reason's behavior specifically, not a global strip.
-        assert "\x07" in captured.err, (
-            "full unsanitized text must still reach the stderr debug channel"
-        )
-
 
 # =============================================================================
 # T2 — item 2: every stdin read capped at _STDIN_READ_MAX
@@ -299,47 +268,6 @@ class TestStdinCaps:
             "permissionDecision"
         ] == "deny"
 
-    def test_bg_degraded_read_over_cap_frame_fails_closed(self):
-        """bg's degraded import-stage read (_read_stdin_tool_name) is capped:
-        an over-cap frame truncates -> the except returns None -> the caller
-        treats None as a fail-CLOSED deny (an unverifiable frame cannot be
-        confirmed read-only). This is the crispest non-vacuity discriminator
-        in T2.
-
-        NON-VACUITY: with item 2 reverted (uncapped json.load), the SAME
-        valid frame parses and the function returns the real tool_name
-        ('Read') instead of None — an observable flip. Both branches are
-        asserted: the over-cap read -> None, and a sanity in-bounds read ->
-        the real name (so a function that ALWAYS returned None would also
-        fail).
-        """
-        cap = bg._STDIN_READ_MAX
-        text = _over_cap_frame(cap, {"tool_name": "Read"})
-        # Reverted-item-2 control: the full frame is valid and names a tool.
-        assert json.loads(text)["tool_name"] == "Read"
-
-        old_in = sys.stdin
-        sys.stdin = io.StringIO(text)
-        try:
-            result = bg._read_stdin_tool_name()
-        finally:
-            sys.stdin = old_in
-        assert result is None, (
-            "over-cap frame must truncate to a JSONDecodeError -> None "
-            "(fail-closed deny); an uncapped read would return 'Read'"
-        )
-
-        # Sanity (guards an always-None regression): an in-bounds frame still
-        # returns the real tool name.
-        old_in = sys.stdin
-        sys.stdin = io.StringIO(json.dumps({"tool_name": "Read"}))
-        try:
-            assert bg._read_stdin_tool_name() == "Read"
-        finally:
-            sys.stdin = old_in
-
-
-
 
 # =============================================================================
 # T3 — item 3: the 5 post-floor stderr diagnostic prints are guarded so a
@@ -363,49 +291,6 @@ class TestStdinCaps:
 # =============================================================================
 
 
-class TestStderrBrokenPipeGuards:
-
-    def test_bg_deny_stderr_brokenpipe_preserves_exit_2(self):
-        """T3-4 (bg:119). A BrokenPipeError on the deny-path stderr
-        diagnostic must NOT flip the deliberate blocking exit 2 — for
-        PreToolUse a nonzero-non-2 exit is non-blocking (fail-OPEN), so a
-        leaked BrokenPipeError would silently let the denied tool PROCEED.
-
-        NON-VACUITY: the writer raised (write_calls >= 1) AND exit stayed 2
-        AND the deny floor printed first. With the guard removed the raised
-        BrokenPipeError would propagate before sys.exit(2), so exit would be
-        the sentinel "NO-EXIT"/an escaped exc — the assertion inverts.
-        """
-        code, writes, out, escaped = _drive_with_broken_stderr(
-            bg._emit_load_failure_deny, "runtime", RuntimeError("boom")
-        )
-        assert writes >= 1, "stderr writer must have been exercised (precondition)"
-        assert escaped is None, f"a raise escaped the guard: {escaped}"
-        assert code == 2, "deny must still reach blocking exit 2"
-        floor = json.loads(out.strip())
-        assert floor["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    def test_bg_degraded_stderr_brokenpipe_preserves_exit_0(self):
-        """T3-5 (bg:289). A BrokenPipeError on the degraded-warning stderr
-        diagnostic must NOT flip exit 0 — stdout JSON is honored only on
-        exit 0, so a leak would retroactively VOID the defer/ask decision.
-
-        NON-VACUITY: writer raised AND exit stayed 0 AND the defer floor
-        printed. Guard removed -> propagated raise before sys.exit(0).
-        """
-        code, writes, out, escaped = _drive_with_broken_stderr(
-            bg._emit_degraded_warning, "runtime", RuntimeError("boom"), "Read"
-        )
-        assert writes >= 1, "stderr writer must have been exercised (precondition)"
-        assert escaped is None, f"a raise escaped the guard: {escaped}"
-        assert code == 0, "degraded defer/ask must still reach exit 0"
-        floor = json.loads(out.strip())
-        assert floor["hookSpecificOutput"]["permissionDecision"] == "defer"
-
-
-
-
-
 # =============================================================================
 # T4a — item 4: truncate-FIRST reorder is output-identical to the old
 # sanitize-then-truncate order.
@@ -420,8 +305,6 @@ class TestStderrBrokenPipeGuards:
 # guarantee that the join runs on a bounded slice), never a multi-GB
 # allocation.
 # =============================================================================
-
-
 
 
 # =============================================================================

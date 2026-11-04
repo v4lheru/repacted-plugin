@@ -64,6 +64,7 @@ _hooks_dir = Path(__file__).resolve().parent
 if str(_hooks_dir) not in sys.path:
     sys.path.insert(0, str(_hooks_dir))
 
+from shell.tools import shell_command  # noqa: E402
 from shell_words import (  # noqa: E402
     SHELL_KEYWORDS, Unreadable, quoted_words, read_script, substitution_spans,
 )
@@ -616,7 +617,8 @@ def _journal(payload: dict, event_type: str, **fields) -> None:
         from shared.session_journal import append_event, make_event
 
         append_event(make_event(event_type, hook=GATE_NAME, event="PreToolUse",
-                                tool_name="Bash", **fields), session_dir=session_dir)
+                                tool_name=payload.get("tool_name"), **fields),
+                     session_dir=session_dir)
     except Exception:  # noqa: BLE001 - a row that cannot be written changes no verdict
         pass
 
@@ -624,7 +626,7 @@ def _journal(payload: dict, event_type: str, **fields) -> None:
 def check(payload: dict, ctx=None) -> Optional[Result]:
     """The verdict on one PreToolUse payload, or None to allow silently. `ctx` is unused; it
     keeps the signature the one-process hook runner calls."""
-    if payload.get("tool_name") != "Bash":
+    if shell_command(payload) is None:   # any tool_name: the host matched this to Bash
         return None
     mode = read_mode()
     if mode == MODE_OFF:

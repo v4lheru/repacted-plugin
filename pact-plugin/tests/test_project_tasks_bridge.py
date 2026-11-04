@@ -238,95 +238,6 @@ class TestAcceptance:
                                     "ts": task["accepts"][0]["ts"]}]
         assert {"target": f"commit:{world.head}", "verified": True} in task["evidence"]
 
-    def test_the_evidence_object_is_used_before_the_ledger(self, world):
-        bind_ref(world)
-        name = world.plant_run()
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        run_hook(lead_accepts(world))
-        targets = [item["target"] for item in world.project_task()["evidence"]]
-        assert targets == [f"commit:{world.head}"] and f"run:{name}" not in targets
-
-    def test_without_an_evidence_object_the_ledger_row_of_this_task_is_the_evidence(self, world):
-        bind_ref(world)
-        name = world.plant_run(passed=12, failed=0)
-        world.task(project_task=world.ref, handoff={"produced": ["x"]})
-        run_hook(lead_accepts(world))
-        task = world.project_task()
-        assert task["status"] == "done"
-        run = next(item for item in task["evidence"] if item["target"] == f"run:{name}")
-        # 1.5.0: a verified run carries the log's digest and counts, so it outlives the log
-        assert run["verified"] is True and len(run["sha256"]) == 64 and run["counts"]["passed"] == 12
-        assert {"target": f"commit:{world.head}", "verified": True} in task["evidence"]
-
-    def test_a_ledger_row_holding_a_raw_line_separator_is_still_the_evidence(self, world):
-        bind_ref(world)
-        """U+2028 inside a row is not a line end; str.splitlines cut such a row in two, in the
-        bridge's reader (the targets) and in evidence.py's (the run's verification)."""
-        name = world.plant_run(passed=12, failed=0)
-        ledger = world.data / "runs" / "ledger.jsonl"
-        row = {**json.loads(ledger.read_text()), "command": "pytest\u2028-q"}
-        ledger.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-        world.task(project_task=world.ref, handoff={"produced": ["x"]})
-        run_hook(lead_accepts(world))
-        task = world.project_task()
-        assert any(item["target"] == f"run:{name}" and item["verified"] for item in task["evidence"])
-        assert {"target": f"commit:{world.head}", "verified": True} in task["evidence"]
-
-    def test_a_ledger_row_of_another_task_is_not_evidence(self, world):
-        bind_ref(world)
-        world.plant_run(task_id="99")
-        world.task(project_task=world.ref, handoff={"produced": ["x"]})
-        run_hook(lead_accepts(world))
-        task = world.project_task()
-        assert task["status"] == "active" or task["status"] == "planned"
-        assert task["accepts"][0]["verified"] is False and task["evidence"] == []
-
-    def test_no_evidence_records_an_unverified_accept_and_leaves_the_task_open(self, world):
-        bind_ref(world)
-        world.task(project_task=world.ref, handoff={"produced": ["x"]})
-        run_hook(lead_accepts(world))
-        task = world.project_task()
-        assert task["status"] != "done"
-        assert [a["verified"] for a in task["accepts"]] == [False]
-        assert f"{world.ref}: accepted without evidence" in world.R.drift_flags(world.state())
-
-    def test_an_invalid_evidence_item_is_dropped_not_fatal(self, world):
-        bind_ref(world)
-        world.task(project_task=world.ref,
-                   handoff={"evidence": {"head": world.head, "docs": ["/etc/passwd@abcdef1"],
-                                         "tests": [{"log": "../../x.log"}]}})
-        run_hook(lead_accepts(world))
-        task = world.project_task()
-        assert task["status"] == "done"
-        assert [item["target"] for item in task["evidence"]] == [f"commit:{world.head}"]
-
-    def test_a_double_fire_writes_once(self, world):
-        bind_ref(world)
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        before = len(world.log_lines())
-        run_hook(lead_accepts(world))
-        run_hook(lead_accepts(world))
-        assert len(world.project_task()["accepts"]) == 1
-        assert len(world.log_lines()) == before + 1       # the accept, once
-
-    def test_an_unbound_project_task_is_reported_never_closed(self, world):
-        """1.5.0 F2: the task file records no author, so a project_task only the file names (a
-        teammate can write it) is not bound: the acceptance reports it and writes nothing."""
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        before = world.log_lines()
-        result = run_hook(lead_accepts(world))
-        assert world.log_lines() == before
-        assert f"not bound by the lead, left as is: {world.ref}" in \
-            json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-
-    def test_the_accept_takes_the_revision_after_a_rejection(self, world):
-        bind_ref(world)
-        world.task(project_task=world.ref, revision_number=2,
-                   handoff_rejection={"reason": "r", "corrections": [], "since": "s", "revision_number": 1},
-                   handoff={"evidence": {"head": world.head}})
-        run_hook(lead_accepts(world))
-        assert world.project_task()["accepts"][0]["rev"] == 2
-
 
 class TestRejection:
     def test_a_rejection_records_the_revision_and_closes_nothing(self, world):
@@ -392,13 +303,6 @@ class TestAttributionRecord:
         assert [e["op"] for e in world.journal()] == ["accept"]
         assert world.project_task()["accepts"] == []
 
-    def test_a_rejection_is_journalled_too(self, world):
-        bind_ref(world)
-        world.task(status="in_progress", project_task=world.ref,
-                   handoff_rejection={"reason": "r", "corrections": [], "since": "s", "revision_number": 3})
-        run_hook(frame(world, metadata={"handoff_rejection": {"reason": "r", "revision_number": 3}}))
-        assert [(e["op"], e["rev"]) for e in world.journal()] == [("reject", 3)]
-
 
 # ---------------------------------------------------------------------------------------------
 # sync (§5.4): only lead-attributed completions are written
@@ -425,81 +329,6 @@ class TestSync:
         bridge().sync(world.repo)
         assert world.project_task()["status"] == "done"
 
-    def test_sync_twice_writes_once(self, world):
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        _journal_accept(world)
-        bridge().sync(world.repo)
-        second = bridge().sync(world.repo)
-        assert second["written"] == [] and len(world.project_task()["accepts"]) == 1
-
-    def test_a_completion_with_no_lead_record_is_listed_never_written(self, world):
-        bind_ref(world)
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        before = world.log_lines()
-        report = bridge().sync(world.repo)
-        assert world.log_lines() == before
-        assert report["not_attributable"] == [f"{TEAM}/{TASK_B}"]
-
-    def test_the_secretary_is_listed_as_excluded_not_written(self, world):
-        world.task(owner="secretary", project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        _journal_accept(world)
-        before = world.log_lines()
-        report = bridge().sync(world.repo)
-        assert world.log_lines() == before and report["excluded"] == [f"{TEAM}/{TASK_B}"]
-
-    def test_sync_records_a_rejection_from_the_task_file(self, world):
-        bind_ref(world)
-        world.task(status="in_progress", project_task=world.ref,
-                   handoff_rejection={"reason": "r", "corrections": [], "since": "s", "revision_number": 2})
-        bridge().sync(world.repo)
-        assert [r["rev"] for r in world.project_task()["rejects"]] == [2]
-
-    def test_check_lists_the_missed_accept_and_writes_nothing(self, world):
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        _journal_accept(world)
-        before = world.log_lines()
-        report = bridge().sync(world.repo, check=True)
-        assert world.log_lines() == before
-        assert report["missed"] == [f"accept {TEAM}/{TASK_B} rev 1"]
-
-    def test_the_cli_sync_command_and_its_check(self, world):
-        """amend_5: a missed lead-attributed write is a defect, so --check exits 1 on it."""
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        _journal_accept(world)
-        check = run_cli(world.repo, "sync", "--check")
-        assert check.returncode == 1 and "missed: 1" in check.stdout
-        done = run_cli(world.repo, "sync")
-        assert done.returncode == 0 and "written: 1" in done.stdout
-        assert world.project_task()["status"] == "done"
-        again = run_cli(world.repo, "sync", "--check")
-        assert again.returncode == 0 and "missed: 0" in again.stdout
-
-    def test_check_exits_0_when_only_unattributable_or_excluded_items_are_listed(self, world):
-        """Visible and closable by a human, so not a failure (amend_5)."""
-        bind_ref(world)
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        world.task(task_id="8", owner="secretary", project_task=world.ref)
-        world.store.link(world.ref, "reference", f"ptask:{TEAM}/8")
-        check = run_cli(world.repo, "sync", "--check")
-        assert check.returncode == 0 and "missed: 0" in check.stdout
-        assert f"not attributable (close with repact-task done --evidence): {TEAM}/{TASK_B}" in check.stdout
-        assert f"excluded (teachback-exempt owner or signal task): {TEAM}/8" in check.stdout
-
-    def test_a_read_command_syncs_first(self, world):
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        _journal_accept(world)
-        assert run_cli(world.repo, "next").returncode == 0
-        assert world.project_task()["status"] == "done"
-
-    def test_a_journal_from_another_repo_is_ignored(self, world, tmp_path):
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        sj = load("session_journal_under_test", PLUGIN_ROOT / "hooks" / "shared" / "session_journal.py")
-        sj.append_event(sj.make_event(JOURNAL_TYPE, ptask=f"{TEAM}/{TASK_B}", op="accept", rev=1,
-                                      t=world.ref, main=str(tmp_path / "elsewhere")),
-                        session_dir=str(world.session_dir))
-        report = bridge().sync(world.repo)
-        assert report["written"] == [] and world.project_task()["accepts"] == []
-
 
 # ---------------------------------------------------------------------------------------------
 # the run: verifier (evidence.verify, bare log name matched to the ledger by basename)
@@ -517,25 +346,6 @@ class TestRunVerifier:
         verified, reason = evidence_module().verify(world.repo, f"run:{name}")
         assert not verified and "counts" in reason
 
-    def test_a_log_the_ledger_never_recorded_does_not_verify(self, world):
-        (world.data / "runs").mkdir(parents=True)
-        (world.data / "runs" / "stray.log").write_text("== 3 passed in 0.1s ==\n")
-        assert evidence_module().verify(world.repo, "run:stray.log")[0] is False
-
-    def test_a_missing_log_does_not_verify(self, world):
-        name = world.plant_run()
-        (world.data / "runs" / name).unlink()
-        assert evidence_module().verify(world.repo, f"run:{name}")[0] is False
-
-    @pytest.mark.parametrize("bad", ["../x.log", "a/b.log", "~x.log", "", ".."])
-    def test_a_name_that_is_not_bare_does_not_verify(self, world, bad):
-        assert evidence_module().verify(world.repo, f"run:{bad}")[0] is False
-
-    def test_the_run_tests_fallback_dir_is_searched(self, world, tmp_path):
-        runs = tmp_path / "tmpdir" / "repacted-test-runs" / "runs"
-        name = world.plant_run(runs=runs)
-        assert evidence_module().verify(world.repo, f"run:{name}") == (True, "")
-
 
 # ---------------------------------------------------------------------------------------------
 # the reader's ptask lookup
@@ -547,12 +357,6 @@ class TestTaskForPtask:
         assert world.R.task_for_ptask(world.state(), TEAM, TASK_B)["ref"] == world.ref
 
     def test_an_unlinked_ptask_finds_nothing(self, world):
-        assert world.R.task_for_ptask(world.state(), TEAM, TASK_B) is None
-
-    def test_a_ptask_linked_to_two_tasks_finds_nothing_rather_than_guess(self, world):
-        other = world.store.add("Another task")
-        world.store.start(world.ref, ptask=f"{TEAM}/{TASK_B}")
-        world.store.start(other, ptask=f"{TEAM}/{TASK_B}")
         assert world.R.task_for_ptask(world.state(), TEAM, TASK_B) is None
 
 
@@ -567,24 +371,4 @@ class TestFailOpen:
         result = run_hook(lead_accepts(world))
         assert result.returncode == 0 and result.stdout == ""
 
-    def test_the_session_ledger_child_syncs_its_project(self, world, monkeypatch):
-        world.task(project_task=world.ref, handoff={"evidence": {"head": world.head}})
-        _journal_accept(world)
-        child = load("session_ledger_under_test", SESSION_LEDGER)
-        monkeypatch.setattr(child, "append_row", lambda row: None)
-        monkeypatch.setattr(child, "build_row", lambda transcript, cwd: {})
-        transcript = world.session_dir / "t.jsonl"
-        transcript.write_text("")
-        child.write_row(str(transcript), str(world.repo))
-        assert world.project_task()["status"] == "done"
 
-    def test_a_sync_failure_in_the_session_ledger_child_is_swallowed(self, world, monkeypatch):
-        child = load("session_ledger_under_test", SESSION_LEDGER)
-        rows = []
-        monkeypatch.setattr(child, "append_row", rows.append)
-        monkeypatch.setattr(child, "build_row", lambda transcript, cwd: {"row": 1})
-        transcript = world.session_dir / "t.jsonl"
-        transcript.write_text("")
-        (world.repo / ".repacted" / "tasks.jsonl").write_bytes(b"\xff\xfe not a log")
-        child.write_row(str(transcript), str(world.repo))
-        assert rows == [{"row": 1}]

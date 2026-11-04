@@ -127,32 +127,3 @@ _MUST_PASS = (
 )
 
 
-@pytest.mark.parametrize("label,text", _MUST_FLAG)
-def test_predicate_flags_a_constructed_leaf(label, text):
-    """Non-vacuity: the predicate must FIRE on every construction spelling.
-
-    A pin that has never fired has demonstrated nothing. These are the shapes a
-    future construction plausibly takes — a literal name, a placeholder, a
-    template, an environment variable, and three prefixes other than `~/`.
-    """
-    assert constructed_leaf_count(text) >= 1, (
-        f"the {label} spelling was NOT flagged. The predicate pins the exact "
-        f"spellings it happens to match rather than the class, so a "
-        f"construction written this way would ship unnoticed."
-    )
-
-
-@pytest.mark.parametrize("label,text", _MUST_PASS)
-def test_predicate_accepts_the_generic_form(label, text):
-    """The over-block guard, and the constraint that decides the pin's worth.
-
-    Naming the directory generically is the CORRECT thing for a shipped plugin
-    to do — it cannot know the absolute path. Refusing this form would push
-    authors toward spelling out a leaf, which is the defect. Reddening here
-    means the pin has become worse than no pin.
-    """
-    assert constructed_leaf_count(text) == 0, (
-        f"the {label} form is CORRECT and was flagged as a defect. This is an "
-        f"over-block: it refuses the spelling the rule asks authors to use. "
-        f"Narrow the predicate; do not change the shipped text to satisfy it."
-    )

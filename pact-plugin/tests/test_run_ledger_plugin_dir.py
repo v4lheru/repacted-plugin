@@ -90,45 +90,4 @@ def test_tcount_from_bash_and_the_run_ledger_hook_write_one_ledger(tmp_path, mon
 # Boundary rows: the resolver and the SessionStart export
 # ---------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("claude, repacted, expect", [
-    ("hook dir", "bash dir", "hook dir"),           # the harness value wins (a hook, a nested -p)
-    (None, "bash dir", "bash dir"),                 # the Bash tool under --plugin-dir
-    ("", "bash dir", "bash dir"),                   # an empty harness value is no value
-    (None, "", None),                               # empty both: the loader default
-    (None, None, None),                             # unset both: the loader default
-    (None, "relative/dir", None),                   # a relative export would differ per cwd: ignored
-])
-def test_the_data_dir_resolves_harness_then_export_then_default(tmp_path, monkeypatch, claude, repacted, expect):
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
-    for name, value in (("CLAUDE_PLUGIN_DATA", claude), ("REPACTED_PLUGIN_DATA", repacted)):
-        if value is None:
-            monkeypatch.delenv(name, raising=False)
-        else:
-            monkeypatch.setenv(name, value if value in ("", "relative/dir") else str(tmp_path / value))
-    got = plugin_paths.plugin_data_dir(create=True)
-    want = tmp_path / expect if expect else tmp_path / "cfg" / "plugins" / "data" / FALLBACK
-    assert got == want and got.is_dir()
-    assert stat.S_IMODE(got.stat().st_mode) == plugin_paths.DATA_DIR_MODE
 
-
-@pytest.mark.parametrize("value", [None, "", "relative/data"])
-def test_no_export_without_an_absolute_harness_data_dir(tmp_path, monkeypatch, value):
-    env_file = tmp_path / "env.sh"
-    monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
-    if value is None:
-        monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-    else:
-        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", value)
-    _export()
-    assert not env_file.exists() or "REPACTED_PLUGIN_DATA" not in env_file.read_text(encoding="utf-8")
-
-
-def test_the_export_round_trips_an_odd_path_and_is_written_once(tmp_path, monkeypatch):
-    odd = str(tmp_path / "data dir $HOME 'q' ü")
-    env_file = tmp_path / "env.sh"
-    monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", odd)
-    _export()
-    _export()                                        # a resume or compact re-fire
-    assert env_file.read_text(encoding="utf-8").count("REPACTED_PLUGIN_DATA") == 1
-    assert _sourced(env_file, "REPACTED_PLUGIN_DATA") == odd

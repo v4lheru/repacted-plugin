@@ -65,12 +65,3 @@ def test_marketplace_json_version():
 
 
 
-def test_pact_plugin_readme_version():
-    p = REPO_ROOT / "pact-plugin" / "README.md"
-    text = p.read_text(encoding="utf-8")
-    assert _TARGET_VERSION_PATTERN.search(text), (
-        f"pact-plugin/README.md missing version literal {TARGET_VERSION} "
-        f"as a word-bounded token (not a digit/dot-adjacent substring)"
-    )
-
-

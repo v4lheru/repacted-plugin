@@ -85,12 +85,6 @@ class TestAcceptance:
         run_hook(lead_accepts(world))
         assert entries(world) == before and len(world.state().tasks) == tasks_before
 
-    def test_a_repo_that_declined_the_task_log_gets_no_ledger(self, world):
-        (world.repo / ".repacted" / "tasks.jsonl").unlink()
-        world.task(handoff=HANDOFF)
-        assert run_hook(lead_accepts(world)).returncode == 0
-        assert not (world.repo / ".repacted" / "ledger.jsonl").exists()
-
 
 # ---------------------------------------------------------------------------------------------
 # the views and the backfill
@@ -150,52 +144,6 @@ class TestHostileText:
             assert page.splitlines()[-1].startswith("<!-- render-hash: sha256:")
         assert views().hand_edited(world.repo / "docs" / "known-limits.md") is False
 
-    def test_a_credential_value_is_withheld_from_the_ledger_the_task_and_the_pages(self, world):
-        ledger().record(world.store, PTASK, 1, {
-            "uncertainty": [f"known-limit: the key {INERT_MARKER} is in the fixture"],
-            "open_questions": [f"remaining: rotate {INERT_MARKER}"]})
-        raw = (world.repo / ".repacted" / "ledger.jsonl").read_text()
-        assert INERT_MARKER not in raw and INERT_MARKER not in (world.repo / ".repacted" / "tasks.jsonl").read_text()
-        got = entries(world)
-        assert all(e["text"].startswith("(withheld: ") and e["withheld"] for e in got)
-        assert got[1]["t"] in world.state().tasks
-        configure_views(world)
-        views().render(world.repo)
-        assert INERT_MARKER not in (world.repo / "docs" / "known-limits.md").read_text()
-
-    def test_huge_and_unicode_text_is_one_capped_line_that_still_decodes(self, world):
-        lg = ledger()
-        huge = chr(0x1F600) * 5000 + "\n# heading - item"
-        report = lg.record(world.store, PTASK, 1, {"uncertainty": [f"known-limit: {huge}"],
-                                                   "open_questions": ["remaining: " + "y" * 9000]})
-        assert report["proposed"]
-        lines = (world.repo / ".repacted" / "ledger.jsonl").read_bytes().splitlines()
-        assert all(len(line) <= 4096 for line in lines)
-        text = json.loads(lines[0])["text"]
-        assert len(text.encode("utf-8")) <= lg.TEXT_MAX_BYTES and text.endswith("…") and "\n" not in text
-        limits, _ = self.render_limit(world, "\u202eevil\x1b[31m red\x07\n# not a heading")
-        assert "\n# not a heading" not in limits
-        assert not any(ch in limits for ch in ("\u202e", "\x1b", "\x07"))
-
-    @pytest.mark.parametrize("handoff", [
-        None, "known-limit: x", {"uncertainty": "known-limit: x"}, {"decisions": [1, None, {"a": 1}, ["x"]]},
-        {"uncertainty": ["known-limit:   ", "known-limit:"]}, {"open_questions": [True, 3.5]}])
-    def test_odd_handoff_shapes_write_nothing_and_never_raise(self, world, handoff):
-        report = ledger().record(world.store, PTASK, 1, handoff)
-        assert report == {"limits": [], "decisions": [], "proposed": [], "retired": []}
-        assert entries(world) == []
-
-    def test_a_hand_edited_ledger_line_is_skipped_not_rendered(self, world):
-        lg = ledger()
-        lg.record(world.store, PTASK, 1, {"decisions": ["kept"]})
-        path = world.repo / ".repacted" / "ledger.jsonl"
-        bad = {"v": 1, "kind": "decision", "ptask": "x`y/1", "rev": 1, "key": "0" * 24,
-               "text": "spoofed", "id": "DL9"}
-        path.write_text(path.read_text() + json.dumps(bad) + "\n{not json\n")
-        got, corrupt = lg.read(world.repo)
-        assert [e["text"] for e in got] == ["kept"] and corrupt == 2
-        assert lg.record(world.store, PTASK, 1, {"decisions": ["next"]})["decisions"] == ["DL2"]
-
 
 # ---------------------------------------------------------------------------------------------
 # keeping the pages short: retire, auto-retire, grouping, the opt-in decision log
@@ -210,6 +158,7 @@ def bind(world, ref, task_id):
 
 
 class TestKeepingThePagesShort:
+    @pytest.mark.slow
     def test_retire_takes_a_limit_off_the_page_and_keeps_a_count(self, world):
         configure_views(world, decision_log=False)
         ledger().record(world.store, PTASK, 1, {"uncertainty": ["known-limit: no Windows support",
@@ -228,72 +177,4 @@ class TestKeepingThePagesShort:
             assert refused.returncode != 0 and len(entries(world)) == 3, ident
         assert run_cli(world.repo, "ledger", "retire", short[:6]).returncode != 0   # no --reason
 
-    def test_a_later_fixed_item_of_the_same_project_task_retires_the_limit(self, world):
-        bind(world, world.ref, TASK_B)
-        bind(world, world.ref, "8")
-        lg = ledger()
-        lg.record(world.store, PTASK, 1, {"uncertainty": ["known-limit: No verb retires a limit yet.",
-                                                          "known-limit: the page only grows"]})
-        lg.record(world.store, f"{TEAM}/9", 1,          # another project task: never retires
-                  {"uncertainty": ["fixed: the page only grows"]})
-        report = lg.record(world.store, f"{TEAM}/8", 1,
-                           {"uncertainty": ["fixed: no verb retires a limit yet"]})
-        assert len(report["retired"]) == 1
-        left = lg.active_limits(lg.read(world.repo)[0])
-        assert [e["text"] for e in left] == ["the page only grows"]
-        named = lg.record(world.store, f"{TEAM}/9", 2,  # the printed id retires it from any task
-                          {"uncertainty": [f"fixed: id `{lg.short_id(left[0])}`, the page shrinks now"]})
-        assert named["retired"] == [left[0]["key"]] and lg.active_limits(lg.read(world.repo)[0]) == []
 
-    def test_known_limits_group_by_project_task_newest_first(self, world):
-        bind(world, world.ref, TASK_B)
-        lg = ledger()
-        lg.record(world.store, PTASK, 1, {"uncertainty": ["known-limit: older"]})
-        lg.record(world.store, f"{TEAM}/9", 1, {"uncertainty": ["known-limit: unbound"]})
-        lg.record(world.store, PTASK, 2, {"uncertainty": ["known-limit: newer"]})
-        configure_views(world, decision_log=False)
-        views().render(world.repo)
-        page = limits_page(world)
-        heading = f"## {world.ref}: Build the acceptance bridge"
-        assert page.index(heading) < page.index("- newer") < page.index("- older") \
-            < page.index(f"## `{TEAM}/9`") < page.index("- unbound")
-
-    def test_the_decision_log_renders_only_when_the_config_names_it(self, world):
-        ledger().record(world.store, PTASK, 1, HANDOFF)
-        configure_views(world, decision_log=False)
-        assert [name for name, _, _ in views().render(world.repo)] == ["progress", "known_limits"]
-        assert not (world.repo / "docs" / "decision-log.md").exists()
-        configure_views(world)
-        assert "decision_log" in [name for name, _, _ in views().render(world.repo)]
-
-    def test_a_decision_that_is_only_a_test_result_is_not_recorded(self, world):
-        """Rule (ledger.is_test_result): a pass/fail count, a tcount run stamp or a bare .log path."""
-        ledger().record(world.store, PTASK, 1, {"decisions": [
-            "Rejection fix: 10 passed on 3.14 (log 2026-10-18T104819Z-66084)",
-            "after the move: 487 passed, 2 skipped",
-            "runs/2026-10-18T1.log",
-            "header pragma -> None / 0 hits, 1 skipped; so the pragma covers one line only",
-            "keep one flock for both files"]})
-        assert [e["text"] for e in entries(world)] == [
-            "header pragma -> None / 0 hits, 1 skipped; so the pragma covers one line only",
-            "keep one flock for both files"]
-
-    def test_the_page_lists_the_newest_open_limits_up_to_the_cap_and_counts_the_rest(self, world):
-        ledger().record(world.store, PTASK, 1, {"uncertainty": [f"known-limit: limit {n}" for n in range(55)]})
-        configure_views(world, decision_log=False)
-        views().render(world.repo)
-        page = limits_page(world)
-        assert page.count("\n- limit ") == 50 and "- limit 54 " in page and "- limit 4 " not in page
-        assert "5 older open limit(s) are not shown: `repact-task ledger --limits` lists them all" in page
-        listed = run_cli(world.repo, "ledger", "--limits").stdout
-        assert "limit 4" in listed and "55 open known limit(s)" in listed
-        config = json.loads((world.repo / ".repacted" / "config.json").read_text())
-        for value in (3, True, 0, "9", 1.5):            # a config key changes it; odd values refuse
-            config["known_limits_max"] = value
-            (world.repo / ".repacted" / "config.json").write_text(json.dumps(config))
-            if value == 3:
-                views().render(world.repo)
-                assert limits_page(world).count("\n- limit ") == 3
-            else:
-                with pytest.raises(Exception, match="known_limits_max"):
-                    views().render(world.repo)

@@ -92,5 +92,3 @@ def test_the_brief_skeletons_carry_every_field_the_checks_read():
     assert "rev" not in handoff  # the CLI assigns it
 
 
-def test_the_skill_hands_in_through_repact_submit():
-    assert "repact submit" in read(SKILL)

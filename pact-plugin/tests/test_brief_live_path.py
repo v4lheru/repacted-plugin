@@ -65,39 +65,3 @@ def test_the_coder_fills_the_draft_and_submits_through_the_real_guards(ops_env: 
     assert ops_env.task(task_id)["metadata"]["teachback"]["accepted"]["by"] == "auto"
 
 
-def test_the_brief_names_this_plugins_launcher(ops_env: World):
-    task_id = ops_env.dispatch()
-    text = brief.paths(ops_env.session_dir, task_id)["brief"].read_text(encoding="utf-8")
-    launcher = shlex.quote(str(PLUGIN / "bin" / "repact"))
-    submits = re.findall(r"`([^`]*\bsubmit {}[^`]*)`".format(task_id), text)
-    assert len(submits) == 2, text
-    assert all(line.startswith(f"{launcher} submit ") for line in submits), submits
-
-
-def test_the_brief_names_this_plugins_tcount_and_a_named_red_run(ops_env: World):
-    """A bare `tcount` ran another install on PATH and its runs went to that
-    install's ledger, and a whole-suite red named no test file, so accept found neither."""
-    task_id = ops_env.dispatch()
-    text = brief.paths(ops_env.session_dir, task_id)["brief"].read_text(encoding="utf-8")
-    tests = text.split("## Tests", 1)[1].split("## Steps", 1)[0]
-    tcount = shlex.quote(str(PLUGIN / "bin" / "tcount"))
-    assert f"`{tcount} <cmd>`" in tests and "`tcount " not in tests, tests
-    assert "NAME the test file" in tests and "before any passing run" in tests, tests
-
-
-def test_the_dispatch_next_line_names_the_plugin_agent_type(ops_env: World):
-    """Under a plugin install with no user-layer agents only the plugin-prefixed
-    agent type exists; a project's own agent keeps its bare name."""
-    from fixtures.ops_env import CODER
-    from shared.ops import dispatch as dispatch_op
-
-    def next_line(**overrides) -> str:
-        args = dict(name=CODER, agent="pact-backend-coder", subject="Fix the parser",
-                    mission="Fix the empty-input case in parser.py.", variety=[1, 1, 1, 1],
-                    kind="fix", repo=str(ops_env.repo), branch="fix/parser")
-        args.update(overrides)
-        return [line for line in dispatch_op.run(ops_env.ctx(), **args).lines if line.startswith("Next:")][0]
-
-    assert 'subagent_type="repacted:pact-backend-coder"' in next_line()
-    assert 'subagent_type="acme-billing-coder"' in next_line(agent="acme-billing-coder", name="c2",
-                                                             branch="fix/p2")

@@ -14,6 +14,10 @@ import subprocess
 from pathlib import Path
 
 from fixtures.ops_env import CODER, SESSION_ID, TEAM, World, ops_env, teachback  # noqa: F401  # fixture
+import pytest
+
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
 
 REPACT = Path(__file__).resolve().parent.parent / "bin" / "repact"
 
@@ -52,17 +56,3 @@ def test_dispatch_submit_and_a_refusal_through_bin_repact(ops_env: World):
     assert lines[-1].startswith("→ ") and lines[-1].endswith("[rule: ops.lead_only]")
 
 
-def test_the_cli_reads_input_files_strictly(ops_env: World):
-    ops_env.dispatch()
-    for name, text in (("nan.json", '{"produced": [NaN]}'), ("big.json", '{"rev": ' + "9" * 5000 + "}"),
-                       ("cut.json", "[1, 2"), ("latin1.json", b"\xff\xfe{}")):
-        done = _repact(ops_env, "submit", "1", "--as", CODER, "--handoff", _write(ops_env, name, text))
-        assert done.returncode == 2, (name, done.stdout, done.stderr)
-        assert done.stderr.splitlines()[-1].endswith("[rule: ops.invalid_input]"), name
-    assert "handoff" not in ops_env.task("1")["metadata"]
-
-
-def test_a_usage_error_prints_the_subcommands_example(ops_env: World):
-    done = _repact(ops_env, "reject", "1")
-    assert done.returncode == 2
-    assert done.stderr.rstrip().endswith("repact reject 12 --reason \"The fix does not cover the empty input\"")

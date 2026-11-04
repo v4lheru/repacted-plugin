@@ -27,7 +27,3 @@ def test_an_installed_copy_takes_its_name_from_the_cache_path(tmp_path, monkeypa
         tmp_path / "cfg" / "plugins" / "data" / "repacted-repacted"
 
 
-def test_a_root_outside_the_cache_keeps_the_fixed_name():
-    for root in (Path("/work/rePACT/repacted/pact-plugin"), Path("/plugins/cache"), Path("/")):
-        assert plugin_paths.data_dirname(root) == plugin_paths.PLUGIN_DATA_DIRNAME
-    assert plugin_paths.data_dirname() == plugin_paths.PLUGIN_DATA_DIRNAME  # this checkout

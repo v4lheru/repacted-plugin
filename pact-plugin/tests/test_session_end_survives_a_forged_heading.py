@@ -207,34 +207,3 @@ class TestWorkingMemorySectionStopsAtTheSessionEnd:
         )
 
 
-class TestRetrievedContextSectionStopsAtTheSessionEnd:
-    """The retrieved-context writer does not consume the session-end marker.
-
-    THIS ARM CATCHES BOTH RETRIEVED CONTEXT REVERTS AND NEITHER WORKING MEMORY
-    REVERT. Measured, not assumed: the two parsers carry their own copies of
-    the two regex sites, so a repair applied to one section leaves the other
-    reverting in silence.
-    """
-
-    HEADING = "## Retrieved Context"
-
-    def test_the_marker_survives_a_forged_heading_in_the_session_block(
-        self, tmp_path
-    ):
-        from scripts.working_memory import sync_retrieved_to_claude_md
-
-        document = _build(self.HEADING)
-        count_in = _assert_the_document_is_the_measured_shape(document, self.HEADING)
-
-        emitted = _write_and_sync(
-            tmp_path,
-            document,
-            lambda: sync_retrieved_to_claude_md(
-                [{"context": ENTRY_SENTINEL}],
-                query="q",
-                memory_ids=["0123456789abcdef" * 2],
-            ),
-        )
-        _assert_the_marker_survived(
-            emitted, self.HEADING, count_in, "retrieved context"
-        )

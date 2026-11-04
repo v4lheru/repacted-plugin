@@ -180,7 +180,7 @@ def rule_family(rule_id: str) -> str:
                            ("dispatch_gate.session_cost", "budget"),
                            ("settings.", "settings"), ("git_commit_check.shared_", "git"),
                            ("ops.", "ops"), ("ops_frame_guard.", "ops"), ("task_write.", "ops"),
-                           ("unattended.", "ops")):
+                           ("unattended.", "ops"), ("owner_prompt.", "ops")):
         if rule_id.startswith(prefix):
             return family
     if rule_id == "team_config_absent":

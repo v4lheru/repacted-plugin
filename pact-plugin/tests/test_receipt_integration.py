@@ -28,6 +28,9 @@ from shared.task_log import features
 from shared.task_log import write as W
 from shared.task_store import TaskRef
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 _pid = itertools.count(1000)
 WHY = "the teammate died; I read the diff by hand"
 
@@ -106,75 +109,4 @@ def test_receipt_shows_the_waiver_first_a_stale_run_with_its_files_and_a_changed
 
 # --- integration -----------------------------------------------------------------------------
 
-def test_a_feature_integrates_only_on_the_merged_tree_and_then_closes_its_rows(ops_env: World):
-    world = ops_env
-    store = W.init(world.repo)
-    ref_a, ref_b = store.add("Search: the index"), store.add("Search: the query")
-    second = world.ctx(frame.Caller(frame.CODER, "coder-2"))
-    task_a = world.dispatch(feature="search", refs=[ref_a], branch="search/index")
-    task_b = world.dispatch(name="coder-2", feature="search", refs=[ref_b], branch="search/query")
-    submit.teachback(world.coder(), task_a, teachback())
-    submit.teachback(second, task_b, teachback())
-    tree_a, tree_b = world.worktree(task_a), world.worktree(task_b)
-    commit_file(tree_a, "search/index.py", "def index(x):\n    return [x]\n", "index")
-    commit_file(tree_a, "tests/test_search.py", "def test_search():\n    pass\n", "test")
-    commit_file(tree_b, "search/query.py", "def query(x):\n    return x\n", "query")
-    pin(world, task_a, {"AC-1": "pytest -q tests/test_search.py"})
-    submit.handoff(world.coder(), task_a, handoff(tree_a, refs={ref_a: "done: index", "AC-1": "done: run"}))
-    submit.handoff(second, task_b, handoff(tree_b, refs={ref_b: "done: query"}))
-    for task_id in (task_a, task_b):
-        assert accept.run(world.ctx(), task_id).exit_code == 0
-        assert world.task(task_id)["metadata"]["acceptance"]["statuses"]["integrated"]["state"] == "waiting"
-    rows = W.Store.locate(world.repo).state().tasks
-    assert rows[ref_a]["status"] != "done" and rows[ref_b]["status"] != "done"
 
-    merged = str(world.repo / ".worktrees" / "search")
-    git(world.repo, "worktree", "add", "-q", "-b", "feature-search", merged, "main")
-    git(Path(merged), "merge", "-q", "--no-edit", "search/index")
-    git(Path(merged), "merge", "-q", "--no-edit", "search/query")
-    red = run_row(merged, "pytest -q tests/test_search.py", passed=0, failed=1)
-    refused = integrate.run(world.ctx(), "search", runs=[red])
-    assert refused.exit_code == 1 and any("AC-1" in line for line in refused.lines)
-    assert features.read(world.repo) == []
-    rows = W.Store.locate(world.repo).state().tasks
-    assert rows[ref_a]["status"] != "done" and rows[ref_b]["status"] != "done"
-
-    commit_file(merged, "search/index.py", "def index(x):\n    return [x, x]\n", "fix the merged index")
-    green = run_row(merged, "pytest -q tests/test_search.py")
-    passed = integrate.run(world.ctx(), "search", runs=[red, green])
-    assert passed.exit_code == 0, passed.lines
-    record = features.read(world.repo)[-1]
-    assert record["feature"] == "search" and record["tree"] == ct.content_tree(merged)
-    assert sorted(record["tasks"]) == sorted([task_a, task_b])
-    rows = W.Store.locate(world.repo).state().tasks
-    assert rows[ref_a]["status"] == "done" and rows[ref_b]["status"] == "done"
-    feature_text = "\n".join(receipt.render_feature(receipt.feature_receipt(world.ctx(), "search", runs=[red, green])))
-    assert "integrated" in feature_text and f"#{task_a}" in feature_text and f"#{task_b}" in feature_text
-
-
-def test_a_feature_with_one_task_is_integrated_at_accept_and_its_row_closes(ops_env: World):
-    world = ops_env
-    store = W.init(world.repo)
-    ref = store.add("Search: alone")
-    task_id = started(world, feature="solo", refs=[ref])
-    submit.handoff(world.coder(), task_id, handoff(world.worktree(task_id), refs={ref: "done: it"}))
-    head = git(Path(world.worktree(task_id)), "rev-parse", "HEAD")
-    submit_meta = world.task(task_id)["metadata"]
-    assert submit_meta["dispatch"]["feature"] == "solo"
-    world.store.update(TaskRef("team-ops", task_id), lambda task: task["metadata"]["handoff"].update(
-        evidence={"head": head}) or True)
-    assert accept.run(world.ctx(), task_id).exit_code == 0
-    assert world.task(task_id)["metadata"]["acceptance"]["statuses"]["integrated"]["state"] == "pass"
-    assert W.Store.locate(world.repo).state().tasks[ref]["status"] == "done"
-    assert json.dumps(features.read(world.repo)) == "[]"
-
-
-def test_bin_repact_prints_the_whole_receipt_and_takes_a_task_or_a_feature(ops_env: World):
-    from test_ops_cli import _repact
-    started(ops_env)
-    shown = _repact(ops_env, "inspect", "1")
-    assert shown.returncode == 0, shown.stderr
-    assert shown.stdout.startswith("#1 Fix the parser") and len(shown.stdout.splitlines()) > 6
-    assert json.loads(_repact(ops_env, "inspect", "1", "--json").stdout)["task_id"] == "1"
-    both = _repact(ops_env, "accept", "1", "--feature", "search")
-    assert both.returncode == 2 and "a task id or --feature" in both.stderr

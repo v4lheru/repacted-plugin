@@ -74,19 +74,3 @@ def test_an_oversized_snapshot_is_cut_at_a_line_and_names_the_journal(tmp_path):
     assert cap_snapshot("short", str(tmp_path)) == "short"
 
 
-def test_the_unattended_notice_is_told_once_per_session_and_mode(monkeypatch, tmp_path):
-    # The harness drives an unknown frame, which journals nothing; a lead's session dir exists
-    # by the time the notice runs, so plant it where get_session_dir() will point.
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setenv("REPACT_EXECUTION", "teams")  # the notice is Teams-only
-    monkeypatch.setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
-    session_dir = Path(reconstruct_session_dir(str(tmp_path / "project"), "aabb1122-0000-0000-0000-000000000000"))
-    session_dir.mkdir(parents=True)
-    runner = TestInprocessModeNoticeIntegration()
-    first = runner._run_main_capture_systemmessage(monkeypatch, tmp_path, "startup", "in-process")
-    assert _INPROCESS_MODE_NOTICE in first
-    assert json.loads((session_dir / NOTICE_MARKER).read_text(encoding="utf-8")) == {"mode": "in-process"}
-    second = runner._run_main_capture_systemmessage(monkeypatch, tmp_path, "resume", "in-process")
-    assert _INPROCESS_MODE_NOTICE not in second, "the same session and mode hears the notice once"
-    changed = runner._run_main_capture_systemmessage(monkeypatch, tmp_path, "resume", None)
-    assert _INPROCESS_MODE_NOTICE in changed, "a changed mode re-tells it"

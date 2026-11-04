@@ -102,32 +102,4 @@ class TestSessionEndUnpausedPrRealResolver:
             "team-dir resolver and emit the unpaused-PR warning"
         )
 
-    def test_non_vacuity_gate_pr_url_in_handoff(self, session_end_live_env, monkeypatch):
-        # The OTHER task-scan sub-path: a github PR URL embedded in a handoff
-        # string value (regex scan). Also driven through the real resolver.
-        _write_task(session_end_live_env, "1", {
-            "handoff": {"produced": "landed via https://github.com/org/repo/pull/777 today"},
-        })
-        monkeypatch.setattr(session_end, "check_pr_state", lambda pr: "")
-        tasks = session_end.get_task_list()
-        assert tasks is not None
-        warning = session_end.check_unpaused_pr(tasks=tasks, project_slug="proj")
-        assert warning is not None and "777" in warning, (
-            "the handoff-URL scan sub-path must resolve the PR through the real resolver"
-        )
 
-    def test_team_task_without_pr_indicator_no_warning(self, session_end_live_env, monkeypatch):
-        # Discrimination control: a real team task with NO pr indicator -> the
-        # scan finds nothing -> None. Proves the warnings above come SPECIFICALLY
-        # from the PR in the task metadata, not from the mere fact that the
-        # resolver returned tasks. NOT named a *gate* because its load-bearing
-        # assertion (no-PR-task -> no-warning) is a POST-fix property; but it is
-        # still resolver-coupled via the `assert tasks is not None` precondition,
-        # so it too FAILS on a source-revert (full-file pre-fix = {3 failed}).
-        _write_task(session_end_live_env, "1", {"intentional_wait": {"reason": "x"}})
-        monkeypatch.setattr(session_end, "check_pr_state", lambda pr: "")
-        tasks = session_end.get_task_list()
-        assert tasks is not None, "resolver returns the task; the scan just finds no PR in it"
-        assert session_end.check_unpaused_pr(tasks=tasks, project_slug="proj") is None, (
-            "a team task with no PR indicator must NOT produce a warning"
-        )

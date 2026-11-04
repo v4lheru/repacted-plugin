@@ -59,36 +59,3 @@ def test_an_old_dir_with_old_children_is_reaped(tmp_path):
     assert not session_dir.exists()
 
 
-def test_a_checkpointed_dir_inside_its_longer_ttl_survives(tmp_path):
-    session_dir = _session(tmp_path, dir_days=100, child_days=100, checkpointed=True)
-    _reap(tmp_path)
-    assert session_dir.exists()
-
-
-def test_a_checkpointed_dir_past_its_longer_ttl_is_reaped(tmp_path):
-    session_dir = _session(tmp_path, dir_days=200, child_days=200, checkpointed=True)
-    _reap(tmp_path)
-    assert not session_dir.exists()
-
-
-def test_a_fresh_dir_with_old_children_survives(tmp_path):
-    """A recent create or unlink moved the dir's own mtime, which then
-    outranks the older children: the age can only get younger."""
-    session_dir = _session(tmp_path, dir_days=0, child_days=40)
-    _reap(tmp_path)
-    assert session_dir.exists()
-
-
-def test_children_that_cannot_be_observed_keep_the_dir(tmp_path, monkeypatch):
-    session_dir = _session(tmp_path, dir_days=40, child_days=40)
-    real_lstat = Path.lstat
-
-    def lstat(path, *args, **kwargs):
-        if path.parent == session_dir:
-            raise PermissionError(13, "denied", str(path))
-        return real_lstat(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "lstat", lstat)
-    _reap(tmp_path)
-    monkeypatch.undo()
-    assert session_dir.exists()

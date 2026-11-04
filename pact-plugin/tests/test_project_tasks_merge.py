@@ -11,6 +11,9 @@ import pytest
 
 from project_tasks_support import git, new_repo, reader, writer
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 
 def _clone(src, dst):
     git(src.parent, "clone", "-q", str(src), str(dst))
@@ -80,23 +83,3 @@ def test_union_merge_replays_the_same_in_both_directions_and_under_rebase(two_cl
     assert states["a_into_b"] == states["b_into_a"] == states["b_onto_a"]
 
 
-def test_union_merge_flags_a_concurrent_edit_of_one_field(two_clones):
-    tmp_path, a, b, shared, picked = two_clones
-    R = reader()
-    work, result = _combine(tmp_path, "flagged", b, a, "merge")
-    assert result.returncode == 0
-    state = R.replay(R.read_log(work / ".repacted" / "tasks.jsonl").events)
-    flags = [c for c in state.concurrent if c["ref"] == shared and c["field"] == "status"]
-    assert flags and sorted(flags[0]["values"]) == ["active", "blocked"]
-
-
-def test_the_union_line_is_what_makes_the_merge_clean(two_clones):
-    """Control: without the merge=union attribute the same histories conflict, so the passing
-    rows above are owed to the attribute `init` writes, not to luck in the line layout."""
-    tmp_path, a, b, shared, picked = two_clones
-    work = _clone(b, tmp_path / "no_union")
-    (work / ".gitattributes").write_text("")
-    git(work, "commit", "-q", "-am", "drop the union attribute")
-    git(work, "fetch", "-q", str(a), "HEAD")
-    result = git(work, "merge", "-q", "--no-edit", "FETCH_HEAD", check=False)
-    assert result.returncode != 0

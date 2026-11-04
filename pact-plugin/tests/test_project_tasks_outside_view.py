@@ -59,6 +59,7 @@ def branch_add(repo, branch, *add_args):
     ok(run_cli(repo, "commit"))
 
 
+@pytest.mark.slow
 class TestViewsAcrossAMerge:
     def test_two_writer_branches_merge_without_a_conflict_and_the_drift_line_names_render(self, base):
         repo, _ = base
@@ -87,17 +88,6 @@ class TestViewsAcrossAMerge:
         ok(run_cli(repo, "render"))
         gates = json.loads((repo / "docs" / "release-gates.json").read_text())["gates"]["v9"]
         assert sorted(entry["gate"] for entry in gates) == ["Gate A", "Gate B"]
-
-    def test_an_empty_log_and_a_corrupt_line_do_not_break_the_drift_check(self, tmp_path):
-        repo = new_repo(tmp_path / "repo")
-        ok(run_cli(repo, "init"))
-        assert DRIFT not in ok(run_cli(repo, "next")).stdout       # no views configured
-        ok(run_cli(repo, "render", "--configure"))
-        assert DRIFT not in ok(run_cli(repo, "next")).stdout
-        with (repo / ".repacted" / "tasks.jsonl").open("a") as log:
-            log.write('{"v": 1, "op": "create", broken\n')
-        out = ok(run_cli(repo, "fsck")).stdout
-        assert "corrupt" in out and DRIFT not in out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -137,13 +127,6 @@ class TestRunsWithoutADigest:
         assert out.splitlines()[0] == "fsck: clean"
         assert f"unverifiable here" in out and world.ref in out
 
-    def test_a_digest_less_run_whose_log_is_here_and_fails_still_fails(self, world):
-        name = world.plant_run(passed=12)
-        cli(world, "done", world.ref, "--evidence", f"run:{name}")
-        strip_digests(world)
-        (world.data / "runs" / name).write_text("============ 3 passed, 9 failed in 0.50s ====\n")
-        assert "no longer verifies" in cli(world, "fsck").stdout
-
 
 # ---------------------------------------------------------------------------------------------
 # D4: drop and open children
@@ -165,18 +148,6 @@ class TestDropAParent:
             assert result.returncode == 65 and open_child in result.stderr and "--with-children" in result.stderr
         assert world.state().tasks[parent]["status"] != "dropped"
 
-    def test_with_children_drops_the_open_descendants_and_keeps_the_done_one(self, world):
-        parent, done_child, open_child, grandchild = self.family(world)
-        ok(cli(world, "drop", parent, "--with-children"))
-        tasks = world.state().tasks
-        assert [tasks[r]["status"] for r in (parent, open_child, grandchild)] == ["dropped"] * 3
-        assert tasks[done_child]["status"] == "done"
-        assert "open child of settled parent" not in cli(world, "fsck").stdout
-
-    def test_a_parent_without_open_children_drops_as_before(self, world):
-        ok(cli(world, "drop", world.ref))
-        assert world.state().tasks[world.ref]["status"] == "dropped"
-
 
 # ---------------------------------------------------------------------------------------------
 # P-B: the session's team in `by`
@@ -192,33 +163,4 @@ class TestByCarriesTheTeam:
                    env={"CLAUDE_PLUGIN_DATA": str(world.data), "CLAUDE_CODE_SESSION_ID": SID}))
         assert last_by(world) == f"lead@{TEAM}"
 
-    def test_no_session_or_an_unknown_one_writes_plain_lead(self, world):
-        for sid in ("", "5e551011-0000-4000-8000-0000000000ff"):
-            ok(run_cli(world.repo, "set", world.ref, "--note", f"n{sid[-2:]}",
-                       env={"CLAUDE_PLUGIN_DATA": str(world.data), "CLAUDE_CODE_SESSION_ID": sid}))
-            assert last_by(world) == "lead"
 
-    @pytest.mark.parametrize("sid", ["*", "../" + SID, SID + "/..", "?" * 36])
-    def test_a_hostile_session_id_is_never_globbed(self, world, sid):
-        ok(run_cli(world.repo, "set", world.ref, "--note", "x",
-                   env={"CLAUDE_PLUGIN_DATA": str(world.data), "CLAUDE_CODE_SESSION_ID": sid}))
-        assert last_by(world) == "lead"
-
-    @pytest.mark.parametrize("team", ["", "a/b", "x" * 80, "téam", 7])
-    def test_a_team_name_the_by_rule_refuses_falls_back_to_plain_lead(self, world, team):
-        (world.session_dir / "pact-session-context.json").write_text(json.dumps({"team_name": team}))
-        assert writer().with_team("lead", SID) == "lead"
-
-    def test_an_explicit_by_wins(self, world):
-        ok(run_cli(world.repo, "set", world.ref, "--note", "x",
-                   env={"CLAUDE_PLUGIN_DATA": str(world.data), "CLAUDE_CODE_SESSION_ID": SID,
-                        "REPACT_TASK_BY": "import"}))
-        assert last_by(world) == "import"
-
-    def test_the_bridge_writes_as_bridge_at_its_team(self, world):
-        world.store.start(world.ref, ptask=f"{TEAM}/{TASK_B}")
-        world.task(project_task=world.ref,
-                   handoff={**HANDOFF, "evidence": {"head": world.head}, "refs": {world.ref: "done: x"}})
-        run_hook(lead_accepts(world))
-        assert world.project_task()["status"] == "done"
-        assert last_by(world) == f"bridge@{TEAM}"

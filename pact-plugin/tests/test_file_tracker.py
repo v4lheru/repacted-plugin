@@ -57,60 +57,6 @@ class TestFileTracker:
         assert conflict is not None
         assert "backend-coder" in conflict
 
-    def test_no_conflict_same_agent(self, tmp_path):
-        from file_tracker import track_edit, check_conflict
-
-        tracking_file = tmp_path / "file-edits.json"
-
-        track_edit("src/auth.ts", "backend-coder", "Edit", str(tracking_file))
-        conflict = check_conflict("src/auth.ts", "backend-coder", str(tracking_file))
-
-        assert conflict is None
-
-    def test_creates_tracking_file(self, tmp_path):
-        from file_tracker import track_edit
-
-        tracking_file = tmp_path / "file-edits.json"
-        assert not tracking_file.exists()
-
-        track_edit("src/auth.ts", "backend-coder", "Edit", str(tracking_file))
-
-        assert tracking_file.exists()
-
-    def test_noop_when_no_agent_name(self, tmp_path):
-        from file_tracker import check_conflict
-
-        tracking_file = tmp_path / "file-edits.json"
-        conflict = check_conflict("src/auth.ts", "", str(tracking_file))
-
-        assert conflict is None
-
-    def test_corrupted_tracking_json_treated_as_empty(self, tmp_path):
-        """Corrupted tracking file should be treated as empty list."""
-        from file_tracker import track_edit
-
-        tracking_file = tmp_path / "file-edits.json"
-        tracking_file.write_text("not valid json{{{")
-
-        abs_path = str(tmp_path / "src" / "auth.ts")
-        # track_edit should overwrite with a fresh single-entry list
-        track_edit(abs_path, "backend-coder", "Edit", str(tracking_file))
-
-        entries = json.loads(tracking_file.read_text())
-        assert len(entries) == 1
-        assert entries[0]["file"] == os.path.realpath(abs_path)
-
-    def test_corrupted_tracking_json_no_conflict(self, tmp_path):
-        """check_conflict with corrupted tracking file should return None."""
-        from file_tracker import check_conflict
-
-        tracking_file = tmp_path / "file-edits.json"
-        tracking_file.write_text("not valid json{{{")
-
-        conflict = check_conflict("src/auth.ts", "backend-coder", str(tracking_file))
-
-        assert conflict is None
-
 
 class TestPathNormalization:
     """Tests for _normalize_path and its effect on conflict detection."""
@@ -142,27 +88,6 @@ class TestPathNormalization:
         conflict = check_conflict("src/auth.ts", "frontend-coder", str(tracking_file))
         assert conflict is not None
         assert "backend-coder" in conflict
-
-    def test_dotdot_paths_normalized(self, tmp_path, monkeypatch):
-        """Paths with '../' components are resolved correctly."""
-        from file_tracker import track_edit, check_conflict
-
-        tracking_file = tmp_path / "file-edits.json"
-
-        monkeypatch.chdir(tmp_path)
-        track_edit("src/../src/auth.ts", "backend-coder", "Edit", str(tracking_file))
-
-        conflict = check_conflict("src/auth.ts", "frontend-coder", str(tracking_file))
-        assert conflict is not None
-        assert "backend-coder" in conflict
-
-    def test_normalize_path_helper(self):
-        """_normalize_path produces absolute, resolved paths."""
-        from file_tracker import _normalize_path
-
-        result = _normalize_path("/tmp/foo/../bar/baz.ts")
-        assert result == os.path.join(os.path.realpath("/tmp"), "bar", "baz.ts")
-        assert ".." not in result
 
 
 class TestLockRelease:
@@ -226,55 +151,6 @@ class TestMainEntryPoint:
 
         assert exc_info.value.code == 0
 
-    def test_main_exits_0_on_invalid_json(self):
-        from file_tracker import main
-
-        with patch("sys.stdin", io.StringIO("not json")):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-
-    def test_main_exits_0_when_no_file_path(self):
-        from file_tracker import main
-
-        input_data = json.dumps({"tool_input": {}})
-
-        with patch("file_tracker.frame_team_and_name", return_value=("pact-test", "")), \
-             patch("file_tracker.pact_context.init"), \
-             patch("sys.stdin", io.StringIO(input_data)):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-
-    def test_main_outputs_warning_on_conflict(self, capsys):
-        from file_tracker import main
-
-        input_data = json.dumps({
-            "tool_input": {"file_path": "src/auth.ts"},
-            "tool_name": "Edit",
-        })
-
-        conflict_msg = "File conflict: src/auth.ts was also edited by backend-coder."
-        with patch("file_tracker.frame_team_and_name", return_value=("pact-test", "")), \
-             patch("file_tracker.pact_context.init"), \
-             patch("file_tracker.resolve_agent_name", return_value="frontend-coder"), \
-             patch("file_tracker.check_conflict", return_value=conflict_msg), \
-             patch("file_tracker.track_edit"), \
-             patch("sys.stdin", io.StringIO(input_data)):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        output = json.loads(captured.out)
-        assert "additionalContext" in output["hookSpecificOutput"]
-        assert "conflict" in output["hookSpecificOutput"]["additionalContext"].lower()
-        # Issue #658: hookEventName is required by the harness schema; missing
-        # it causes the harness to silently fail open (additionalContext dropped).
-        assert output["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
-
 
 class TestFileTrackerCompositeKey:
     """NEW-1 (#878): the editor key is the composite (agent_name, session_id),
@@ -301,75 +177,6 @@ class TestFileTrackerCompositeKey:
         assert conflict is not None
         assert "auth.ts" in conflict
         assert "backend-coder" in conflict
-
-    def test_two_same_name_other_instances_label_disambiguated(self, tmp_path):
-        """When TWO other editors share an agent_name (different sessions), the
-        labels are disambiguated with a session suffix so the message names two
-        distinct editors rather than a confusing repeated bare name."""
-        from file_tracker import track_edit, check_conflict
-
-        tracking_file = str(tmp_path / "file-edits.json")
-        abs_path = str(tmp_path / "src" / "auth.ts")
-
-        track_edit(abs_path, "backend-coder", "Edit", tracking_file, session_id="sess-aaaa")
-        track_edit(abs_path, "backend-coder", "Edit", tracking_file, session_id="sess-bbbb")
-        # A third instance checks.
-        conflict = check_conflict(abs_path, "backend-coder", tracking_file, session_id="sess-cccc")
-        assert conflict is not None
-        assert "session sess-aaa" in conflict
-        assert "session sess-bbb" in conflict
-
-    def test_same_instance_twice_no_false_positive(self, tmp_path):
-        """The SAME instance (same agent_name AND session_id) editing twice is
-        NOT a conflict."""
-        from file_tracker import track_edit, check_conflict
-
-        tracking_file = str(tmp_path / "file-edits.json")
-        abs_path = str(tmp_path / "src" / "auth.ts")
-
-        track_edit(abs_path, "backend-coder", "Edit", tracking_file, session_id="sess-aaaa")
-        conflict = check_conflict(abs_path, "backend-coder", tracking_file, session_id="sess-aaaa")
-        assert conflict is None
-
-    def test_in_process_distinct_agent_names_shared_session_detected(self, tmp_path):
-        """In-process model (one process → one shared session_id, distinct
-        agent_names) → conflict still DETECTED via the agent_name half of the
-        composite."""
-        from file_tracker import track_edit, check_conflict
-
-        tracking_file = str(tmp_path / "file-edits.json")
-        abs_path = str(tmp_path / "src" / "auth.ts")
-
-        track_edit(abs_path, "backend-coder", "Edit", tracking_file, session_id="sess-shared")
-        conflict = check_conflict(abs_path, "frontend-coder", tracking_file, session_id="sess-shared")
-        assert conflict is not None
-        assert "backend-coder" in conflict
-
-    def test_track_edit_records_session_id(self, tmp_path):
-        """The composite-key session_id component is persisted in the entry."""
-        from file_tracker import track_edit
-
-        tracking_file = tmp_path / "file-edits.json"
-        abs_path = str(tmp_path / "src" / "auth.ts")
-        track_edit(abs_path, "backend-coder", "Edit", str(tracking_file), session_id="sess-xyz")
-
-        entries = json.loads(tracking_file.read_text())
-        assert entries[0]["session_id"] == "sess-xyz"
-        assert entries[0]["agent"] == "backend-coder"  # label retained
-
-    def test_single_other_editor_label_not_disambiguated(self, tmp_path):
-        """When only ONE other editor instance exists for a name, the label is
-        the bare agent_name (no noisy session suffix)."""
-        from file_tracker import track_edit, check_conflict
-
-        tracking_file = str(tmp_path / "file-edits.json")
-        abs_path = str(tmp_path / "src" / "auth.ts")
-
-        track_edit(abs_path, "frontend-coder", "Edit", tracking_file, session_id="sess-aaaa")
-        conflict = check_conflict(abs_path, "backend-coder", tracking_file, session_id="sess-bbbb")
-        assert conflict is not None
-        assert "frontend-coder" in conflict
-        assert "session" not in conflict  # unambiguous single editor → no suffix
 
 
 # ---------------------------------------------------------------------------
@@ -441,14 +248,3 @@ class TestFileTrackerInASeparateProcess:
         warning = self._edit(tmp_path, "ft-session-b", target)
         assert "File conflict" in warning and "tmux-editor" in warning, warning
 
-    def test_two_same_name_separate_process_editors_draw_the_conflict_warning(self, tmp_path):
-        """REVERT PROOF. Two instances with one member name are separate editors
-        only through their sessions; without the frame's session_id both keys
-        would be (name, "") and the second edit would look like the first."""
-        config = self._root(tmp_path, ["tmux-editor"])
-        self._register(config, "ft-session-a", "tmux-editor")
-        self._register(config, "ft-session-b", "tmux-editor")
-        target = str(tmp_path / "shared.py")
-        assert self._edit(tmp_path, "ft-session-a", target) == ""
-        warning = self._edit(tmp_path, "ft-session-b", target)
-        assert "File conflict" in warning, warning

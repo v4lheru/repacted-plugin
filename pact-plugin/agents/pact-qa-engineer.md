@@ -3,6 +3,7 @@ name: pact-qa-engineer
 description: "Runs the app to verify pages, interactions and regressions. Needs a dev server."
 color: "#FF69B4"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

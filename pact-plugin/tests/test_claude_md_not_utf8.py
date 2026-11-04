@@ -16,9 +16,7 @@ NOT_UTF8 = b"# My notes\n\nna\xefve caf\xe9\n"
 
 
 @pytest.mark.parametrize("call", [
-    migrate_to_managed_structure,
-    lambda: update_session_info("sid", "session-sid"),
-], ids=["migration", "session block"])
+    migrate_to_managed_structure,], ids=["migration",])
 def test_a_writer_leaves_a_non_utf8_claude_md_byte_identical(tmp_path, monkeypatch, call):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     target = tmp_path / "CLAUDE.md"

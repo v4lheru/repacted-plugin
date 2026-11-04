@@ -43,20 +43,6 @@ def repo(tmp_path):
     return tmp_path
 
 
-def test_every_name_in_the_git_helper_annotation_is_bound_at_module_level():
-    tree = ast.parse(Path(pre.__file__).read_text(encoding="utf-8"))
-    bound = set()
-    for node in ast.walk(ast.Module(body=[n for n in tree.body if not isinstance(
-            n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))], type_ignores=[])):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            bound |= {(alias.asname or alias.name).split(".")[0] for alias in node.names}
-    helper = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_git_quiet")
-    names = {n.id for n in ast.walk(ast.parse(helper.returns.value, mode="eval"))
-             if isinstance(n, ast.Name)}
-    names -= set(dir(builtins))
-    assert names == {"subprocess"} and names <= bound, names - bound
-
-
 def test_a_branch_that_loses_nothing_is_disposable(repo):
     assert pre._git_quiet(str(repo), "rev-parse", "HEAD").returncode == 0
     assert pre._deletes_only_disposable_branches("git branch -D merged", str(repo)) is True

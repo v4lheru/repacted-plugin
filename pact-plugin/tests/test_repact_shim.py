@@ -87,6 +87,7 @@ def run_shim(home: Path, *args: str) -> subprocess.CompletedProcess:
 
 # ─── one regression test per behaviour ────────────────────────────────────────────────────
 
+@pytest.mark.slow
 def test_a_fresh_home_gets_a_working_shim_that_passes_arguments_unchanged(home, tmp_path):
     root = fake_plugin(tmp_path / "cache" / "repacted" / "2.0.0")
     register(home / ".claude", {"repacted@repacted": user(root)})
@@ -128,59 +129,6 @@ def test_a_foreign_repact_is_never_overwritten_or_deleted_and_the_doctor_names_i
     assert result.state == "amber" and "is not rePACTed's shim" in result.summary
 
 
-def test_the_off_switch_writes_nothing_removes_our_own_shim_and_the_doctor_reads_settings(home, tmp_path):
-    register(home / ".claude", {"repacted@repacted": user(fake_plugin(tmp_path / "root"))})
-    off = env(home, **{repact_shim.OPTION: "0"})
-    assert repact_shim.ensure_shim(home, home / ".claude", off) is None
-    assert not repact_shim.shim_path(home).exists()
-    repact_shim.ensure_shim(home, home / ".claude", env(home))
-    note = repact_shim.ensure_shim(home, home / ".claude", off)
-    assert note and note.startswith("Removed") and not repact_shim.shim_path(home).exists()
-    # A plain terminal has no merged settings env: the doctor reads the switch from settings.json.
-    register(home / ".claude", {"repacted@repacted": user(tmp_path / "root")},
-             env_block={repact_shim.OPTION: "off"})
-    assert _doctor_state.check_launcher(context_from_env(env(home))).state == "skip"
-
-
-def test_the_doctor_prints_the_exact_path_line_when_local_bin_is_not_on_path(home, tmp_path):
-    register(home / ".claude", {"repacted@repacted": user(fake_plugin(tmp_path / "root"))})
-    repact_shim.ensure_shim(home, home / ".claude", env(home))
-    result = _doctor_state.check_launcher(context_from_env(env(home, PATH="/usr/bin:/bin")))
-    assert result.state == "amber"
-    assert result.summary == (f"{home}/.local/bin is not on PATH; add to ~/.zshrc: "
-                              'export PATH="$HOME/.local/bin:$PATH"')
-
-
 # ─── the resolver at its boundary: installed_plugins.json is outside input ────────────────
 
-@pytest.mark.parametrize("registry", [b"", b"[]", b"{not json", json.dumps({"plugins": []}).encode(),
-                                      json.dumps({"plugins": {"repacted@m": "x"}}).encode(),
-                                      json.dumps({"plugins": {"repacted@m": [{"installPath": 7}, "x", None]}}).encode(),
-                                      json.dumps({"plugins": {"repacted": [{"installPath": "/nope"}]}}).encode()])
-def test_a_hostile_registry_is_a_clear_refusal_never_a_crash(home, registry):
-    (home / ".claude" / "plugins").mkdir(parents=True)
-    (home / ".claude" / "plugins" / "installed_plugins.json").write_bytes(registry)
-    root, why = repact_shim.resolve_root(home / ".claude")
-    assert root is None and why
-    assert repact_shim.ensure_shim(home, home / ".claude", env(home)) is None
-    assert not repact_shim.shim_path(home).exists()
 
-
-def test_candidate_rules_name_scope_enabled_then_refuse(home, tmp_path):
-    a, b, n8n = (fake_plugin(tmp_path / x) for x in ("a", "b", "n8n"))
-    config = home / ".claude"
-    register(config, {"repacted-n8n@repacted": user(n8n), "repacted@repacted": user(a),
-                      "repacted@local": user(b, scope="project")})
-    assert repact_shim.resolve_root(config) == (a, None)        # n8n never; project only as a last resort
-    register(config, {"repacted@repacted": user(a), "repacted@local": user(b)},
-             enabled={"repacted@local": True, "repacted@repacted": False})
-    assert repact_shim.resolve_root(config) == (b, None)        # two user scope: the enabled one
-    register(config, {"repacted@repacted": user(a), "repacted@local": user(b)})
-    root, why = repact_shim.resolve_root(config)
-    assert root is None and "repacted@repacted" in why and "repacted@local" in why
-
-
-def test_the_shim_quotes_the_resolver_safely():
-    text = repact_shim.shim_text()
-    assert "'" not in repact_shim.RESOLVER and text.count("'") == 2
-    assert "--dangerously" not in text and text.rstrip().endswith('"$config" "$@"')

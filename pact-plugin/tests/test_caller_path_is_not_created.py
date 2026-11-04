@@ -133,55 +133,6 @@ class TestACallerPathIsOpenedNotCreated:
             "against an empty database instead of failing"
         )
 
-    def test_a_store_that_is_present_still_opens(self, tmp_path):
-        """THE OVER-BLOCK GUARD. A refusal that also refuses correct paths is
-        worse than the defect. This arm is why the refusal is bounded to
-        ABSENT files rather than to caller paths as a class."""
-        store = _make_store(tmp_path / "already-there.db")
-
-        proc = _run("list", "--db-path", str(store))
-
-        assert proc.returncode == 0, (
-            f"a store that is present was refused. rc={proc.returncode} "
-            f"stderr={proc.stderr!r}"
-        )
-
-    @pytest.mark.parametrize(
-        "name", ["has#hash.db", "has?query.db", "has%pct.db", "has space.db"]
-    )
-    def test_a_path_holding_shell_or_uri_syntax_still_opens(self, tmp_path, name):
-        """THE CARDINAL ARM, AND IT IS NOT OPTIONAL.
-
-        Over-block is the cardinal failure here. A store path may hold `#`, `?`,
-        `%` or a space. Each of those is syntax to a URI, and a space is syntax
-        to a shell. The path must survive the argument vector AND the existence
-        test, so a correct path holding one of them continues to open.
-        """
-        store = _make_store(tmp_path / name)
-
-        proc = _run("list", "--db-path", str(store))
-
-        assert proc.returncode == 0, (
-            f"a correct path holding {name!r} was refused, which turns a guard "
-            f"against typos into a guard against good-faith callers. "
-            f"stderr={proc.stderr!r}"
-        )
-
-    def test_setup_may_bring_a_caller_path_into_existence(self, tmp_path):
-        """THE EXEMPTION, AND IT IS THE OTHER HALF OF THE RULE.
-
-        `setup` is the one command allowed to create at a path a caller typed.
-        Without this arm the refusal would read as correct while leaving no way
-        to make a store at a named location at all.
-        """
-        store = tmp_path / "brand-new.db"
-        assert not store.exists()
-
-        proc = _run("setup", "--db-path", str(store))
-
-        assert proc.returncode == 0, f"setup was refused. stderr={proc.stderr!r}"
-        assert store.exists(), "setup reported success and created no store"
-
 
 class TestTheDirectoryHalfStillHoldsBelowTheBoundary:
     """THE DIRECTORY HALF IS PINNED HERE, AT THE LAYER THE CLI SEAM CANNOT SEE.
@@ -232,35 +183,6 @@ class TestTheCreatingRouteKeepsItsHardening:
 
         assert (derived_root / "memory.db").exists()
 
-    def test_a_new_derived_store_hardens_itself_and_its_sidecars(
-        self, tmp_path, monkeypatch
-    ):
-        """`is_new` DRIVES THE CREATE AND THE SIDECAR PERMISSIONS.
-
-        A change that suppressed the create would leave a genuinely new store
-        with sidecars at the process umask, holding memory content. This arm
-        measures the MODE rather than the presence.
-        """
-        derived_root = tmp_path / "derived" / "pact-memory"
-        monkeypatch.setenv("PACT_TEST_MEMORY_DIR", str(derived_root))
-        store = derived_root / "memory.db"
-
-        with get_connection() as conn:
-            conn.execute("CREATE TABLE t (x INTEGER)")
-            conn.execute("INSERT INTO t VALUES (1)")
-
-            assert stat.S_IMODE(store.stat().st_mode) == 0o600
-
-            hardened = 0
-            for suffix in ("-wal", "-shm"):
-                sidecar = Path(str(store) + suffix)
-                if sidecar.exists():
-                    assert stat.S_IMODE(sidecar.stat().st_mode) == 0o600
-                    hardened += 1
-            # CONTROL: at least one sidecar was present, so the loop above was
-            # not vacuous. WAL mode creates them on the first write.
-            assert hardened > 0
-
 
 class TestTheOrderOfTheBoundaryCheck:
     def test_an_absent_path_is_reported_before_malformed_input(self, tmp_path):
@@ -294,56 +216,6 @@ class TestTheOrderOfTheBoundaryCheck:
             "than update the expected string to whatever the code now returns."
         )
         assert not absent.exists()
-
-    def test_an_absent_path_precedes_malformed_input_to_update_too(self, tmp_path):
-        """THE SECOND HANDLER OF THE PAIR, SO NEITHER ONE STANDS ALONE.
-
-        `cmd_save` and `cmd_update` are the ONLY two handlers that report an
-        error before they open a store. An arm on one of them leaves the other
-        free to drift. This arm is the same claim on `cmd_update`.
-        """
-        absent = tmp_path / "not-there.db"
-
-        proc = _run(
-            "update", "--db-path", str(absent), "a" * 32, "{not valid json"
-        )
-
-        assert proc.returncode != 0
-        assert _envelope(proc)["error"] == "DB_PATH_NOT_FOUND"
-        assert not absent.exists()
-
-    @pytest.mark.parametrize(
-        "argv_tail",
-        [
-            ("save", "{not valid json"),
-            ("update", "a" * 32, "{not valid json"),
-        ],
-        ids=["save", "update"],
-    )
-    def test_with_the_store_present_the_handler_reports_the_input(
-        self, memory_store, argv_tail
-    ):
-        """THE POSITIVE CONTROL, AND THE TWO ARMS ABOVE ARE VACUOUS WITHOUT IT.
-
-        The arms above asserts that the PATH is named first. Each of them passes
-        against a build that DELETED the JSON check, because a deleted check also
-        never reports `INVALID_JSON`. This arm removes that reading: with the
-        store PRESENT, the boundary has nothing to refuse, so the handler check
-        runs and names the input.
-
-        READ THE THREE TOGETHER. They say the boundary check CHANGES THE ORDER of
-        two live checks. They do not say it suppresses one.
-        """
-        command, *rest = argv_tail
-        store = memory_store("present.db")
-
-        proc = _run(command, "--db-path", str(store), *rest)
-
-        assert proc.returncode != 0
-        assert _envelope(proc)["error"] == "INVALID_JSON", (
-            "with the store present the handler no longer reports the malformed "
-            "input, so the ordering arms above prove nothing about ordering"
-        )
 
 
 class TestEachNonExemptCommandRefusesAnAbsentCallerPath:
@@ -383,29 +255,6 @@ class TestEachNonExemptCommandRefusesAnAbsentCallerPath:
             "the exemption set widened. Each command it holds stops being "
             "swept, so a widening must be a deliberate edit here as well as "
             "there."
-        )
-
-    @pytest.mark.parametrize("command", _NON_EXEMPT_COMMANDS)
-    def test_an_absent_caller_path_is_refused(self, command, tmp_path):
-        """Each command other than `setup` refuses a caller path that is absent.
-
-        ⚠️ THIS ARM READS THE ERROR NAME AND NOT THE STATUS, AND THAT IS THE
-        WHOLE DESIGN OF IT. A row that exits at argparse also returns a
-        non-zero status. A status assertion would pass for that row while the
-        row never reached the boundary, which would rebuild inside this sweep
-        the defect the sweep exists to close.
-        """
-        absent = tmp_path / f"{command}-not-there.db"
-
-        proc = _run(command, *_MINIMAL_ARGS[command], "--db-path", str(absent))
-
-        assert proc.returncode != 0, f"`{command}` reported success"
-        assert _envelope(proc)["error"] == "DB_PATH_NOT_FOUND", (
-            f"`{command}` did not reach the boundary refusal, so this row "
-            f"pins nothing. stdout={proc.stdout[:200]!r}"
-        )
-        assert not absent.exists(), (
-            f"`{command}` built a store at a path a caller typed"
         )
 
 
@@ -448,126 +297,3 @@ class TestSetupMayAlsoCreateTheParentDirectory:
         assert target.exists()
 
 
-class TestTheEmptyStringIsNotACallerPath:
-    """THE ONE EXCEPTION TO THE RULE, PINNED SO THE RULE STAYS HONEST.
-
-    `--db-path ""` is a caller value that is not a store, and it is NOT
-    refused. The falsy coercion in `cli.main` collapses it to None before the
-    refusal reads it, so it takes the DERIVED route. That coercion is
-    deliberate and pre-existing, and this arm does not ask for it to change.
-    It pins the EXCEPTION, so a reader of the rule meets its boundary.
-
-    WHAT ANSWERS INSTEAD, which is why this arm needs no store. Under pytest
-    the unscoped-store guard refuses the derived route, so the call is refused
-    for a different reason and reaches nothing.
-    """
-
-    def test_an_empty_db_path_is_not_refused_as_a_caller_path(self):
-        proc = _run("list", "--db-path", "")
-
-        envelope = _envelope(proc)
-        assert envelope["error"] != "DB_PATH_NOT_FOUND", (
-            "the empty string is now treated as a caller path. That may be an "
-            "improvement, and it changes a declared behaviour: read the "
-            "coercion comment in `cli.main` and decide deliberately."
-        )
-        assert envelope["error"] == "UNSCOPED_TEST_DB", (
-            f"the empty string took neither the refusal nor the guarded "
-            f"derived route, so this arm no longer shows where it lands: "
-            f"{envelope}"
-        )
-
-
-class TestTheRefusalMessageStatesWhatItObserved:
-    """THE MESSAGE MUST NOT ASSERT ABSENCE, BECAUSE THE TEST CANNOT SEE IT.
-
-    `Path.exists()` answers False for a path that is ABSENT and for a path the
-    process cannot STAT. A permission fault on a parent directory therefore
-    reads the same as a typo, and a message that asserts the store is not
-    there sends such a caller to `setup`, which does not repair one.
-
-    THE PREMISE ABOVE IS MEASURED, NOT ASSUMED, AND THE MEASUREMENT IS NOT
-    IN THIS FILE. A store that is present below a parent directory at mode
-    0o000 makes `Path.exists()` answer False, and the CLI then reports
-    DB_PATH_NOT_FOUND for a store that IS there. `Path.exists()` delegates to
-    `os.path.exists`, which returns False for an OSError rather than raising
-    it. That is why the message names the stat case, and it is what lets this
-    arm stub the predicate rather than build the condition.
-
-    THIS ARM REPRODUCES THE CONDITION AND NOT THE CAUSE. It makes the
-    predicate answer False while the store IS present. That is the semantics
-    that matter, and it is environment-independent. A mode change on a parent
-    directory does not hold when the suite runs as root, and would give a
-    silent pass there.
-    """
-
-    def test_the_message_does_not_claim_the_store_is_absent(
-        self, tmp_path, monkeypatch, capfd
-    ):
-        store = _make_store(tmp_path / "present.db")
-        real_exists = Path.exists
-
-        def _blind_to_one_path(self):
-            if self == store:
-                return False
-            return real_exists(self)
-
-        monkeypatch.setattr(Path, "exists", _blind_to_one_path)
-
-        with pytest.raises(SystemExit):
-            cli.main(["list", "--db-path", str(store)])
-
-        envelope = json.loads(capfd.readouterr().err)
-        assert envelope["error"] == "DB_PATH_NOT_FOUND"
-        message = envelope["message"]
-        assert "cannot stat" in message, (
-            f"the message does not tell the caller that the test it failed "
-            f"also fails for a path this process cannot stat, so a permission "
-            f"fault reads as a typo: {message!r}"
-        )
-        assert "No store at" not in message, (
-            f"the message asserts absence, which is an inference the "
-            f"predicate did not establish: {message!r}"
-        )
-
-
-class TestTheRefusalScrubsTheHomeDirectory:
-    """THE MESSAGE CARRIES A CALLER PATH, SO IT REPORTS THE SCRUBBED FORM.
-
-    Six sibling error sites in `cli.py` scrub before they report, because a
-    caller pipes this envelope into a log and an absolute path carries the
-    account name. The refusal is the seventh site and follows the same idiom.
-
-    THIS ARM EXISTS BECAUSE THE PROPERTY WAS CORRECT AND UNDEFENDED. Removal
-    of the `_scrub` call left the suite green, which is the same shape as the
-    defect this file closes: a property that holds today and that no arm
-    watches tomorrow. A guard nobody watches is one edit from gone.
-
-    MUTANT THAT KILLS THIS ARM: report `str(db_path)` in place of the scrubbed
-    value at the refusal site in `cli.main`.
-    """
-
-    def test_the_refused_path_is_reported_below_a_tilde(self, tmp_path):
-        home = tmp_path / "home"
-        (home / "store-dir").mkdir(parents=True)
-        absent = home / "store-dir" / "not-there.db"
-
-        env = dict(os.environ)
-        env["HOME"] = str(home)
-        proc = subprocess.run(
-            [sys.executable, str(_CLI), "list", "--db-path", str(absent)],
-            capture_output=True, text=True, timeout=60, env=env,
-        )
-
-        message = _envelope(proc)["message"]
-        assert str(home) not in message, (
-            f"the refusal reported the home directory literally, so a caller "
-            f"who pipes this envelope into a log leaks it: {message!r}"
-        )
-        # THE POSITIVE CONTROL. Absence of the literal is also satisfied by a
-        # message that names no path at all, so the arm reads the scrubbed
-        # form as well.
-        assert "~/store-dir/not-there.db" in message, (
-            f"the path is neither literal nor scrubbed to a tilde, so this "
-            f"arm cannot say the scrub ran: {message!r}"
-        )

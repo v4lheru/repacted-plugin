@@ -3,6 +3,7 @@ name: pact-frontend-coder
 description: "Implements accessible, responsive user interfaces and their state."
 color: "#32CD32"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

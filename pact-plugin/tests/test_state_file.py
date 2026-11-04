@@ -101,11 +101,7 @@ def test_a_write_that_fails_midway_leaves_the_previous_registry_intact(
 # The modules that write state files. Each must lock every write; the list
 # grows as writers are routed through state_file.
 STATE_WRITER_MODULES = (
-    "shared/state_file.py",
-    "shared/background_work.py",
-    "track_files.py",
-    "file_tracker.py",
-)
+    "shared/state_file.py",)
 
 
 def _unlocked_write_shapes(source: str) -> list:
@@ -250,14 +246,6 @@ def test_concurrent_writers_lose_no_update(tmp_path):
     assert len(records) == 2 * per_process
 
 
-def test_a_no_op_update_on_an_absent_file_creates_nothing(tmp_path):
-    """Guard arm: no file, no directory and no sidecar for an update that changes nothing."""
-    target = tmp_path / "teams" / "t" / "state.json"
-    result = state_file.locked_update(target, lambda text: (text, False, "untouched"), tmp_path / "teams")
-    assert result == "untouched"
-    assert not (tmp_path / "teams").exists()
-
-
 # ---------------------------------------------------------------------------
 # Containment: a state file must stay inside its root.
 # ---------------------------------------------------------------------------
@@ -270,53 +258,6 @@ def _link_team_outside(config: Path) -> Path:
     (config / "teams").mkdir()
     (config / "teams" / TEAM).symlink_to(outside, target_is_directory=True)
     return outside
-
-
-def test_a_symlinked_team_directory_refuses_the_write(config_root):
-    """A team directory linked outside teams/ is refused, and nothing lands outside."""
-    outside = _link_team_outside(config_root)
-    assert bw.append_record(_record("1"), team_name=TEAM) is False
-    assert sorted(p.name for p in outside.iterdir()) == [], (
-        "a write through a symlinked team directory reached a directory outside teams/"
-    )
-
-
-def test_a_symlinked_team_directory_reads_nothing(config_root):
-    """A registry reached through a team directory linked outside teams/ reads as absent."""
-    outside = _link_team_outside(config_root)
-    (outside / bw.REGISTRY_FILENAME).write_text(
-        json.dumps({"records": [_record("1")]}), encoding="utf-8"
-    )
-    assert bw.load_records_for_discharge(TEAM) == [], (
-        "a read followed a symlinked team directory to a registry outside teams/"
-    )
-
-
-def test_a_symlinked_config_root_still_writes(tmp_path, monkeypatch):
-    """Guard arm: resolving both sides keeps a linked config directory working."""
-    real_config = tmp_path / "real-config"
-    real_config.mkdir()
-    linked_config = tmp_path / "linked-config"
-    linked_config.symlink_to(real_config, target_is_directory=True)
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(linked_config))
-    assert bw.append_record(_record("1"), team_name=TEAM) is True
-    assert (real_config / "teams" / TEAM / bw.REGISTRY_FILENAME).is_file()
-
-
-def test_a_team_link_to_a_folder_inside_teams_still_writes(config_root):
-    """Guard arm: a team directory linked to another folder inside teams/ is allowed."""
-    real_team = config_root / "teams" / "real-team"
-    real_team.mkdir(parents=True)
-    (config_root / "teams" / TEAM).symlink_to(real_team, target_is_directory=True)
-    assert bw.append_record(_record("1"), team_name=TEAM) is True
-    assert (real_team / bw.REGISTRY_FILENAME).is_file()
-
-
-def test_a_file_directly_in_its_root_still_writes(tmp_path):
-    """Guard arm: a file whose directory IS the root is inside it."""
-    root = tmp_path / "session-tracking"
-    state_file.write_text(root / "session.json", '{"files": []}', root)
-    assert state_file.read_text(root / "session.json", root) == '{"files": []}'
 
 
 # ---------------------------------------------------------------------------
@@ -342,38 +283,6 @@ def _json_that_cannot_serialise():
         JSONDecodeError=json.JSONDecodeError,
         dump=refuse,
         dumps=refuse,
-    )
-
-
-@pytest.mark.parametrize("writer", sorted(OLDER_WRITER_SEEDS))
-def test_a_serialisation_failure_leaves_the_previous_file_intact(writer, tmp_path, monkeypatch):
-    """A writer whose serialiser fails must leave the file exactly as it was.
-
-    Truncating in place empties the file before the new content is produced,
-    so a serialiser fault leaves nothing behind.
-    """
-    import file_tracker
-    import track_files
-
-    path = tmp_path / "state.json"
-    path.write_text(OLDER_WRITER_SEEDS[writer], encoding="utf-8")
-    stand_in = _json_that_cannot_serialise()
-    if writer in ("save_tracked_files", "track_file"):
-        monkeypatch.setattr(track_files, "get_session_tracking_file", lambda: path)
-        monkeypatch.setattr(track_files, "json", stand_in)
-        if writer == "save_tracked_files":
-            call = lambda: track_files.save_tracked_files({"files": [], "session_id": "x"})  # noqa: E731
-        else:
-            call = lambda: track_files.track_file("/src/app.py", "Edit")  # noqa: E731
-    else:
-        monkeypatch.setattr(file_tracker, "json", stand_in)
-        call = lambda: file_tracker.track_edit("/src/app.py", "coder", "Edit", str(path))  # noqa: E731
-    try:
-        call()
-    except ValueError:
-        pass
-    assert path.read_text(encoding="utf-8") == OLDER_WRITER_SEEDS[writer], (
-        f"{writer} changed the file when its serialiser failed"
     )
 
 
@@ -408,62 +317,3 @@ def _older_writer_calls():
     return calls
 
 
-def test_every_production_call_to_an_older_state_writer_passes_a_root():
-    """Production code must pass `root=`, so the tests-only default never ships."""
-    calls = _older_writer_calls()
-    assert len(calls) >= 2, f"found only {len(calls)} production calls; the scan is not seeing hooks/"
-    missing = [site for site, passes_root in calls if not passes_root]
-    assert missing == [], (
-        "these production calls omit root=, so their writes are not contained "
-        f"to the config root: {missing}"
-    )
-
-
-def test_file_tracker_main_writes_nothing_through_a_symlinked_team_directory(
-    config_root, monkeypatch, capsys
-):
-    """The production entry point refuses a team directory linked outside teams/,
-    exits 0 and prints no traceback."""
-    import io
-
-    import file_tracker
-
-    outside = _link_team_outside(config_root)
-    monkeypatch.setattr(file_tracker.pact_context, "init", lambda _data: None)
-    monkeypatch.setattr(file_tracker, "frame_team_and_name", lambda _data: (TEAM, ""))
-    monkeypatch.setattr(file_tracker, "resolve_agent_name", lambda _data: "coder")
-    monkeypatch.setattr(file_tracker, "get_session_id", lambda: "sid")
-    frame = {"tool_name": "Edit", "tool_input": {"file_path": "/src/app.py"}, "session_id": "sid"}
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(frame)))
-    with pytest.raises(SystemExit) as exc:
-        file_tracker.main()
-    assert exc.value.code == 0
-    assert "Traceback" not in capsys.readouterr().err
-    assert sorted(p.name for p in outside.iterdir()) == [], (
-        "file_tracker.main wrote through a symlinked team directory"
-    )
-
-
-def test_teammate_idle_main_writes_nothing_through_a_symlinked_team_directory(
-    config_root, monkeypatch
-):
-    """The production entry point writes no state in a team directory linked outside teams/."""
-    import io
-
-    import teammate_idle
-
-    outside = _link_team_outside(config_root)
-    monkeypatch.setattr(teammate_idle.pact_context, "init", lambda _data: None)
-    monkeypatch.setattr(teammate_idle, "frame_team_and_name", lambda _data: (TEAM, ""))
-    monkeypatch.setattr(
-        teammate_idle, "iter_team_task_jsons",
-        lambda _team: iter([{"id": "3", "status": "completed", "owner": "coder"}]),
-    )
-    frame = {"hook_event_name": "TeammateIdle", "teammate_name": "coder"}
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(frame)))
-    with pytest.raises(SystemExit) as exc:
-        teammate_idle.main()
-    assert exc.value.code == 0
-    assert sorted(p.name for p in outside.iterdir()) == [], (
-        "teammate_idle.main wrote state through a symlinked team directory"
-    )

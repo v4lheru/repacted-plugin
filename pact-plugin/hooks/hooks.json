@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" UserPromptSubmit",
-            "timeout": 120
+            "timeout": 150
           }
         ]
       }
@@ -17,7 +17,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" SessionStart",
-            "timeout": 210
+            "timeout": 270
           }
         ]
       }
@@ -96,6 +96,16 @@
         ]
       },
       {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PreToolUse Monitor",
+            "timeout": 90
+          }
+        ]
+      },
+      {
         "matcher": "WebFetch|Artifact",
         "hooks": [
           {
@@ -136,7 +146,17 @@
         ]
       },
       {
-        "matcher": "^(?!(?:Agent|Task|Read|Bash|NotebookRead|Grep|WebFetch|Artifact|Edit|Write|MultiEdit|NotebookEdit|TaskUpdate|TaskCreate|AskUserQuestion)$)(?:.*?(?:mcp__.*|WebFetch|Artifact|Bash))",
+        "matcher": "ScheduleWakeup|CronCreate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch.py\" PreToolUse ScheduleWakeup,CronCreate",
+            "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "^(?!(?:Agent|Task|Read|Bash|NotebookRead|Grep|Monitor|WebFetch|Artifact|Edit|Write|MultiEdit|NotebookEdit|TaskUpdate|TaskCreate|AskUserQuestion|ScheduleWakeup|CronCreate)$)(?:.*?(?:mcp__.*|WebFetch|Artifact|Bash))",
         "hooks": [
           {
             "type": "command",

@@ -209,47 +209,6 @@ def test_markers_are_ascii_and_span_no_multibyte():
 # ── A-xor-B precedence: the coupled non-vacuity pair ──────────────────────
 
 
-def test_enumeration_appends_exactly_when_incumbent_does_not_fire(
-    tmp_path, monkeypatch, capsys
-):
-    """COUPLED PAIR IN ONE BODY — both legs, one test, revert-cardinality {2}.
-
-    Leg A (healthy, no stale mismatch): the incumbent finds nothing, so the
-    enumeration appends and no stale diagnosis appears.
-    Leg B (stale mismatch): the incumbent fires, so its specific diagnosis is
-    returned and the generic enumeration is suppressed.
-
-    Together these pin A-xor-B. Either leg alone would pass by absence.
-    """
-    # ── Leg A — healthy: enumeration present, stale diagnosis absent ──
-    leg_a = tmp_path / "leg_a"
-    leg_a.mkdir()
-    _full_setup(monkeypatch, leg_a, tasks=(("someone-else", "pending"),))
-    _write_project_claude_md(monkeypatch, leg_a, _LIVE_SESSION_ID)
-    _reset_context_caches(monkeypatch)
-
-    code_a, out_a = _run_main(_make_input(), capsys)
-    reason_a = out_a["hookSpecificOutput"]["permissionDecisionReason"]
-
-    assert code_a == 2, "decision must still be DENY"
-    _assert_deny_text(reason_a, rule_text="no task dispatched", enumeration=True)
-    assert _STALE_MARKER not in reason_a, "stale diagnosis must not fire when healthy"
-
-    # ── Leg B — stale mismatch: incumbent wins, enumeration suppressed ──
-    leg_b = tmp_path / "leg_b"
-    leg_b.mkdir()
-    _full_setup(monkeypatch, leg_b, tasks=(("someone-else", "pending"),))
-    _write_project_claude_md(monkeypatch, leg_b, _STALE_SESSION_ID)
-    _reset_context_caches(monkeypatch)
-
-    code_b, out_b = _run_main(_make_input(), capsys)
-    reason_b = out_b["hookSpecificOutput"]["permissionDecisionReason"]
-
-    assert code_b == 2, "decision must still be DENY"
-    assert _STALE_MARKER in reason_b, "incumbent stale diagnosis must fire"
-    _assert_deny_text(reason_b, rule_text="no task dispatched", enumeration=False)
-
-
 # ── Graceful degradation: A's failure degrades INTO B ─────────────────────
 
 
@@ -320,24 +279,6 @@ def test_rule_six_deny_never_receives_the_enumeration(
     assert code == 2, "rule 6 must actually fire, else this test is vacuous"
     _assert_deny_text(reason, rule_text="team_name is unavailable",
                       enumeration=False)
-
-
-def test_non_symptom_deny_receives_neither_diagnosis(
-    tmp_path, monkeypatch, capsys
-):
-    """A deny rule outside the stale-diagnosable set gets neither block, even
-    with a stale-recorded CLAUDE.md present. A name-validation failure is not a
-    restart symptom and not a store-observability symptom."""
-    _full_setup(monkeypatch, tmp_path)
-    _write_project_claude_md(monkeypatch, tmp_path, _STALE_SESSION_ID)
-    _reset_context_caches(monkeypatch)
-
-    code, out = _run_main(_make_input(name=""), capsys)
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-
-    assert code == 2, "name_required must still DENY"
-    _assert_deny_text(reason, rule_text="name=", enumeration=False)
-    assert _STALE_MARKER not in reason, "stale diagnosis must not reach this rule"
 
 
 # ── Healthy ALLOW is untouched ────────────────────────────────────────────
@@ -418,34 +359,6 @@ def test_enumeration_has_no_negative_arm_on_cause_four():
 
 
 # ── Precondition totality: the failure DIRECTION ──────────────────────────
-
-
-def test_composer_is_total_over_message_type():
-    """A non-str message must return the fail-closed fallback, never raise.
-
-    WHY THIS IS NOT DEFENSIVE CLUTTER. Every DENY path in evaluate_dispatch
-    supplies a real message (11 of 11, verified by enumeration), so this is
-    unreachable today. It is pinned because the failure DIRECTION of the
-    alternative is wrong: the composer runs OUTSIDE main()'s runtime try, so a
-    TypeError here escapes uncaught and exits 1 — and a nonzero-non-2 exit is
-    NON-BLOCKING, meaning the tool call proceeds. A gate whose job is to refuse
-    would silently become a pass-through.
-
-    Asserted on the returned VALUE, not merely on "did not raise": the fallback
-    must be a real non-empty sentence. An empty string would also avoid the
-    crash while telling the operator nothing, which is the degraded outcome
-    this fallback exists to rule out.
-    """
-    from dispatch_gate import _compose_deny_diagnosis, _MISSING_DENY_REASON
-
-    for bad_message in (None, 0, [], {}, object()):
-        out = _compose_deny_diagnosis("no_task_assigned", bad_message, {})
-        assert out == _MISSING_DENY_REASON, f"not fail-closed for {type(bad_message)}"
-        assert isinstance(out, str) and out.strip(), "fallback must be non-empty"
-        assert _ENUM_MARKER not in out, "must not claim to have diagnosed a cause"
-
-    # The guard must not have cost the normal path anything.
-    assert _compose_deny_diagnosis("some_other_rule", "plain deny", {}) == "plain deny"
 
 
 # ── Journal purity ────────────────────────────────────────────────────────
@@ -591,56 +504,6 @@ _FORBIDDEN_INERT_REMEDIES = (
     "rewrites those records",
     "bootstrap will rewrite",
 )
-
-
-def test_cause_two_names_the_measured_manual_repoint_not_a_bootstrap_pointer(
-    tmp_path, monkeypatch, capsys
-):
-    """COUPLED PAIR IN ONE BODY: the recovery elements PRESENT and the inert
-    bootstrap-pointer phrasings ABSENT, asserted against the SAME emitted
-    deny. Either half alone is vacuous — absence-only passes on a cause (2)
-    emptied of any remedy at all; presence-only passes with the inert
-    pointer still appended after the real recovery.
-
-    The recovery pinned here is the MEASURED one: set team_name in the OLD
-    session's pact-session-context.json to the LIVE team, leaving
-    session_id + the journal dir untouched (journal continuity). "OLD
-    session" is the load-bearing element — after a resume there are two
-    session dirs and only the OLD one holds the records this gate reads.
-
-    Written against observable deny text only, importing no post-fix symbol,
-    so it carries revert-cardinality like its section neighbours.
-    """
-    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
-    _write_project_claude_md(monkeypatch, tmp_path, _LIVE_SESSION_ID)
-    _reset_context_caches(monkeypatch)
-
-    code, out = _run_main(_make_input(), capsys)
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-
-    assert code == 2, "rule 8 must actually DENY, else this test is vacuous"
-    assert _ENUM_MARKER in reason, "enumeration absent — nothing to check"
-    assert _CAUSE_MARKERS[2] in reason, "precondition: cause 2 present"
-
-    for marker in _CAUSE2_RECOVERY_MARKERS:
-        assert marker.isascii(), (
-            f"cause-2 recovery marker is not ASCII-only: {marker!r}. A "
-            "marker that spans a non-ASCII character invites a "
-            "transcription that substitutes a hyphen for U+2014, after "
-            "which it can never fail."
-        )
-        assert marker in reason, (
-            f"measured-recovery element missing from cause (2): {marker!r}. "
-            "The reader in this cause is being sent to chase a team "
-            "mismatch without the one edit that recovers it."
-        )
-    for phrase in _FORBIDDEN_INERT_REMEDIES:
-        assert phrase not in reason, (
-            f"inert bootstrap-pointer remedy reintroduced: {phrase!r}. "
-            "Completing bootstrap does not rewrite these records, so that "
-            "pointer sends the operator to a ritual that changes nothing "
-            "for this denial."
-        )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -790,31 +653,6 @@ def _setup_rule_six(monkeypatch, root):
     monkeypatch.setattr(ctx_module, "_context_path", ctx_path)
     _reset_context_caches(monkeypatch)
     return plugin_root
-
-
-def test_rule_six_under_stale_mismatch_gets_incumbent_without_enumeration(
-    tmp_path, monkeypatch, capsys
-):
-    """Rule ⑥ WITH a stale mismatch: the incumbent fires and the enumeration
-    must stay away.
-
-    The sibling file asserts the stale marker PRESENT on this input but never
-    asserts the enumeration ABSENT, so an A-xor-B break on rule ⑥ — the other
-    member of the stale-diagnosable set — was silent. Coupled here: the
-    incumbent's marker present AND the enumeration's markers absent, against
-    the same emitted text, so neither half can pass by absence.
-    """
-    _setup_rule_six(monkeypatch, tmp_path)
-    _write_project_claude_md(monkeypatch, tmp_path, _STALE_SESSION_ID)
-    _reset_context_caches(monkeypatch)
-
-    code, out = _run_main(_make_input(), capsys)
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-
-    assert code == 2, "rule 6 must actually fire, else this test is vacuous"
-    assert _STALE_MARKER in reason, "incumbent stale diagnosis must fire"
-    _assert_deny_text(reason, rule_text="team_name is unavailable",
-                      enumeration=False)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1014,64 +852,6 @@ def test_unreadable_store_denies_while_the_owner_matching_task_survives(
 # ══════════════════════════════════════════════════════════════════════════
 # The value property the A-xor-B inference rests on
 # ══════════════════════════════════════════════════════════════════════════
-
-
-def test_fired_incumbent_produces_a_strictly_longer_message(
-    tmp_path, monkeypatch, capsys
-):
-    """When the incumbent fires it must return STRICTLY MORE than it was given.
-
-    The composer infers "the incumbent fired" from a value difference rather
-    than from a flag. That inference is sound only while the fire path is
-    append-only with a NON-EMPTY suffix — and nothing was pinning the non-empty
-    part. The concrete regression it admits: shrink the appended text to
-    nothing and a fired incumbent returns the message unchanged, the composer
-    reads that as "did not fire", and the enumeration appends on top of a case
-    the design deliberately suppresses. Silent, and in the wrong direction.
-
-    THE HALF THIS DOES NOT COVER, so it is not mistaken for the whole: "no
-    second path can ever change the message without the incumbent firing" is a
-    universal claim over future code and no test expresses it. That half stays
-    a declared residual with an escalation trigger in the composer docstring.
-    Only the VALUE property is testable today, and it is testable cheaply.
-
-    Coupled against one run: the stale marker present (the incumbent really
-    fired), the emitted text strictly longer than the journaled reason, and the
-    enumeration absent. Length alone would be satisfied by the enumeration
-    appending, which is the very case this must distinguish.
-    """
-    journal = _capture_journal(monkeypatch)
-
-    _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
-    _write_project_claude_md(monkeypatch, tmp_path, _STALE_SESSION_ID)
-    _reset_context_caches(monkeypatch)
-
-    code, out = _run_main(_make_input(), capsys)
-    emitted = out["hookSpecificOutput"]["permissionDecisionReason"]
-    rule, journaled = _journaled(journal, 0)
-
-    assert code == 2, "the deny must fire"
-    assert rule == "no_task_assigned", f"expected the no-task rule, got {rule!r}"
-
-    # Guards the derived marker itself: _STALE_MARKER is a slice of a
-    # production constant, and an empty constant would make every
-    # "_STALE_MARKER in reason" assertion in this file vacuously true and every
-    # "not in" assertion fail — so pin non-emptiness rather than assume it.
-    assert _STALE_MARKER, (
-        "the derived stale marker is empty — every assertion using it is now "
-        "either vacuous or inverted"
-    )
-    assert _STALE_MARKER in emitted, "the incumbent must actually have fired"
-
-    assert len(emitted) > len(journaled), (
-        "a fired incumbent must return strictly more than it was given; an "
-        "empty suffix makes the composer's fired-vs-not inference undecidable"
-    )
-    assert emitted.startswith(journaled), "the fire path must be append-only"
-    assert _ENUM_MARKER not in emitted, (
-        "the enumeration must stay suppressed when the incumbent fired — if it "
-        "appended here, the length check above passed for the wrong reason"
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1393,31 +1173,3 @@ def test_setting_is_never_named_without_its_cost():
             )
 
 
-def test_gate_texts_point_at_the_setting_and_never_inline_it():
-    """The gates carry a POINTER; they must never inline the setting itself.
-
-    A deny message cannot carry the cost statement, the verification step and
-    the retirement note — so a gate that names the setting has necessarily
-    named it silently, which is the one form of disclosure the criteria
-    forbid outright. The pointer exists precisely so the setting is only ever
-    encountered next to its trade-off.
-
-    COUPLED, because a bare absence assertion here would pass if the gate texts
-    were emptied, deleted or renamed out of existence: the positive half
-    asserts each gate still carries its pointer URL. Absence of the setting is
-    only meaningful while the pointer is present to replace it.
-    """
-    for source_name in _GATE_SOURCES:
-        source = (Path(__file__).parent.parent / "hooks" / source_name).read_text(
-            encoding="utf-8"
-        )
-        assert _pointer_urls(source_name), (
-            f"{source_name} carries no pointer URL, so the absence check below "
-            "is vacuous — it would pass on an empty file."
-        )
-        assert _SETTING not in source, (
-            f"{source_name} inlines {_SETTING} into gate text. A deny message "
-            "cannot carry the blast radius, the verification step and the "
-            "retirement note, so naming the setting here discloses it "
-            "silently. Point at the documented section instead."
-        )

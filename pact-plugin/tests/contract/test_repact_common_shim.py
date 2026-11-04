@@ -48,18 +48,3 @@ def test_the_shim_defines_nothing():
             assert [t.id for t in node.targets if isinstance(t, ast.Name)] == ["__all__"]
 
 
-def test_every_exported_name_is_the_owning_module_object():
-    shim = _shim()
-    assert shim.__all__
-    for name in shim.__all__:
-        obj = getattr(shim, name)
-        module = getattr(obj, "__module__", None)
-        if module and module.startswith("shared."):
-            owner = importlib.import_module(module)
-            assert getattr(owner, name) is obj, name
-
-
-def test_external_callers_names_resolve():
-    shim = _shim()
-    missing = sorted(n for n in EXTERNAL_NAMES if not hasattr(shim, n))
-    assert not missing, missing

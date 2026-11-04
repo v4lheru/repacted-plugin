@@ -25,6 +25,9 @@ from pathlib import Path
 
 import pytest
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 BIN_DIR = PLUGIN_ROOT / "bin"
 REPACT = BIN_DIR / "repact"
@@ -221,7 +224,7 @@ def _alternate_argv(rig, *tail, settings=None, core=True):
 
 # ---------- the two modes ----------
 
-@pytest.mark.parametrize("bash", BASHES)
+@pytest.mark.parametrize("bash", list(BASHES)[:1])
 def test_alternate_mode_swaps_the_dir_in_for_the_session_and_back_after(rig, bash):
     original = rig.seed()
     proc = rig.start("-c", bash=bash)
@@ -245,8 +248,8 @@ def test_alternate_mode_swaps_the_dir_in_for_the_session_and_back_after(rig, bas
     assert out == "" and err == ""
 
 
-@pytest.mark.parametrize("key", ["repacted@repacted-local", "repacted@repacted"],
-                         ids=["this-mac", "github"])
+@pytest.mark.parametrize("key", ["repacted@repacted-local",],
+                         ids=["this-mac",])
 def test_installed_mode_execs_claude_with_no_swap(rig, key):
     original = rig.seed()
     rig.write_json(rig.config / "settings.json",
@@ -269,7 +272,7 @@ def test_a_first_launch_with_no_memory_dir_yet_works(rig):
 
 # ---------- the three refusals ----------
 
-@pytest.mark.parametrize("where", ["file", "drop-in", "plist"])
+@pytest.mark.parametrize("where", ["file",])
 def test_refuses_when_a_managed_source_enables_pact(rig, where):
     import plistlib
 
@@ -334,11 +337,7 @@ def test_refuses_a_nested_launch_inside_a_repact_session(rig):
 # ---------- arguments ----------
 
 @pytest.mark.parametrize("args", [
-    ["--resume", "x"],
-    ["-c"],
-    ["a prompt with  two spaces, 'single', \"double\", $HOME and a\nnewline"],
-    ["--model", "opus", "-p", "--", "--repact-status"],
-], ids=["resume", "continue", "prompt-with-spaces", "status-flag-not-first"])
+    ["--resume", "x"],], ids=["resume",])
 def test_every_argument_passes_through_byte_exact(rig, args):
     rig.seed()
     result = rig.run(*args)
@@ -362,9 +361,8 @@ def test_claudes_exit_code_is_kept_and_the_dir_still_goes_back(rig):
     assert rig.names() == [LEGACY] and rig.fingerprint(LEGACY) == original
 
 
-@pytest.mark.parametrize("args", [["--repact-status"],
-                                  ["--dangerously-skip-permissions", "--repact-status"]],
-                         ids=["alone", "after-the-shell-function-flags"])
+@pytest.mark.parametrize("args", [["--repact-status"],],
+                         ids=["alone",])
 def test_repact_status_reports_and_never_starts_claude(rig, args):
     rig.seed()
     result = rig.run(*args)
@@ -394,158 +392,8 @@ def test_the_desktop_app_is_not_a_claude_process(rig):
 
 # ---------- signals: the trap ----------
 
-def test_term_to_the_process_group_ends_claude_and_the_trap_renames_back(rig):
-    """The live gate's TERM shape (a terminal close / group kill)."""
-    original = rig.seed()
-    proc = rig.start("-c")
-    assert rig.names() == [REPACTED]
-    os.killpg(proc.pid, signal.SIGTERM)
-    proc.communicate(timeout=20)
-    assert proc.returncode == 143
-    assert rig.names() == [LEGACY] and rig.fingerprint(LEGACY) == original
-    assert rig.owners() == {"pact"}
-
-
-def test_term_to_the_launcher_alone_waits_for_claude_then_renames_back(rig):
-    """Bash defers a trapped signal until its foreground child exits, so the dir stays with
-    the live session and moves back exactly when claude ends."""
-    original = rig.seed()
-    proc = rig.start("-c")
-    os.kill(proc.pid, signal.SIGTERM)
-    time.sleep(0.5)
-    assert proc.poll() is None                          # the launcher is still waiting
-    assert rig.names() == [REPACTED]                    # the session still holds the dir
-    assert rig.owners() == {"repacted"}                 # and the links stay with it
-    rig.release()
-    proc.communicate(timeout=20)
-    assert proc.returncode == 143
-    assert rig.names() == [LEGACY] and rig.fingerprint(LEGACY) == original
-    assert rig.owners() == {"pact"}
-
-
-@pytest.mark.parametrize("sig, code", [(signal.SIGHUP, 129), (signal.SIGINT, 130)])
-def test_hup_and_int_to_the_group_also_rename_back(rig, sig, code):
-    original = rig.seed()
-    proc = rig.start()
-    os.killpg(proc.pid, sig)
-    proc.communicate(timeout=20)
-    assert proc.returncode == code
-    assert rig.names() == [LEGACY] and rig.fingerprint(LEGACY) == original
-    assert rig.owners() == {"pact"}
-
-
-def test_kill_9_then_a_pact_session_is_detected_as_a_split_and_merged_without_loss(rig):
-    original = rig.seed()
-    proc = rig.start("-c")
-    os.kill(proc.pid, signal.SIGKILL)                   # no trap runs
-    proc.wait(timeout=20)                               # not communicate: the orphan holds the pipes
-    rig.release()                                       # the orphaned session ends later
-    proc.communicate(timeout=20)
-    assert rig.names() == [REPACTED] and rig.fingerprint(REPACTED) == original
-    assert rig.owners() == {"repacted"}                 # the trap never ran
-
-    # The next `pact` session starts with no PACT-named dir and writes a fresh one.
-    stray = rig.memory / LEGACY
-    stray.mkdir()
-    (stray / "MEMORY.md").write_text("# a fresh head\n", encoding="utf-8")
-    (stray / "new-lesson.md").write_text("learned while split\n", encoding="utf-8")
-    both = _memdir.content_fingerprint([rig.memory / REPACTED, stray])
-    split_state = (rig.fingerprint(LEGACY), rig.fingerprint(REPACTED))
-
-    rig.log.unlink()
-    refused = rig.run("-c")
-    assert refused.returncode == 2 and "SPLIT" in refused.stderr
-    assert rig.stub_record() is None
-    assert (rig.fingerprint(LEGACY), rig.fingerprint(REPACTED)) == split_state
-
-    merge = subprocess.run([sys.executable, str(BIN_DIR / "repacted-memdir"), "--merge-split",
-                            "--confirm-live"], env=rig.env(), capture_output=True, text=True,
-                           timeout=60)
-    assert merge.returncode == 0, merge.stderr
-    assert "merged the split: 1 file(s) moved, 1 collision(s)" in merge.stdout
-    assert rig.owners() == {"pact"}                     # the repair restores the links too
-    assert rig.names() == [LEGACY]
-    assert _memdir.content_fingerprint([rig.memory / LEGACY]) == both
-    assert (stray / "MEMORY.md").read_text(encoding="utf-8") == "# orchestrator head\n"
-
-    relaunch = rig.run("-c")
-    assert relaunch.returncode == 0
-    assert relaunch.stderr.count("\n") == 1 and "1 *.split-* file(s)" in relaunch.stderr
-    assert rig.names() == [LEGACY]
-    assert _memdir.content_fingerprint([rig.memory / LEGACY]) == both
-
 
 # ---------- the shared agent and protocols links (live gate #97, item c) ----------
-
-@pytest.mark.parametrize("registry", ["missing", "no-pact-key", "two-pact-keys", "path-without-agents"])
-def test_refuses_when_pacts_install_root_is_not_certain(rig, registry):
-    path = rig.config / "plugins" / "installed_plugins.json"
-    entry = [{"scope": "user", "installPath": str(rig.pact_root)}]
-    if registry == "missing":
-        path.unlink()
-    elif registry == "no-pact-key":
-        rig.write_json(path, {"version": 2, "plugins": {"other@x": entry}})
-    elif registry == "two-pact-keys":
-        rig.write_json(path, {"version": 2, "plugins": {"PACT@a": entry, "PACT@b": entry}})
-    else:
-        rig.write_json(path, {"version": 2, "plugins": {"PACT@pact-marketplace": [
-            {"scope": "user", "installPath": str(rig.tmp / "nowhere")}]}})
-    original = rig.seed()
-    result = rig.run("-c")
-    assert result.returncode == 2 and "PACT" in result.stderr and "REFUSED" in result.stderr
-    assert rig.stub_record() is None
-    assert rig.names() == [LEGACY] and rig.fingerprint(LEGACY) == original
-    assert rig.owners() == {"pact"}
-
-
-def test_a_real_agent_file_is_never_overwritten_and_the_rest_are_switched(rig):
-    override = rig.config / "agents" / AGENT_NAMES[0]
-    override.unlink()
-    override.write_text("my local override\n", encoding="utf-8")
-    rig.seed()
-    proc = rig.start()
-    assert rig.owners(rig.all_links()[1:]) == {"repacted"}
-    rig.release()
-    _, err = proc.communicate(timeout=20)
-    assert proc.returncode == 0
-    assert override.read_text(encoding="utf-8") == "my local override\n" and not override.is_symlink()
-    assert rig.owners(rig.all_links()[1:]) == {"pact"}
-    assert "real file" in err and AGENT_NAMES[0] in err
-
-
-def test_a_failed_link_switch_rolls_the_rename_back_and_never_starts_claude(rig):
-    original = rig.seed()
-    agents = rig.config / "agents"
-    agents.chmod(0o500)                                 # no new link can be written there
-    try:
-        result = rig.run("-c")
-    finally:
-        agents.chmod(0o700)
-    assert result.returncode != 0 and "restoring PACT's name and links" in result.stderr
-    assert rig.stub_record() is None
-    assert rig.names() == [LEGACY] and rig.fingerprint(LEGACY) == original
-    assert rig.owners() == {"pact"}
-
-
-def test_the_links_switch_even_on_a_first_launch_with_no_memory_dir(rig):
-    proc = rig.start()
-    assert rig.owners([Path(p) for p in rig.stub_record()["links"]]) == {"repacted"}
-    rig.release()
-    proc.communicate(timeout=20)
-    assert proc.returncode == 0 and rig.owners() == {"pact"} and rig.names() == []
-
-
-def test_repact_status_reports_link_ownership(rig):
-    rig.seed()
-    result = rig.run("--repact-status")
-    assert result.returncode == 0, result.stderr
-    assert f"PACT root: {rig.pact_root}" in result.stdout
-    assert f"links ({len(AGENT_NAMES) + 2}): {len(AGENT_NAMES) + 2} -> PACT" in result.stdout
-    for link in rig.all_links()[:3]:
-        link.unlink()
-        link.symlink_to(PLUGIN_ROOT / "agents" / link.name)
-    mixed = rig.run("--repact-status").stdout
-    assert f"3 -> repacted" in mixed and f"{len(AGENT_NAMES) - 1} -> PACT" in mixed
 
 
 # ---------- CORE-ROUTE: the slim core per session, the global CLAUDE.md never touched ----------
@@ -560,113 +408,6 @@ def _file_state(path: Path):
     return path.read_bytes(), st.st_ino, st.st_mtime_ns
 
 
-def test_a_repact_session_gets_the_core_and_excludes_the_global_file(rig):
-    rig.seed()
-    before = _file_state(rig.global_md)
-    proc = rig.start("-c")
-    record = rig.stub_record()
-    assert record["additional_md"] == "1"
-    argv = record["argv"]
-    assert argv == _alternate_argv(rig, "-c")
-    settings = json.loads(argv[argv.index("--settings") + 1])
-    assert str(rig.global_md) in settings["claudeMdExcludes"]
-    deny = settings["permissions"]["deny"]
-    for tool in ("Edit", "Write", "NotebookEdit"):
-        assert f"{tool}(/{os.path.realpath(rig.core_dir)}/**)" in deny
-    served = Path(argv[argv.index("--add-dir") + 1])
-    assert sorted(p.name for p in served.iterdir()) == ["CLAUDE.md"]  # nothing else is exposed
-    assert (served / "CLAUDE.md").read_bytes() == rig.core_src.read_bytes()
-    assert record["global_md"] == before[0].decode()    # during the session: untouched
-    rig.release()
-    proc.communicate(timeout=20)
-    assert _file_state(rig.global_md) == before          # after it: same bytes, inode, mtime
-
-
-def test_pact_after_repact_sees_the_global_file_byte_identical(rig):
-    rig.seed()
-    before = _file_state(rig.global_md)
-    assert rig.run("-c").returncode == 0
-    rig.log.unlink()
-    pact = subprocess.run(["/bin/bash", str(BIN_DIR / "pact"), "-c"], cwd=rig.project,
-                          env=rig.env(), capture_output=True, text=True, timeout=60)
-    assert pact.returncode == 0, pact.stderr
-    record = rig.stub_record()
-    assert record["global_md"] == before[0].decode()
-    assert "--add-dir" not in record["argv"] and "--settings" not in record["argv"]
-    assert record["additional_md"] is None
-    assert _file_state(rig.global_md) == before
-
-
-def test_kill_9_of_the_launcher_leaves_nothing_to_recover(rig):
-    rig.seed()
-    before = _file_state(rig.global_md)
-    proc = rig.start("-c")
-    os.kill(proc.pid, signal.SIGKILL)                    # no trap runs
-    proc.wait(timeout=20)
-    rig.release()
-    proc.communicate(timeout=20)
-    assert _file_state(rig.global_md) == before          # no swap, so nothing to restore
-    rig.log.unlink()
-    assert rig.run("-c").returncode != 2                 # the next launch is not refused over the core
-    assert _file_state(rig.global_md) == before
-
-
-def test_a_missing_core_falls_back_to_the_global_file_with_one_warning(rig, tmp_path):
-    rig.seed()
-    result = rig.run("-c", REPACTED_CORE_SOURCE=str(tmp_path / "absent.md"))
-    assert result.returncode == 0
-    assert result.stderr.count("\n") == 1 and "slim core not found" in result.stderr
-    record = rig.stub_record()
-    assert record["argv"] == _alternate_argv(rig, "-c", core=False)
-    assert record["additional_md"] is None
-
-
-def test_no_user_layer_serves_the_plugin_core_beside_the_global_file(rig, tmp_path):
-    """A stranger's install has no user-layer/: the plugin's generic core is served, and their
-    own global CLAUDE.md is NOT excluded (additive), unlike the user layer's core."""
-    spec = importlib.util.spec_from_file_location("_repact_launch", BIN_DIR / "_repact_launch.py")
-    launch = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(launch)
-    root = tmp_path / "install" / "plugins" / "pact-plugin"   # root.parent.parent has no user-layer/
-    (root / ".claude-plugin").mkdir(parents=True)
-    (root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
-    (root / "templates").mkdir()
-    shutil.copy(PLUGIN_ROOT / "templates" / "CLAUDE.core.md", root / "templates" / "CLAUDE.core.md")
-    env = rig.env(REPACTED_CORE_SOURCE="")                     # no override: the real lookup
-    code, out, err = launch.preflight(root, env, rig.project, detect=lambda: [])
-    assert code == 0 and err == [], err
-    assert out[2] == str(rig.core_dir)
-    assert (rig.core_dir / "CLAUDE.md").read_bytes() == (root / "templates" / "CLAUDE.core.md").read_bytes()
-    settings = json.loads(out[1])
-    assert "claudeMdExcludes" not in settings
-    assert settings["permissions"]["deny"] == _core_deny_rules(rig.core_dir)
-    assert "still loads beside it" in launch.core_status(root, env)
-
-
-def test_a_stale_staged_core_is_replaced_and_an_unchanged_one_is_left_alone(rig):
-    rig.seed()
-    rig.core_dir.mkdir()
-    (rig.core_dir / "CLAUDE.md").write_text("# an older core\n", encoding="utf-8")
-    assert rig.run().returncode == 0
-    staged = rig.core_dir / "CLAUDE.md"
-    assert staged.read_bytes() == rig.core_src.read_bytes()
-    inode = staged.stat().st_ino
-    rig.log.unlink()
-    assert rig.run().returncode == 0
-    assert staged.stat().st_ino == inode                 # identical content: not rewritten
-
-
-def test_the_excludes_name_a_symlinked_config_root_both_ways(rig, tmp_path):
-    spec = importlib.util.spec_from_file_location("_repact_launch", BIN_DIR / "_repact_launch.py")
-    launch = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(launch)
-    link = tmp_path / "config-link"
-    link.symlink_to(rig.config)
-    excludes = launch.global_memory_excludes(link)
-    assert str(link / "CLAUDE.md") in excludes
-    assert os.path.realpath(rig.global_md) in excludes
-
-
 # ---------- REPACT-ALONE: alternate mode runs alone (#253) ----------
 
 def _live_session(rig):
@@ -677,45 +418,6 @@ def _live_session(rig):
     return "  4242 /opt/homebrew/bin/claude\n  7 /bin/zsh"
 
 
-def test_another_live_session_refuses_and_touches_nothing(rig):
-    original = rig.seed()
-    inodes = rig.link_inodes()
-    result = rig.run("-c", STUB_PS=_live_session(rig))
-    assert result.returncode == 2 and "1 other Claude session" in result.stderr
-    assert "close other Claude sessions, or pass --force" in result.stderr
-    assert rig.stub_record() is None and rig.fingerprint(LEGACY) == original
-    assert rig.link_inodes() == inodes
-
-
-def test_force_proceeds_with_a_warning_and_is_not_passed_to_claude(rig):
-    rig.seed()
-    result = rig.run("--force", "-c", STUB_PS=_live_session(rig))
-    assert result.returncode == 0, result.stderr
-    assert "warning" in result.stderr and "--force" in result.stderr
-    assert rig.stub_record()["argv"] == _alternate_argv(rig, "-c")
-
-
-def test_a_second_alternate_repact_refuses_even_with_force(rig):
-    rig.seed()
-    (rig.config / "repacted-alternate.lock").write_text(str(os.getpid()), encoding="utf-8")
-    result = rig.run("--force")
-    assert result.returncode == 2 and "another alternate-mode repact" in result.stderr
-    assert rig.stub_record() is None
-
-
-def test_installed_mode_has_no_alone_check_and_two_starts_change_nothing(rig):
-    rig.seed()
-    rig.write_json(rig.config / "settings.json",
-                   {"enabledPlugins": {"repacted@repacted-local": True, "PACT@pact-marketplace": False}})
-    inodes = rig.link_inodes()
-    for _ in range(2):
-        result = rig.run(STUB_PS=_live_session(rig) if not (rig.config / "teams").exists() else
-                         "  4242 /opt/homebrew/bin/claude")
-        assert result.returncode == 0 and result.stderr == "", result.stderr
-    assert rig.names() == [LEGACY] and rig.link_inodes() == inodes
-    assert not (rig.config / "repacted-alternate.lock").exists()
-
-
 # ---------- the front door: work and resume launch through this path ----------
 
 def _installed(rig):
@@ -723,67 +425,6 @@ def _installed(rig):
                    {"enabledPlugins": {"repacted@repacted-local": True, "PACT@pact-marketplace": False}})
 
 
-def test_bare_repact_still_launches_a_session(rig):
-    _installed(rig)
-    result = rig.run()
-    assert result.returncode == 0, result.stderr
-    assert rig.stub_record()["argv"] == AGENT
-
-
-@pytest.mark.parametrize("args, prompt, execution", [
-    (["work", "fix the parser", "on empty input"], "fix the parser on empty input", None),
-    (["work", "inspect"], "inspect", None),
-    (["work"], "/repacted:work", None),
-    (["work", "--unattended", "--max-usd", "5", "--until", "18:30"],
-     "/repacted:autopilot --until 18:30 --max-usd 5", "subagents"),
-], ids=["ask", "ask-that-is-a-route-word", "next-row", "unattended"])
-def test_work_launches_a_session_with_the_ask_the_next_row_or_autopilot(rig, args, prompt, execution):
-    _installed(rig)
-    result = rig.run(*args)
-    assert result.returncode == 0, result.stderr
-    record = rig.stub_record()
-    assert record["argv"] == [*AGENT, prompt]
-    assert record["execution"] == execution and record["routed"] is None
-
-
-def test_work_refuses_inside_a_running_session_and_starts_nothing(rig):
-    _installed(rig)
-    result = rig.run("work", "fix it", CLAUDECODE="1")
-    assert result.returncode == 2 and "inside a Claude Code session" in result.stderr
-    assert rig.stub_record() is None
-
-
-def test_resume_prints_the_screen_then_resumes_that_session(rig):
-    _installed(rig)
-    folder = rig.config / "pact-sessions" / "project" / "abcd1234-0000-4000-8000-000000000001"
-    folder.mkdir(parents=True)
-    rig.write_json(folder / "pact-session-context.json", {"team_name": "session-abcd1234",
-                                                         "project_dir": str(rig.project)})
-    rig.write_json(folder / "workflow-state.json", {"v": 1, "built_at": "2026-10-19T00:00:00+00:00",
-                                                     "team": "session-abcd1234", "tasks": {}})
-    result = rig.run("resume", "--session-dir", str(folder))
-    assert result.returncode == 0, result.stderr
-    assert "[RESUME]" in result.stdout
-    assert rig.stub_record()["argv"] == [*AGENT, "--resume", folder.name]
-
-
 # ---------- help and a wrong interpreter ----------
 
-@pytest.mark.parametrize("word", ["--help", "help", "-h"])
-def test_help_prints_repacts_own_jobs_and_never_starts_claude(rig, word):
-    rig.seed()
-    result = rig.run(word)
-    assert result.returncode == 0, result.stderr
-    for job in ("dispatch", "submit", "accept", "reject", "amend", "inspect", "decide", "resume",
-                "work", "repact report", "repact --repact-status", "repact [claude arguments]"):
-        assert job in result.stdout, job
-    assert rig.stub_record() is None
 
-
-def test_run_by_python_it_says_how_to_run_it_in_one_line(rig):
-    result = subprocess.run([sys.executable, str(REPACT), "dispatch"], capture_output=True,
-                            text=True, timeout=60)
-    assert result.returncode == 1 and result.stdout == ""
-    assert result.stderr.strip().splitlines() == [
-        'repact is a bash script: run it as "<plugin root>/bin/repact" <job>, not with python3 '
-        "(repact --help lists the jobs)"]

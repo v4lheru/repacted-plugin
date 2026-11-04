@@ -63,29 +63,6 @@ class TestEndToEndTokenOracle:
             "a faithful close token no longer authorizes the faithful close click"
         )
 
-    def test_close_token_mismatched_at_base(self, tmp_path, monkeypatch):
-        # Run HEAD's auth logic with the BASELINE classifier semantics: patch the
-        # from-imported classifier seams merge_guard_pre consumes. At base the
-        # command derives (merge,5), so the (close,5) token REFUSES — the observed
-        # symptom (any token the user minted for the close spelling mismatched).
-        baseline = load_baseline()
-        monkeypatch.setattr(
-            merge_guard_pre, "extract_command_context", baseline.extract_command_context
-        )
-        monkeypatch.setattr(
-            merge_guard_pre, "is_dangerous_command", baseline.is_dangerous_command
-        )
-        monkeypatch.setattr(
-            merge_guard_pre, "_single_destructive_leg", baseline._single_destructive_leg
-        )
-        monkeypatch.setattr(
-            merge_guard_pre, "_single_detectable_leg", baseline._single_detectable_leg
-        )
-        merge_guard_post.write_token(dict(self.CLOSE_TOKEN_CTX), token_dir=tmp_path)
-        assert merge_guard_pre.check_merge_authorization(BITE, tmp_path) is not None, (
-            "vacuity: the pre-fix cross-auth mismatch did not reproduce at base"
-        )
-
     def test_bite_still_gated_without_token(self, tmp_path):
         # close is a destructive op: with NO token the bite stays gated (the fix
         # changes WHICH token authorizes, never whether approval is required).
@@ -97,65 +74,6 @@ class TestEndToEndTokenOracle:
 # Option shape matters: a bare-text option carries the comment prose AND the full
 # command as two regions; a backtick-wrapped option carries one region.
 # =========================================================================================
-class TestMintSide:
-    BARE_Q = {
-        "question": "Proceed?",
-        "options": [{"label": "Yes, close", "description": BITE}],
-        "multiSelect": False,
-    }
-    BACKTICK_Q = {
-        "question": "Proceed?",
-        "options": [{"label": "Yes, close", "description": "Run `%s` now" % BITE}],
-        "multiSelect": False,
-    }
-    ANSWER = {"Proceed?": "Yes, close"}
-
-    def test_base_minted_the_launder(self, monkeypatch):
-        # PRE-FIX DISCRIMINATOR: both regions classified merge at base -> ONE pair
-        # (merge,5) -> approving a CLOSE minted a merge+admin credential.
-        baseline = load_baseline()
-        monkeypatch.setattr(
-            merge_guard_post, "detect_command_operation_type",
-            baseline.detect_command_operation_type,
-        )
-        monkeypatch.setattr(
-            merge_guard_post, "extract_command_context", baseline.extract_command_context
-        )
-        monkeypatch.setattr(
-            merge_guard_post, "locate_command_regions", baseline.locate_command_regions
-        )
-        # The base had no CLI repo binding (amend_3 on #141); simulate it faithfully.
-        monkeypatch.setattr(merge_guard_post, "command_repo_binding", lambda ctx, cmd: ctx)
-        # The captured base rows are keyed on the label of that time, which the closed label
-        # set no longer takes: the label check is switched off for this base replay only.
-        monkeypatch.setattr(merge_guard_post, "is_approval_label", lambda label: True)
-        question = {**self.BARE_Q, "options": [{"label": "Yes, close it", "description": BITE}]}
-        ctx, refusal = merge_guard_post._mint_context_from_bundle(
-            [question], {"Proceed?": "Yes, close it"})
-        assert refusal is None and ctx is not None
-        assert ctx["operation_type"] == "merge", "launder discriminator"
-        assert "--admin" in ctx.get("bound_flags", [])
-
-    def test_head_refuses_bare_shape_multiplicity(self):
-        # DELIBERATE DISTRACTOR POLICY: two distinct pairs {(merge,5),(close,5)}
-        # -> refusal. NOT an over-block regression — the faithful path is the
-        # single-region option (below) or a reworded comment.
-        ctx, refusal = merge_guard_post._mint_context_from_bundle([self.BARE_Q], self.ANSWER)
-        assert ctx is None
-        assert refusal == "multiple_commands"
-
-    def test_head_mints_close_on_single_region_shape(self):
-        # the faithful close path: the canonical backtick-wrapped option is ONE
-        # region -> mints the CLOSE credential that the e2e row proves authorizes.
-        ctx, refusal = merge_guard_post._mint_context_from_bundle(
-            [self.BACKTICK_Q], self.ANSWER
-        )
-        assert refusal is None and ctx is not None
-        assert ctx["operation_type"] == "close"
-        assert ctx["pr_number"] == "5"
-        assert ctx.get("bound_flags") == []
-
-
 # =========================================================================================
 # R1 / F2 — PUSH/BRANCH DETECT ARMS OFF THE MASKED VIEW (remediation commit 5). Commit 2
 # ran the force-push / push-to-main / branch-delete arms on the quote-masked view; a

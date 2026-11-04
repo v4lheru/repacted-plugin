@@ -3,6 +3,7 @@ name: pact-database-engineer
 description: "Implements schemas, migrations, queries, indexes and data integrity."
 color: "#FFBF00"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

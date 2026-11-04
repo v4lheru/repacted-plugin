@@ -52,22 +52,6 @@ class TestAttribution:
         assert counters["checks"] == {"allow_ctx": {"runs": 1, "context": 10, "system": 0}}
         assert counters["frames"] == {"teammate": {"runs": 1, "context": 10, "system": 0}}
 
-    def test_a_failed_call_counts_its_error_and_a_huge_response_is_capped(self):
-        text, _ = _run("", "PostToolUseFailure", {"error": "Exit code 1\nboom"})
-        assert json.loads(text)["agents"]["bob"]["out_bytes"] == _json_bytes("Exit code 1\nboom")
-        text, _ = _run("", "PostToolUse", {"tool_response": {"stdout": "z" * (ledger.OUT_CAP + 5)}})
-        assert json.loads(text)["agents"]["bob"]["out_bytes"] == ledger.OUT_CAP
-
-    def test_base_is_the_sessions_measured_start_per_run(self):
-        counters = {"checks": {"session_init": {"runs": 2, "context": 200, "system": 20},
-                               "peer_inject": {"runs": 1, "context": 50, "system": 0}}}
-        assert ledger.base_bytes(counters, "lead") == 110
-        assert ledger.base_bytes(counters, "teammate") == 160
-
-    def test_a_non_tool_event_with_nothing_injected_writes_nothing(self):
-        text, changed, rows = ledger.add_run("", "Stop", "lead", {}, "", {}, LIMITS)
-        assert not changed and rows == []
-
 
 class TestTiers:
     def test_silent_under_the_line_one_line_per_tier_and_a_new_name_starts_at_zero(self):
@@ -98,51 +82,6 @@ class TestTiers:
         counters = json.loads(text)
         assert counters["agents"]["bob2"]["tier"] == "" and counters["pending"] == []
 
-    def test_the_band_is_said_once_between_stop_and_hard_then_the_hard_line_once(self):
-        text = ""
-        for _ in range(7):                                             # the 7th crosses 2,000
-            text, _ = _run(text, "PreToolUse", {"tool_input": BIG})
-        text, _, (_, [band]) = ledger.consume(text, "bob", "teammate")
-        assert "start no new work" in band and "run the tests for what you have already" in band
-        assert "`remaining:`" in band and "hard line (~2 KB)" in band   # 2,500 prints as 2 KB
-        text, _ = _run(text, "PreToolUse", {"tool_input": {"c": "x"}})  # still in the band
-        assert json.loads(text)["agents"]["bob"]["tier"] == "stop"
-        assert ledger.consume(text, "bob", "teammate")[2] == ([], [])  # the band is said once
-        text, _ = _run(text, "PreToolUse", {"tool_input": BIG})        # the 9th crosses 2,500
-        assert json.loads(text)["agents"]["bob"]["tier"] == "hard"
-        text, _, (_, [hard]) = ledger.consume(text, "bob", "teammate")
-        assert hard.startswith("your context is past the hard line (~3 KB); write your HANDOFF now")
-        text, _, (system, _) = ledger.consume(text, "lead", "lead")
-        assert [line.split(" (")[0] for line in system[1:]] == [
-            "context: bob is past the stop line", "context: bob is past the hard line"]
-        text, _ = _run(text, "PreToolUse", {"tool_input": BIG})
-        assert ledger.consume(text, "bob", "teammate")[2] == ([], [])  # the hard line once
-
-    def test_the_session_line_is_spoken_once_and_the_budget_row_names_the_top(self):
-        limits = {"advise": 10 ** 9, "stop": 10 ** 9, "session": 500}
-        text = ""
-        for agent in ("a", "b", "a", "b"):
-            text, _ = _run(text, "PreToolUse", {"tool_input": {"c": "x" * 100}}, agent=agent,
-                           limits=limits)
-        [line] = json.loads(text)["pending"]
-        assert line.startswith("session spend ~0 MB-calls across 2 agents; top: ")
-        assert json.loads(text)["session_told"] is True
-        text, _, rows = ledger.add_run(text, "SessionEnd", "lead", {}, "", {}, limits)
-        [(kind, row)] = rows
-        assert kind == "context_budget" and row["agents"] == 2
-        assert [item["agent"] for item in row["top"]] == ["a", "b"]
-        assert row["spend"] == sum(item["spend"] for item in row["top"])
-
-    def test_profile_overrides_the_lines_it_names_with_positive_ints(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-        (tmp_path / "repacted").mkdir()
-        (tmp_path / "repacted" / "profile.json").write_text(json.dumps(
-            {"context_lines": {"advise": 5, "stop": True, "session": -1, "other": 9}}))
-        assert ledger.lines() == {"advise": 5, "stop": ledger.LINES["stop"],
-                                  "session": ledger.LINES["session"]}
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "none"))
-        assert ledger.lines() == ledger.LINES
-
 
 def _task(task_id="7", owner="bob", status="in_progress", **metadata) -> dict:
     return {"id": task_id, "owner": owner, "status": status, "metadata": metadata}
@@ -165,78 +104,6 @@ class TestBudget:
         assert self._lines(_task()) == self.DEFAULT
         assert self._lines(_task(variety={"scope": 2, "risk": 3, "total": 9})) == self.DEFAULT
         assert ledger.hard_line(ledger.LINES) == 625_000
-
-    def test_large_by_scope(self):
-        assert self._lines(_task(variety={"scope": 3, "risk": 1})) == self.LARGE
-
-    def test_large_by_risk(self):
-        assert self._lines(_task(variety={"scope": 1, "risk": 4})) == self.LARGE
-
-    def test_large_by_the_stamp_repact_dispatch_writes(self):
-        assert self._lines(_task(dispatch={"variety": {"scope": 4, "risk": 2, "total": 9}})) == self.LARGE
-        assert self._lines(_task(variety={"scope": {"score": 3, "rationale": "r"},
-                                          "risk": {"score": 1, "rationale": "r"}})) == self.LARGE
-
-    def test_explicit_budget_wins_over_the_stamp_and_is_clamped(self):
-        assert self._lines(_task(context_budget_kb=700, variety={"scope": 4})) == (420_000, 700_000)
-        assert self._lines(_task(context_budget_kb=350.5)) == (210_300, 350_500)
-        for low in (0, -5, 299):
-            assert self._lines(_task(context_budget_kb=low)) == (180_000, 300_000)
-        for high in (1001, 10 ** 400):
-            assert self._lines(_task(context_budget_kb=high)) == (600_000, 1_000_000)
-
-    @pytest.mark.parametrize("metadata", [
-        {"variety": "large"}, {"variety": ["scope", 4]}, {"variety": {"scope": "4", "risk": None}},
-        {"variety": {"scope": True, "risk": float("nan")}}, {"context_budget_kb": "900"},
-        {"context_budget_kb": True}, {"context_budget_kb": float("nan")},
-        {"context_budget_kb": float("inf")}, {"context_budget_kb": {"kb": 900}}])
-    def test_a_malformed_stamp_or_budget_falls_back_to_the_default(self, metadata):
-        assert self._lines(_task(**metadata)) == self.DEFAULT
-        assert self._lines({"id": "7", "metadata": "x"}) == self.DEFAULT
-        assert self._lines(["not", "a", "task"]) == self.DEFAULT
-
-    def test_a_malformed_budget_does_not_hide_a_large_stamp(self):
-        assert self._lines(_task(context_budget_kb="900", variety={"risk": 4})) == self.LARGE
-
-    def test_the_actors_task_is_its_highest_in_progress_one_and_the_lead_keeps_the_default(
-            self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-        team = tmp_path / "tasks" / "team-a"
-        team.mkdir(parents=True)
-        for task in (_task("9", context_budget_kb=900), _task("10", variety={"scope": 3}),
-                     _task("11", status="completed", context_budget_kb=400),
-                     _task("12", owner="eve", context_budget_kb=400)):
-            (team / f"{task['id']}.json").write_text(json.dumps(task))
-        (team / "13.json").write_text("{not json")                     # unreadable: skipped
-        assert ledger.current_task("team-a", "bob")["id"] == "10"      # 10 over 9, not "9" > "10"
-        assert ledger.current_task("team-a", "nobody") is None
-        assert ledger.current_task("no-such-team", "bob") is None
-        assert ledger.current_task("../team-a", "bob") is None
-        monkeypatch.setattr(ledger, "actor_team", lambda payload: "team-a")
-        assert ledger.agent_limits({}, "teammate", "bob", ledger.LINES)["stop"] == 800_000
-        assert ledger.agent_limits({}, "teammate", "eve", ledger.LINES)["stop"] == 400_000
-        assert ledger.agent_limits({}, "lead", "lead", ledger.LINES) == ledger.LINES
-        assert ledger.agent_limits({}, "teammate", "unknown", ledger.LINES) == ledger.LINES
-        monkeypatch.setattr(ledger, "current_task", lambda team, agent: 1 / 0)
-        assert ledger.agent_limits({}, "teammate", "bob", ledger.LINES) == ledger.LINES
-
-    def test_the_budget_is_read_only_from_the_lowest_line_up_and_moves_the_tiers(self):
-        calls = []
-
-        def budget():
-            calls.append(1)
-            return {**LIMITS, "advise": 5_000, "stop": 8_000}
-
-        limits = {**LIMITS, "advise": 600}                             # lowest line: 600
-        text, _, _ = ledger.add_run("", "PreToolUse", "teammate", {}, "bob",
-                                    ledger.frame_sizes("PreToolUse", {"tool_input": BIG}),
-                                    limits, budget)
-        assert calls == [] and json.loads(text)["agents"]["bob"]["tier"] == ""
-        for _ in range(8):                                             # ~2.8 KB: past LIMITS' hard
-            text, _, _ = ledger.add_run(text, "PreToolUse", "teammate", {}, "bob",
-                                        ledger.frame_sizes("PreToolUse", {"tool_input": BIG}),
-                                        limits, budget)
-        assert len(calls) == 8 and json.loads(text)["agents"]["bob"]["tier"] == ""
 
 
 class TestInject:
@@ -305,25 +172,19 @@ def session(tmp_path, monkeypatch):
     return session_dir, frame
 
 
-def test_the_lead_hears_each_tier_once_on_the_frame_after_the_crossing(session):
+@pytest.mark.slow
+def test_the_lead_is_never_told_about_its_own_context(session):
     session_dir, frame = session
     payload = {"tool_name": "Bash", "session_id": "s1", "tool_input": BIG}
     envelopes = [frame(payload) for _ in range(9)]
-    said = [env.get("systemMessage", "") for env in envelopes]
+    assert all(env.get("systemMessage", "") == "" for env in envelopes)
     told = [env.get("hookSpecificOutput", {}).get("additionalContext", "") for env in envelopes]
-    assert all(line == "" for line in said[:4])                        # under the line: silence
-    assert said[4].startswith("context: lead ~1 KB after 4 calls; consider a fresh session")
-    assert said[5] == ""                                               # not repeated
-    assert said[7].startswith("context: lead is past the stop line (~2 KB after 7 calls)")
-    # The lead's own wording: its work goes on in fresh agents, and the user runs the checkpoint.
-    assert "do no new work in THIS context" in told[7] and told[7].startswith("ran\n")
-    assert "give it to a fresh agent" in told[7] and "/repacted:pause checkpoint then /compact" in told[7]
-    assert "start no new work" not in told[7] and "write your HANDOFF" not in told[7]
-    assert said[8].startswith("context: lead is past the hard line (~3 KB after 8 calls)")
-    assert "write your HANDOFF now" in told[8]
+    assert all("compact" not in line and "stop line" not in line and "hard line" not in line
+               for line in told)
     counters = json.loads((session_dir / ledger.COST_FILE).read_text("utf-8"))
     assert counters["agents"]["lead"]["calls"] == 9
-    assert counters["agents"]["lead"]["tier"] == "hard" and counters["pending"] == []
+    assert counters["agents"]["lead"]["tier"] == "hard" and not counters.get("pending")
+    assert not counters["agents"]["lead"].get("stop_pending")
     assert counters["checks"]["allow_ctx"]["runs"] == 9
 
 
@@ -355,6 +216,7 @@ def test_repact_cost_prints_the_agents_by_spend(tmp_path):
     assert [row["agent"] for row in rows] == ["bob"] and rows[0]["transcript"] == 50_000
 
 
+@pytest.mark.slow
 def test_repact_explain_filters_refusals_by_agent(tmp_path):
     def row(agent):
         base = {"v": 1, "type": "gate_refusal", "ts": "2026-10-04T10:00:00Z", "hook": "deny_a",

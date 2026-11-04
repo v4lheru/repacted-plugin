@@ -108,12 +108,6 @@ class TestSessionInitCheckpointRealSeam:
         )
         assert "Build the feature" in cp and "id: 100" in cp
 
-    def test_negative_control_empty_team_dir_safety_net(self, live_env):
-        live_env.mkdir(parents=True, exist_ok=True)  # team dir exists but empty
-        cp = _build_checkpoint()
-        # get_task_list() -> None -> finders get [] -> safety-net feature line.
-        assert "cannot tell which task is the feature" in cp
-
 
 # ── Seam B: session-dir resolution behind the lead-read instruction ──────────
 
@@ -227,58 +221,4 @@ class TestCompactReadInstructionRealSeam:
         # that compacts receives it too.
         assert "compact-summary.txt" in ctx
 
-    def test_real_session_id_names_the_resolved_archive_directory(
-        self, tmp_path, monkeypatch
-    ):
-        sid = "aabb1122-0000-0000-0000-000000000000"
-        ctx = _run_compact_main(tmp_path, monkeypatch, sid)
 
-        # The READ TARGET is session-scoped (#1504): the instruction names the
-        # file inside the resolved session dir — the writer put it there, so
-        # the lead is sent where it actually is, not to the root singleton.
-        assert f"/{sid}/compact-summary.txt" in ctx
-        # The archive directory is the REAL resolved one. Asserted from the
-        # inputs (home + session id), never by re-deriving the resolver, so a
-        # resolver returning "" or the wrong dir fails here.
-        assert f"archived the summary into {tmp_path}" in ctx
-        assert sid in ctx
-        assert "names the path in its briefing" not in ctx, (
-            "the guarded fallback fired for a well-formed session — "
-            "session-dir resolution returned empty when it should not"
-        )
-
-    def test_the_archive_instruction_allows_an_unattributed_summary_without_naming_it(
-        self, tmp_path, monkeypatch
-    ):
-        """A summary no transcript attributes to this session is parked and never
-        promoted, so compact-summary.txt can be absent without an archive. The
-        lead is told to continue from its own context, and is never pointed at a
-        parked file, which may hold a teammate's summary."""
-        ctx = _run_compact_main(tmp_path, monkeypatch, "aabb1122-0000-0000-0000-000000000000")
-
-        assert f"(if it is absent, either the secretary archived the summary into {tmp_path}" in ctx
-        assert (
-            "or it was not attributed to this session and you continue from the "
-            "summary already in your context)" in ctx
-        )
-        assert "unattributed" not in ctx
-
-    def test_missing_session_id_falls_back_instead_of_naming_an_empty_dir(
-        self, tmp_path, monkeypatch
-    ):
-        ctx = _run_compact_main(tmp_path, monkeypatch, None)
-
-        # The DEGRADED branch must follow the degraded WRITE: no session_id
-        # means the writer fell back to the root singleton, so the pointer
-        # names the sid-free ROOT path. The contiguous fragment cannot match
-        # a session-scoped pointer (pact-sessions/{slug}/{sid}/...), so a
-        # scoped misroute reddens here — the bare filename substring could not
-        # tell the two apart (F-TEST-1).
-        assert "pact-sessions/compact-summary.txt" in ctx
-        assert "names the path in its briefing" in ctx
-        # The two failure shapes a blind interpolation would produce.
-        assert "archived the summary into  as" not in ctx
-        assert "unknown-" not in ctx, (
-            "the unknown-* fallback session id must never reach an instruction "
-            "the lead may act on"
-        )

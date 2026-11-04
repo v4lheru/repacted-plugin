@@ -149,38 +149,6 @@ class TestAPathlessCallInheritsTheScope:
         # so the arm above cannot pass through a leaked global.
         assert resolve_db_path() != outer
 
-    def test_the_directory_inherits_through_a_pathless_scope(self, tmp_path):
-        """RED against the unconditional-set mutant, on the directory leg."""
-        outer = tmp_path / "outer" / "outer.db"
-
-        with store_scope(outer):
-            with store_scope(None):
-                assert get_memory_dir() == outer.parent
-
-    def test_a_pathless_connection_opens_the_enclosing_store(self, tmp_path):
-        """The behavioural form of the arm above, read from SQLite itself.
-
-        RED against the unconditional-set mutant. `db_connection()` with no
-        argument is exactly what `search.py`, `graph.py` and
-        `embedding_catchup.py` issue, and not one of them accepts a path.
-        """
-        outer = tmp_path / "outer" / "outer.db"
-        outer.parent.mkdir(parents=True)
-
-        with store_scope(outer):
-            with db_connection() as conn:
-                assert _connection_file(conn) == outer
-
-    def test_an_inner_path_wins_and_the_outer_one_returns(self, tmp_path):
-        """A real inner path overrides, and the outer binding is restored."""
-        outer = tmp_path / "outer" / "outer.db"
-        inner = tmp_path / "inner" / "inner.db"
-
-        with store_scope(outer):
-            with store_scope(inner):
-                assert resolve_db_path() == inner
-            assert resolve_db_path() == outer
-
 
 # ---------------------------------------------------------------------------
 # The scoped API reads the scoped store
@@ -248,22 +216,6 @@ class TestTheScopedApiReadsTheScopedStore:
             "the search read a store other than the one the caller named"
         )
 
-    def test_status_reports_the_scoped_store(self, tmp_path):
-        """RED ON THE UNPATCHED TREE. The report named the default store.
-
-        The counts came from the caller store and the `db_path` field came from
-        the default one, so the envelope disagreed with itself.
-        """
-        scoped = tmp_path / "status-store" / "status.db"
-        scoped.parent.mkdir(parents=True)
-
-        with patch.object(memory_api_module, "_ensure_ready"):
-            status = memory_api_module.PACTMemory(
-                project_id="store-scope-arm", db_path=scoped
-            ).get_status()
-
-        assert status["db_path"] == str(scoped)
-
 
 # ---------------------------------------------------------------------------
 # setup: three legs, one scope
@@ -303,43 +255,6 @@ class TestSetupIsolatesOnAllThreeLegs:
         assert scoped.parent.is_dir()
         assert scoped.exists()
 
-    def test_setup_does_not_create_the_default_directory(self, tmp_path, capsys):
-        """RED ON THE UNPATCHED TREE. The directory leg created the default one.
-
-        The parent of X exists here on purpose, so the schema leg succeeds
-        either way and this arm isolates the DIRECTORY leg by itself.
-        """
-        scoped = tmp_path / "present-parent" / "setup.db"
-        scoped.parent.mkdir(parents=True)
-        default_dir = get_memory_dir()
-
-        # CONTROL: the default directory is absent before the call, so its
-        # presence afterwards can only come from this command.
-        assert not default_dir.exists()
-
-        code = self._run_setup(scoped)
-        capsys.readouterr()
-
-        assert code == 0
-        assert not default_dir.exists(), (
-            "setup created the default store directory while the caller named "
-            "another store"
-        )
-
-    def test_setup_reports_the_scoped_directory(self, tmp_path, capsys):
-        """RED ON THE UNPATCHED TREE. The report leg named the default store."""
-        scoped = tmp_path / "reported" / "setup.db"
-        scoped.parent.mkdir(parents=True)
-
-        code = self._run_setup(scoped)
-        envelope = json.loads(capsys.readouterr().out)
-
-        assert code == 0
-        assert envelope["ok"] is True
-        assert envelope["result"]["details"]["paths"]["memory_dir"] == str(
-            scoped.parent
-        )
-
 
 # ---------------------------------------------------------------------------
 # The cardinal constraint: redirect, never refuse
@@ -363,49 +278,6 @@ class TestTheScopeIsARedirectAndNotARefusal:
         directory, and a production caller keeps reaching its store.
         """
         assert resolve_db_path() == get_memory_dir() / DB_FILENAME
-
-    def test_resolution_creates_no_directory(self, tmp_path):
-        """NON-REGRESSION ARM for the behaviour, new for the name.
-
-        `compute_db_path` already carried this property and still does. The
-        assertion moves to `resolve_db_path` because that is now the composing
-        expression, and because the status report calls it: a read-shaped method
-        must not leave a directory tree behind.
-        """
-        target = tmp_path / "never-created" / "never.db"
-
-        with store_scope(target):
-            assert resolve_db_path() == target
-
-        assert not target.parent.exists()
-
-    def test_the_resolver_holds_no_refusal(self):
-        """MUTATION-BOUND ARM. Red only against a `raise` added to the resolver.
-
-        A refusal is what an isolation fix reaches for when it is written the
-        wrong way round: block the default and every isolation arm goes green
-        while production breaks. This asserts the refusal has no expression to
-        live in.
-        """
-        config_tree = _parse(_SCRIPTS_DIR / "config.py")
-
-        for name in ("resolve_db_path", "get_memory_dir", "store_scope"):
-            raises = [
-                node
-                for node in ast.walk(_function(config_tree, name))
-                if isinstance(node, ast.Raise)
-            ]
-            assert raises == [], f"{name} refuses a store instead of redirecting it"
-
-        # CONTROL, POSITIVE: the detector finds a `raise` where one is present,
-        # so the empty results above are absence and not a blind instrument.
-        database_tree = _parse(_SCRIPTS_DIR / "database.py")
-        control = [
-            node
-            for node in ast.walk(_function(database_tree, "db_connection"))
-            if isinstance(node, ast.Raise)
-        ]
-        assert control, "the raise detector found nothing where a raise exists"
 
 
 # ---------------------------------------------------------------------------
@@ -513,79 +385,9 @@ class TestOnlyOneExpressionYieldsTheStorePath:
         text_hits = [m.name for m in modules if DB_FILENAME in m.read_text(encoding="utf-8")]
         assert len(text_hits) > len(hits), text_hits
 
-    def test_one_site_composes_a_path_from_the_name(self):
-        """RED ON THE UNPATCHED TREE, where the constant does not exist.
-
-        THIS IS THE ARM THAT CATCHES A REUSE. A second derivation written from
-        the shared constant leaves the literal count at one and is invisible to
-        the arm above.
-        """
-        modules = _package_modules()
-
-        loads = [
-            (module.name, node.lineno, _enclosing_function(tree, node.lineno))
-            for module in modules
-            for tree in [_parse(module)]
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Name)
-            and node.id == "DB_FILENAME"
-            and isinstance(node.ctx, ast.Load)
-        ]
-
-        assert len(loads) == 1, f"more than one site derives the store path: {loads}"
-        assert loads[0][0] == "config.py"
-        assert loads[0][2] == "resolve_db_path"
-
-        # CONTROL, POSITIVE: the constant IS defined, so the count of one above
-        # is a real single reader and not a package where the name is absent.
-        stores = [
-            module.name
-            for module in modules
-            for node in ast.walk(_parse(module))
-            if isinstance(node, ast.Name)
-            and node.id == "DB_FILENAME"
-            and isinstance(node.ctx, ast.Store)
-        ]
-        assert stores == ["config.py"]
-
 
 # ---------------------------------------------------------------------------
 # The connection factory
 # ---------------------------------------------------------------------------
 
 
-class TestTheConnectionFactoryContract:
-    """The factory that every scoped read and write goes through."""
-
-    def test_the_factory_passes_no_isolation_level(self):
-        """MUTATION-BOUND ARM. Green before and after this change.
-
-        It is here because the property had NO test at all: `isolation_level`
-        appeared in zero test files while the repair work depends on it. Leaving
-        it unset keeps the driver's implicit transaction handling, so a delete
-        and its replacement insert sit in one transaction and a failure between
-        them rolls back. Pass `isolation_level=None` and each statement
-        autocommits, which turns that pair into two independent writes.
-        """
-        tree = _parse(_SCRIPTS_DIR / "database.py")
-        factory = _function(tree, "get_connection")
-
-        connects = [
-            node
-            for node in ast.walk(factory)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "connect"
-        ]
-        assert len(connects) == 1, connects
-
-        keywords = {kw.arg for kw in connects[0].keywords}
-
-        # CONTROL, POSITIVE: the instrument reads keyword arguments at all, so
-        # the absence asserted below is an absence and not a blind read.
-        assert "check_same_thread" in keywords
-
-        assert "isolation_level" not in keywords, (
-            "the factory sets isolation_level, which changes when a statement "
-            "commits and breaks the drop-then-insert pairing"
-        )

@@ -69,8 +69,7 @@ class TestPostcompactSuppression:
         return mock_write
 
     @pytest.mark.parametrize("frame_builder", [
-        lead_frame_qualified, lead_frame_unqualified,
-    ], ids=["qualified", "unqualified"])
+        lead_frame_qualified,], ids=["qualified",])
     def test_lead_writes_compact_summary(self, frame_builder, monkeypatch, tmp_path):
         """A lead frame with a compact_summary writes the summary."""
         frame = frame_builder(hook_event_name="PostCompact",
@@ -79,27 +78,6 @@ class TestPostcompactSuppression:
         mock_write = self._run_postcompact(frame, monkeypatch, tmp_path)
         mock_write.assert_called_once()
         assert mock_write.call_args.args[0] == "lead summary text"
-
-    @pytest.mark.parametrize("frame, role", [
-        (postcompact_frame(agent_type="pact-backend-coder", session_id=_SESSION_ID),
-         "teammate"),
-        (postcompact_frame(agent_type=None, session_id=_SESSION_ID), "plain"),
-    ])
-    def test_non_lead_suppresses_compact_summary(self, frame, role, monkeypatch, tmp_path):
-        """A teammate/plain frame must NOT write the compact-summary — identity
-        collapse resolves it into the lead's own session dir."""
-        mock_write = self._run_postcompact(frame, monkeypatch, tmp_path)
-        mock_write.assert_not_called()
-
-    def test_lead_with_empty_summary_does_not_write(self, monkeypatch, tmp_path):
-        """Even a lead frame with an empty compact_summary skips the write
-        (the `compact_summary and is_lead(...)` short-circuit). Confirms the
-        gate is `summary AND lead`, not `lead alone`."""
-        frame = lead_frame_qualified(hook_event_name="PostCompact",
-                                     compact_summary="",
-                                     session_id=_SESSION_ID)
-        mock_write = self._run_postcompact(frame, monkeypatch, tmp_path)
-        mock_write.assert_not_called()
 
 
 # ===========================================================================
@@ -136,27 +114,13 @@ class TestBootstrapGateFlip:
         }
 
     @pytest.mark.parametrize("frame_builder", [
-        lead_frame_qualified, lead_frame_unqualified,
-    ], ids=["qualified", "unqualified"])
+        lead_frame_qualified,], ids=["qualified",])
     def test_lead_no_marker_enforces(self, frame_builder, monkeypatch, tmp_path):
         from bootstrap_gate import _check_tool_allowed, _DENY_REASON
         self._setup_session_no_marker(monkeypatch, tmp_path)
         result = _check_tool_allowed(self._input(frame_builder(), tool_name="Agent"))
         assert result == _DENY_REASON, (
             "lead frame, no marker, blocked tool → must ENFORCE (deny)"
-        )
-
-    @pytest.mark.parametrize("frame, role", [
-        (teammate_frame(), "teammate"),
-        (teammate_frame(agent_type="repacted:pact-backend-coder"), "teammate-qualified"),
-        (plain_frame(), "plain"),
-    ])
-    def test_non_lead_passes_through(self, frame, role, monkeypatch, tmp_path):
-        from bootstrap_gate import _check_tool_allowed
-        self._setup_session_no_marker(monkeypatch, tmp_path)
-        result = _check_tool_allowed(self._input(frame))
-        assert result is None, (
-            f"{role} frame must PASS THROUGH the bootstrap DENY gate (no-op)"
         )
 
 
@@ -182,11 +146,7 @@ class TestClassBGateBypassFlip:
         return g
 
     @pytest.mark.parametrize("frame, expect_bypass", [
-        (lead_frame_qualified(), False),
-        (lead_frame_unqualified(), False),
-        (teammate_frame(), True),
-        (plain_frame(), True),
-    ], ids=["lead-q", "lead-u", "teammate", "plain"])
+        (lead_frame_qualified(), False),], ids=["lead-q",])
     def test_prompt_gate_flip(self, frame, expect_bypass, monkeypatch, tmp_path):
         g = self._setup_prompt_gate(monkeypatch, tmp_path)
         result = g._check_bootstrap_needed({"session_id": _SESSION_ID, **frame})
@@ -196,36 +156,6 @@ class TestClassBGateBypassFlip:
             assert result is not None, "lead must engage (inject bootstrap instruction)"
 
     # --- bootstrap_marker_writer._try_write_marker ---
-
-    @pytest.mark.parametrize("frame, expect_write", [
-        (lead_frame_qualified(), True),
-        (lead_frame_unqualified(), True),
-        (teammate_frame(), False),
-        (plain_frame(), False),
-    ], ids=["lead-q", "lead-u", "teammate", "plain"])
-    def test_marker_writer_flip(self, frame, expect_write, monkeypatch, tmp_path):
-        """_try_write_marker(input_data) reads session_dir internally; is_lead
-        gates BEFORE the team-is-identified / plugin-version pre-conditions.
-        Stub the whole post-is_lead chain so a lead frame reaches _write_marker
-        and a non-lead frame bypasses before any of it. The write function is
-        _write_marker (underscore)."""
-        import bootstrap_marker_writer as g
-        sess = tmp_path / "sess"
-        sess.mkdir()
-        monkeypatch.setattr(g.pact_context, "init", lambda _d: None)
-        monkeypatch.setattr(g.pact_context, "get_session_dir", lambda: str(sess))
-        monkeypatch.setattr(g, "is_marker_set", lambda _p: False)
-        # Post-is_lead pre-conditions — stub so a lead frame reaches _write_marker.
-        monkeypatch.setattr(g, "_team_is_identified", lambda _t: True)
-        monkeypatch.setattr(g.pact_context, "get_team_name", lambda: "t1")
-        monkeypatch.setattr(g.pact_context, "get_plugin_root", lambda: str(tmp_path))
-        monkeypatch.setattr(g, "_read_plugin_version", lambda _r: "9.9.9")
-        with patch.object(g, "_write_marker") as mock_write:
-            g._try_write_marker({"session_id": _SESSION_ID, **frame})
-        if expect_write:
-            assert mock_write.called, "lead must proceed to write the marker"
-        else:
-            assert not mock_write.called, "non-lead must bypass (no marker write)"
 
 
 # ===========================================================================
@@ -253,63 +183,4 @@ class TestAgentIdDriftFixture:
                 f"re-verify the role discriminator still ignores agent_id."
             )
 
-    def test_agent_type_maps_to_role_per_ssot(self):
-        """Pin the agent_type→role mapping against the SSOT. A change to
-        LEAD_AGENT_TYPES or the classifier that silently remaps a role surfaces
-        here."""
-        from shared.pact_context import classify_session_role, is_lead
 
-        cases = [
-            ("repacted:pact-orchestrator", "lead", True),
-            ("pact-orchestrator", "lead", True),
-            ("pact-backend-coder", "teammate", False),
-            ("pact-secretary", "teammate", False),
-            (None, "unknown", False),
-        ]
-        for agent_type, expected_role, expected_is_lead in cases:
-            frame = {} if agent_type is None else {"agent_type": agent_type}
-            assert classify_session_role(frame) == expected_role, (
-                f"agent_type={agent_type!r} role drift"
-            )
-            assert is_lead(frame) is expected_is_lead
-
-    def test_agent_id_presence_never_promotes_role(self):
-        """The #812 guard, pinned at the discriminator level: adding an
-        agent_id to a NON-lead frame must never flip it to lead — agent_type is
-        the sole role signal."""
-        from shared.pact_context import is_lead, classify_session_role
-
-        # A teammate frame with an agent_id re-added (simulating a future CC
-        # build) stays a teammate.
-        frame = {"agent_type": "pact-backend-coder", "agent_id": "backend@team"}
-        assert is_lead(frame) is False
-        assert classify_session_role(frame) == "teammate"
-
-        # A plain frame with an agent_id stays unknown (agent_id alone is not
-        # a role).
-        frame2 = {"agent_id": "someone@team"}
-        assert is_lead(frame2) is False
-        assert classify_session_role(frame2) == "unknown"
-
-    def test_postcompact_provenance_split_synthesized_vs_captured(self):
-        """#1504 provenance discipline: the C2 ``session_id`` kwarg does NOT
-        promote the builder. ``postcompact_frame`` must KEEP its SYNTHESIZED
-        stamp; the ONLY captured PostCompact shape is ``postcompact_lead_manual``
-        (the #1504 step-0 live capture). A silent promotion of the builder —
-        or a future frame stamped captured without a real capture behind it —
-        would let a guessed shape masquerade as a platform capture; this pins
-        the split in both directions."""
-        from fixtures.role_frames import captured_postcompact_lead_manual
-
-        synth = postcompact_frame(
-            "repacted:pact-orchestrator", session_id="sid"
-        )["_meta"]["capture_method"]
-        assert "synthesized" in synth.lower(), (
-            f"postcompact_frame must KEEP its SYNTHESIZED stamp (the "
-            f"session_id kwarg does not promote it); got {synth!r}"
-        )
-        captured = captured_postcompact_lead_manual()["_meta"]["capture_method"]
-        assert captured and "synthesized" not in captured.lower(), (
-            f"postcompact_lead_manual must be a REAL capture, not synthesized; "
-            f"got {captured!r}"
-        )

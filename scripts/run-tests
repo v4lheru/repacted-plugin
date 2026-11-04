@@ -8,7 +8,9 @@ suite. Run pytest through it, never bare, when several agents or worktrees share
                                                  name what changed since the merge base with main,
                                                  plus a small smoke list; holds ONE worker slot
   run-tests [options] [--] [pytest args...]      targeted run: holds ONE worker slot
-  run-tests --full [options]                     full suite: holds the suite slot + one worker slot
+  run-tests --full [options]                     full suite on 2 workers, slow tier skipped: holds the
+                                                 suite slot + both worker slots
+  run-tests --full --all [options]               the same, slow tier included (before a release)
   run-tests --raw [options] -- <cmd> [args...]   any other heavy command under one worker slot
   run-tests --status                             who holds which slot, and the suite queue order
 
@@ -37,6 +39,11 @@ the verdict against the versioned baseline scripts/known-failures.txt:
 'gate passed (N known)' only when each suite's failing ids EQUAL its listed ids; a new failure,
 a listed id that now passes or is gone (drift), a failure list tcount truncated, or a missing
 baseline fails the gate. A narrowed `--full <args>` says on stderr that it is not the merge gate.
+--full runs the plugin suite on 2 pytest-xdist workers (`-n 2`) and so holds BOTH worker slots,
+which keeps the machine at its cap of 2 heavy processes; an interpreter without pytest-xdist runs
+it on one worker and one slot, and says so. The bare --full skips the slow tier (`-m "not slow"`:
+non-guard tests that took 0.5 s or more, marked `@pytest.mark.slow`); `--full --all` runs it too.
+A narrowed `--full <args>` runs exactly what it names, slow or not.
 Every --full run also gives pytest `--durations=0 --durations-min=0.1`, so tcount's log holds the
 wall of each test phase over 0.1 s; after the counts lines the 10 slowest test files are printed
 (those phases summed per file), and the suite's row copied to the live ledger carries them as
@@ -60,7 +67,8 @@ The test process runs:
     into the caller's live run ledger (the child never writes it), where the run-ledger hook
     attributes it by its log path;
   - under `nice -n 19`, through tcount, so the counts line is verifiable (D7);
-  - with pytest `-q -p no:cacheprovider`. xdist `-n` is refused: the slot IS the parallelism cap.
+  - with pytest `-q -p no:cacheprovider`. A caller's xdist `-n` is refused: the slots ARE the
+    parallelism cap; only --full sets `-n 2`, holding both slots.
 
 Options
   (no args)         QUICK: the changed files are `git diff --name-only <merge-base main>` plus
@@ -69,9 +77,11 @@ Options
                     ) that names it (its file name, or `import <stem>` /
                     `from ... import <stem>`). SMOKE is always added. The selection is printed.
                     Use --full for a release or the lead's final merge check.
-  --full            take the suite slot too; with no pytest args, collects the whole plugin
+  --full            take the suite slot and both worker slots, run on 2 workers; with no pytest
+                    args, collects the whole plugin without the slow tier
                     (tests/ and skills/*/test_*.py)
                     ; with pytest args, runs only those, in the plugin
+  --all             with --full: include the slow tier (`@pytest.mark.slow`); use before a release
   --pkg NAME        package name for the owner sidecar (default: the git branch)
   --home DIR        scratch HOME to use (kept); default: a temp dir, removed afterwards
   --python PATH     interpreter with pytest installed (default: $REPACTED_PYTHON, else .venv/bin/python3
@@ -121,6 +131,8 @@ POLL_SECONDS = 2.0
 HEAD_POLL_SECONDS = 0.2  # the head waiter polls faster, so it usually beats a pre-queue copy
 PS = "/bin/ps" if Path("/bin/ps").exists() else "ps"
 XDIST_FLAGS = ("-n", "--numprocesses", "--dist")
+FULL_WORKERS = 2                       # the machine cap on heavy processes; --full holds both slots
+SLOW_TIER = ("-m", "not slow")         # the bare --full skips tests marked @pytest.mark.slow
 
 REPACTED = Path(__file__).resolve().parent.parent
 PLUGIN = REPACTED / "pact-plugin"
@@ -357,15 +369,24 @@ def build_steps(args, pytest_args: list[str]) -> list[tuple[str, list[str], Path
     for arg in pytest_args:
         if arg.split("=", 1)[0] in XDIST_FLAGS or (arg.startswith("-n") and arg[2:].isdigit()):
             raise Usage(f"refused: {arg!r}. The worker slot is the parallelism cap (D11); run without xdist")
+    if args.all and not args.full:
+        raise Usage("--all goes with --full (it adds the slow tier to the full run)")
     python = default_python(args.python)
     print(f"run-tests: interpreter {shutil.which(python) or python}", file=sys.stderr)
+    args.workers = FULL_WORKERS if args.full and has_xdist(python) else 1
+    if args.full:
+        tier = ("only the named tests, slow tier not filtered" if pytest_args else
+                "slow tier included" if args.all else "slow tier skipped (--all runs it)")
+        how = f"{args.workers} workers" if args.workers > 1 else "1 worker (no pytest-xdist in this interpreter)"
+        print(f"run-tests: plugin suite on {how}; {tier}", file=sys.stderr)
 
-    def pytest(*extra: str) -> list[str]:
+    def pytest(*extra: str, lead: tuple[str, ...] = ()) -> list[str]:
         return ["nice", "-n", "19", python, str(TCOUNT), "--", python, "-m", "pytest",
-                *(DURATIONS if args.full else ()), "-q", "-p", "no:cacheprovider", *extra]
+                *(DURATIONS if args.full else ()), *lead, "-q", "-p", "no:cacheprovider", *extra]
 
+    parallel = ("-n", str(args.workers)) if args.workers > 1 else ()
     if pytest_args:
-        return [("plugin", pytest(*pytest_args), PLUGIN)]
+        return [("plugin", pytest(*pytest_args, lead=parallel), PLUGIN)]
     if not args.full:
         plugin_tests, picked = quick_selection(changed_files())
         steps = [("plugin", pytest(*plugin_tests), PLUGIN)]
@@ -376,8 +397,16 @@ def build_steps(args, pytest_args: list[str]) -> list[tuple[str, list[str], Path
         return steps
     # --full with no args is the merge gate: the whole plugin (tests/ AND the skills/*/test_*.py
     # modules).
-    steps = [("plugin", pytest(), PLUGIN)]
+    steps = [("plugin", pytest(lead=(*parallel, *(() if args.all else SLOW_TIER))), PLUGIN)]
     return steps
+
+
+def has_xdist(python: str) -> bool:
+    """True when the interpreter can import pytest-xdist, so --full can run on 2 workers."""
+    try:
+        return subprocess.run([python, "-c", "import xdist"], capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _git(*args: str) -> list[str]:
@@ -749,6 +778,7 @@ def parse(argv: list[str]):
                                      epilog=__doc__.split("Examples", 1)[1].join(["Examples", ""]))
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--raw", action="store_true")
+    parser.add_argument("--all", action="store_true")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--pkg")
     parser.add_argument("--home")
@@ -792,13 +822,16 @@ def main(argv: list[str]) -> int:
             held.append(got[0])
             ticket = got[2]
             sidecars.append(write_owner(got[1], pkg))
-        got = acquire(tuple(lock_dir() / name for name in WORKER_LOCKS), deadline)
-        if got is None:
-            print(f"run-tests: no worker slot free within {args.wait:.0f}s; see --status. "
-                  "Report it; do not bypass the lock.", file=sys.stderr)
-            return EXIT_LOCK_TIMEOUT
-        held.append(got[0])
-        sidecars.append(write_owner(got[1], pkg))
+        free = [lock_dir() / name for name in WORKER_LOCKS]
+        for _ in range(getattr(args, "workers", 1)):   # --full on 2 workers holds both slots
+            got = acquire(tuple(free), deadline)
+            if got is None:
+                print(f"run-tests: no worker slot free within {args.wait:.0f}s; see --status. "
+                      "Report it; do not bypass the lock.", file=sys.stderr)
+                return EXIT_LOCK_TIMEOUT
+            free.remove(got[1])
+            held.append(got[0])
+            sidecars.append(write_owner(got[1], pkg))
         print(f"run-tests: {pkg} holds {', '.join(p.name[:-len('.owner')] for p in sidecars)}",
               file=sys.stderr)
 

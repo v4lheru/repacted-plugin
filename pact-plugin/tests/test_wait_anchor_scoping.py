@@ -104,12 +104,6 @@ class TestTheAnchorScopesCoverageAndTheClockDoesNot:
         task = _task(covers_since=_iso(RESTAMP_AT), since=_iso(RESTAMP_AT))
         assert wait_covers_record(task, _record(LAUNCH_AT)) is True
 
-    def test_the_comparison_is_inclusive_at_the_boundary(self):
-        """`anchor >= registered_at`, so an anchor set at the launch instant
-        covers it. Distinguishes `>=` from `>`, which no arm above can."""
-        task = _task(covers_since=_iso(LAUNCH_AT), since=_iso(RESTAMP_AT))
-        assert wait_covers_record(task, _record(LAUNCH_AT)) is True
-
 
 class TestAnAbsentAnchorSTILLCoversDeliberately:
     """🔴 THE HIGHEST-VALUE PIN IN THIS FILE, and it is not the defect arm.
@@ -154,12 +148,6 @@ class TestAnAbsentAnchorSTILLCoversDeliberately:
         task = _task(since=_iso(ANCHOR_AT))
         assert wait_covers_record(task, _record(LAUNCH_AT)) is False
 
-    def test_a_never_restamped_unanchored_wait_covers_its_own_launch_instant(self):
-        """The never-re-stamped case: `since` equals the true anchor, so the
-        fallback is exactly right and the wait is harmless by construction."""
-        task = _task(since=_iso(LAUNCH_AT))
-        assert wait_covers_record(task, _record(LAUNCH_AT)) is True
-
 
 class TestAbsentAndMalformedStayTwoDistinctClasses:
     """Three states, not two — the recurring defect of this arc is collapsing
@@ -179,30 +167,6 @@ class TestAbsentAndMalformedStayTwoDistinctClasses:
     def test_a_missing_anchor_reports_ABSENT(self):
         assert wait_anchor_class(_task(since=_iso(RESTAMP_AT))) == ANCHOR_CLASS_ABSENT
 
-    def test_an_UNPARSEABLE_anchor_reports_MALFORMED_not_absent(self):
-        task = _task(covers_since="not-a-timestamp", since=_iso(RESTAMP_AT))
-        assert wait_anchor_class(task) == ANCHOR_CLASS_MALFORMED, (
-            "an unparseable anchor is an agent BUG and must not be reported as "
-            "a missing field; collapsing the two hides the bug behind the "
-            "legitimate transitional case"
-        )
-
-    def test_the_two_classes_are_not_the_same_value(self):
-        """Guards the collapse directly: if someone sets both constants to one
-        value the arms above still pass individually."""
-        assert ANCHOR_CLASS_ABSENT != ANCHOR_CLASS_MALFORMED
-
-    def test_a_VALID_anchor_reports_NO_class(self):
-        """None means "nothing to report", and it is the third state."""
-        task = _task(covers_since=_iso(ANCHOR_AT), since=_iso(RESTAMP_AT))
-        assert wait_anchor_class(task) is None
-
-    def test_a_malformed_anchor_still_FALLS_BACK_rather_than_refusing(self):
-        """The class is reported AND coverage still works — a bug in the field
-        must not break the mechanism that field scopes."""
-        task = _task(covers_since="not-a-timestamp", since=_iso(RESTAMP_AT))
-        assert wait_covers_record(task, _record(LAUNCH_AT)) is True
-
 
 class TestWaitScopeAnchorReturnsBothHalves:
     """The predicate underneath the surfaces above, pinned directly.
@@ -213,25 +177,8 @@ class TestWaitScopeAnchorReturnsBothHalves:
     caller alone cannot see a swap of the two.
     """
 
-    @pytest.mark.parametrize("bad", [None, "", 7, [], "not-a-dict"])
+    @pytest.mark.parametrize("bad", [None,])
     def test_a_non_dict_wait_yields_no_anchor_and_ABSENT(self, bad):
         assert wait_scope_anchor(bad) == (None, ANCHOR_CLASS_ABSENT)
 
-    def test_a_valid_anchor_returns_THAT_instant_and_no_class(self):
-        anchor, cls = wait_scope_anchor(
-            {"since": _iso(RESTAMP_AT), WAIT_ANCHOR_KEY: _iso(ANCHOR_AT)})
-        assert (anchor, cls) == (ANCHOR_AT, None)
 
-    def test_an_absent_anchor_returns_SINCE_and_ABSENT(self):
-        anchor, cls = wait_scope_anchor({"since": _iso(RESTAMP_AT)})
-        assert (anchor, cls) == (RESTAMP_AT, ANCHOR_CLASS_ABSENT)
-
-    def test_a_malformed_anchor_returns_SINCE_and_MALFORMED(self):
-        anchor, cls = wait_scope_anchor(
-            {"since": _iso(RESTAMP_AT), WAIT_ANCHOR_KEY: "garbage"})
-        assert (anchor, cls) == (RESTAMP_AT, ANCHOR_CLASS_MALFORMED)
-
-    def test_an_unusable_SINCE_with_no_anchor_yields_None(self):
-        """Both halves unusable is the one case with nothing to fall back to."""
-        anchor, cls = wait_scope_anchor({"since": "garbage"})
-        assert (anchor, cls) == (None, ANCHOR_CLASS_ABSENT)

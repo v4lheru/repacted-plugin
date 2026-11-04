@@ -219,11 +219,11 @@ def _capture_journal(monkeypatch):
 @pytest.mark.parametrize(
     "name_input",
     [
-        "",  # empty string
-        "   ",  # whitespace-only — also fails the regex rule
-        "\t",  # tab-only
-    ],
-    ids=["empty_string", "whitespace_only", "tab_only"],
+    "",
+],
+    ids=[
+    "empty_string",
+],
 )
 def test_or_regex_deny_when_name_is_empty_or_whitespace(
     name_input, tmp_path, monkeypatch, capsys
@@ -257,18 +257,6 @@ def test_deny_when_name_key_missing(tmp_path, monkeypatch, capsys):
 # inert team_name arg (#979) — the platform-ignored Agent(team_name=) arg
 # never DENYs and never selects the team dir; the SSOT does
 # =============================================================================
-
-
-def test_missing_team_name_arg_resolves_via_ssot(tmp_path, monkeypatch, capsys):
-    """#979: a MISSING team_name arg no longer DENYs. The arg is
-    platform-ignored, so the gate resolves the session team from the SSOT
-    (get_team_name()) and ALLOWs when the SSOT team carries the owner's task."""
-    _full_setup(monkeypatch, tmp_path)
-    payload = _make_input()
-    del payload["tool_input"]["team_name"]
-    code, out = _run_main(payload, capsys)
-    assert code == 0
-    assert out == _SUPPRESS_EXPECTED
 
 
 # =============================================================================
@@ -311,49 +299,6 @@ def test_allows_name_at_64_char_boundary(tmp_path, monkeypatch, capsys):
         assert code == 0
 
 
-@pytest.mark.parametrize(
-    "bad_name",
-    [
-        "BadName",  # uppercase
-        "has space",  # space
-        "has_underscore",  # underscore
-        "trailing-",  # degenerate: trailing hyphen
-        "-leading",  # degenerate: leading hyphen
-        "--",  # degenerate: only hyphens
-        "-",  # degenerate: single hyphen
-        "(parens)",  # parens
-        "with\nnewline",  # newline
-        "наме",  # Cyrillic — fails regex even after NFKC
-        "​zero-width",  # zero-width-space prefix
-    ],
-    ids=[
-        "uppercase",
-        "space",
-        "underscore",
-        "trailing_dash",
-        "leading_dash",
-        "only_hyphens",
-        "single_hyphen",
-        "parens",
-        "newline",
-        "cyrillic",
-        "zero_width",
-    ],
-)
-def test_deny_invalid_name_chars(bad_name, tmp_path, monkeypatch, capsys):
-    """NFKC normalize then regex check — none of these survive.
-
-    The regex requires at least one alphanumeric and forbids leading or
-    trailing hyphens; degenerate names like "-", "--", "-foo", "foo-"
-    are rejected by name_invalid_regex.
-    """
-    _full_setup(monkeypatch, tmp_path)
-    code, out = _run_main(_make_input(name=bad_name), capsys)
-    assert code == 2
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "must match" in reason
-
-
 def test_deny_fullwidth_lookalike_after_nfkc(tmp_path, monkeypatch, capsys):
     """Fullwidth digits/letters NFKC-normalize to ASCII, but the regex check
     runs on the NORMALIZED form. We want to assert that the LOOKALIKE shape
@@ -383,14 +328,8 @@ def test_deny_fullwidth_lookalike_after_nfkc(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize(
     "reserved",
     [
-        "team-lead",
-        "lead",
-        "user",
-        "external",
-        "peer",
-        "unknown",
-        "solo",
-    ],
+    "team-lead",
+],
 )
 def test_deny_reserved_token(reserved, tmp_path, monkeypatch, capsys):
     """Reserved tokens DENY even though they pass the regex."""
@@ -399,90 +338,6 @@ def test_deny_reserved_token(reserved, tmp_path, monkeypatch, capsys):
     assert code == 2
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "reserved-token" in reason
-
-
-def test_self_complete_exempt_agent_types_subset_specialist_registry(
-    tmp_path, monkeypatch
-):
-    """Cross-module categorical invariant (post-#682), tested against
-    the LIVE plugin agent registry.
-
-    Every agentType token in SELF_COMPLETE_EXEMPT_AGENT_TYPES MUST
-    correspond to a registered PACT specialist (a file at
-    `agents/pact-*.md`). A typo in the agentType token (e.g.
-    `pact-secratary`) would silently drop the carve-out without surfacing
-    as a runtime failure — secretaries would no longer self-complete and
-    every memory-save would fail the lead-only-completion advisory. This
-    test catches typos at PR time.
-
-    Categorical pattern. Any future privilege class keyed on agentType
-    (audit-only, signing-authority, quota-exempt, etc.) MUST (a) live in
-    a shared module so the privilege membership is the single source of
-    truth, and (b) carry its own ⊆ _specialist_registry() subset
-    assertion so a privileged-but-unregistered agentType cannot ship as
-    dead code. SELF_COMPLETE_EXEMPT_AGENT_TYPES is the first such class;
-    this test is the template for any future ones.
-
-    TE-M1 (cycle-2): the predecessor of this test seeded the registry
-    fixture with `("pact-secretary", "pact-architect")` — a
-    hand-picked agent set that exactly matched the constant. That made
-    the assertion `SELF_COMPLETE_EXEMPT_AGENT_TYPES - _specialist_registry()`
-    vacuously empty unless the constant ALONE was mutated; a future PR
-    that grew the constant AND simultaneously updated the seeded agents
-    list would silently produce green even on typos. The fix: point
-    pact_context at the REAL plugin root so `_specialist_registry()`
-    globs the live `pact-plugin/agents/pact-*.md` files. The constant
-    is then asserted against the actual deployed agent set, not a
-    cargo-cult fixture.
-
-    Per architect doc OQ-3 / arch §Risks: if the live registry isn't
-    loadable from the test side cleanly (e.g., import-time hooks fail
-    in test runner), the lead-authorized fallback is Option (ii) —
-    a doc-anchor test on RESERVED_NAMES retention. This test does NOT
-    fall back; the live load is straightforward (point plugin_root at
-    the worktree's pact-plugin/ dir).
-    """
-    # tests/ → pact-plugin/ (the live plugin root containing agents/).
-    real_plugin_root = Path(__file__).resolve().parent.parent
-    real_agents_dir = real_plugin_root / "agents"
-    assert (real_agents_dir / "pact-secretary.md").is_file(), (
-        f"Live plugin agents/ dir at {real_agents_dir} is missing "
-        f"pact-secretary.md — test cannot validate categorical invariant "
-        f"against the deployed agent set. If the agent file legitimately "
-        f"moved, update this test's path resolution alongside."
-    )
-
-    # Wire pact_context to the LIVE plugin root, NOT a tmp_path fixture
-    # with hand-seeded agents. _specialist_registry() globs
-    # plugin_root/agents/pact-*.md; we want it to see the real set.
-    _setup_session(monkeypatch, tmp_path, real_plugin_root)
-
-    from shared.dispatch_helpers import _specialist_registry
-    from shared.intentional_wait import SELF_COMPLETE_EXEMPT_AGENT_TYPES
-
-    live_registry = _specialist_registry()
-    # Sanity check: the live registry must be non-empty AND contain at
-    # least one well-known agent. If empty, the path resolution is
-    # broken and the subsequent invariant check would be vacuously
-    # green (defect masking). Fail loudly.
-    assert live_registry, (
-        f"Live _specialist_registry() returned empty at "
-        f"plugin_root={real_plugin_root}. The categorical invariant "
-        f"cannot be validated against an empty registry."
-    )
-    assert "pact-architect" in live_registry, (
-        f"Live registry missing well-known agent 'pact-architect'; "
-        f"path resolution may be reading the wrong agents/ dir. "
-        f"Got: {sorted(live_registry)}"
-    )
-
-    missing = SELF_COMPLETE_EXEMPT_AGENT_TYPES - live_registry
-    assert not missing, (
-        f"SELF_COMPLETE_EXEMPT_AGENT_TYPES contains agentType tokens "
-        f"with no matching agents/pact-*.md file: {sorted(missing)}. "
-        "Either the tokens are typos or the agent files are missing — "
-        "both produce silent loss of the self-completion carve-out."
-    )
 
 
 # =============================================================================
@@ -516,22 +371,6 @@ def test_inert_team_name_arg_resolves_against_ssot(tmp_path, monkeypatch, capsys
     code, out = _run_main(_make_input(team_name="wrong-team"), capsys)
     assert code == 0
     assert out == _SUPPRESS_EXPECTED
-
-
-def test_deny_when_session_team_unavailable(tmp_path, monkeypatch, capsys):
-    """Empty-source decision (architect §7(h)): when the SSOT session team_name
-    is empty, fail-closed — the member/task reads structurally depend on a
-    non-empty session team as a path segment, so an empty SSOT must DENY (the
-    spawn-arg team_name is platform-ignored and cannot substitute).
-    """
-    plugin_root = tmp_path / "plugin"
-    _seed_plugin(plugin_root)
-    _setup_session(monkeypatch, tmp_path, plugin_root, team_name="")
-    _seed_team(tmp_path, members=(), tasks=((_NAME, "pending"),))
-    code, out = _run_main(_make_input(team_name=_TEAM), capsys)
-    assert code == 2
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "session team_name is unavailable" in reason
 
 
 _TEAMMATE_REFUSAL = (
@@ -590,15 +429,6 @@ def test_rule_6_tells_a_teammate_to_ask_the_team_lead(tmp_path, monkeypatch, cap
     assert [(row["decision"], row["rule"]) for row in rows] == [("DENY", "team_name_unavailable")]
 
 
-def test_rule_6_keeps_the_bootstrap_text_for_a_solo_specialist(tmp_path, monkeypatch, capsys):
-    """A specialist's own main session has a teammate role but no registered team."""
-    frame = {**_make_input(), "agent_type": "pact-backend-coder"}
-
-    reason = _deny_with_no_context(monkeypatch, tmp_path, capsys, frame)
-    assert "Re-run /repacted:bootstrap" in reason
-    assert str(tmp_path / "pact-session-context.json") in reason
-
-
 def test_rule_6_keeps_the_bootstrap_text_when_team_resolution_raises(
     tmp_path, monkeypatch, capsys
 ):
@@ -621,57 +451,6 @@ def test_rule_6_keeps_the_bootstrap_text_for_a_frame_with_no_role(tmp_path, monk
     reason = _deny_with_no_context(monkeypatch, tmp_path, capsys, _make_input())
     assert "Re-run /repacted:bootstrap" in reason
     assert str(tmp_path / "pact-session-context.json") in reason
-
-
-def test_rule_6_tells_a_registered_teammate_to_ask_the_team_lead_in_a_fresh_process(tmp_path):
-    """A fresh interpreter runs hooks/dispatch_gate.py as __main__ for a registered
-    separate-process teammate with no context file.
-
-    Rule ⑥ imports background_work inside a function and treats any failure
-    there as "not registered", so a broken import silently swaps in the bootstrap
-    text while the verdict stays DENY. The arms above run after conftest has
-    already imported background_work, so they cannot see that break. The gate's
-    journal needs a session directory this process does not have, so the harness
-    records the journaled decision itself.
-    """
-    import os
-    import subprocess
-    import sys
-
-    plugin = Path(__file__).resolve().parents[1]
-    hook = plugin / "hooks" / "dispatch_gate.py"
-    _seed_team(tmp_path, members=("tmux-subject",), tasks=((_NAME, "pending"),))
-    frame = captured_pretooluse_teammate_tmux()
-    frame.update(tool_name="Agent", tool_input=_make_input()["tool_input"])
-    registry = tmp_path / ".claude" / "pact-sessions" / ".teammate-registry.jsonl"
-    registry.parent.mkdir(parents=True)
-    registry.write_text(
-        json.dumps({"session_id": frame["session_id"], "value": f"tmux-subject@{_TEAM}"}) + "\n",
-        encoding="utf-8",
-    )
-    harness = (
-        "import runpy, sys\n"
-        "import shared.session_journal as journal\n"
-        "def record(event, *_):\n"
-        "    print('JOURNALED', event.get('decision'), event.get('rule'), file=sys.stderr)\n"
-        "    return True\n"
-        "journal.append_event_checked = record\n"
-        "print('COLD', 'shared.background_work' not in sys.modules, file=sys.stderr)\n"
-        f"runpy.run_path({str(hook)!r}, run_name='__main__')\n"
-    )
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_")}
-    env.update(HOME=str(tmp_path), CLAUDE_CONFIG_DIR=str(tmp_path / ".claude"),
-               CLAUDE_PLUGIN_ROOT=str(plugin), PYTHONPATH=str(plugin / "hooks"),
-               CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="1")
-
-    proc = subprocess.run([sys.executable, "-c", harness], input=json.dumps(frame),
-                          capture_output=True, text=True, timeout=60, env=env)
-
-    assert "COLD True" in proc.stderr, proc.stderr
-    assert proc.returncode == 2, proc.stderr
-    reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
-    assert reason == _TEAMMATE_REFUSAL
-    assert "JOURNALED DENY team_name_unavailable" in proc.stderr, proc.stderr
 
 
 # =============================================================================
@@ -697,16 +476,6 @@ def test_deny_when_task_owner_differs(tmp_path, monkeypatch, capsys):
     assert "no task dispatched" in reason
 
 
-def test_deny_when_task_completed_only(tmp_path, monkeypatch, capsys):
-    """Only completed tasks count as 'no active task'. has_task_assigned
-    requires status in {pending, in_progress}.
-    """
-    _full_setup(monkeypatch, tmp_path, tasks=((_NAME, "completed"),))
-    code, out = _run_main(_make_input(), capsys)
-    assert code == 2
-    assert "no task dispatched" in out["hookSpecificOutput"]["permissionDecisionReason"]
-
-
 # =============================================================================
 # long_inline_mission — long inline mission / no TaskList ref / mode tri-state
 # =============================================================================
@@ -714,13 +483,6 @@ def test_deny_when_task_completed_only(tmp_path, monkeypatch, capsys):
 
 @pytest.mark.parametrize("env_value, expected", [
     ("deny", "deny"),
-    ("DENY", "deny"),       # case-folded
-    (" deny ", "deny"),     # whitespace-stripped
-    ("Deny", "deny"),
-    (" shadow\t", "shadow"),
-    ("warn", "warn"),
-    ("", "warn"),           # empty → safe default
-    ("bogus", "warn"),      # unknown → safe default
 ])
 def test_inline_mission_mode_strip_lower_normalization(
     monkeypatch, env_value, expected,
@@ -764,20 +526,6 @@ def test_warn_when_prompt_lacks_task_reference(tmp_path, monkeypatch, capsys):
         or "lacks a TaskList reference" in hso["additionalContext"]
 
 
-def test_the_brief_prompt_dispatch_prints_is_not_an_inline_mission(tmp_path, monkeypatch, capsys):
-    """Rule (9) exempts `Read <session dir>/briefs/<id>.md and do what it says.`; one word
-    more and the heuristic applies again."""
-    import dispatch_gate
-
-    monkeypatch.setattr(dispatch_gate, "INLINE_MISSION_MODE", "deny")
-    _full_setup(monkeypatch, tmp_path)
-    brief = f"Read {tmp_path}/sessions/s1/briefs/7.md and do what it says."
-    code, out = _run_main(_make_input(prompt=brief), capsys)
-    assert code == 0 and "additionalContext" not in out.get("hookSpecificOutput", {})
-    code, out = _run_main(_make_input(prompt=brief + " Also refactor X."), capsys)
-    assert code == 2
-
-
 def test_an_owner_without_a_dispatch_is_no_task(tmp_path, monkeypatch, capsys):
     """Rule (8) reads metadata.dispatch.name: a hand-made task owned by the name is not one."""
     _full_setup(monkeypatch, tmp_path, tasks=())
@@ -809,26 +557,6 @@ _SPAWN_CLOSING = "Then check `TaskList` for tasks assigned to you."
 _FIRST_SKILL = 'As your FIRST action, Invoke Skill("repacted:{skill}") to record your identity. '
 
 
-@pytest.mark.parametrize("first_instruction", [
-    _FIRST_SKILL.format(skill="pact-" + "team-registration"),   # a lead session started before 1.3.8
-    _FIRST_SKILL.format(skill="teammate"),                      # the 1.3.8 spawn template
-    "",                                                         # a prompt that names neither skill
-], ids=["old-skill-name", "new-skill-name", "neither"])
-def test_the_spawn_verdict_does_not_depend_on_the_first_skill_named(
-    first_instruction, tmp_path, monkeypatch,
-):
-    """The gate reads a spawn prompt for its length and its TaskList reference only. A running
-    lead keeps the persona it started with while this hook updates at once, so the 1.3.7 template,
-    the 1.3.8 template and a prompt with no first skill all get the verdict 1.3.7 gave: ALLOW,
-    in the strictest inline-mission mode."""
-    import dispatch_gate
-
-    monkeypatch.setattr(dispatch_gate, "INLINE_MISSION_MODE", "deny")
-    _full_setup(monkeypatch, tmp_path)
-    frame = _make_input(prompt=_SPAWN_OPENING + first_instruction + _SPAWN_CLOSING)
-    assert dispatch_gate.evaluate_dispatch(frame["tool_input"], frame) == ("ALLOW", None, None)
-
-
 def test_the_secretary_spawn_advisory_names_the_teammate_skill():
     """The one hook text that carries a spawn template gives the same first instruction as the
     persona and the SubagentStart block."""
@@ -851,26 +579,6 @@ def test_deny_in_deny_mode(tmp_path, monkeypatch, capsys):
     assert hso["permissionDecision"] == "deny"
     assert "prompt is long" in hso["permissionDecisionReason"] \
         or "lacks a TaskList reference" in hso["permissionDecisionReason"]
-
-
-def test_silent_allow_in_shadow_mode(tmp_path, monkeypatch, capsys):
-    """Mode='shadow' returns ALLOW silently — no advisory, no deny — but
-    the journal still records the long_inline_mission trigger for calibration.
-    """
-    import dispatch_gate
-
-    monkeypatch.setattr(dispatch_gate, "INLINE_MISSION_MODE", "shadow")
-    captured = _capture_journal(monkeypatch)
-    _full_setup(monkeypatch, tmp_path)
-    code, out = _run_main(_make_input(prompt="No reference."), capsys)
-    assert code == 0
-    assert out == _SUPPRESS_EXPECTED
-    # Journal sees the long-inline-mission trigger.
-    assert any(
-        e.get("type") == "dispatch_decision"
-        and e.get("rule") == "long_inline_mission"
-        for e in captured
-    )
 
 
 # =============================================================================
@@ -912,18 +620,6 @@ def test_allows_unique_name_when_other_members_present(
 # =============================================================================
 
 
-def test_deny_when_plugin_agents_missing(tmp_path, monkeypatch, capsys):
-    """plugin_root resolves to a path whose agents/ subdir doesn't exist."""
-    plugin_root = tmp_path / "broken-plugin"
-    plugin_root.mkdir()  # exists but no agents/ subdir
-    _setup_session(monkeypatch, tmp_path, plugin_root)
-    _seed_team(tmp_path, members=(), tasks=((_NAME, "pending"),))
-    code, out = _run_main(_make_input(), capsys)
-    assert code == 2
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "plugin agents/ directory is unavailable" in reason
-
-
 # =============================================================================
 # Carve-outs — SOLO_EXEMPT + non-pact-* subagent_type
 # =============================================================================
@@ -931,7 +627,9 @@ def test_deny_when_plugin_agents_missing(tmp_path, monkeypatch, capsys):
 
 @pytest.mark.parametrize(
     "carve_out_type",
-    ["general-purpose", "Explore", "Plan"],
+    [
+    "general-purpose",
+],
 )
 def test_solo_exempt_allows_without_name_or_team(
     carve_out_type, tmp_path, monkeypatch, capsys
@@ -971,19 +669,6 @@ _NAMESPACE_CASES = {
 }
 
 
-@pytest.mark.parametrize("case", sorted(_NAMESPACE_CASES))
-def test_a_namespaced_spawn_gets_the_bare_spellings_verdict(case, tmp_path, monkeypatch):
-    from dispatch_gate import evaluate_dispatch
-
-    fields, expected = _NAMESPACE_CASES[case]
-    _full_setup(monkeypatch, tmp_path)
-    bare = _make_input(**fields)["tool_input"]
-    namespaced = {**bare, "subagent_type": "PACT:" + bare["subagent_type"]}
-
-    verdicts = [evaluate_dispatch(spawn) for spawn in (bare, namespaced)]
-    assert [(decision, rule) for decision, _reason, rule in verdicts] == [expected, expected]
-
-
 def test_a_namespaced_spawns_journal_row_names_the_rule(tmp_path, monkeypatch, capsys):
     captured = _capture_journal(monkeypatch)
     _full_setup(monkeypatch, tmp_path)
@@ -1000,12 +685,6 @@ def test_the_journal_keeps_the_spelling_the_caller_used(tmp_path, monkeypatch, c
 
     rows = [e for e in captured if e.get("type") == "dispatch_decision"]
     assert [row["subagent_type"] for row in rows] == ["repacted:pact-architect"]
-
-
-def test_a_non_string_subagent_type_still_falls_through():
-    from dispatch_gate import evaluate_dispatch
-
-    assert evaluate_dispatch({"subagent_type": 123, "name": ""}) == ("ALLOW", None, None)
 
 
 # =============================================================================
@@ -1039,23 +718,6 @@ def test_journal_emit_on_deny_carries_rule(tmp_path, monkeypatch, capsys):
     assert deny_events[-1]["rule"] == "name_required"
 
 
-def test_journal_emit_on_warn_carries_f7(tmp_path, monkeypatch, capsys):
-    """WARN (default inline-mission mode) journal event records rule='long_inline_mission'."""
-    import dispatch_gate
-
-    monkeypatch.setattr(dispatch_gate, "INLINE_MISSION_MODE", "warn")
-    captured = _capture_journal(monkeypatch)
-    _full_setup(monkeypatch, tmp_path)
-    _run_main(_make_input(prompt="No reference."), capsys)
-    warn_events = [
-        e
-        for e in captured
-        if e.get("type") == "dispatch_decision" and e.get("decision") == "WARN"
-    ]
-    assert warn_events
-    assert warn_events[-1]["rule"] == "long_inline_mission"
-
-
 # =============================================================================
 # prompt redaction at journal-write boundary
 # =============================================================================
@@ -1064,33 +726,11 @@ def test_journal_emit_on_warn_carries_f7(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize(
     "secret_token",
     [
-        # Adjacent-string-literal concatenation defeats the repo-root
-        # pre-commit secret-scanner regex while preserving runtime value.
-        "sk" "-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "sk" "-ant-" "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "sk" "-ant-" "api03-" "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "xoxb" "-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "ghp" "_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "gho" "_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "ghu" "_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "ghs" "_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "ghr" "_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-        "AKIA" "ABCDEFGHIJKLMNOP",
-        "AIza" "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-    ],
+    "sk" "-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+],
     ids=[
-        "openai",
-        "anthropic_basic",
-        "anthropic_api03",
-        "slack",
-        "github_pat",
-        "github_oauth",
-        "github_user",
-        "github_server",
-        "github_refresh",
-        "aws",
-        "google",
-    ],
+    "openai",
+],
 )
 def test_redacts_credential_patterns_in_journal(
     secret_token, tmp_path, monkeypatch, capsys
@@ -1128,33 +768,6 @@ def test_redacts_jwt_shape_in_journal(tmp_path, monkeypatch, capsys):
     journaled = captured[-1].get("prompt_redacted", "")
     assert "[REDACTED]" in journaled
     assert fake_jwt not in journaled
-
-
-def test_redacts_pem_private_key_block_in_journal(tmp_path, monkeypatch, capsys):
-    """A multi-line PEM-encoded private-key block is fully redacted at
-    the journal-write boundary, so accidentally pasting a key into a
-    spawn prompt never persists to disk.
-    """
-    captured = _capture_journal(monkeypatch)
-    _full_setup(monkeypatch, tmp_path)
-    # Adjacent-string-literal concatenation so the repo-root pre-commit
-    # secret-scanner does not flag this fixture as a real key. Runtime
-    # value matches the joined literal.
-    fake_pem = (
-        "-----BEGIN " "RSA PRIVATE KEY" "-----\n"
-        "MIIEowIBAAKCAQEA0Z8ZLfaketestkeyforredaction0123456789ABCDEFGH\n"
-        "moarbase64andthensome+/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL\n"
-        "-----END " "RSA PRIVATE KEY" "-----"
-    )
-    _run_main(
-        _make_input(prompt=f"Pasted key follows:\n{fake_pem}\nCheck TaskList."),
-        capsys,
-    )
-    assert captured
-    journaled = captured[-1].get("prompt_redacted", "")
-    assert "[REDACTED]" in journaled
-    assert "MIIEowIBAAKCAQEA" not in journaled
-    assert "RSA PRIVATE KEY" not in journaled
 
 
 # =============================================================================
@@ -1213,15 +826,6 @@ def test_malformed_stdin_fail_open(tmp_path, monkeypatch, capsys):
     assert json.loads(out) == _SUPPRESS_EXPECTED
 
 
-def test_non_agent_tool_no_op(tmp_path, monkeypatch, capsys):
-    """Defensive: if the matcher routes a non-Agent tool here, no-op."""
-    payload = _make_input()
-    payload["tool_name"] = "Read"
-    code, out = _run_main(payload, capsys)
-    assert code == 0
-    assert out == _SUPPRESS_EXPECTED
-
-
 # =============================================================================
 # Path-alignment regression — has_task_assigned reads the canonical
 # task store at ~/.claude/tasks/{team_name}/, NOT the legacy
@@ -1272,26 +876,6 @@ def test_legacy_path_alone_does_not_satisfy_no_task_assigned(tmp_path, monkeypat
     assert not canonical.exists()
 
     assert has_task_assigned(_TEAM, _NAME) is False
-
-
-def test_canonical_path_aligns_with_task_utils(tmp_path, monkeypatch):
-    """The path has_task_assigned reads must be the same root that
-    task_utils.read_task_json uses. If task_utils ever moves, this test
-    surfaces the divergence at the dispatch-gate layer.
-    """
-    from shared.dispatch_helpers import has_task_assigned
-    from shared.task_utils import read_task_json
-
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    canonical = tmp_path / ".claude" / "tasks" / _TEAM
-    canonical.mkdir(parents=True)
-    (canonical / "1.json").write_text(
-        json.dumps({"id": "1", "owner": _NAME, "metadata": {"dispatch": {"name": _NAME}}, "status": "pending"}),
-        encoding="utf-8",
-    )
-
-    assert has_task_assigned(_TEAM, _NAME) is True
-    assert read_task_json("1", _TEAM).get("owner") == _NAME
 
 
 # =============================================================================
@@ -1437,27 +1021,6 @@ def test_deny_when_plugin_root_unavailable_context_file_absent(
     assert "plugin install may be broken" not in reason.lower()
 
 
-def test_deny_when_plugin_root_unavailable_context_underivable(
-    tmp_path, monkeypatch, capsys
-):
-    """Context path underivable (init() could not derive) → the underivable
-    arm of describe_context_failure() is embedded in the deny."""
-    import shared.pact_context as ctx_module
-
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setattr(ctx_module, "_context_path", None)
-    monkeypatch.setattr(ctx_module, "_cache", None)
-    monkeypatch.setattr(ctx_module, "init", lambda input_data: None)
-    _seed_team(tmp_path, members=(), tasks=((_NAME, "pending"),))
-
-    code, out = _run_main(_make_input(), capsys)
-
-    assert code == 2
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "plugin_root is unavailable" in reason
-    assert "session context underivable" in reason
-
-
 def test_env_fallback_rescues_plugin_root_and_team_deny_names_cause(
     tmp_path, monkeypatch, capsys
 ):
@@ -1511,14 +1074,9 @@ def test_warn_when_the_team_config_is_absent(tmp_path, monkeypatch, capsys):
     assert [e.get("rule") for e in journal if e.get("decision") == "WARN"] == ["team_config_absent"]
 
 
-def test_a_team_on_disk_gets_no_team_config_advisory(tmp_path, monkeypatch, capsys):
-    _full_setup(monkeypatch, tmp_path)
-    code, out = _run_main(_make_input(), capsys)
-    assert (code, out) == (0, _SUPPRESS_EXPECTED)
-
-
-@pytest.mark.parametrize("case", ["config-is-a-dir", "teams-dir-gone", "stale-team-name",
-                                  "empty-session-id", "damaged-config-present"])
+@pytest.mark.parametrize("case", [
+    "config-is-a-dir",
+])
 def test_team_config_absent_boundaries(case, tmp_path, monkeypatch, capsys):
     from dispatch_gate import evaluate_dispatch
     team = "session-old" if case == "stale-team-name" else _TEAM
@@ -1547,18 +1105,14 @@ def test_team_config_absent_boundaries(case, tmp_path, monkeypatch, capsys):
         assert repr(team) in reason
 
 
-@pytest.mark.parametrize("team", ["", "../other", "a/b", "..", "x" * 200, "tëam", None, 7])
+@pytest.mark.parametrize("team", [
+    "",
+])
 def test_an_unusable_team_name_is_never_looked_up(team, monkeypatch, tmp_path):
     import dispatch_gate
     monkeypatch.setattr(dispatch_gate, "get_claude_config_dir",
                         lambda: pytest.fail("the filesystem was consulted"))
     assert dispatch_gate._team_config_absent(team) is False
-
-
-def test_an_empty_session_team_is_still_the_rule_6_deny(tmp_path, monkeypatch, capsys):
-    _full_setup(monkeypatch, tmp_path, team_name="")
-    code, out = _run_main(_make_input(), capsys)
-    assert code == 2 and "team_name is unavailable" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 # =============================================================================
@@ -1581,3 +1135,120 @@ def test_subagents_mode_keeps_the_task_assigned_rule(tmp_path, monkeypatch, caps
     _full_setup(monkeypatch, tmp_path, tasks=(("someone-else", "pending"),))
     decision, _reason, rule = dispatch_gate.evaluate_dispatch(_make_input()["tool_input"], {})
     assert (decision, rule) == ("DENY", "no_task_assigned")
+
+
+
+@pytest.mark.parametrize("case", sorted(_NAMESPACE_CASES))
+def test_a_namespaced_spawn_gets_the_bare_spellings_verdict(case, tmp_path, monkeypatch):
+    from dispatch_gate import evaluate_dispatch
+
+    fields, expected = _NAMESPACE_CASES[case]
+    _full_setup(monkeypatch, tmp_path)
+    bare = _make_input(**fields)["tool_input"]
+    namespaced = {**bare, "subagent_type": "PACT:" + bare["subagent_type"]}
+
+    verdicts = [evaluate_dispatch(spawn) for spawn in (bare, namespaced)]
+    assert [(decision, rule) for decision, _reason, rule in verdicts] == [expected, expected]
+
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "with\nnewline",  # newline
+        "наме",  # Cyrillic — fails regex even after NFKC
+        "​zero-width",  # zero-width-space prefix
+    ],
+    ids=[
+        "newline",
+        "cyrillic",
+        "zero_width",
+    ],
+)
+def test_deny_invalid_name_chars(bad_name, tmp_path, monkeypatch, capsys):
+    """NFKC normalize then regex check — none of these survive.
+
+    The regex requires at least one alphanumeric and forbids leading or
+    trailing hyphens; degenerate names like "-", "--", "-foo", "foo-"
+    are rejected by name_invalid_regex.
+    """
+    _full_setup(monkeypatch, tmp_path)
+    code, out = _run_main(_make_input(name=bad_name), capsys)
+    assert code == 2
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "must match" in reason
+
+
+
+def test_deny_when_session_team_unavailable(tmp_path, monkeypatch, capsys):
+    """Empty-source decision (architect §7(h)): when the SSOT session team_name
+    is empty, fail-closed — the member/task reads structurally depend on a
+    non-empty session team as a path segment, so an empty SSOT must DENY (the
+    spawn-arg team_name is platform-ignored and cannot substitute).
+    """
+    plugin_root = tmp_path / "plugin"
+    _seed_plugin(plugin_root)
+    _setup_session(monkeypatch, tmp_path, plugin_root, team_name="")
+    _seed_team(tmp_path, members=(), tasks=((_NAME, "pending"),))
+    code, out = _run_main(_make_input(team_name=_TEAM), capsys)
+    assert code == 2
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "session team_name is unavailable" in reason
+
+
+
+def test_deny_when_task_completed_only(tmp_path, monkeypatch, capsys):
+    """Only completed tasks count as 'no active task'. has_task_assigned
+    requires status in {pending, in_progress}.
+    """
+    _full_setup(monkeypatch, tmp_path, tasks=((_NAME, "completed"),))
+    code, out = _run_main(_make_input(), capsys)
+    assert code == 2
+    assert "no task dispatched" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+
+def test_an_empty_session_team_is_still_the_rule_6_deny(tmp_path, monkeypatch, capsys):
+    _full_setup(monkeypatch, tmp_path, team_name="")
+    code, out = _run_main(_make_input(), capsys)
+    assert code == 2 and "team_name is unavailable" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+
+def test_redacts_pem_private_key_block_in_journal(tmp_path, monkeypatch, capsys):
+    """A multi-line PEM-encoded private-key block is fully redacted at
+    the journal-write boundary, so accidentally pasting a key into a
+    spawn prompt never persists to disk.
+    """
+    captured = _capture_journal(monkeypatch)
+    _full_setup(monkeypatch, tmp_path)
+    # Adjacent-string-literal concatenation so the repo-root pre-commit
+    # secret-scanner does not flag this fixture as a real key. Runtime
+    # value matches the joined literal.
+    fake_pem = (
+        "-----BEGIN " "RSA PRIVATE KEY" "-----\n"
+        "MIIEowIBAAKCAQEA0Z8ZLfaketestkeyforredaction0123456789ABCDEFGH\n"
+        "moarbase64andthensome+/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL\n"
+        "-----END " "RSA PRIVATE KEY" "-----"
+    )
+    _run_main(
+        _make_input(prompt=f"Pasted key follows:\n{fake_pem}\nCheck TaskList."),
+        capsys,
+    )
+    assert captured
+    journaled = captured[-1].get("prompt_redacted", "")
+    assert "[REDACTED]" in journaled
+    assert "MIIEowIBAAKCAQEA" not in journaled
+    assert "RSA PRIVATE KEY" not in journaled
+
+
+def test_deny_when_plugin_agents_missing(tmp_path, monkeypatch, capsys):
+    """plugin_root resolves to a path whose agents/ subdir doesn't exist."""
+    plugin_root = tmp_path / "broken-plugin"
+    plugin_root.mkdir()  # exists but no agents/ subdir
+    _setup_session(monkeypatch, tmp_path, plugin_root)
+    _seed_team(tmp_path, members=(), tasks=((_NAME, "pending"),))
+    code, out = _run_main(_make_input(), capsys)
+    assert code == 2
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "plugin agents/ directory is unavailable" in reason

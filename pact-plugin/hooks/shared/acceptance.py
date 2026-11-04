@@ -34,19 +34,23 @@ LINE = re.compile(r"\s*(?:[-*+]\s+)?(?:\*\*)?(AC-\S*?)(?:\*\*)?\s*[:.)]\s+(.*)")
 CODE = re.compile(r"`([^`\n]+)`")
 MAX_TEXT = 1 << 20
 # The wrappers `_unwrap` sets aside run the command after them as it is: `tcount`, `rtk [proxy]`,
-# `nice [-n N]`, `env NAME=value`, `uv run [uv options]`, `python[3[.N]] -m`. `uv run --with PKG`
+# `nice [-n N]`, `taskpolicy [options]`, `env NAME=value`, `uv run [uv options]`, `python[3[.N]] -m`. `uv run --with PKG`
 # and `--no-project` only set up the environment and are set aside too (this repo's own test
 # recipe). A wrapper option that moves what runs or where (another directory or
 # project, an editable or requirements install, an env file; an env option, or an env
-# assignment of a SELECTING_ENV variable) makes the command unreadable: selection() gives None
-# and the run counts for nothing.
+# assignment of a selecting variable, see selecting_env) makes the command unreadable:
+# selection() gives None and the run counts for nothing.
 _PYTHON = re.compile(r"python(?:\d+(?:\.\d+)*)?\Z")
 _UV_VALUE = ("-p", "--python", "--extra", "--group", "--with")
 _UV_CHANGES = re.compile(r"--(?:directory|project|with-editable|with-requirements|env-file)(?:=.*)?\Z")
 _ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=.*", re.DOTALL)
+_TASKPOLICY_VALUE = ("-c", "-d", "-g", "-t", "-l", "-p")   # macOS taskpolicy: QoS and I/O tiers
 # Environment variables that change which tests run or what they import: tcount
 # records them, and a run under the first two never counts (shared/evidence_check.py).
 SELECTING_ENV = ("PYTEST_ADDOPTS", "NODE_OPTIONS", "PYTHONPATH")
+# MSBuild reads every environment variable as a property, names in any case: a VSTest* one
+# (VSTestTestCaseFilter) selects the tests of a `dotnet test`.
+VSTEST_ENV = re.compile(r"VSTest", re.I)
 # Options that change what a run prints or how soon it stops, never which tests it selects; the
 # second list takes a value as the next word (`--tb short`). Every other option must match.
 OUTPUT_ONLY = re.compile(r"-[qvsxl]+\Z|--(?:quiet|verbose|no-header|exitfirst|showlocals)\Z"
@@ -88,8 +92,14 @@ def parse_criteria(text: str) -> tuple[list[dict], list[str]]:
     return found, ignored
 
 
+def selecting_env(name: str) -> bool:
+    """The environment variable changes which tests run or what they import: a SELECTING_ENV
+    name or a VSTest* one (VSTEST_ENV). tcount records these."""
+    return name in SELECTING_ENV or bool(VSTEST_ENV.match(name))
+
+
 def _unwrap(words: list[str]) -> Optional[list[str]]:
-    """The words less the leading wrappers (tcount, rtk, nice, env, uv run, python -m), or None
+    """The words less the leading wrappers (tcount, rtk, nice, taskpolicy, env, uv run, python -m), or None
     when a wrapper changes what runs (see _UV_CHANGES and SELECTING_ENV)."""
     while words:
         head = os.path.basename(words[0])
@@ -100,10 +110,14 @@ def _unwrap(words: list[str]) -> Optional[list[str]]:
         elif head == "nice":
             words = words[3:] if words[1:2] == ["-n"] else words[2:] if re.fullmatch(
                 r"-n?-?\d+", "".join(words[1:2])) else words[1:]
+        elif head == "taskpolicy":
+            words = words[1:]
+            while words and words[0].startswith("-"):
+                words = words[2:] if words[0] in _TASKPOLICY_VALUE else words[1:]
         elif head == "env":
             words = words[1:]
             while words and (assigned := _ASSIGNMENT.match(words[0])):
-                if assigned.group(1) in SELECTING_ENV:
+                if selecting_env(assigned.group(1)):
                     return None
                 words = words[1:]
             if words and words[0].startswith("-"):
@@ -133,15 +147,21 @@ def _runs_tests(words: list[str]) -> bool:
     return head in _PYTEST or detect_runner(shlex.join([head, *words[1:]])) is not None
 
 
+def test_words(command: str) -> Optional[list[str]]:
+    """The words of a test command less its wrappers, or None when it cannot be split, a wrapper
+    changes what runs, or it runs no test runner (shared/evidence_check.py reads dotnet and
+    vitest options from these)."""
+    split = _shell_words(command)
+    words = _unwrap(split) if split is not None else None
+    return words if words and _runs_tests(words) else None
+
+
 def selection(command: str) -> Optional[tuple]:
     """(runner, sorted (option, value) pairs, targets) of a test command, or None when it cannot be
     split (an open quote) or names nothing. Wrappers and OUTPUT_ONLY options are set aside; a
     target loses a leading `./` and a trailing `/`."""
-    split = _shell_words(command)
-    if split is None:
-        return None
-    words = _unwrap(split)
-    if not words or not _runs_tests(words):
+    words = test_words(command)
+    if words is None:
         return None
     pytest = os.path.basename(words[0]) in _PYTEST
     options, targets, rest = [], [], iter(words[1:])

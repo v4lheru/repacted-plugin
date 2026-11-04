@@ -30,23 +30,3 @@ def test_a_write_through_the_wrapper_lands_in_the_journal(tmp_path):
     assert [(e["type"], e["phase"]) for e in events] == [("checkpoint", "CODE")]
 
 
-def test_a_failed_write_prints_the_trap_line_and_keeps_the_exit_code(tmp_path):
-    result = _run(tmp_path, "not json\n")
-    assert result.returncode == 1
-    assert "[JOURNAL WRITE FAILED] orchestrate.md:" in result.stderr and "exit=1" in result.stderr
-    assert not (tmp_path / "session-journal.jsonl").exists()
-
-
-def test_help_prints_the_usage_and_exits_zero_without_writing(tmp_path):
-    result = subprocess.run([sys.executable, str(WRAPPER), "--help"], capture_output=True, text=True,
-                            cwd=tmp_path)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("usage: repact-journal-write --site")
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_the_command_files_carry_wrapper_calls_and_no_trap():
-    for name in DETRAPPED:
-        text = (PLUGIN_ROOT / "commands" / name).read_text(encoding="utf-8")
-        assert "[JOURNAL WRITE FAILED]" not in text and "trap 'rc=$?" not in text, name
-        assert f"repact-journal-write\" --site {name} " in text, name

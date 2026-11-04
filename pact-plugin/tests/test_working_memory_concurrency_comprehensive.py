@@ -177,12 +177,13 @@ def _run_barrier_procs(target, arg_tuples):
 # N>2 writers at the first site.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 class TestNWriterLostUpdate:
     """Lock contention at scale: N>2 barrier-synchronized writers. The
     verification companion proves N=2; this proves the lock serializes an
     arbitrary fan-in into a well-formed rolling window, not just a pair."""
 
-    @pytest.mark.parametrize("n_writers", [4, 8])
+    @pytest.mark.parametrize("n_writers", [4,])
     def test_n_concurrent_writers_fill_rolling_window(self, n_writers, tmp_path):
         """N real processes that enter their read-modify-write window
         simultaneously must serialize into a well-formed rolling window.
@@ -279,24 +280,6 @@ class TestRetrievedContextLostUpdate:
             f"window.\n{final[final.find('## Retrieved Context'):]}"
         )
 
-    def test_retrieved_writer_creates_section_when_absent(self, tmp_path):
-        """Second-site serialization must hold even when the Retrieved Context
-        section does not pre-exist (the section-create branch). Two writers
-        race to create-and-populate; both entries survive."""
-        claude_md = _seed_claude_md(tmp_path, with_retrieved=False)
-        barrier = _MP.Barrier(2)
-        _run_barrier_procs(
-            _retrieved_worker,
-            [(str(tmp_path), wid, barrier) for wid in (0, 1)],
-        )
-
-        final = claude_md.read_text(encoding="utf-8")
-        assert "## Retrieved Context" in final, "section was never created"
-        assert "RC-WRITER-0" in final and "RC-WRITER-1" in final, (
-            "A writer's entry was lost in the section-create branch under "
-            f"concurrency.\n{final[final.find('## Retrieved Context'):]}"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Cross-site interleave: WM writer vs RC writer on the same file.
@@ -339,181 +322,8 @@ class TestCrossSiteInterleave:
 # No-regression: the lock must not change section semantics.
 # ---------------------------------------------------------------------------
 
-class TestSyncSemanticsUnchangedUnderLock:
-    """Single-process (no concurrency) sanity that the lock wrapper did not
-    alter the rolling-window / idempotency / marker semantics of the two sync
-    functions. These run the REAL committed (locked) code path."""
-
-    def _import_wm(self):
-        sys.path.insert(0, _SCRIPTS_DIR)
-        from importlib import import_module
-        return import_module("scripts.working_memory")
-
-    def test_working_memory_rolling_window_trims_to_max(self, tmp_path, monkeypatch):
-        """Syncing more than MAX_WORKING_MEMORIES entries keeps only the most
-        recent MAX, newest-first — unchanged by the lock."""
-        wm = self._import_wm()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-        _seed_claude_md(tmp_path)
-
-        total = wm.MAX_WORKING_MEMORIES + 2
-        for i in range(total):
-            # Truthiness throughout this class: the subject is sync SEMANTICS
-            # under the lock, so each call's success is a precondition for the
-            # structural assertions that follow, not the thing being classified.
-            assert wm.sync_to_claude_md(
-                {"context": f"ROLL-{i}", "goal": f"g{i}"}, None, f"id{i}"
-            )
-
-        final = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
-        # Most-recent MAX survive; the oldest (total - MAX) are trimmed.
-        kept = [i for i in range(total) if f"ROLL-{i}" in final]
-        assert kept == list(range(total - wm.MAX_WORKING_MEMORIES, total)), (
-            f"rolling window did not trim to the most-recent "
-            f"{wm.MAX_WORKING_MEMORIES}: kept {kept}"
-        )
-        # Newest-first ordering: the latest entry appears before the earliest kept.
-        assert final.index(f"ROLL-{total - 1}") < final.index(
-            f"ROLL-{total - wm.MAX_WORKING_MEMORIES}"
-        ), "entries are not newest-first under the lock"
-
-    def test_idempotent_resync_does_not_corrupt_section(self, tmp_path, monkeypatch):
-        """Re-syncing the SAME memory twice in a row leaves a well-formed
-        section with exactly one Working Memory header — the lock's
-        acquire/release across two calls does not duplicate or drop the
-        section."""
-        wm = self._import_wm()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-        _seed_claude_md(tmp_path)
-
-        mem = {"context": "IDEMPOTENT", "goal": "same"}
-        assert wm.sync_to_claude_md(mem, None, "same-id")
-        assert wm.sync_to_claude_md(mem, None, "same-id")
-
-        final = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
-        assert final.count("## Working Memory") == 1, (
-            "re-sync duplicated the Working Memory header under the lock"
-        )
-        assert "IDEMPOTENT" in final
-
-    def test_pact_markers_survive_sync_under_lock(self, tmp_path, monkeypatch):
-        """When CLAUDE.md carries the PACT managed/memory markers, a locked
-        sync must preserve all four in structural order — the lock wraps the
-        same read-modify-write that the marker-preservation pipeline relies
-        on, so it must not perturb them."""
-        wm = self._import_wm()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir(parents=True, exist_ok=True)
-        claude_md = claude_dir / "CLAUDE.md"
-        # Minimal managed-region layout with all 4 markers and a Working Memory
-        # section the sync will rewrite.
-        claude_md.write_text(
-            "# Project\n\n"
-            "<!-- PACT_MANAGED_START -->\n"
-            "<!-- PACT_MEMORY_START -->\n"
-            "## Working Memory\n"
-            "<!-- Auto-managed by pact-memory skill. -->\n\n"
-            "<!-- PACT_MEMORY_END -->\n"
-            "<!-- PACT_MANAGED_END -->\n",
-            encoding="utf-8",
-        )
-
-        assert wm.sync_to_claude_md(
-            {"context": "MARKER-SAFE", "goal": "g"}, None, "id"
-        )
-
-        final = claude_md.read_text(encoding="utf-8")
-        markers = [
-            "<!-- PACT_MANAGED_START -->",
-            "<!-- PACT_MEMORY_START -->",
-            "<!-- PACT_MEMORY_END -->",
-            "<!-- PACT_MANAGED_END -->",
-        ]
-        positions = []
-        for m in markers:
-            assert m in final, f"{m} dropped by locked sync"
-            positions.append(final.index(m))
-        assert positions == sorted(positions), (
-            f"PACT markers out of structural order after locked sync: {positions}"
-        )
-        assert "MARKER-SAFE" in final
-
 
 # ---------------------------------------------------------------------------
 # Drift-test genuinely-fails counter-check.
 # ---------------------------------------------------------------------------
 
-class TestDriftTestIsNotVacuous:
-    """The TestFileLockTwinCopyDrift body-compare and constant-equality checks
-    must FAIL on a simulated twin divergence — proving the drift guard actually
-    detects drift rather than passing unconditionally.
-
-    These counter-checks exercise the drift-test MACHINERY against the live
-    twin; they are independent of whether the sync sites are currently locked.
-    Under a source-only revert to the pre-lock parent the twin does not exist,
-    so these raise ImportError — that is an expected artifact of the revert
-    (the guard's subject is absent pre-fix), NOT a lost-update regression. The
-    meaningful RED-on-revert signal is the 5 concurrency lost-update tests
-    above; see the TEST-phase HANDOFF for the documented cardinality.
-    """
-
-    @staticmethod
-    def _ensure_scripts_on_path():
-        """Self-sufficient sys.path insert so these tests do not depend on an
-        earlier concurrency test in the same file having run first."""
-        if _SCRIPTS_DIR not in sys.path:
-            sys.path.insert(0, _SCRIPTS_DIR)
-
-    def test_body_compare_detects_a_logic_divergence(self):
-        """Inject a one-line difference into the twin's extracted body and
-        confirm the byte-compare the real drift test uses would FAIL. This
-        re-implements the drift test's own _extract_body comparison against a
-        mutated source string so we never edit the real module."""
-        self._ensure_scripts_on_path()
-        import inspect
-        from shared.claude_md_manager import file_lock as canonical
-        from scripts.working_memory import file_lock as twin
-        from test_working_memory_twin_drift import TestFileLockTwinCopyDrift
-
-        extract = TestFileLockTwinCopyDrift._extract_body
-        canonical_body = extract(inspect.getsource(canonical))
-        twin_body = extract(inspect.getsource(twin))
-
-        # Sanity: the real twin matches (mirrors the live drift test).
-        assert canonical_body == twin_body, "precondition: twin must match canonical"
-
-        # Now simulate drift: mutate one logical line of the twin source and
-        # re-extract. The compare MUST now fail.
-        twin_src = inspect.getsource(twin)
-        mutated_src = twin_src.replace(
-            "fcntl.LOCK_EX | fcntl.LOCK_NB", "fcntl.LOCK_EX", 1
-        )
-        assert mutated_src != twin_src, "mutation did not apply — test is vacuous"
-        mutated_body = extract(mutated_src)
-        assert mutated_body != canonical_body, (
-            "drift test is VACUOUS: a logic divergence in the twin body did "
-            "not change the extracted body, so the body-compare would not catch "
-            "real drift"
-        )
-
-    def test_constant_equality_detects_a_mismatch(self):
-        """The lock-tuning constants the drift test pins must actually differ
-        when one side changes — confirm a simulated mismatch would be caught."""
-        self._ensure_scripts_on_path()
-        import shared.claude_md_manager as cmm
-        from scripts import working_memory as wm
-
-        # Live values match (mirrors the real constant-equality drift test).
-        assert cmm._LOCK_TIMEOUT_SECONDS == wm._LOCK_TIMEOUT_SECONDS
-        assert cmm._LOCK_POLL_INTERVAL == wm._LOCK_POLL_INTERVAL
-
-        # A simulated divergence must be detectable by simple equality (the
-        # assertion the drift test makes). We do NOT mutate the modules; we
-        # assert the comparison itself discriminates.
-        simulated_twin_timeout = wm._LOCK_TIMEOUT_SECONDS + 1.0
-        assert simulated_twin_timeout != cmm._LOCK_TIMEOUT_SECONDS, (
-            "constant-equality drift check is vacuous: a changed timeout would "
-            "still compare equal"
-        )

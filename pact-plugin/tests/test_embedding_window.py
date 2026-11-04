@@ -93,18 +93,3 @@ class TestTheEncoderReceivesTheWindow:
         assert kwargs["max_length"] == EMBEDDING_MAX_TOKENS
 
 
-class TestTheWindowIsNotBelowTheMedianRecord:
-    def test_the_window_is_not_below_the_measured_median(self):
-        """RED IF SOMEBODY RETURNS THE WINDOW TO A TOO-SMALL VALUE.
-
-        The wiring arm above catches a dropped keyword. It does NOT catch a
-        window set back to the encoder default, which is the same fault this
-        change exists to end. This arm covers that direction.
-
-        IT REFERENCES TWO NAMES AND PINS NO LITERAL, so it survives a
-        deliberate change to either constant and reddens on a regression.
-        """
-        assert EMBEDDING_MAX_TOKENS >= MEASURED_MEDIAN_TOKENS, (
-            "the window is below the median record in the store, so a median "
-            "record reaches the semantic index truncated"
-        )

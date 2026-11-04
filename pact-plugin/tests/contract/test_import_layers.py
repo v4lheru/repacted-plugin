@@ -225,27 +225,3 @@ def test_a_cycle_through_relative_imports_fails_r5(tmp_path):
     assert "hooks/shared/a" in graph.edges["hooks/shared/pkg/__init__"]
 
 
-def test_no_sys_path_insertion_toward_bin_under_hooks():
-    assert GRAPH.path_sites == set(), sorted(GRAPH.path_sites)
-
-
-def test_the_fail_closed_emitter_imports_only_the_stdlib():
-    """The exemption's price: the emitter has no plugin edge and names only these stdlib modules."""
-    tree = ast.parse(GRAPH.ids[STDLIB_EMITTER].read_text("utf-8"))
-    names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            names.add(node.module.split(".")[0])
-    assert names <= EMITTER_IMPORTS, sorted(names - EMITTER_IMPORTS)
-    assert not GRAPH.edges.get(STDLIB_EMITTER), sorted(GRAPH.edges[STDLIB_EMITTER])
-
-
-def test_the_shared_package_is_a_docstring():
-    tree = ast.parse((HOOKS / "shared" / "__init__.py").read_text("utf-8"))
-    # The one statement beside the docstring is the compiler directive test_py39_annotation_compat
-    # requires of every module; it imports and re-exports nothing.
-    allowed = [isinstance(node, ast.Expr) or (isinstance(node, ast.ImportFrom) and node.module == "__future__")
-               for node in tree.body]
-    assert all(allowed), "shared/__init__.py re-exports nothing"

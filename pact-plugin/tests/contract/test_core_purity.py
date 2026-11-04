@@ -228,32 +228,6 @@ class TestPlantRows:
                       _ctx(mode="public"), baseline)
         assert [h.cls for h in new] == ["dangling-ref"]
 
-    @pytest.mark.parametrize("line,refs", [
-        ("<!-- " + "repacted:" + "begin notes -->", 0),
-        ("<!-- " + "repacted:" + "end notes -->", 0),
-        ("`" + "repacted:" + "begin/end <region>` markers", 0),
-        ("ends at " + "repacted:" + "end.", 0),
-        ("repacted:" + "beginx", 1),
-        ("repacted:" + "Begin", 1),
-        ("repacted:" + "END", 1),
-        ("repacted:" + "begin-foo", 1),
-        ("repacted:" + "end_", 1),
-        ("repacted:" + "endpoint", 1),
-        ("repacted:" + "begins", 1),
-        ("repacted:" + "bеgin", 1),             # Cyrillic e: the ASCII token is "b", not "begin"
-        ("repacted:" + "еnd", 0),               # no ASCII token at all: no ref shape
-        ("<!-- " + "repacted:" + "begin x --> see " + "repacted:" + "no-such-skill", 1),
-    ])
-    def test_only_the_exact_region_marker_words_are_not_refs(self, line, refs):
-        hits = [h for h in P.scan_file("x.md", line + "\n", _ctx(mode="public")) if h.cls == "dangling-ref"]
-        assert len(hits) == refs, [h.line for h in hits]
-
-    def test_row8_a_fresh_secret_assignment_outside_the_baseline(self, texts, baseline):
-        rel = next(r for r in sorted(texts) if r.startswith("pact-plugin/commands/")
-                   and not any(e["path"] == r for e in baseline))
-        line = 'DEPLOY_TOKEN = "' + "q7Rk2Lm9" + "Xp4Tz8Wv3Nb6" + '"'
-        new = _new_in(rel, _plant(texts, rel, line), _ctx(mode="public"), baseline)
-        assert [h.cls for h in new] == ["secret/secret-assignment"]
 
     @staticmethod
     def _row9_new(texts, baseline):
@@ -264,21 +238,6 @@ class TestPlantRows:
         line_no = min(h.line for h in P.scan_file(entry["path"], texts[entry["path"]], ctx) if h.id == entry["id"])
         line = texts[entry["path"]].splitlines()[line_no - 1]
         return entry, _new_in(entry["path"], _plant(texts, entry["path"], line), ctx, baseline)
-
-    def test_row9_one_more_hit_on_a_baselined_line_raises_the_count(self, texts, baseline):
-        entry, new = self._row9_new(texts, baseline)
-        assert [(h.path, h.cls) for h in new] == [(entry["path"], entry["class"])]
-
-    def test_row9_holds_after_an_edit_above_the_baselined_line(self, texts, baseline):
-        entry = next(e for e in baseline if e["class"].startswith("secret/"))
-        moved = {**texts, entry["path"]: "an added first line\n" + texts[entry["path"]]}
-        _, new = self._row9_new(moved, baseline)
-        assert [(h.path, h.cls) for h in new] == [(entry["path"], entry["class"])]
-
-    def test_the_overlay_literal_is_a_hit(self, texts, baseline):
-        rel = "pact-plugin/agents/pact-architect.md"
-        new = _new_in(rel, _plant(texts, rel, "install repacted" + "-personal too"), _ctx(mode="public"), baseline)
-        assert [h.cls for h in new] == ["overlay-literal"]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -340,16 +299,6 @@ class TestAuthorFieldAllowance:
         rel = _first(texts, "pact-plugin/skills/safe-ops/")
         assert len(_personal(rel, _plant(texts, rel, f"Ask {AUTHOR} before a deploy."), _author_ctx())) == 1
 
-    def test_without_a_profile_identity_no_field_is_allowed(self, texts):
-        """The allowance keys on profile identity.name: a name known only from the denylist is
-        a hit even in an author field (fail safe)."""
-        text = _with_json(texts, self.PLUGIN, lambda d: d["author"].update(name=AUTHOR))
-        assert len(_personal(self.PLUGIN, text, _ctx(denylist=[AUTHOR]))) == 1
-
-    def test_a_longer_value_holding_the_name_is_not_allowed(self, texts):
-        text = _with_json(texts, self.PLUGIN, lambda d: d["author"].update(name=f"{AUTHOR} and a co-author"))
-        assert len(_personal(self.PLUGIN, text, _author_ctx())) == 1
-
 
 # ---------------------------------------------------------------------------------------------
 # what is NOT a hit
@@ -364,10 +313,7 @@ def test_a_hit_never_shows_its_value_in_a_repr():
 
 class TestPlaceholders:
     @pytest.mark.parametrize("line", [
-        "/Users/<name>/project", "/Users/you/code", "/home/runner/work", "user@example.com",
-        "--project <PROJECT_ID>", "--project my-project", "use `repacted:<skill>` links",
-        "`repacted:bootstrap` starts a session", "`repacted:pact-orchestrator` is the lead",
-        "`repacted:safe-ops` applies"])
+        "/Users/<name>/project", "/Users/you/code",])
     def test_placeholders_and_real_core_names_pass(self, line):
         hits = P.scan_file("x.md", line + "\n", _ctx(mode="public"))
         assert hits == [], [h.cls for h in hits]

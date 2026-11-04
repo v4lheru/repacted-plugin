@@ -225,7 +225,8 @@ def halt_rows(explicit: Optional[str], start: Path) -> Tuple[List[dict], List[st
         for halt in halts:
             task = one_line(halt.get("task_id", "?"))
             rows.append(row("halt", task, halt.get("question", "?"), None, [f"task {task} stops"],
-                            f"repact-unattended off --session-dir {folder}, then the lead asks again"))
+                            f"type any message in session {folder.name} (it turns unattended "
+                            "mode off), then the lead asks again"))
     return rows, notes
 
 

@@ -3,6 +3,7 @@ name: pact-test-engineer
 description: "Designs and runs unit, integration, E2E, performance and security tests."
 color: "#DC143C"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

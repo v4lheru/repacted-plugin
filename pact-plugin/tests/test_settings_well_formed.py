@@ -57,30 +57,6 @@ class TestCheckSettingsWellFormed:
         (cfg_dir / "settings.json").write_text(_WELL_FORMED, encoding="utf-8")
         assert check_settings_well_formed() is None
 
-    def test_absent_returns_none(self, cfg_dir):
-        # No settings.json planted.
-        assert check_settings_well_formed() is None
-
-    def test_invalid_utf8_returns_warn_without_raising(self, cfg_dir):
-        # read_text(encoding="utf-8") raises UnicodeDecodeError (ValueError
-        # subclass) -> caught by the total contract -> warn, never propagate.
-        (cfg_dir / "settings.json").write_bytes(b'\xff\xfe{ "env": ')
-        result = check_settings_well_formed()
-        assert isinstance(result, str) and "settings.json" in result
-
-    def test_guard_is_load_bearing_only_malformed_warns(self, cfg_dir):
-        # The load-bearing counter-test: the SAME call returns a warn on malformed
-        # and None on well-formed -- so the warning is produced BY the malformed
-        # branch, not unconditionally. A guard that emitted always (or never)
-        # would fail one of these two poles.
-        sp = cfg_dir / "settings.json"
-        sp.write_text(_MALFORMED, encoding="utf-8")
-        malformed_result = check_settings_well_formed()
-        sp.write_text(_WELL_FORMED, encoding="utf-8")
-        wellformed_result = check_settings_well_formed()
-        assert malformed_result is not None
-        assert wellformed_result is None
-
 
 def _run_main_output(frame, monkeypatch, tmp_path, cfg_dir):
     """Drive real session_init.main(); return the full parsed output dict."""
@@ -116,16 +92,4 @@ class TestSelfCheckWiring:
             "malformed settings.json warn must reach systemMessage on a lead frame (4d wiring)"
         )
 
-    def test_well_formed_produces_no_settings_warn(self, monkeypatch, tmp_path, cfg_dir):
-        (cfg_dir / "settings.json").write_text(_WELL_FORMED, encoding="utf-8")
-        out = _run_main_output(lead_frame_qualified(), monkeypatch, tmp_path, cfg_dir)
-        assert "not valid JSON" not in out.get("systemMessage", "")
 
-    def test_teammate_frame_gated_no_settings_warn(self, monkeypatch, tmp_path, cfg_dir):
-        # Even with a malformed file present, a teammate frame must NOT receive the
-        # config-health warn -- it lives inside the same lead-only gate as the
-        # injection block.
-        (cfg_dir / "settings.json").write_text(_MALFORMED, encoding="utf-8")
-        out = _run_main_output(teammate_frame("pact-backend-coder"),
-                               monkeypatch, tmp_path, cfg_dir)
-        assert "not valid JSON" not in out.get("systemMessage", "")

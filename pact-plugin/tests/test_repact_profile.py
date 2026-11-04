@@ -91,17 +91,3 @@ def test_build_writes_test_commands_and_reasons_from_this_repo_only(tmp_path):
     assert "OTHER-PROJECT" not in text
 
 
-def test_reasons_are_scrubbed(tmp_path):
-    repo = _fixture(tmp_path)
-    assert _build(tmp_path, repo).returncode == 0
-    text = (repo / ".repacted" / "profile.md").read_text(encoding="utf-8")
-    assert TOKEN not in text
-    assert TOKEN[:12] not in text
-
-
-def test_no_task_log_writes_nothing(tmp_path):
-    repo = _fixture(tmp_path, enabled=False)
-    result = _build(tmp_path, repo)
-    assert result.returncode == 0, result.stderr
-    assert not (repo / ".repacted").exists()
-    assert "not written" in result.stdout

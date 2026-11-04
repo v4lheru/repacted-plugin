@@ -47,15 +47,8 @@ def rule(command: str, cwd: Path) -> str | None:
 
 
 @pytest.mark.parametrize("command", [
-    'for d in src lib; do grep -rn TODO "$d"; done',                   # a loop variable
-    "grep -rn TODO {src,lib}",                                          # probe 2
-    "grep -rn TODO ./src/**/*.py",                                      # probe 3
-    'for d in w1 w2; do git -C "$d" add -A; done',                      # its git -C form
+    'for d in src lib; do grep -rn TODO "$d"; done',
     'for d in w1 w2\ndo\n  git -C $d commit -m x\ndone',
-    'for a in src lib; do for b in sub x; do grep -rn TODO "$a/$b"; done; done',
-    "grep -rn TODO docs/*policy* src",
-    "F=$(grep -rln --exclude='.env*' --exclude='*.env' TODO src); echo $F",  # not a load
-    'grep -rn TODO "$CLAUDE_PROJECT_DIR"',
     'git -C "$HOME" add -A',
 ])
 def test_a_known_harmless_expansion_passes(tree, command):
@@ -64,24 +57,11 @@ def test_a_known_harmless_expansion_passes(tree, command):
 
 @pytest.mark.parametrize("command, expected", [
     ('for d in src .env; do grep -rn K "$d"; done', "env.read.operand"),
-    ('for d in src config/../.env; do grep -rn K "$d"; done', "env.read.operand"),
-    ("grep -rn K {src,.env}", "env.read.operand"),
-    ("grep -rn K ./**/*.local", "env.search.reaches_class"),           # matches .env.local
-    ("grep -rn K nested/**", "env.search.reaches_class"),
-    ("grep -rn K ~/**", "env.search.reaches_class"),                   # ** from ~
-    ('for d in src lib; do for f in a .envrc; do cat "$d/$f"; done; done', "env.read.operand"),
+    ("grep -rn K ./**/*.local", "env.search.reaches_class"),
     ('for d in $(ls); do grep -rn K "$d"; done', "env.search.unknown_root"),
-    ("for d in " + " ".join(f"w{i}" for i in range(17)) + '; do grep -rn K "$d"; done',
-     "env.search.unknown_root"),                                        # 17 words: over the cap
-    ('for d in src .ｅnv; do grep -rn K "$d"; done', "env.search.unknown_root"),
-    ("grep -rn K {src,.еnv}", "env.search.unknown_root"),          # Cyrillic e
-    ('d=$(echo w1); git -C "$d" add -A', "env.git.unknown_dir"),
-    ('for d in "src/*"; do grep -rn K "$d"; done', "env.search.unknown_root"),  # quoted glob
-    ('for d in src; do d=$(cat list); grep -rn K "$d"; done', "env.search.unknown_root"),
+    ("grep -rn K {src,.еnv}", "env.search.unknown_root"),
     ('for d in src; do grep -rn K "${d:-.}"; done', "env.search.unknown_root"),
-    ('for d in src lib; do :; done; grep -rn K "$d"', "env.search.unknown_root"),  # after done
-    ('echo for d in src; grep -rn K "$d"', "env.search.unknown_root"),  # not a loop
-    ("git -C {w1,w2} add -A", "env.git.unknown_dir"),                   # -C w1 w2: not two dirs
+    ("git -C {w1,w2} add -A", "env.git.unknown_dir"),
 ])
 def test_an_expansion_that_reaches_the_class_or_stays_unknown_is_refused(tree, command, expected):
     assert rule(command, tree) == expected

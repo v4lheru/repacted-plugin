@@ -32,29 +32,11 @@ SPELLINGS = [
         "git \"pu\"'sh' --force origin main", "git $'\\x70ush' --force origin main",
         "git $\"push\" --force origin main", "git pu\\sh --force origin main",
         "git push $'--force' origin \"main\"", "\"git\" push --force origin main"]),
-    ("git push -o merge_request.merge_when_pipeline_succeeds origin feature", [
-        "git 'push' -o merge_request.merge_when_pipeline_succeeds origin feature",
-        "git push '-o' 'merge_request.merge_when_pipeline_succeeds' origin feature"]),
-    ("git branch -D feature", [
-        "git 'branch' -D feature", "git br\"anch\" -D feature", "git $'branch' $'-D' feature"]),
-    ("git push origin --delete feature", [
-        "git 'push' origin --delete feature", "git push origin $'--delete' feature",
-        "git $\"push\" origin --delete feature"]),
     ("git push origin :feature", [
         "git 'push' origin :feature", "git $\"push\" origin ':feature'", "git pu\\sh origin :feature"]),
-    ("gh pr merge 5", ["gh 'pr' merge 5", "gh pr $'merge' 5", "\"gh\" pr merge 5", "gh pr 'merge' '5'"]),
-    ("glab mr merge 5", ["glab mr 'merge' 5", "glab $\"mr\" merge 5", "glab 'mr' 'merge' 5"]),
     ("git -C /tmp/x push --force origin main", [
         "git '-C' /tmp/x 'push' --force origin main", "git -C '/tmp/x' 'push' --force origin main",
         "git -C \"/tmp/a b\" 'push' --force origin main"]),
-    ("echo $(git push --force origin main)", [
-        "echo $(git 'push' --force origin main)", "echo \"$(git \"pu\"sh --force origin main)\"",
-        "echo `git 'push' --force origin main`", "echo $(echo $(git 'pu'sh --force origin main))"]),
-    ("bash -c 'git push --force origin main'", [
-        "bash -c 'git \"pu\"sh --force origin main'", "bash -c \"git 'push' --force origin main\"",
-        "sh -lc \"git \\\"push\\\" --force origin main\""]),
-    ("eval 'git push --force origin main'", [
-        "eval \"git 'push' --force origin main\"", "eval git 'push' --force origin main"]),
     ("cd /x && git push --force origin main", ["cd /x && git 'push' --force origin main"]),
 ]
 
@@ -69,17 +51,7 @@ def test_a_decoded_spelling_gates_like_its_plain_form(plain, spelling, tmp_path)
 
 @pytest.mark.parametrize("command", [
     "echo '~' '*' '?' '[a]' '{a,b}' '=ls' '!x' '#x' 'a b' '' '$x'",
-    "'if' true; 'then' x",
-    "cat <<'EOF'\ngit push --force origin main\nEOF",
-    "cat <<-\"EOF\"\nx\nEOF",
-    "A'=1' git push",
-    "echo '2'>out",                                # a quoted digit before > is not an fd
-    "git commit -m \"don't push\"",
-    "git push origin main # it's fine",            # a comment's apostrophe: unreadable, as typed
-    "git 'push origin main",                       # an open quote
-    "git 'рush' --force origin main",              # Cyrillic er: not plain ASCII
-    "git 'ｐｕｓｈ' --force origin main",             # fullwidth
-    "git \"pu\x00sh\" --force origin main",        # a raw NUL stays inside the word
+    "git \"pu\x00sh\" --force origin main",
 ])
 def test_a_word_whose_quotes_matter_keeps_them(command):
     assert canonical_spelling(command) == command

@@ -3,6 +3,8 @@ name: pact-auditor
 description: "Checks coders' work against the spec as they code; flags drift early."
 color: "#4169E1"
 model: inherit
+autoCompactWindow: 120000
+effort: medium
 permissionMode: byDefault
 memory: user
 ---

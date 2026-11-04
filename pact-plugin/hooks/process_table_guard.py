@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import sys
 
+from shell.tools import shell_command
 from shell_words import (HEREDOC_MARK, PREFIX_WORDS, Unreadable, quoted_words, read_script,
                          runner_prefix, segments, strip_prefix, token_spans, tokens)
 
@@ -500,11 +501,8 @@ def command_is_listing(command: str) -> bool:
 
 def decide(payload: dict) -> dict | None:
     """The hook's output for one payload: a deny object, or None to allow."""
-    if payload.get("tool_name") != "Bash":
-        return None
-    tool_input = payload.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str):
+    command = shell_command(payload)   # any tool_name: the host matched this guard to Bash
+    if command is None:
         return None
     reason = DENY_MESSAGE if command_is_listing(command) else \
         PTY_DENY_MESSAGE if wraps_human_gate(command) else None

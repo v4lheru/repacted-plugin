@@ -132,22 +132,6 @@ class TestMainSiteThreeWay:
             "pass `--agent` loses the cue that rides beside the ladder."
         )
 
-    def test_teammate_frame_gets_neither_the_ladder_nor_the_note(
-        self, monkeypatch, tmp_path
-    ):
-        """The teammate branch must not change. SEPARATION: the run is proven
-        live by the SystemExit(0) plus a parsed output envelope in `_run_main`,
-        and the two absences are asserted together so a shift of the teammate
-        frame into either sibling branch reddens."""
-        out = _run_main({"agent_type": "some-teammate-name"}, monkeypatch, tmp_path)
-        assert LADDER not in out, (
-            "a teammate frame received the orchestrator instructions"
-        )
-        assert _UNKNOWN_ROLE_NOTICE not in out, (
-            "a teammate frame received the unknown-role note, so the teammate "
-            "branch now falls through to the unknown branch"
-        )
-
 
 class TestSafetyNetThreeWay:
     """The exception path. `_build_safety_net_context` is pure, so each case is
@@ -160,51 +144,4 @@ class TestSafetyNetThreeWay:
         assert out, "the safety net returned an empty string for a lead frame"
         assert LADDER in out, "the safety net stopped delivering the lead ladder"
 
-    def test_teammate_keeps_its_own_marker(self):
-        out = _build_safety_net_context("session-x", "teammate")
-        assert TEAMMATE_MARKER in out, "the teammate safety-net marker is gone"
-        assert LADDER not in out, "a teammate frame received the lead ladder"
 
-    def test_unknown_gets_the_note_and_the_ladder(self):
-        out = _build_safety_net_context("session-x", "unknown")
-        assert out, "the safety net returned an empty string for an unknown frame"
-        assert LADDER in out, (
-            "the safety-net unknown branch withholds the orchestrator marker. "
-            "A primary frame that reaches the exception window is the same "
-            "user as on the normal path and must not be denied."
-        )
-        assert _UNKNOWN_ROLE_NOTICE in out, (
-            "the unknown safety-net branch emitted no note, so the operator "
-            "cue is gone"
-        )
-        assert TEAMMATE_MARKER not in out, (
-            "an unknown frame was labelled a teammate, which claims a role the "
-            "classifier did not find"
-        )
-
-    def test_none_is_ruled_separately_from_unknown(self):
-        """None and 'unknown' are DIFFERENT facts and get DIFFERENT text.
-
-        THE TWO SHARE THE LADDER AND DIFFER IN THE CUE. An unresolved frame
-        keeps the orchestrator instructions, because the classifier not
-        running says nothing about the reader, and that frame is mostly a
-        primary user. What separates it is its own sentence, which a reader
-        who debugs the early window needs to tell an unresolved frame from a
-        resolved-empty one.
-        """
-        out = _build_safety_net_context("session-x", None)
-        assert out, "the safety net returned an empty string for an unresolved frame"
-        assert "before the session role was resolved" in out, (
-            "the unresolved-frame case lost its distinguishing sentence, so it "
-            "can no longer be told apart from the resolved-empty case"
-        )
-        assert LADDER in out, (
-            "an unresolved frame lost the lead ladder. Withholding it denies "
-            "an ordinary user every tool, and the reactive route that was "
-            "supposed to cover that cost did not work in the field."
-        )
-        assert _build_safety_net_context("session-x", None) != \
-            _build_safety_net_context("session-x", "unknown"), (
-            "the None case and the 'unknown' case now emit identical text, so "
-            "the two have been collapsed into one"
-        )

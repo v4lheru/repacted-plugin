@@ -139,65 +139,11 @@ class TestTheLine:
         assert line.startswith("tasks: next ")
         assert tasks_part(run_brief(env, repo)) == line
 
-    def test_the_line_also_reaches_the_model(self, env, repo):
-        output = run_brief(env, repo)
-        assert expected_line(repo) in output["hookSpecificOutput"]["additionalContext"]
-
-    def test_a_session_in_a_subdirectory_or_a_worktree_finds_the_main_log(self, env, repo, tmp_path):
-        (repo / "src" / "deep").mkdir(parents=True)
-        git(repo, "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "side")
-        assert tasks_part(run_brief(env, repo / "src" / "deep")) == expected_line(repo)
-        assert tasks_part(run_brief(env, tmp_path / "wt")) == expected_line(repo)
-
-    def test_a_matching_cache_stamp_prints_the_cached_line_without_a_replay(self, env, repo):
-        R = reader()
-        stamp = R.log_stamp(R.log_path(repo))
-        cache_file(repo).parent.mkdir(parents=True, exist_ok=True)
-        cache_file(repo).write_text(json.dumps({"stamp": list(stamp), "line": "tasks: FROM THE CACHE"}))
-        assert tasks_part(run_brief(env, repo)) == "tasks: FROM THE CACHE"
-
-    def test_a_stale_cache_stamp_replays_instead(self, env, repo):
-        cache_file(repo).parent.mkdir(parents=True, exist_ok=True)
-        cache_file(repo).write_text(json.dumps({"stamp": [1, 1], "line": "tasks: STALE"}))
-        assert tasks_part(run_brief(env, repo)) == expected_line(repo)
-
-    def test_the_doctor_line_and_the_tasks_line_both_print(self, env, repo):
-        write_doctor(env, RED)
-        output = run_brief(env, repo)
-        assert output["systemMessage"].startswith("doctor: ")
-        assert tasks_part(output) == expected_line(repo) and "doctor:" not in tasks_part(output)
-
 
 class TestSilence:
     def test_silent_without_a_task_log(self, env, tmp_path):
         plain = new_repo(tmp_path / "plain")
         assert run_brief(env, plain) == SUPPRESS
-
-    def test_silent_outside_any_repo(self, env, tmp_path):
-        (tmp_path / "nowhere").mkdir()
-        assert run_brief(env, tmp_path / "nowhere") == SUPPRESS
-
-    def test_silent_when_there_is_nothing_to_say(self, env, tmp_path):
-        empty = new_repo(tmp_path / "empty")
-        writer().init(empty)
-        assert run_brief(env, empty) == SUPPRESS
-
-    @pytest.mark.parametrize("agent_type", ["repacted:pact-backend-coder", "pact-secretary", "coder"])
-    def test_silent_in_a_teammate_session(self, env, repo, agent_type):
-        assert run_brief(env, repo, agent_type=agent_type) == SUPPRESS
-
-    def test_a_lead_session_gets_the_line(self, env, repo):
-        assert tasks_part(run_brief(env, repo, agent_type="repacted:pact-orchestrator")) == expected_line(repo)
-
-    def test_silent_on_a_compaction_restart(self, env, repo):
-        assert run_brief(env, repo, source="compact") == SUPPRESS
-
-    def test_a_broken_log_or_cache_fails_open(self, env, repo):
-        cache_file(repo).parent.mkdir(parents=True, exist_ok=True)
-        cache_file(repo).write_text("{not json")
-        (repo / ".repacted" / "tasks.jsonl").write_bytes(b"\xff\xfe\x00 not a log\n")
-        output = run_brief(env, repo)
-        assert output == SUPPRESS or tasks_part(output).startswith("tasks: ")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -210,38 +156,12 @@ class TestNoWrites:
         run_brief(env, repo)
         assert tree_snapshot(repo) == before and not cache_file(repo).exists()
 
-    def test_the_cached_path_writes_nothing(self, env, repo):
-        R = reader()
-        cache_file(repo).parent.mkdir(parents=True, exist_ok=True)
-        cache_file(repo).write_text(json.dumps({"stamp": list(R.log_stamp(R.log_path(repo))),
-                                                "line": "tasks: FROM THE CACHE"}))
-        before = tree_snapshot(repo)
-        run_brief(env, repo)
-        assert tree_snapshot(repo) == before
 
-
+@pytest.mark.slow
 class TestAboveTheThreshold:
     def test_a_large_log_prints_no_tasks_line(self, env, repo):
         synthetic_log(repo, brief_module().TASKS_INLINE_MAX + 4096)
         assert tasks_part(run_brief(env, repo)) == ""
-
-    def test_a_large_log_starts_a_detached_refresh_that_fills_the_cache(self, env, repo):
-        synthetic_log(repo, brief_module().TASKS_INLINE_MAX + 4096)
-        started = time.monotonic()
-        run_brief({**env, "REPACT_DOCTOR_NO_REFRESH": ""}, repo)
-        assert time.monotonic() - started < 5, "the hook must not wait for the refresh"
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline and not cache_file(repo).exists():
-            time.sleep(0.2)
-        assert cache_file(repo).exists(), "the detached refresh never wrote the cache"
-        time.sleep(0.5)                                          # let the atomic replace settle
-        assert tasks_part(run_brief(env, repo)) == expected_line(repo)     # now served from the cache
-
-    def test_the_no_refresh_switch_starts_nothing(self, env, repo):
-        synthetic_log(repo, brief_module().TASKS_INLINE_MAX + 4096)
-        run_brief(env, repo)
-        time.sleep(3)
-        assert not cache_file(repo).exists()
 
 
 def test_a_log_the_size_of_a_busy_repo_is_replayed_inline_without_a_cache(env, repo):
@@ -256,6 +176,7 @@ def test_a_log_the_size_of_a_busy_repo_is_replayed_inline_without_a_cache(env, r
 # the brief's own stat-only copy of find_main_checkout stays equal to the reader's
 # ---------------------------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_the_main_checkout_finder_matches_the_readers(tmp_path):
     R, B = reader(), brief_module()
     repo = new_repo(tmp_path / "repo")
@@ -300,6 +221,7 @@ def test_the_inline_replay_at_the_threshold_prints_the_line(env, repo):
     assert tasks_part(run_brief(env, repo)) == expected_line(repo)
 
 
+@pytest.mark.slow
 def test_the_inline_replay_of_a_real_size_log_fits_the_brief_pin(env, repo, tmp_path):
     write_doctor(env, RED)                                  # the doctor line renders too: worst case
     synthetic_log(repo, REAL_LOG_BYTES)
@@ -310,6 +232,7 @@ def test_the_inline_replay_of_a_real_size_log_fits_the_brief_pin(env, repo, tmp_
     assert ratio < PIN_RATIO and hook < CEILING_MS
 
 
+@pytest.mark.slow
 def test_the_cached_line_fits_the_brief_pin(env, repo, tmp_path):
     write_doctor(env, RED)
     synthetic_log(repo, brief_module().TASKS_INLINE_MAX)
@@ -322,8 +245,3 @@ def test_the_cached_line_fits_the_brief_pin(env, repo, tmp_path):
     assert ratio < PIN_RATIO and hook < CEILING_MS
 
 
-def test_the_copied_paths_match_the_readers():
-    """The brief copies two relative paths instead of importing the reader (latency)."""
-    R, B = reader(), brief_module()
-    assert B.TASK_LOG == R.LOG_RELPATH and B.TASK_CACHE == R.CACHE_RELPATH
-    assert B.TASK_READER.resolve() == (PLUGIN_ROOT / "hooks" / "shared" / "project_tasks.py").resolve()

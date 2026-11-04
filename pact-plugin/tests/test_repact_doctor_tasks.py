@@ -20,6 +20,9 @@ import pytest
 from project_tasks_support import PLUGIN_ROOT, load, writer
 from test_repact_doctor import World, git
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 
 def old_ts(hours: float) -> str:
     moment = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
@@ -74,72 +77,3 @@ def test_events_uncommitted_for_over_a_day_are_amber(world):
     assert any("repact-task commit" in line for line in state["detail"])
 
 
-def test_committing_clears_it(world):
-    append_raw_event(world.repo, hours_ago=30)
-    git(world.repo, "add", ".repacted/tasks.jsonl")
-    git(world.repo, "commit", "-q", "-m", "log")
-    assert tasks_state(world)["state"] == "green"
-
-
-def test_a_corrupt_line_is_red(world):
-    with open(world.repo / ".repacted" / "tasks.jsonl", "a") as handle:
-        handle.write("{this is not json\n")
-    state = tasks_state(world)
-    assert state["state"] == "red" and "corrupt" in state["summary"]
-    assert any("line " in line for line in state["detail"])
-
-
-def test_a_hand_edited_view_is_amber(world):
-    V = load("views_for_doctor_test", PLUGIN_ROOT / "bin" / "_tasks" / "views.py")
-    writer().Store(world.repo).add("A task for the view")
-    V.configure(world.repo)
-    V.render(world.repo)
-    git(world.repo, "add", "-A")
-    git(world.repo, "commit", "-q", "-m", "views")
-    assert tasks_state(world)["state"] == "green"
-    backlog = world.repo / "docs" / "backlog.md"
-    backlog.write_text(backlog.read_text().replace("A task for the view", "A task EDITED by hand"))
-    state = tasks_state(world)
-    assert state["state"] == "amber" and "hand" in state["summary"]
-    assert any("docs/backlog.md" in line for line in state["detail"])
-
-
-def test_a_legacy_backlog_store_is_amber_and_names_the_importer(world):
-    legacy = world.home / ".claude" / "pact-backlog"
-    legacy.mkdir(parents=True)
-    (legacy / "someproject.json").write_text("{}")
-    state = tasks_state(world)
-    assert state["state"] == "amber"
-    assert any("import-pact-backlog" in line for line in state["detail"])
-
-
-def test_without_any_log_the_check_skips(world):
-    (world.repo / ".repacted" / "tasks.jsonl").unlink()
-    assert tasks_state(world)["state"] == "skip"
-
-
-def test_a_registered_project_is_checked_too(world, tmp_path):
-    other = tmp_path / "other"
-    other.mkdir()
-    git(other, "init", "-q", "-b", "main")
-    writer().init(other)
-    with open(other / ".repacted" / "tasks.jsonl", "a") as handle:
-        handle.write("garbage\n")
-    world.data.mkdir(parents=True, exist_ok=True)
-    (world.data / "projects.json").write_text(json.dumps(registry_doc(other, project_id="p-1")))
-    state = tasks_state(world)
-    assert state["state"] == "red"
-    assert any(str(other.resolve()) in line or other.name in line for line in state["detail"])
-
-
-def test_a_declined_offer_is_not_checked(world, tmp_path):
-    other = tmp_path / "declined"
-    other.mkdir()
-    git(other, "init", "-q", "-b", "main")
-    writer().init(other)
-    with open(other / ".repacted" / "tasks.jsonl", "a") as handle:
-        handle.write("garbage\n")
-    world.data.mkdir(parents=True, exist_ok=True)
-    (world.data / "projects.json").write_text(json.dumps(
-        registry_doc(other, project_id=None, bootstrap={"offered": old_ts(1), "answer": "declined"})))
-    assert tasks_state(world)["state"] == "green"

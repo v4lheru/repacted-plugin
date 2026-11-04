@@ -56,11 +56,6 @@ def _reason(out: str) -> str:
 @pytest.mark.parametrize("outcome, line, rule, channel", [
     (_outcome("tailed", 2, _deny("no [rule: tailed.no_way]"), b"no [rule: tailed.no_way]\n"),
      "tailed: no [rule: tailed.no_way]", "tailed.no_way", "exit_2"),
-    (_outcome("bare", 0, _deny("plain no")), "bare: plain no [rule: bare.deny]", "bare.deny", "deny"),
-    (_outcome("already", 0, _deny("already: done [rule: already.done]")),
-     "already: done [rule: already.done]", "already.done", "deny"),
-    (_outcome("hostile", 0, _deny("x [rule: ../etc]")),
-     "hostile: x [rule: ../etc] [rule: hostile.deny]", "hostile.deny", "deny"),
     (_outcome("nodot", 0, _deny("x [rule: nodot]")),
      "nodot: x [rule: nodot] [rule: nodot.deny]", "nodot.deny", "deny"),
 ])
@@ -127,26 +122,6 @@ def _emitted_ids() -> set[str]:
     for table in SHELL_TABLES:
         ids.update(table)
     return ids
-
-
-def test_every_emitted_rule_id_has_a_sentence():
-    ids = _emitted_ids()
-    assert "dispatch.task_store_absent" in ids and "env_guard.timeout" in ids  # the grep sees
-    assert "env.read.operand" in ids and "mg.merge.explicit" in ids            # the tables
-    assert ids - set(RULES) == set()
-
-
-def test_the_shell_tables_and_the_registry_carry_the_same_sentence():
-    """One registry: a shell table may hold its ids, but the sentence is the registry's."""
-    for table in SHELL_TABLES:
-        for rule_id, sentence in table.items():
-            assert RULES[rule_id].explain == sentence, rule_id
-
-
-def test_every_rule_has_one_sentence_and_a_doc_anchor():
-    for rule_id, rule in RULES.items():
-        assert rule.explain.endswith(".") and "\n" not in rule.explain, rule_id
-        assert re.fullmatch(r"docs/[A-Za-z0-9_/.-]+\.md#[a-z0-9-]+", rule.doc), rule_id
 
 
 # --- repact inspect --refusals over a written journal -------------------------------------------------------

@@ -129,6 +129,12 @@ def pytest_configure(config):
         "real_approval_record: the merge guard reads the user's answer from the test's own "
         "transcript instead of the _approval_on_record_for_binding_tests stand-in.",
     )
+    config.addinivalue_line(
+        "markers",
+        "slow: a non-guard test that took 0.5 s or more. `run-tests --full` deselects it "
+        "(-m 'not slow'); `run-tests --full --all` runs it. Never put it on a guard, "
+        "redaction, purity, contract, parser or gate test.",
+    )
 
     # RELOCATE THE MEMORY STORE BEFORE COLLECTION BEGINS.
     #

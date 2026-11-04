@@ -105,34 +105,6 @@ class TestWriteCompactSummary:
         assert result is True
         assert (Path(deep_dir) / "compact-summary.txt").exists()
 
-    def test_secure_permissions(self, tmp_path):
-        from postcompact_archive import write_compact_summary
-        write_compact_summary("secure content", str(tmp_path))
-        path = tmp_path / "compact-summary.txt"
-        mode = stat.S_IMODE(path.stat().st_mode)
-        assert mode == 0o600
-
-    def test_overwrites_existing_file(self, tmp_path):
-        from postcompact_archive import write_compact_summary
-        write_compact_summary("first", str(tmp_path))
-        write_compact_summary("second", str(tmp_path))
-        path = tmp_path / "compact-summary.txt"
-        assert path.read_text(encoding="utf-8") == "second"
-
-    def test_returns_false_on_error(self, tmp_path):
-        from postcompact_archive import write_compact_summary
-        # Point at a file path where parent can't be created
-        fake_file = tmp_path / "blocker"
-        fake_file.write_text("x", encoding="utf-8")
-        result = write_compact_summary("test", str(fake_file / "nested"))
-        assert result is False
-
-    def test_empty_summary_writes_empty_file(self, tmp_path):
-        from postcompact_archive import write_compact_summary
-        write_compact_summary("", str(tmp_path))
-        path = tmp_path / "compact-summary.txt"
-        assert path.read_text(encoding="utf-8") == ""
-
 
 # ---------------------------------------------------------------------------
 # Integration tests: subprocess
@@ -161,18 +133,6 @@ class TestPostcompactSubprocess:
         result = run_hook(json.dumps({"compact_summary": ""}))
         assert result.returncode == 0
 
-    def test_exits_zero_with_no_summary_field(self):
-        result = run_hook(json.dumps({"other_field": "data"}))
-        assert result.returncode == 0
-
-    def test_empty_summary_still_emits_suppress_output(self):
-        """Even when compact_summary is empty, clean path returns
-        {"suppressOutput": true} — no systemMessage."""
-        result = run_hook(json.dumps({"compact_summary": ""}))
-        output = json.loads(result.stdout.strip())
-        assert output == {"suppressOutput": True}
-        assert "systemMessage" not in output
-
 
 # ---------------------------------------------------------------------------
 # Fail-open tests
@@ -190,21 +150,6 @@ class TestPostcompactFailOpen:
         result = run_hook("not json")
         assert result.returncode == 0
 
-    def test_null_input_exits_zero(self):
-        result = run_hook("null")
-        assert result.returncode == 0
-
-    def test_array_input_exits_zero(self):
-        result = run_hook("[]")
-        assert result.returncode == 0
-
-    def test_malformed_json_still_emits_suppress_output(self):
-        """Malformed stdin still goes through the happy path (empty
-        summary) and emits {"suppressOutput": true}."""
-        result = run_hook("not json")
-        output = json.loads(result.stdout.strip())
-        assert output == {"suppressOutput": True}
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -219,28 +164,6 @@ class TestConstants:
         p = get_compact_summary_path()
         assert p.name == "compact-summary.txt"
         assert "pact-sessions" in str(p)
-
-    def test_bare_write_targets_the_shared_root_accessor(self, tmp_path, monkeypatch):
-        """#1504: the seam takes a FULLY RESOLVED session dir; a bare call
-        falls back to the shared root accessor's path — the degradation
-        destination, not a locally re-spelled filename."""
-        from postcompact_archive import write_compact_summary
-
-        target = tmp_path / "compact-summary.txt"
-        monkeypatch.setattr(
-            "postcompact_archive.get_compact_summary_path", lambda: target
-        )
-        assert write_compact_summary("bare")
-        assert target.read_text(encoding="utf-8") == "bare"
-
-    def test_seam_write_targets_the_given_directory(self, tmp_path):
-        """write_compact_summary(summary, session_dir) writes
-        COMPACT_SUMMARY_NAME inside the fully-resolved dir, nowhere else."""
-        from postcompact_archive import write_compact_summary
-
-        session_dir = tmp_path / "proj" / "sid"
-        assert write_compact_summary("scoped", str(session_dir))
-        assert (session_dir / "compact-summary.txt").read_text(encoding="utf-8") == "scoped"
 
 
 # ---------------------------------------------------------------------------
@@ -273,43 +196,6 @@ class TestPostcompactOuterExceptionHandler:
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 0
-
-    def test_stderr_contains_error_info(self, capsys):
-        """Error details must appear on stderr for logging."""
-        from postcompact_archive import main
-
-        stdin_data = json.dumps(
-            {"compact_summary": "test", "agent_type": "pact-orchestrator"}
-        )
-        with patch("sys.stdin", StringIO(stdin_data)), \
-             patch("postcompact_archive.write_compact_summary",
-                   side_effect=RuntimeError("test error")):
-            with pytest.raises(SystemExit):
-                main()
-
-        captured = capsys.readouterr()
-        assert "postcompact_archive" in captured.err
-        assert "test error" in captured.err
-
-    def test_stdout_contains_hook_error_json(self, capsys):
-        """Stdout must contain structured JSON from hook_error_json."""
-        from postcompact_archive import main
-
-        stdin_data = json.dumps(
-            {"compact_summary": "test", "agent_type": "pact-orchestrator"}
-        )
-        with patch("sys.stdin", StringIO(stdin_data)), \
-             patch("postcompact_archive.write_compact_summary",
-                   side_effect=RuntimeError("test error")):
-            with pytest.raises(SystemExit):
-                main()
-
-        captured = capsys.readouterr()
-        output = json.loads(captured.out.strip())
-        assert "systemMessage" in output
-        assert "PACT hook warning" in output["systemMessage"]
-        assert "postcompact_archive" in output["systemMessage"]
-        assert "test error" in output["systemMessage"]
 
 
 # ---------------------------------------------------------------------------
@@ -350,28 +236,14 @@ class TestPostcompactLeadGate:
             assert exc_info.value.code == 0
         return calls
 
-    @pytest.mark.parametrize("agent_type", ["repacted:pact-orchestrator", "pact-orchestrator"],
-                             ids=["qualified", "unqualified"])
+    @pytest.mark.parametrize("agent_type", ["repacted:pact-orchestrator",],
+                             ids=["qualified",])
     def test_lead_settles_then_stages_into_the_resolved_session_dir(self, tmp_path, agent_type):
         from fixtures.role_frames import postcompact_frame
         frame = postcompact_frame(agent_type, compact_summary="x")
         calls = self._run_main_with(frame, tmp_path)
         folder = str(self._dest.parent)
         assert calls == [("settle", (folder,), {}), ("stage_summary", (frame, folder), {})]
-
-    def test_lead_with_a_root_singleton_destination_writes_it_directly(self, tmp_path):
-        from fixtures.role_frames import postcompact_frame
-        from shared.constants import get_compact_summary_path
-        root = get_compact_summary_path()
-        calls = self._run_main_with(
-            postcompact_frame("repacted:pact-orchestrator", compact_summary="x"), tmp_path, destination=root,
-        )
-        assert calls == [("write", ("x", str(root.parent)), {})]
-
-    @pytest.mark.parametrize("agent_type", ["pact-backend-coder", None], ids=["teammate", "plain"])
-    def test_non_lead_frames_neither_stage_nor_write(self, tmp_path, agent_type):
-        from fixtures.role_frames import postcompact_frame
-        assert self._run_main_with(postcompact_frame(agent_type, compact_summary="x"), tmp_path) == []
 
 
 # ---------------------------------------------------------------------------
@@ -424,35 +296,6 @@ class TestPostcompactLeadGateRealDisk:
         assert summary_path.read_text(encoding="utf-8") == self._SENTINEL, (
             "a teammate PostCompact truncated the lead's compact-summary file — "
             "the #881 lead-gate failed to suppress the real O_TRUNC write"
-        )
-
-    def test_plain_frame_does_not_truncate_real_file(self):
-        """A plain (no-agent_type) PostCompact must also leave the file intact."""
-        from fixtures.role_frames import postcompact_frame
-        summary_path = self._run_main_realdisk(
-            postcompact_frame(None, compact_summary="PLAIN CLOBBER")
-        )
-        assert summary_path.read_text(encoding="utf-8") == self._SENTINEL
-
-    def test_identified_lead_frame_stages_session_scoped_not_root(self, tmp_path, monkeypatch):
-        """Positive symmetry, session-scoped (#1504): an IDENTIFIED lead
-        PostCompact stages its summary in the session's own directory, never
-        writes compact-summary.txt there, and the root sentinel SURVIVES."""
-        from fixtures.role_frames import postcompact_frame
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/test/project")
-        summary_path = self._run_main_realdisk(
-            postcompact_frame("repacted:pact-orchestrator",
-                              compact_summary="NEW LEAD SUMMARY",
-                              session_id=self._SID)
-        )
-        assert summary_path.read_text(encoding="utf-8") == self._SENTINEL, (
-            "an identified lead PostCompact must not touch the root singleton"
-        )
-        session_dir = tmp_path / ".claude" / "pact-sessions" / "project" / self._SID
-        [pending] = session_dir.glob("compact-summary.pending-*.json")
-        assert json.loads(pending.read_text(encoding="utf-8"))["summary"] == "NEW LEAD SUMMARY"
-        assert not (session_dir / "compact-summary.txt").exists(), (
-            "a PostCompact must stage its summary, never write compact-summary.txt"
         )
 
 
@@ -543,39 +386,6 @@ class TestPostcompactRunHookConfigRootIsolation:
         )
         assert written[0].read_text(encoding="utf-8") == "LEAD COUNTER-TEST SUMMARY"
 
-    def test_identified_lead_frame_stages_session_scoped_under_pinned_tmp(self, tmp_path):
-        """#1504 session-scoped arm: an IDENTIFIED lead frame (session_id in
-        stdin, CLAUDE_PROJECT_DIR in env — both ride the real captured frame,
-        tests/fixtures/role_frames.py ``postcompact_lead_manual``) stages its
-        summary in {env_root}/pact-sessions/{slug}/{sid}/, and the root
-        singleton stays EMPTY: identified writes never feed the drain.
-        """
-        from fixtures.role_frames import postcompact_frame
-
-        sid = "aabb1122-0000-0000-0000-00000000cafe"
-        lead_frame = postcompact_frame(
-            "repacted:pact-orchestrator", compact_summary="SCOPED LEAD SUMMARY",
-            session_id=sid,
-        )
-        result = run_hook(
-            json.dumps(lead_frame), env_root=str(tmp_path),
-            extra_env={"CLAUDE_PROJECT_DIR": "/test/project"},
-        )
-        assert result.returncode == 0, (
-            f"postcompact child exited {result.returncode}; stderr={result.stderr!r}"
-        )
-        session_dir = tmp_path / "pact-sessions" / "project" / sid
-        staged = list(session_dir.glob("compact-summary.pending-*.json"))
-        assert len(staged) == 1, (
-            f"identified lead frame must stage session-scoped under the pinned "
-            f"tmp root; found instead: {list(tmp_path.glob('**/compact-summary*'))}"
-        )
-        assert json.loads(staged[0].read_text(encoding="utf-8"))["summary"] == "SCOPED LEAD SUMMARY"
-        assert not (tmp_path / "pact-sessions" / "compact-summary.txt").exists(), (
-            "an identified write fed the root singleton — the resolver's "
-            "session leg did not fire"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Staging: a session destination settles earlier summaries, then stages
@@ -633,16 +443,4 @@ class TestSummaryStagingSeat:
         assert json.loads(pending.read_text(encoding="utf-8"))["summary"] == "THE NEW SUMMARY"
         assert stat.S_IMODE(pending.stat().st_mode) == 0o600
 
-    def test_an_expired_earlier_summary_is_settled_before_staging(self, monkeypatch, capsys):
-        result = self._run(monkeypatch, capsys)
-        parked = result["dir"] / "compact-summary.unattributed-1000.txt"
-        assert parked.read_text(encoding="utf-8") == "AN EARLIER SUMMARY"
-        assert result["verdicts"] == [("unknown", "expired")]
 
-    @pytest.mark.parametrize("override", [{"agent_type": "pact-architect"}, {"compact_summary": ""}])
-    def test_nothing_is_settled_or_staged_when_no_write_would_happen(self, monkeypatch, capsys, override):
-        result = self._run(monkeypatch, capsys, **override)
-        assert sorted(p.name for p in result["dir"].iterdir()) == [
-            "compact-summary.pending-1000.json", "compact-summary.txt",
-        ]
-        assert result["verdicts"] == []

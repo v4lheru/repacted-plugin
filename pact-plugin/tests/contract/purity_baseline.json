@@ -3,20 +3,16 @@
  "version": 1,
  "refreshes": [
   {
-   "date": "2026-10-19",
+   "date": "2026-11-03",
    "mode": "public",
    "reason": "derived for the public tree: the private rows whose shipped file still has the hit in its public text, at the public line, plus the reviewed public-only rows",
    "delta": {
-    "secret/api-key": 8,
-    "secret/aws-key": 2,
-    "secret/bearer-token": 3,
+    "secret/api-key": 1,
+    "secret/bearer-token": 1,
     "secret/credential-name": 2,
-    "secret/github-token": 2,
-    "secret/jwt": 1,
-    "secret/password-in-url": 6,
-    "secret/password-inline": 11,
-    "secret/private-key": 3,
-    "secret/secret-assignment": 62
+    "secret/password-in-url": 1,
+    "secret/password-inline": 8,
+    "secret/secret-assignment": 36
    }
   }
  ],
@@ -275,72 +271,16 @@
   },
   {
    "path": "pact-plugin/tests/test_distill_promote.py",
-   "line": 193,
-   "class": "secret/password-in-url",
-   "id": "3da4053fad2b162f",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_distill_promote.py",
-   "line": 194,
-   "class": "secret/secret-assignment",
-   "id": "6aacf4e0b4d0a027",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_distill_promote.py",
-   "line": 200,
+   "line": 183,
    "class": "secret/secret-assignment",
    "id": "1abfe56237fe4f54",
    "scope": "test"
   },
   {
-   "path": "pact-plugin/tests/test_distill_promote.py",
-   "line": 220,
-   "class": "secret/password-in-url",
-   "id": "446bfd26ba88b0be",
-   "scope": "test"
-  },
-  {
    "path": "pact-plugin/tests/test_git_commit_check.py",
-   "line": 568,
+   "line": 373,
    "class": "secret/secret-assignment",
    "id": "8070f0b25d1f1570",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_merge_guard.py",
-   "line": 5718,
-   "class": "secret/secret-assignment",
-   "id": "f736fbfe774c9ced",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 269,
-   "class": "secret/bearer-token",
-   "id": "74202588a7d6ca55",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 269,
-   "class": "secret/password-inline",
-   "id": "b0ec2e46b7bb94b6",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 269,
-   "class": "secret/secret-assignment",
-   "id": "a8228de532a8808c",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_repact_doctor.py",
-   "line": 270,
-   "class": "secret/private-key",
-   "id": "30568d6d3b0c3fc3",
    "scope": "test"
   },
   {
@@ -365,20 +305,6 @@
    "scope": "test"
   },
   {
-   "path": "pact-plugin/tests/test_telegram_client.py",
-   "line": 97,
-   "class": "secret/secret-assignment",
-   "id": "573713fc216f5aef",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_client.py",
-   "line": 237,
-   "class": "secret/api-key",
-   "id": "8879cfe99f37229f",
-   "scope": "test"
-  },
-  {
    "path": "pact-plugin/tests/test_telegram_config.py",
    "line": 42,
    "class": "secret/secret-assignment",
@@ -394,315 +320,28 @@
   },
   {
    "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 356,
+   "line": 107,
    "class": "secret/secret-assignment",
    "id": "f2a7c24302695c0b",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 384,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 394,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 405,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 416,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 427,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 438,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 449,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 460,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 471,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 496,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 509,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 522,
-   "class": "secret/secret-assignment",
-   "id": "f2a7c24302695c0b",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_config.py",
-   "line": 545,
+   "line": 128,
    "class": "secret/secret-assignment",
    "id": "2fc567a6c17f8b86",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 63,
-   "class": "secret/aws-key",
-   "id": "e7a731da6c506343",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 72,
-   "class": "secret/api-key",
-   "id": "65c3a3ba20d79291",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 79,
-   "class": "secret/api-key",
-   "id": "b0ebe593547e784c",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 88,
-   "class": "secret/secret-assignment",
-   "id": "6a36dda597448a70",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 97,
-   "class": "secret/github-token",
-   "id": "ab01f454ccc944fe",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 104,
-   "class": "secret/github-token",
-   "id": "ab01f454ccc944fe",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 113,
-   "class": "secret/secret-assignment",
-   "id": "7933e3eae0286e30",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 120,
-   "class": "secret/secret-assignment",
-   "id": "10b0f7505a3805b4",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 128,
-   "class": "secret/bearer-token",
-   "id": "537da54c00abb423",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 137,
-   "class": "secret/password-inline",
-   "id": "36c0cc3546ab4c5c",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 137,
-   "class": "secret/secret-assignment",
-   "id": "5fe01b54e2297c92",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 152,
-   "class": "secret/password-in-url",
-   "id": "8f866ec9cedb8409",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 159,
-   "class": "secret/password-in-url",
-   "id": "540c975481467758",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 165,
-   "class": "secret/password-in-url",
-   "id": "f58ae3149b47ba8f",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 173,
-   "class": "secret/private-key",
-   "id": "34b9b536c0c4bb97",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 180,
-   "class": "secret/private-key",
-   "id": "2e3497671012c75c",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 188,
-   "class": "secret/secret-assignment",
-   "id": "c474f9daf2daaff2",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 202,
-   "class": "secret/jwt",
-   "id": "cdaab9d2d86ede20",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 214,
-   "class": "secret/aws-key",
-   "id": "1c85ca91daf58ec2",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 215,
-   "class": "secret/api-key",
-   "id": "ab203f698e6a7213",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 216,
-   "class": "secret/password-inline",
-   "id": "7be5cb48edbde4eb",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 216,
-   "class": "secret/secret-assignment",
-   "id": "4ec69fd4bac5429a",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 227,
-   "class": "secret/api-key",
-   "id": "e4a0df2fdac37506",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 233,
-   "class": "secret/api-key",
-   "id": "01c67bf78b92a7d9",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 246,
-   "class": "secret/secret-assignment",
-   "id": "815550ddc513da34",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 439,
-   "class": "secret/api-key",
-   "id": "eaa3e34e6187521e",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_content_filter.py",
-   "line": 456,
+   "line": 145,
    "class": "secret/api-key",
    "id": "eaa3e34e6187521e",
    "scope": "test"
   },
   {
    "path": "pact-plugin/tests/test_telegram_server.py",
-   "line": 376,
-   "class": "secret/secret-assignment",
-   "id": "7585dcb1e6c0b9d1",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_server.py",
-   "line": 434,
-   "class": "secret/secret-assignment",
-   "id": "7585dcb1e6c0b9d1",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_server.py",
-   "line": 463,
-   "class": "secret/secret-assignment",
-   "id": "7585dcb1e6c0b9d1",
-   "scope": "test"
-  },
-  {
-   "path": "pact-plugin/tests/test_telegram_tools.py",
-   "line": 64,
+   "line": 175,
    "class": "secret/secret-assignment",
    "id": "7585dcb1e6c0b9d1",
    "scope": "test"

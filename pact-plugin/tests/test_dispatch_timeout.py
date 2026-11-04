@@ -54,7 +54,8 @@ SCRIPTS = {
                   "'PreToolUse', 'additionalContext': 'ran'}}))\n"),
 }
 SECURITY = ("env_guard", "merge_guard_pre", "egress_guard", "git_commit_check", "worktree_guard",
-            "write_checks", "task_write_guard", "ops_frame_guard", "dispatch_gate")
+            "write_checks", "task_write_guard", "ops_frame_guard", "dispatch_gate", "egress_ws")
+ALARM_OF = {"egress_ws": "egress_guard"}  # the Monitor socket check runs egress_guard at its alarm
 
 
 @pytest.fixture
@@ -182,7 +183,7 @@ class TestRegistryContract:
         for name in SECURITY:
             check = by_name[name]
             assert check.on_timeout == "deny", name
-            assert check.timeout_s == registry.SECURITY_TIMEOUTS_S[name], name
+            assert check.timeout_s == registry.SECURITY_TIMEOUTS_S[ALARM_OF.get(name, name)], name
             assert check.timeout_s <= registry.SECURITY_TIMEOUT_CAP_S, name
         others = [check for event in registry.REGISTRY for check in registry.checks_for(event)
                   if check.name not in SECURITY]

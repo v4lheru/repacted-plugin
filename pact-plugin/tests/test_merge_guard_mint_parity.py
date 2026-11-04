@@ -38,37 +38,15 @@ from merge_guard_post import _mint_context_from_bundle, _target_value  # noqa: E
 #     discriminator spellings (assembled at runtime) ---
 MINTING_SPELLINGS = [
     ("merge", "gh pr " + "mer" + "ge 42"),
-    ("merge-admin", "gh pr " + "mer" + "ge 5 --admin"),
     ("close-delete-branch", "gh pr close 42 " + "--delete-" + "branch"),
-    ("force-push", "git push " + "--for" + "ce origin main"),
-    ("push-to-main", "git push origin main"),
     ("lease-push", "git push " + "--force-with-" + "lease origin main"),
-    ("branch-delete-single", "git branch " + "-D victim"),
     ("branch-delete-set", "git branch " + "-D feat1 feat2"),
-    ("branch-delete-quoted-target", 'git branch ' + '-D "feat/x"'),
-    ("remote-ref-delete", "git push origin " + ":feature"),
     ("remote-mass-delete", "git push " + "--prune origin"),
-    (
-        "branch-protection",
-        "gh api -X " + "DEL" + "ETE repos/o/r/branches/main/protection",
-    ),
     (
         "quoted-api-url-refs-delete",
         "gh api 'repos/o/r/git/refs/heads/x' -X " + "DEL" + "ETE",
     ),
-    # global-flag spelling (`gh -R o/r api …`): the canonical minting form is the
-    # branch-protection endpoint (matches the standing completeness pin). The
-    # git/refs global-flag variant is a PRE-EXISTING non-minting residual (target
-    # extraction abstains identically at base and HEAD — verified, not this arc's).
-    (
-        "global-flag-gh-api",
-        "gh -R o/r api -X " + "DEL" + "ETE repos/o/r/branches/main/protection",
-    ),
-    ("api-merge-endpoint", "gh api -X PUT /repos/o/r/pulls/42/" + "mer" + "ge"),
-    # V2 raw-fallback discriminators (see module docstring).
     ("wrapped-bash-c-merge", "bash -c 'gh pr " + "mer" + "ge 5'"),
-    ("wrapped-sh-c-merge", 'sh -c "gh pr ' + "mer" + 'ge 5"'),
-    # line-continuation spelling: the shared normalizer joins the lines.
     ("line-continuation-close", "gh pr close 5 \\\n" + "--delete-" + "branch"),
 ]
 

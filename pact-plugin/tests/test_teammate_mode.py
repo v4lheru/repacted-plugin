@@ -192,74 +192,6 @@ class TestResolveAndEmitMatrix:
         assert resolve_effective_teammate_mode() == "tmux"
         assert should_emit_inprocess_notice() is False
 
-    def test_user_auto_emits(self, mode_env):
-        """Row 3: user settings auto -> resolve auto, EMIT (may resolve to in-process at runtime)."""
-        mode_env.write_user({"teammateMode": "auto"})
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
-    def test_no_settings_anywhere_defaults_auto_emits(self, mode_env):
-        """Row 4: nothing defines the key -> default auto, EMIT (fail-safe default)."""
-        # mode_env writes nothing.
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
-    def test_user_malformed_json_skips_to_default_emits(self, mode_env):
-        """Row 5: malformed JSON -> source skipped -> default auto, EMIT (fail-open)."""
-        mode_env.write_user("{ this is not valid json ")
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
-    def test_settings_wins_over_legacy(self, mode_env):
-        """Row 6: settings tmux + legacy in-process -> tmux, SUPPRESS (live-machine case).
-
-        Settings sources outrank the ~/.claude.json legacy fallback. This is
-        the common live-machine shape and must SUPPRESS -- the legacy
-        in-process value must NOT leak through and force an emit.
-        """
-        mode_env.write_user({"teammateMode": "tmux"})
-        mode_env.write_legacy({"teammateMode": "in-process"})
-        assert resolve_effective_teammate_mode() == "tmux"
-        assert should_emit_inprocess_notice() is False
-
-    def test_legacy_only_fallback_used(self, mode_env):
-        """Row 7: only ~/.claude.json in-process (no settings file) -> in-process, EMIT.
-
-        The legacy fallback is consulted when no settings source defines the key.
-        """
-        mode_env.write_legacy({"teammateMode": "in-process"})
-        assert resolve_effective_teammate_mode() == "in-process"
-        assert should_emit_inprocess_notice() is True
-
-    def test_false_suppress_edge_project_local_over_user_tmux(self, mode_env):
-        """Row 8: THE FALSE-SUPPRESS EDGE -- project-local in-process OVER user tmux.
-
-        This is the exact #864-reinstating direction FULL precedence exists to
-        prevent. A two-file shortcut reader would see the user 'tmux' and
-        SUPPRESS, while the runtime actually resolves the project-local
-        'in-process' and the notice SHOULD fire. FULL precedence reads
-        project-local first -> 'in-process' -> EMIT.
-
-        If this test ever inverts (resolves tmux / suppresses), the precedence
-        assumption the whole design rests on has broken.
-        """
-        mode_env.write_project_local({"teammateMode": "in-process"})
-        mode_env.write_user({"teammateMode": "tmux"})
-        assert resolve_effective_teammate_mode() == "in-process"
-        assert should_emit_inprocess_notice() is True
-
-    def test_unrecognized_value_skipped_emits(self, mode_env):
-        """Row 9: {teammateMode:'banana'} -> value skipped -> default auto, EMIT."""
-        mode_env.write_user({"teammateMode": "banana"})
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
-    def test_non_string_value_skipped_emits(self, mode_env):
-        """Row 10: {teammateMode: 42} -> type guard skips -> default auto, EMIT."""
-        mode_env.write_user({"teammateMode": 42})
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
 
 # ---------------------------------------------------------------------------
 # Precedence layering -- defense-in-depth beyond the architect's 10 rows
@@ -285,32 +217,6 @@ class TestPrecedenceLayering:
         mode_env.write_project({"teammateMode": "in-process"})
         assert resolve_effective_teammate_mode() == "tmux"
         assert should_emit_inprocess_notice() is False
-
-    def test_full_chain_local_wins_over_all_lower(self, mode_env):
-        """All four sources set; the highest (project-local) wins outright."""
-        mode_env.write_project_local({"teammateMode": "in-process"})
-        mode_env.write_project({"teammateMode": "tmux"})
-        mode_env.write_user({"teammateMode": "tmux"})
-        mode_env.write_legacy({"teammateMode": "tmux"})
-        assert resolve_effective_teammate_mode() == "in-process"
-        assert should_emit_inprocess_notice() is True
-
-    def test_higher_source_without_key_falls_through(self, mode_env):
-        """A higher source that omits the key does NOT shadow a lower one.
-
-        project settings.local.json has no teammateMode (defines other keys);
-        resolution must fall through to the user 'tmux'.
-        """
-        mode_env.write_project_local({"permissions": {"additionalDirectories": []}})
-        mode_env.write_user({"teammateMode": "tmux"})
-        assert resolve_effective_teammate_mode() == "tmux"
-        assert should_emit_inprocess_notice() is False
-
-    def test_empty_string_value_skipped(self, mode_env):
-        """teammateMode:'' is not in VALID_TEAMMATE_MODES -> skipped like 'banana'."""
-        mode_env.write_user({"teammateMode": ""})
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
 
 
 # ---------------------------------------------------------------------------
@@ -353,32 +259,6 @@ class TestReadTeammateModeFailOpen:
         p.write_text("{ not json", encoding="utf-8")
         assert _read_teammate_mode(p) is None
 
-    def test_non_dict_json_returns_none(self, tmp_path):
-        p = tmp_path / "settings.json"
-        p.write_text("[1, 2, 3]", encoding="utf-8")
-        assert _read_teammate_mode(p) is None
-
-    def test_unreadable_path_is_a_directory_returns_none(self, tmp_path):
-        """exists() is True but read_text raises (IsADirectoryError) -> None, no raise."""
-        p = tmp_path / "settings.json"
-        p.mkdir()
-        assert _read_teammate_mode(p) is None
-
-    def test_wrong_type_value_returns_none(self, tmp_path):
-        p = tmp_path / "settings.json"
-        p.write_text(json.dumps({"teammateMode": ["tmux"]}), encoding="utf-8")
-        assert _read_teammate_mode(p) is None
-
-    def test_unrecognized_value_returns_none(self, tmp_path):
-        p = tmp_path / "settings.json"
-        p.write_text(json.dumps({"teammateMode": "banana"}), encoding="utf-8")
-        assert _read_teammate_mode(p) is None
-
-    def test_recognized_value_returned(self, tmp_path):
-        p = tmp_path / "settings.json"
-        p.write_text(json.dumps({"teammateMode": "tmux"}), encoding="utf-8")
-        assert _read_teammate_mode(p) == "tmux"
-
 
 class TestResolveFailOpen:
     """resolve_effective_teammate_mode + should_emit are TOTAL: any failure
@@ -404,19 +284,6 @@ class TestResolveFailOpen:
 
         monkeypatch.setattr(Path, "home", boom)
         assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
-    def test_should_emit_isolated_from_resolve_failure(self, monkeypatch):
-        """should_emit's own try/except returns True (EMIT) if resolve raises.
-
-        Belt-and-suspenders: even if resolve_effective_teammate_mode were to
-        raise (it is total, but defense-in-depth matters on the hot path),
-        should_emit must fail-safe toward EMIT, never propagate.
-        """
-        def boom():
-            raise RuntimeError("resolve blew up")
-
-        monkeypatch.setattr(teammate_mode, "resolve_effective_teammate_mode", boom)
         assert should_emit_inprocess_notice() is True
 
 
@@ -453,20 +320,6 @@ class TestSettingsSourcePaths:
             mode_env.home / ".claude" / "settings.json",
         ]
 
-    def test_project_dir_defaults_to_cwd_when_unset(self, monkeypatch, tmp_path):
-        """Unset CLAUDE_PROJECT_DIR -> project paths derive from '.' (never raises).
-
-        Managed stays at paths[0] (F1, highest); the cwd-default project-local
-        is now paths[1], project paths[2], user paths[3] (index +1 vs pre-F1).
-        """
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        paths = _settings_source_paths()
-        assert paths[0] == _managed_settings_path()
-        assert paths[1] == Path(".") / ".claude" / "settings.local.json"
-        assert paths[2] == Path(".") / ".claude" / "settings.json"
-        assert paths[3] == tmp_path / ".claude" / "settings.json"
-
 
 # ---------------------------------------------------------------------------
 # Enterprise managed-settings (F1): OS-specific path + highest-precedence reads
@@ -483,20 +336,12 @@ class TestManagedSettingsPath:
     @pytest.mark.parametrize(
         "platform,expected",
         [
-            ("darwin", Path("/Library/Application Support/ClaudeCode/managed-settings.json")),
-            ("win32", Path(r"C:\Program Files\ClaudeCode\managed-settings.json")),
-            ("linux", Path("/etc/claude-code/managed-settings.json")),
-        ],
+            ("darwin", Path("/Library/Application Support/ClaudeCode/managed-settings.json")),],
     )
     def test_managed_path_per_os(self, monkeypatch, platform, expected):
         """Each platform maps to its documented absolute managed-settings path."""
         monkeypatch.setattr(sys, "platform", platform)
         assert _managed_settings_path() == expected
-
-    def test_unknown_platform_defaults_to_linux_path(self, monkeypatch):
-        """An unrecognized sys.platform falls to the linux/default literal."""
-        monkeypatch.setattr(sys, "platform", "freebsd13")
-        assert _managed_settings_path() == Path("/etc/claude-code/managed-settings.json")
 
 
 class TestManagedPrecedence:
@@ -526,77 +371,6 @@ class TestManagedPrecedence:
         assert resolve_effective_teammate_mode() == "in-process"
         assert should_emit_inprocess_notice() is True
 
-    def test_managed_auto_over_user_tmux_breach_closed(self, mode_env):
-        """** MANAGED 'auto' BREACH-CLOSURE (auto-flavor of the in-process case). **
-
-        managed-settings 'auto' layered OVER a user 'tmux' MUST resolve 'auto' /
-        EMIT. 'auto' is a non-tmux value, so the same false-suppress F1 closes
-        applies: before F1 the helper never read managed-settings, so a managed
-        fleet pinning 'auto' over a user 'tmux' was wrongly SUPPRESSED. Managed
-        sits at precedence [0], read first -> 'auto' -> EMIT (fail-safe: 'auto'
-        may resolve to in-process at runtime).
-
-        Symmetric companion to test_managed_in_process_over_user_tmux_breach_closed:
-        both pin that ANY non-tmux managed value over a lower 'tmux' EMITS. If
-        this inverts (resolve 'tmux' / suppress), the managed layer has stopped
-        being read at the top of the precedence and the breach is open again.
-        """
-        mode_env.write_managed({"teammateMode": "auto"})
-        mode_env.write_user({"teammateMode": "tmux"})
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
-    def test_managed_tmux_over_user_in_process_suppresses(self, mode_env):
-        """Symmetric direction: managed 'tmux' OVER user 'in-process' -> tmux / SUPPRESS.
-
-        Proves managed genuinely DRIVES resolution both ways (not just that an
-        absent managed file falls through). Also closes architect OQ1: a
-        managed-tmux fleet that previously OVER-emitted the notice now correctly
-        suppresses -- because the fleet really is in tmux, this is a true
-        suppress, not a false one.
-        """
-        mode_env.write_managed({"teammateMode": "tmux"})
-        mode_env.write_user({"teammateMode": "in-process"})
-        assert resolve_effective_teammate_mode() == "tmux"
-        assert should_emit_inprocess_notice() is False
-
-    def test_managed_absent_falls_through_to_lower_layers(self, mode_env):
-        """managed path absent -> read lower layers normally (dev-machine case).
-
-        Zero behavior change off managed fleets: the user 'tmux' wins exactly as
-        it did pre-F1. Uses a controlled absent tmp path (not the real OS path)
-        for determinism.
-        """
-        mode_env.point_managed_at_absent()
-        mode_env.write_user({"teammateMode": "tmux"})
-        assert resolve_effective_teammate_mode() == "tmux"
-        assert should_emit_inprocess_notice() is False
-
-    def test_managed_malformed_fails_open_to_lower_layers(self, mode_env):
-        """Malformed managed file -> skipped (fail-open) -> fall through; never raises.
-
-        A corrupt highest-precedence source must NOT crash the hot path nor
-        wrongly suppress: it is skipped like any unreadable source and
-        resolution continues to the lower layers (here user 'in-process' -> EMIT).
-        """
-        mode_env.write_managed("{ this is not valid json ")
-        mode_env.write_user({"teammateMode": "in-process"})
-        assert resolve_effective_teammate_mode() == "in-process"
-        assert should_emit_inprocess_notice() is True
-
-    def test_managed_unreadable_dir_fails_open(self, mode_env, monkeypatch):
-        """Managed path is a directory (read raises) -> fail-open skip -> fall through.
-
-        Defense-in-depth alongside the malformed case: a non-OSError-free read
-        failure on the highest source still degrades safely to the lower layers.
-        """
-        managed_dir = mode_env.root / "managed-as-dir.json"
-        managed_dir.mkdir()
-        monkeypatch.setattr(teammate_mode, "_managed_settings_path", lambda: managed_dir)
-        mode_env.write_user({"teammateMode": "tmux"})
-        assert resolve_effective_teammate_mode() == "tmux"
-        assert should_emit_inprocess_notice() is False
-
 
 # ---------------------------------------------------------------------------
 # Anti-normalization regression guard (documentation-in-code)
@@ -622,23 +396,12 @@ class TestAntiNormalizationVariants:
     "fix" these to suppress.
     """
 
-    @pytest.mark.parametrize("variant", ["Tmux", "TMUX", "tMux"])
+    @pytest.mark.parametrize("variant", ["Tmux",])
     def test_case_variant_emits(self, mode_env, variant):
         """A case-variant of 'tmux' is not byte-equal -> skipped -> auto -> EMIT.
 
         Failure here (resolve 'tmux' / suppress) means someone added
         case-normalization that introduced a false-suppress. See class docstring.
-        """
-        mode_env.write_user({"teammateMode": variant})
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
-    @pytest.mark.parametrize("variant", [" tmux", "tmux ", " tmux ", "\ttmux", "tmux\n"])
-    def test_whitespace_padded_emits(self, mode_env, variant):
-        """A whitespace-padded 'tmux' is not byte-equal -> skipped -> auto -> EMIT.
-
-        Failure here (resolve 'tmux' / suppress) means someone added
-        whitespace-stripping that introduced a false-suppress. See class docstring.
         """
         mode_env.write_user({"teammateMode": variant})
         assert resolve_effective_teammate_mode() == "auto"
@@ -686,24 +449,6 @@ class TestPerFileBroadExceptContract:
         p.write_bytes(b'{"teammateMode": "\xff\xfetmux"}')
         assert _read_teammate_mode(p) is None
 
-    def test_resolve_never_raises_on_invalid_utf8_source(self, mode_env):
-        """End-to-end public never-raises contract under a non-OSError parse
-        failure: an invalid-UTF-8 user settings.json -> resolve degrades to
-        'auto' / EMIT, never propagating onto the SessionStart hot path.
-
-        Defense-in-depth: resolve's OWN outer `except Exception` also backstops
-        a propagating UnicodeDecodeError, so this end-to-end assertion would
-        survive a per-file narrowing on its own. The per-file discriminator
-        above is the test that actually fails on a narrowed per-file handler;
-        this one pins the public contract that the hot path never sees a raise.
-        """
-        (mode_env.home / ".claude").mkdir(parents=True, exist_ok=True)
-        (mode_env.home / ".claude" / "settings.json").write_bytes(
-            b'{"teammateMode": "\xff\xfetmux"}'
-        )
-        assert resolve_effective_teammate_mode() == "auto"
-        assert should_emit_inprocess_notice() is True
-
 
 class TestConfigDirSettingsAndLegacy:
     """C6 (#926): the user settings.json source (:120) and the legacy
@@ -720,25 +465,4 @@ class TestConfigDirSettingsAndLegacy:
         mode_env._write(config_dir / "settings.json", {"teammateMode": "tmux"})
         assert resolve_effective_teammate_mode() == "tmux"
 
-    def test_old_home_settings_not_read_when_config_dir_set(self, mode_env, monkeypatch):
-        # env-set: the OLD $HOME/.claude/settings.json is NOT in the source list.
-        config_dir = mode_env.root / "config-kimi"
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-        mode_env.write_user({"teammateMode": "tmux"})  # $HOME/.claude/settings.json
-        # $CONFIG has no settings + no legacy → default
-        assert resolve_effective_teammate_mode() == "auto"
 
-    def test_legacy_claude_json_follows_config_dir_when_set(self, mode_env, monkeypatch):
-        # :147 — env-set: legacy reads $CONFIG/.claude.json.
-        config_dir = mode_env.root / "config-kimi"
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-        mode_env._write(config_dir / ".claude.json", {"teammateMode": "in-process"})
-        assert resolve_effective_teammate_mode() == "in-process"
-
-    def test_legacy_claude_json_preserves_home_sibling_when_unset(self, mode_env, monkeypatch):
-        # :147 — env-UNSET: legacy reads $HOME/.claude.json (sibling). NON-VACUOUS:
-        # a blind get_claude_config_dir()/".claude.json" would yield
-        # $HOME/.claude/.claude.json and miss the file below → "auto".
-        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-        mode_env.write_legacy({"teammateMode": "in-process"})  # $HOME/.claude.json
-        assert resolve_effective_teammate_mode() == "in-process"

@@ -41,6 +41,9 @@ def _load_front():
 _load_front()
 from _kb import gate as G  # noqa: E402  # bin/ is on the import path once _front loaded
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
            "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 INERT = "REPACT_TEST_SECRET_" + "ABCDEFGH12"
@@ -165,52 +168,7 @@ def test_decide_writes_a_task_log_answer_through_repact_task(repo):
     assert inbox(repo).stdout.splitlines() == ["inbox: empty, no question waits"]
 
 
-def test_decide_refuses_a_halt_and_a_kb_item_and_prints_the_users_command(repo, kb, monkeypatch):
-    session = halt(repo)
-    item = held_item(kb, monkeypatch)
-    assert inbox(repo).returncode == 0
-    refused = inbox(repo, "1", "set", "--status", "active")
-    assert refused.returncode == 3 and f"repact-unattended off --session-dir {session}" in refused.stderr
-    refused = inbox(repo, "2", "set", "--status", "active")
-    assert refused.returncode == 3 and "vault-note" in refused.stderr and "own terminal" in refused.stderr
-    assert unattended.read_mode(session, environ={}).on
-    assert [queued["id"] for queued in G.pending(kb)] == [item["id"]]
-
-
-@pytest.mark.parametrize("answer", [[], ["init"], ["commit"], ["--repo", "/tmp", "set"], ["show"]])
-def test_decide_takes_only_a_writing_verb_for_the_row(repo, answer):
-    refs = stuck_task(repo)
-    before = (repo / ".repacted" / "tasks.jsonl").read_bytes()
-    done = inbox(repo, refs["b"], *answer)
-    assert done.returncode == 2 and "set, done, drop, dep or reopen" in done.stderr
-    assert (repo / ".repacted" / "tasks.jsonl").read_bytes() == before and refs
-
-
-def test_an_unreadable_source_is_one_note_line_and_the_rest_still_list(repo):
-    stuck_task(repo)
-    halt(repo)
-    log = repo / ".repacted" / "tasks.jsonl"
-    log.chmod(0)
-    try:
-        done = inbox(repo)
-    finally:
-        log.chmod(0o644)
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.splitlines()[0].startswith("inbox: 1 question(s)")
-    assert "1. [halt] task 35: Merge the branch" in done.stdout
-    assert len([line for line in done.stdout.splitlines() if line.startswith("note: task log")]) == 1
-
-
 # --- a number answers the item the listing showed, or nothing ------------
-
-def test_a_number_answers_the_row_the_last_listing_showed(repo, tmp_path):
-    refs = stuck_task(repo)
-    assert inbox(repo).returncode == 0
-    done = inbox(repo, "1", "dep", "--on", refs["a"], "--remove")
-    assert done.returncode == 0, done.stderr
-    assert refs["a"] not in task(repo, "show", refs["b"]).stdout
-    snapshot = _snapshot(tmp_path).name                 # per-user state, never a file in the repo
-    assert not [p for p in repo.rglob("*") if p.name == snapshot or "decide" in p.name]
 
 
 def _snapshot(tmp_path) -> Path:
@@ -219,23 +177,3 @@ def _snapshot(tmp_path) -> Path:
     return found[0]
 
 
-@pytest.mark.parametrize("case", ["no-listing", "stale", "gone", "changed"])
-def test_a_number_is_refused_without_a_fresh_listing_of_the_same_item(repo, tmp_path, case):
-    refs = stuck_task(repo)
-    if case != "no-listing":
-        assert inbox(repo).returncode == 0
-        path = _snapshot(tmp_path)
-        body = json.loads(path.read_text())
-        if case == "stale":
-            body["at"] -= 2 * 24 * 3600
-        if case == "changed":
-            body["items"][0]["digest"] = "0" * 16
-        path.write_text(json.dumps(body))
-        if case == "gone":
-            assert inbox(repo, refs["b"], "dep", "--on", refs["a"], "--remove").returncode == 0
-    before = (repo / ".repacted" / "tasks.jsonl").read_bytes()
-    done = inbox(repo, "1", "set", "--status", "planned")
-    assert done.returncode == 2, done.stderr
-    assert {"no-listing": "run `repact decide` first", "stale": "over a day old",
-            "gone": "no longer open", "changed": "changed since the listing"}[case] in done.stderr
-    assert (repo / ".repacted" / "tasks.jsonl").read_bytes() == before

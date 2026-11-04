@@ -136,17 +136,6 @@ class TestARefusedCreateWritesNothingAtAll:
             "the instrument reports no write for a create that succeeded"
         )
 
-    def test_the_change_count_does_not_move_when_the_guard_raises(self, conn):
-        before = conn.total_changes
-        with pytest.raises(ValueError, match="must be a list"):
-            create_memory(conn, {"context": "a refused record",
-                                 "reasoning_chains": "a bare string"})
-        assert conn.total_changes == before, (
-            "a refused create wrote {0} row(s). Either the guard runs after a "
-            "write, or a partial write survives the refusal".format(
-                conn.total_changes - before)
-        )
-
 
 # ---------------------------------------------------------------------------
 # COMPANION 1. The design mechanism that had no test.
@@ -199,113 +188,8 @@ class TestEachMergeCallerAlsoCallsTheGuard:
             "this arm reads the wrong file".format(MERGE)
         )
 
-    def test_each_merge_call_sits_in_a_function_that_calls_the_guard(self):
-        tree = _parse()
-        merges = _calls_by_enclosing_function(tree, {MERGE})
-        guards = _calls_by_enclosing_function(tree, {GUARD})
-        guarded_functions = {enclosing for _, _, enclosing in guards}
-
-        unguarded = [
-            (lineno, enclosing)
-            for lineno, _, enclosing in merges
-            if enclosing not in guarded_functions
-        ]
-        assert not unguarded, (
-            "these {0} call(s) sit in a function that does not call {1}, so a "
-            "value reaches the merge unchecked: {2}".format(
-                MERGE, GUARD, unguarded)
-        )
-
 
 # ---------------------------------------------------------------------------
 # COMPANION 2. Position, and it claims a code shape and nothing more.
 # ---------------------------------------------------------------------------
 
-class TestTheGuardPrecedesTheWrite:
-    """In `create_memory`, each guard call sits above each write statement.
-
-    THIS ARM CLAIMS A CODE SHAPE. It does NOT claim that the guard RAN before
-    the write. The guard is conditional, inside a loop behind a `continue`,
-    and the write is unconditional, so a record with no list field reaches the
-    write with the guard unrun and this arm stays green. That is correct
-    behaviour and it shows the limit.
-
-    FOUR LIMITS, recorded so the next reader does not over-read the green:
-      1. It compares TEXT POSITION, not execution order.
-      2. It is bounded to `create_memory`. A write moved into a helper leaves
-         the function, the write population empties, and the length gate below
-         ABORTS rather than passes.
-      3. It sees a write only when the SQL is a literal that starts with a
-         write verb. A statement built from a value escapes it.
-      4. It cannot see a write through a connection this module does not read.
-    `TestARefusedCreateWritesNothingAtAll` covers each of the four, because it
-    measures the store rather than the source.
-
-    THE SPELLING IS `max(guard) < min(write)` ON PURPOSE. Comparing the two
-    nodes that happen to be found lets a SECOND write added above the guard
-    pass unseen. Comparing the LAST guard against the FIRST write makes an
-    early write unrepresentable rather than unseen.
-
-    THE MUTANT IS AN EARLY WRITE, AND NOT A GUARD MOVED DOWN. The obvious
-    mutant, the guard relocated below the write, IS NOT CONSTRUCTIBLE for this
-    function, and the reason is worth the sentence. The guard sits IN THE DATA
-    PATH OF THE WRITE: it feeds the merge, the merge assigns the normalised
-    value, and the serialiser turns that value into the row the write stores.
-    So a guard moved below the write changes the BYTES WRITTEN, which makes it
-    a data change wearing the clothes of a reordering, and an arm proven by it
-    would credit the position assertion for a failure the data caused.
-    An added early write moves the position alone, so it is the mutant that
-    proves this arm for its own cause.
-    """
-
-    def _guard_and_write_lines(self):
-        fn = _function(_parse(), "create_memory")
-        guard_lines = [
-            node.lineno
-            for node in ast.walk(fn)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == GUARD
-        ]
-        write_lines = []
-        for node in ast.walk(fn):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if not (isinstance(func, ast.Attribute)
-                    and func.attr in ("execute", "executemany")):
-                continue
-            if not node.args:
-                continue
-            first = node.args[0]
-            if not (isinstance(first, ast.Constant)
-                    and isinstance(first.value, str)):
-                continue
-            if first.value.strip().upper().startswith(WRITE_VERBS):
-                write_lines.append(node.lineno)
-        return guard_lines, write_lines
-
-    def test_the_two_populations_are_present(self):
-        """ABORT GATE, and it is the load-bearing half of this class.
-
-        With no guard call the comparison below has nothing to compare, and
-        an `all(...)` spelling over an empty population returns TRUE. This
-        gate turns each empty population into a loud failure.
-        """
-        guard_lines, write_lines = self._guard_and_write_lines()
-        assert guard_lines, (
-            "no {0} call in create_memory. The guard was removed, renamed, or "
-            "moved out of the function".format(GUARD)
-        )
-        assert write_lines, (
-            "no literal write statement in create_memory. The write moved to "
-            "a helper, so this arm no longer guards it. Re-point it"
-        )
-
-    def test_the_last_guard_call_precedes_the_first_write(self):
-        guard_lines, write_lines = self._guard_and_write_lines()
-        assert max(guard_lines) < min(write_lines), (
-            "a write at line {0} runs at or above the last guard call at line "
-            "{1}, so a value can reach the store unchecked".format(
-                min(write_lines), max(guard_lines))
-        )

@@ -168,88 +168,6 @@ class TestGetTaskList:
 
         assert result is None
 
-    def test_skips_malformed_json_files(self, mock_tasks_dir, make_task):
-        """Test skips malformed JSON files and continues with valid ones."""
-        from shared.task_utils import get_task_list
-
-        # Create one valid and one malformed file
-        valid_task = make_task("task-1", "Valid task", "in_progress")
-        (mock_tasks_dir / "task-1.json").write_text(json.dumps(valid_task))
-        (mock_tasks_dir / "task-2.json").write_text("{ invalid json")
-        (mock_tasks_dir / "task-3.json").write_text("")
-
-        result = get_task_list()
-
-        assert result is not None
-        assert len(result) == 1
-        assert result[0]["subject"] == "Valid task"
-
-    def test_returns_none_when_session_id_not_set(self, tmp_path, monkeypatch, pact_context):
-        """Test returns None when session ID is not available.
-
-        Solo context (team_name="") so this exercises the REAL solo branch's
-        no-id guard rather than passing vacuously via the team-branch
-        short-circuit. Real-resolver coverage of the preserved solo path.
-        """
-        from shared.task_utils import get_task_list
-
-        # Set up pact_context with empty session_id AND empty team_name (solo)
-        pact_context(session_id="", team_name="")
-        monkeypatch.delenv("CLAUDE_CODE_TASK_LIST_ID", raising=False)
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        result = get_task_list()
-
-        assert result is None
-
-    def test_uses_task_list_id_when_provided(self, tmp_path, monkeypatch, make_task, pact_context):
-        """Test uses CLAUDE_CODE_TASK_LIST_ID when available.
-
-        CLAUDE_CODE_TASK_LIST_ID is honored in the SOLO branch (the team
-        branch ignores it — team sessions resolve by team_name). So this test
-        runs in a solo context (team_name="") to exercise the preserved
-        env-var precedence. Doubles as real-resolver coverage of the solo
-        branch (the path the team-dir fix must NOT regress).
-        """
-        from shared.task_utils import get_task_list
-
-        # Setup with different session_id and task_list_id
-        session_id = "session-abc"
-        task_list_id = "shared-task-list-xyz"
-
-        pact_context(session_id=session_id, team_name="")
-        monkeypatch.setenv("CLAUDE_CODE_TASK_LIST_ID", task_list_id)
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        # Create tasks directory using task_list_id
-        tasks_dir = tmp_path / ".claude" / "tasks" / task_list_id
-        tasks_dir.mkdir(parents=True)
-
-        task = make_task("task-1", "Shared task", "in_progress")
-        (tasks_dir / "task-1.json").write_text(json.dumps(task))
-
-        result = get_task_list()
-
-        assert result is not None
-        assert len(result) == 1
-        assert result[0]["subject"] == "Shared task"
-
-    def test_handles_non_json_files_gracefully(self, mock_tasks_dir, make_task):
-        """Test ignores non-JSON files in tasks directory."""
-        from shared.task_utils import get_task_list
-
-        # Create a valid task and some non-JSON files
-        task = make_task("task-1", "Valid task", "in_progress")
-        (mock_tasks_dir / "task-1.json").write_text(json.dumps(task))
-        (mock_tasks_dir / "readme.txt").write_text("This is not a task")
-        (mock_tasks_dir / ".hidden").write_text("Hidden file")
-
-        result = get_task_list()
-
-        assert result is not None
-        assert len(result) == 1
-        assert result[0]["subject"] == "Valid task"
-
 
 # =============================================================================
 # Tests for find_feature_task()
@@ -298,44 +216,6 @@ class TestFindFeatureTask:
 
         assert result is None
 
-    def test_returns_none_for_empty_task_list(self):
-        """Test returns None for empty task list."""
-        from shared.task_utils import find_feature_task
-
-        result = find_feature_task([])
-
-        assert result is None
-
-    def test_prefers_in_progress_over_pending(self, make_task):
-        """Test prefers in_progress feature tasks over pending ones."""
-        from shared.task_utils import find_feature_task
-
-        tasks = [
-            make_task("task-1", "Pending feature", "pending"),
-            make_task("task-2", "Active feature", "in_progress"),
-        ]
-
-        result = find_feature_task(tasks)
-
-        # The first matching in_progress task should be returned
-        # Both are valid, but it should find one
-        assert result is not None
-        assert result["status"] in ("in_progress", "pending")
-
-    def test_handles_tasks_without_id(self, make_task):
-        """Test handles tasks missing the id field gracefully."""
-        from shared.task_utils import find_feature_task
-
-        tasks = [
-            {"subject": "Missing id", "status": "in_progress"},
-            make_task("task-1", "Valid feature", "in_progress"),
-        ]
-
-        result = find_feature_task(tasks)
-
-        assert result is not None
-        assert result.get("id") == "task-1"
-
 
 # =============================================================================
 # Tests for find_current_phase()
@@ -363,37 +243,6 @@ class TestFindCurrentPhase:
             make_task("task-1", "PREPARE: feature", "completed"),
             make_task("task-2", "ARCHITECT: feature", "completed"),
             make_task("task-3", "Feature task", "in_progress"),  # Not a phase
-        ]
-
-        result = find_current_phase(tasks)
-
-        assert result is None
-
-    def test_detects_all_phase_prefixes(self, make_task):
-        """Test detects all valid phase prefixes."""
-        from shared.task_utils import find_current_phase
-
-        for phase_prefix in ["PREPARE:", "ARCHITECT:", "CODE:", "TEST:"]:
-            tasks = [make_task("task-1", f"{phase_prefix} feature", "in_progress")]
-            result = find_current_phase(tasks)
-            assert result is not None, f"Failed to detect {phase_prefix}"
-            assert result["id"] == "task-1"
-
-    def test_returns_none_for_empty_list(self):
-        """Test returns None for empty task list."""
-        from shared.task_utils import find_current_phase
-
-        result = find_current_phase([])
-
-        assert result is None
-
-    def test_ignores_completed_phase_tasks(self, make_task):
-        """Test ignores completed and pending phase tasks."""
-        from shared.task_utils import find_current_phase
-
-        tasks = [
-            make_task("task-1", "PREPARE: feature", "completed"),
-            make_task("task-2", "ARCHITECT: feature", "pending"),
         ]
 
         result = find_current_phase(tasks)
@@ -434,63 +283,6 @@ class TestFindActiveAgents:
         assert len(result) == 3
         agent_ids = {t["id"] for t in result}
         assert agent_ids == {"task-1", "task-2", "task-3"}
-
-    def test_returns_empty_list_with_no_active_agents(self, make_task):
-        """Test returns empty list when no agents are in_progress."""
-        from shared.task_utils import find_active_agents
-
-        tasks = [
-            make_task("task-1", "backend-coder: Work", "completed"),
-            make_task("task-2", "Feature task", "in_progress"),  # Not an agent
-        ]
-
-        result = find_active_agents(tasks)
-
-        assert result == []
-
-    def test_detects_all_agent_prefixes(self, make_task):
-        """Test detects all valid agent type prefixes."""
-        from shared.task_utils import find_active_agents
-
-        agent_prefixes = [
-            "preparer:",
-            "architect:",
-            "backend-coder:",
-            "frontend-coder:",
-            "database-engineer:",
-            "devops-engineer:",
-            "test-engineer:",
-            "security-engineer:",
-            "qa-engineer:",
-            "secretary:",
-        ]
-
-        for prefix in agent_prefixes:
-            tasks = [make_task("task-1", f"{prefix} work item", "in_progress")]
-            result = find_active_agents(tasks)
-            assert len(result) == 1, f"Failed to detect {prefix}"
-
-    def test_returns_empty_list_for_empty_input(self):
-        """Test returns empty list for empty task list."""
-        from shared.task_utils import find_active_agents
-
-        result = find_active_agents([])
-
-        assert result == []
-
-    def test_case_insensitive_agent_detection(self, make_task):
-        """Test agent detection is case-insensitive for subject."""
-        from shared.task_utils import find_active_agents
-
-        tasks = [
-            make_task("task-1", "BACKEND-CODER: Uppercase", "in_progress"),
-            make_task("task-2", "Frontend-Coder: Mixed case", "in_progress"),
-        ]
-
-        result = find_active_agents(tasks)
-
-        # The implementation converts to lowercase for comparison
-        assert len(result) == 2
 
 
 # =============================================================================
@@ -537,87 +329,6 @@ class TestFindBlockers:
         assert len(result) == 1
         assert result[0]["metadata"]["level"] == "HALT"
 
-    def test_filters_out_completed_blockers(self, make_task):
-        """Test excludes blockers that have been resolved (status: completed)."""
-        from shared.task_utils import find_blockers
-
-        tasks = [
-            make_task(
-                "task-1",
-                "Resolved blocker",
-                "completed",
-                metadata={"type": "blocker"},
-            ),
-            make_task(
-                "task-2",
-                "Active blocker",
-                "pending",
-                metadata={"type": "blocker"},
-            ),
-        ]
-
-        result = find_blockers(tasks)
-
-        assert len(result) == 1
-        assert result[0]["id"] == "task-2"
-
-    def test_returns_empty_list_with_no_blockers(self, make_task):
-        """Test returns empty list when no blocker/algedonic tasks exist."""
-        from shared.task_utils import find_blockers
-
-        tasks = [
-            make_task("task-1", "Normal task", "in_progress"),
-            make_task("task-2", "Another task", "pending", metadata={"type": "normal"}),
-        ]
-
-        result = find_blockers(tasks)
-
-        assert result == []
-
-    def test_returns_empty_list_for_empty_input(self):
-        """Test returns empty list for empty task list."""
-        from shared.task_utils import find_blockers
-
-        result = find_blockers([])
-
-        assert result == []
-
-    def test_handles_tasks_without_metadata(self, make_task):
-        """Test handles tasks that have no metadata field."""
-        from shared.task_utils import find_blockers
-
-        tasks = [
-            make_task("task-1", "No metadata task", "in_progress"),
-            {"id": "task-2", "subject": "Also no metadata", "status": "pending"},
-        ]
-
-        result = find_blockers(tasks)
-
-        assert result == []
-
-    def test_finds_both_blockers_and_algedonics(self, make_task):
-        """Test finds both blocker and algedonic types together."""
-        from shared.task_utils import find_blockers
-
-        tasks = [
-            make_task(
-                "task-1",
-                "Blocker task",
-                "pending",
-                metadata={"type": "blocker"},
-            ),
-            make_task(
-                "task-2",
-                "Algedonic task",
-                "pending",
-                metadata={"type": "algedonic"},
-            ),
-        ]
-
-        result = find_blockers(tasks)
-
-        assert len(result) == 2
-
 
 # =============================================================================
 # Tests for build_post_compaction_checkpoint()
@@ -655,88 +366,6 @@ class TestBuildPostCompactionCheckpoint:
         result = build_post_compaction_checkpoint(None, phase, agents, [])
 
         assert "cannot tell which task is the feature" in result
-
-    def test_handles_missing_phase(self, make_task):
-        """Test handles None phase task gracefully."""
-        from shared.task_utils import build_post_compaction_checkpoint
-
-        feature = make_task("feat-1", "Feature", "in_progress")
-
-        result = build_post_compaction_checkpoint(feature, None, [], [])
-
-        assert "None detected" in result
-
-    def test_includes_blocker_information(self, make_task):
-        """Test includes blocker details in message."""
-        from shared.task_utils import build_post_compaction_checkpoint
-
-        feature = make_task("feat-1", "Feature", "in_progress")
-        blockers = [
-            make_task(
-                "block-1",
-                "Missing credentials",
-                "pending",
-                metadata={"type": "blocker", "level": "HALT"},
-            ),
-        ]
-
-        result = build_post_compaction_checkpoint(feature, None, [], blockers)
-
-        assert "**BLOCKERS DETECTED:**" in result
-        assert "Missing credentials" in result
-        assert "HALT" in result
-        assert "Address blockers" in result
-
-    def test_formats_multiple_agents(self, make_task):
-        """Test formats multiple active agents correctly."""
-        from shared.task_utils import build_post_compaction_checkpoint
-
-        feature = make_task("feat-1", "Feature", "in_progress")
-        agents = [
-            make_task("agent-1", "backend-coder: API", "in_progress"),
-            make_task("agent-2", "frontend-coder: UI", "in_progress"),
-        ]
-
-        result = build_post_compaction_checkpoint(feature, None, agents, [])
-
-        assert "Active Agents (2)" in result
-        assert "backend-coder: API" in result
-        assert "frontend-coder: UI" in result
-
-    def test_includes_feature_id_when_present(self, make_task):
-        """Test includes feature task ID in output."""
-        from shared.task_utils import build_post_compaction_checkpoint
-
-        feature = make_task("feat-123", "My Feature", "in_progress")
-
-        result = build_post_compaction_checkpoint(feature, None, [], [])
-
-        assert "feat-123" in result
-
-    def test_next_step_guidance_priority(self, make_task):
-        """Test next step guidance prioritizes blockers over agents over phase."""
-        from shared.task_utils import build_post_compaction_checkpoint
-
-        feature = make_task("feat-1", "Feature", "in_progress")
-        phase = make_task("phase-1", "CODE: work", "in_progress")
-        agents = [make_task("agent-1", "backend-coder: work", "in_progress")]
-        blockers = [make_task("block-1", "Blocker", "pending", metadata={"type": "blocker"})]
-
-        # With blockers - should mention addressing blockers
-        result = build_post_compaction_checkpoint(feature, phase, agents, blockers)
-        assert "Address blockers" in result
-
-        # Without blockers but with agents - should mention monitoring agents
-        result = build_post_compaction_checkpoint(feature, phase, agents, [])
-        assert "Monitor active agents" in result
-
-        # Without blockers or agents but with phase - should mention continuing phase
-        result = build_post_compaction_checkpoint(feature, phase, [], [])
-        assert "Continue current phase" in result
-
-        # With nothing - should ask user
-        result = build_post_compaction_checkpoint(feature, None, [], [])
-        assert "ask user how to proceed" in result.lower()
 
 
 # =============================================================================

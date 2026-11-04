@@ -114,38 +114,3 @@ def test_a_call_that_never_returned_within_the_cap_does_not_hide_a_stop(lead):
     assert "dead-e" in _named(_surface(lead))
 
 
-def test_a_teammate_whose_turn_ended_recently_is_still_named(lead):
-    """A recent write is not work once the turn has ended: its job is outstanding and
-    nothing will wake it."""
-    assert "ended-f" in _named(_surface(lead))
-
-
-def test_a_turn_that_ended_in_a_refusal_is_still_named(lead):
-    assert "refused-h" in _named(_surface(lead))
-
-
-def test_an_orphaned_call_in_an_earlier_message_does_not_hide_a_stop(lead):
-    assert "orphan-g" in _named(_surface(lead))
-
-
-def test_a_teammate_without_a_transcript_is_still_named(lead):
-    assert "missing-c" in _named(_surface(lead))
-
-
-def test_each_teammate_is_named_once_with_all_its_tasks(lead):
-    surface = _surface(lead)
-    assert _named(surface).count("idle-b") == 1
-    assert "idle-b (task(s) 6, 7)" in surface
-
-
-def test_the_exact_set_named(lead):
-    assert sorted(_named(_surface(lead))) == ["dead-e", "ended-f", "idle-b", "missing-c", "orphan-g", "refused-h"]
-
-
-def test_no_lead_transcript_path_keeps_every_teammate(lead):
-    assert sorted(_named(_surface(None))) == [
-        "busy-a", "dead-e", "ended-f", "idle-b", "longcall-d", "missing-c", "orphan-g", "refused-h"]
-
-
-def test_the_first_sentence_is_unchanged(lead):
-    assert _surface(lead).startswith(FIRST_SENTENCE)

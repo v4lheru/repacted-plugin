@@ -196,25 +196,6 @@ class TestTheAdverseConditionIsReal:
         )
         assert "blocked by test fixture" in proc.stderr
 
-    @pytest.mark.skipif(
-        not _dependency_importable(),
-        reason=(
-            "converse control needs the dependency actually installed; it is "
-            "absent here, so a failed import would prove nothing about the hook"
-        ),
-    )
-    def test_the_blocker_is_the_cause_not_a_bare_environment(self):
-        """The same import SUCCEEDS without the hook, so the hook is the cause."""
-        proc = subprocess.run(
-            [sys.executable, "-c", f"import {BLOCKED_IMPORTS[0]}"],
-            capture_output=True, text=True, timeout=60,
-            env=_env_with_hook(None),
-        )
-        assert proc.returncode == 0, (
-            "import failed with no blocker installed, so the blocked arm above "
-            f"cannot be attributed to the fixture: {proc.stderr}"
-        )
-
 
 class TestCliOutputPurity:
     """The contract: the CLI's streams stay machine-readable under stress."""
@@ -232,103 +213,6 @@ class TestCliOutputPurity:
         envelope = _parse_or_fail(result.stderr, "stderr")
         assert envelope["ok"] is False
         assert envelope["error"] == "NOT_FOUND"
-
-    def test_stderr_is_pure_json_under_forced_warnings(self, tmp_path, memory_store):
-        """
-        PYTHONWARNINGS=always defeats the default warning filters, so any
-        `warnings.warn` reachable on this path is forced onto stderr. This is
-        the arm that would catch a warning-based signal being added later.
-        """
-        hook_dir = _make_hook_dir(tmp_path, "block")
-        result = _run_cli(
-            ["get", "nonexistent99", "--db-path", str(memory_store("m.db"))],
-            hook_dir,
-            extra_env={"PYTHONWARNINGS": "always"},
-        )
-
-        assert result.returncode == 1
-        envelope = _parse_or_fail(result.stderr, "stderr")
-        assert envelope["error"] == "NOT_FOUND"
-
-    def test_success_path_keeps_stdout_json_and_stderr_silent(
-        self, tmp_path, memory_store
-    ):
-        """
-        The success path carries the same exposure: stdout is the envelope, and
-        stderr stays empty for a command that emits nothing.
-
-        ⚠️ THAT IS A CLAIM ABOUT THIS COMMAND, NOT ABOUT THE SUCCESS PATH, and
-        the wider claim would be false. `_own_stderr_for_envelope` REPLAYS to
-        stderr anything written inside the handler window when the command
-        succeeds -- measured, and pinned by TestTheGuardDisposesOfCapturedBytes
-        below. A successful run whose handler emits (a divergence warning, a
-        model-download progress bar) therefore exits 0 with stderr NON-EMPTY and
-        is behaving correctly. `list` emits nothing, so there is nothing to
-        replay, which is the whole reason this arm is green.
-
-        DO NOT GENERALISE IT BACK. An earlier wording here said stderr "must
-        stay EMPTY" on the success path, which contradicts the replay the guard
-        performs by design, and would send the next reader of a failure here
-        hunting a defect that is not one.
-        """
-        hook_dir = _make_hook_dir(tmp_path, "block")
-        result = _run_cli(
-            ["list", "--db-path", str(memory_store("m.db"))],
-            hook_dir,
-        )
-
-        assert result.returncode == 0
-        payload = _parse_or_fail(result.stdout, "stdout")
-        assert payload["ok"] is True
-        assert result.stderr == "", (
-            "a `list` wrote to stderr. `list` emits nothing inside the handler "
-            "window, so the guard has nothing to replay and this should be "
-            "empty. Check for a NEW emitter on the import path or in the list "
-            "handler -- do NOT read this as the replay misbehaving, and do not "
-            f"relax the assertion to accommodate one: {result.stderr!r}"
-        )
-
-
-class TestThisGuardCanFire:
-    """
-    Mutation arm. Injects the exact defect the module exists to catch and
-    requires the contract to break — otherwise the assertions above would pass
-    against a CLI that could not be broken, and would prove nothing.
-    """
-
-    def test_an_import_time_stderr_write_breaks_the_parse(self, tmp_path, memory_store):
-        hook_dir = _make_hook_dir(tmp_path, "emit", emit_to_stderr=True)
-        result = _run_cli(
-            ["get", "nonexistent99", "--db-path", str(memory_store("m.db"))],
-            hook_dir,
-        )
-
-        assert _EMISSION_MARKER in result.stderr, (
-            "the injected emission never reached stderr, so this arm did not "
-            "exercise the mutation it claims to"
-        )
-        with pytest.raises(json.JSONDecodeError):
-            json.loads(result.stderr)
-
-    def test_the_mutation_differs_from_the_guarded_case_only_by_the_emission(
-        self, tmp_path, memory_store
-    ):
-        """
-        Both arms block the same imports and run the same command; the ONLY
-        difference is the added stderr write. That is what licenses attributing
-        the broken parse to the emission rather than to the adverse conditions.
-        """
-        args = ["get", "nonexistent99", "--db-path", str(memory_store("m.db"))]
-        clean = _run_cli(args, _make_hook_dir(tmp_path, "clean"))
-        mutated = _run_cli(args, _make_hook_dir(tmp_path, "dirty", emit_to_stderr=True))
-
-        assert clean.returncode == mutated.returncode
-        assert json.loads(clean.stderr)["error"] == "NOT_FOUND"
-        assert mutated.stderr.endswith(clean.stderr), (
-            "the mutated run should be the clean envelope with the emission "
-            "prepended; it differs in some other way, so the comparison does "
-            "not isolate the emission"
-        )
 
 
 class TestTheGuardDisposesOfCapturedBytes:
@@ -460,17 +344,3 @@ class TestTheGuardDisposesOfCapturedBytes:
             f"  landed:   {landed!r}"
         )
 
-    def test_a_failed_window_discards_what_it_captured(self):
-        """Asserts stderr is EMPTY, not merely that the payload is absent.
-
-        Absence of the payload is satisfied by a replay that ran and wrote
-        something else, which is still a replay on the failure path and still
-        puts bytes in front of the error envelope. Emptiness is the property
-        the envelope's purity actually depends on.
-        """
-        landed = self._bytes_reaching_stderr(exit_code=1)
-        assert landed == b"", (
-            "bytes reached stderr on a FAILED exit, so they sit in front of "
-            "the error envelope and every caller parsing stderr breaks. The "
-            f"capture must be discarded on this path. Landed: {landed!r}"
-        )

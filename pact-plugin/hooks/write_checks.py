@@ -25,6 +25,8 @@ import hashlib
 import json
 import sys
 
+from shell.tools import shell_command
+
 _ALLOW_OUTPUT = json.dumps({"suppressOutput": True})
 COMMITS_TEAM, COMMITS_TASK = "_commits", "commits"
 
@@ -66,7 +68,7 @@ def commit_gate(payload: dict, ev) -> tuple[str | None, str | None]:
 
 
 def decide(payload: dict) -> tuple[str | None, str | None]:
-    if payload.get("tool_name") != "Bash":
+    if shell_command(payload) is None:   # any tool_name: the host matched this to Bash
         return None, None
     return commit_gate(payload, load_evidence())
 

@@ -58,6 +58,10 @@ Combination (the host runs separate hooks in parallel and documents none of the 
     stderr line>", the notice the host showed for it alone, when the combined exit is 0.
     On a combined exit 2 the host reads only stderr, so neither that notice nor another
     check's additionalContext is carried (the host's handling of it is undocumented).
+  - Monitor (hold_monitor): the host runs the Bash entry on a Monitor command but applies
+    no allow and no updatedInput there, so a combined result for tool_name "Monitor" that
+    carries updatedInput and does not refuse becomes a deny that quotes the hint and the
+    rewritten command, `[rule: dispatch.monitor_rewrite]`, with its own gate_refusal row.
 
 Journal rows (the dispatcher writes them after printing its result, best effort):
   - check_failure: one per check that raised, timed out or could not load:
@@ -124,6 +128,7 @@ if str(HOOKS_DIR) not in sys.path:
 
 import dispatch_registry as registry  # noqa: E402
 import dispatch_rules as rules  # noqa: E402
+from shell.tools import MONITOR_TOOL  # noqa: E402  (stdlib only, imports nothing)
 
 # The frame memo (shared/frame.py): a module with no __file__, so _Isolation keeps it
 # across checks. Created per dispatch, removed after; this file never imports shared.
@@ -676,6 +681,48 @@ def combine(event: str, outcomes: list) -> tuple[int, bytes, bytes, list]:
     return exit_code, stdout, stderr, parsed
 
 
+# --- Monitor: a rewrite the host would not apply ----------------------------------------
+
+MONITOR_REWRITE_RULE = "dispatch.monitor_rewrite"
+_HINT_LIMIT = 600   # characters of the rewritten command quoted back in the deny
+
+
+def hold_monitor(event: str, tool_name: str, exit_code: int, stdout: bytes,
+                 stderr: bytes) -> tuple[int, bytes, bytes, bool]:
+    """(exit code, stdout, stderr, held) after the Monitor hold.
+
+    Claude Code 2.1.314 runs the Bash hooks on a Monitor command but applies neither their
+    allow nor their updatedInput, so a check that answers with a rewrite would let the
+    original command run. A combined PreToolUse result for a Monitor call that carries
+    updatedInput, and does not already refuse, becomes a deny whose reason keeps the
+    check's hint and the rewritten command. Anything else passes unchanged (held False).
+    """
+    unchanged = (exit_code, stdout, stderr, False)
+    if event != "PreToolUse" or tool_name != MONITOR_TOOL or exit_code == 2:
+        return unchanged
+    try:
+        envelope = json.loads(stdout or b"null")
+    except ValueError:
+        return unchanged
+    hso = envelope.get("hookSpecificOutput") if isinstance(envelope, dict) else None
+    if (not isinstance(hso, dict) or "updatedInput" not in hso
+            or hso.get("permissionDecision") == "deny"):
+        return unchanged
+    parts = ["Blocked: a hook would rewrite this Monitor command, and Monitor runs a command "
+             "as written, so the original would run unchecked."]
+    hint = hso.get("additionalContext") or hso.get("permissionDecisionReason")
+    if isinstance(hint, str) and hint.strip():
+        parts.append(hint.strip())
+    updated = hso.get("updatedInput")
+    command = updated.get("command") if isinstance(updated, dict) else None
+    if isinstance(command, str) and command.strip():
+        parts.append(f"The rewritten command: {command.strip()[:_HINT_LIMIT]}")
+    reason = " ".join(parts) + f" [rule: {MONITOR_REWRITE_RULE}]"
+    denied = {"hookSpecificOutput": {"hookEventName": event, "permissionDecision": "deny",
+                                     "permissionDecisionReason": reason}}
+    return 2, json.dumps(denied).encode("utf-8"), reason.encode("utf-8"), True
+
+
 # --- journal -------------------------------------------------------------------------
 
 def _hash12(text: str) -> str:
@@ -887,10 +934,17 @@ def dispatch(event: str, raw: bytes, checks=None, group: Optional[str] = None) -
         if refused is None:
             return 0
         return _emit(2, refused.stdout, refused.stderr)
+    exit_code, stdout, stderr, held = hold_monitor(event, tool_name, exit_code, stdout, stderr)
     code = _emit(exit_code, _advised(event, payload, exit_code, stdout), stderr)
     try:
         for event_type, fields in journal_rows(event, payload, parsed):
             _journal_one(payload, event_type, fields)
+        if held:
+            _journal_one(payload, "gate_refusal", {
+                "hook": "dispatch", "event": event, "tool_name": tool_name, "verdict": "deny",
+                "rule": MONITOR_REWRITE_RULE, "channel": "deny",
+                "code": _hash12(stderr.decode("utf-8", "replace")), "target": _target(payload),
+                "frame": _frame(payload), "plugin_version": _plugin_version()})
     except Exception:  # noqa: BLE001 - a row that cannot be written changes no decision
         pass
     record_cost(event, payload, parsed)

@@ -33,6 +33,7 @@ import os
 
 from shell.settings import (_TRIGGERS, CLAUDE_CLI_WORDS, CONSENT_STATE, TASK_LOG, TASK_STATE,
                             protected_place, written_place)
+from shell.tools import SHELL_TOOLS, shell_command
 from shell.words import Unreadable
 
 RULE_ID = "settings.write"
@@ -62,7 +63,7 @@ def _target(payload: dict) -> str | None:
     if tool in FILE_TOOLS:
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
         return protected_place(path, cwd) if isinstance(path, str) and path else None
-    if tool == "Bash":
+    if tool in SHELL_TOOLS or shell_command(payload) is not None:
         command = tool_input.get("command")
         if not isinstance(command, str):
             return None

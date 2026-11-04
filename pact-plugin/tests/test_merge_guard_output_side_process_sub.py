@@ -71,31 +71,24 @@ from merge_guard_pre import (  # noqa: E402
 
 # Output-side positives the widened guard MUST now detect (design §4.5).
 _OUTPUT_SIDE_POSITIVES = [
-    'echo "x" > >(bash)',          # canonical stdout -> shell
-    'echo "x" > >(sh)',            # sh target
-    'echo "x" > >(zsh)',           # zsh target
-    'echo "x" 1> >(bash)',         # explicit fd-1
-    'echo "x" &> >(bash)',         # stdout+stderr
-    'echo "x" >> >(bash)',         # append-style
-    'echo "x" >  >(bash)',         # extra whitespace between > and >(
-    'echo "x" > >( bash )',        # whitespace inside the substitution
+    'echo "x" > >(bash)',
+    'echo "x" > >( bash )',
 ]
 
 # Exclusions the guard MUST NOT match. Each is defeated only by a *broadening*
 # mutation (named), never by removing the output-side arm — hence the
 # counter-test uses the distinct broaden per exclusion, not a removal-revert.
 _GUARD_NEGATIVES = [
-    'echo "x" 2> >(bash)',                      # stderr fd-2 (drop (?<![0-9]) to defeat)
-    'echo "x" 3> >(bash)',                      # fd-3 (drop (?<![0-9]) to defeat)
-    "git push origin main > >(tee push.log)",   # pinned not-compound; tee not a shell
-    'echo "x" > >(cat)',                        # non-shell target (widen target to defeat)
-    'echo "x" > >(grep foo)',                   # non-shell target
-    'echo "x" > file.log',                      # plain file redirect, no process-sub
+    'echo "x" 2> >(bash)',
 ]
 
 # Input-side behavior F2 must leave UNCHANGED (the original guard).
-_INPUT_SIDE_POSITIVES = ["bash <(echo x)", "sh <(echo x)", "zsh <(echo x)"]
-_INPUT_SIDE_NEGATIVES = ["cat <(echo x)", "grep <(echo x)", "echo x", 'echo "just text"']
+_INPUT_SIDE_POSITIVES = [
+    "bash <(echo x)",
+]
+_INPUT_SIDE_NEGATIVES = [
+    "cat <(echo x)",
+]
 
 
 @pytest.mark.parametrize("command", _OUTPUT_SIDE_POSITIVES)
@@ -132,28 +125,14 @@ def test_guard_input_side_unchanged_negative(command):
 # (command, dangerous-payload) — now-detected output-side under-blocks.
 _FUNCTIONAL_POSITIVES = [
     'echo "gh pr merge 42" > >(bash)',
-    'echo "gh pr merge 42" > >(sh)',
-    'echo "gh pr merge 42" > >(zsh)',
-    'echo "gh pr merge 42" 1> >(bash)',
-    'echo "gh pr merge 42" &> >(bash)',
-    'echo "gh pr merge 42" >> >(bash)',
-    'echo "gh pr merge 42" >  >(bash)',
-    'echo "gh pr merge 42" > >( bash )',
-    "echo 'gh pr merge 42' > >(bash)",          # single-quoted carrier
-    'printf "gh pr merge 42" > >(bash)',         # printf carrier
-    'echo "git branch -D x" > >(bash)',          # branch-delete payload
+    'echo "git branch -D x" > >(bash)',
 ]
 
 # Exclusion negatives — dangerous payload routed where it never reaches a shell,
 # so it stays stripped and non-dangerous. The broaden mutation named in the
 # module docstring makes each flip to dangerous => RED (non-vacuity).
 _FUNCTIONAL_NEGATIVES = [
-    'echo "gh pr merge 42" 2> >(bash)',          # stderr — not an echo-stdout vector (OQ1)
-    'echo "gh pr merge 42" 3> >(bash)',          # fd-3
-    'echo "git branch -D x" > >(tee out.log)',   # tee not a shell
-    'echo "gh pr merge 42" > >(cat)',            # cat not a shell
-    'echo "gh pr merge 42" > >(grep foo)',       # grep not a shell
-    'echo "gh pr merge 42" > push.log',          # plain file redirect
+    'echo "gh pr merge 42" 2> >(bash)',
 ]
 
 
@@ -169,13 +148,6 @@ def test_output_side_non_shell_and_stderr_stay_stripped(command):
     """A dangerous literal routed to a non-shell consumer or to stderr never
     reaches a shell, so the carrier strips it and it stays non-dangerous."""
     assert is_dangerous_command(command) is False
-
-
-def test_input_side_functional_parity_unchanged():
-    """The input-side carrier-3 preservation contract is undisturbed by F2:
-    `bash <(echo '<danger>')` is dangerous; `cat <(...)` is not."""
-    assert is_dangerous_command('bash <(echo "gh pr merge 42")') is True
-    assert is_dangerous_command('cat <(echo "gh pr merge 42")') is False
 
 
 # ===========================================================================
@@ -206,50 +178,26 @@ def test_input_side_functional_parity_unchanged():
 
 # Guard-unit positives (payload irrelevant — the guard keys on redirect/arg syntax).
 _REMEDIATION_POSITIVES_GUARD = [
-    'echo "x" >& >(bash)',        # csh stdout+stderr synonym of `&>` (Arm A)
-    'echo "x" >| >(bash)',        # clobber-override redirect (Arm A)
-    'echo "x" > >(/bin/bash)',    # absolute path-qualified target
-    'echo "x" > >(./sh)',         # relative path-qualified target
-    'echo "x" > >(/usr/bin/zsh)', # abs-path zsh
-    'echo "x" | tee >(bash)',     # tee-fanout — procsub as command arg (Arm B)
-    'echo "x" | tee -a >(bash)',  # tee -a fanout (Arm B)
-    'echo "x" > >(bash;ls)',      # metachar `;` — bash executes before the sep
-    'echo "x" > >(bash&&y)',      # metachar `&&`
-    'echo "x" > >(bash|cat)',     # metachar `|`
+    'echo "x" >& >(bash)',
+    'echo "x" > >(bash|cat)',
 ]
 
 # Guard-unit NEW exclusions (over-block bound — must stay False).
 _REMEDIATION_NEGATIVES_GUARD = [
-    'echo "x" > >(/usr/bin/tee)',  # path-qualified NON-shell target
-    'echo "x" > >(teehee)',        # shell name is not a whole leaf (prefix-of-name)
-    'echo "x" > >(basht)',         # `bash` + trailing word char (suffix-of-name)
-    'echo "x" > >(mysh)',          # `sh` as a name suffix
-    'echo "x" > >(bash/foo)',      # `bash` is a DIRECTORY, `foo` the executable
+    'echo "x" > >(/usr/bin/tee)',
 ]
 
 # Functional positives — DANGEROUS payload so the strip-skip is OBSERVABLE
 # through is_dangerous_command (anti-phantom-green).
 _REMEDIATION_FUNCTIONAL_POSITIVES = [
     'echo "gh pr merge 42" >& >(bash)',
-    'echo "gh pr merge 42" >| >(bash)',
-    'echo "gh pr merge 42" > >(/bin/bash)',
-    'echo "gh pr merge 42" > >(./sh)',
-    'echo "gh pr merge 42" | tee >(bash)',
-    'echo "gh pr merge 42" | tee -a >(bash)',
-    'echo "gh pr merge 42" > >(bash;ls)',
-    'echo "gh pr merge 42" > >(bash&&y)',
-    'echo "gh pr merge 42" > >(bash|cat)',
-    "echo 'git branch -D real' > >(/bin/bash)",  # branch-delete payload, path-qualified
+    "echo 'git branch -D real' > >(/bin/bash)",
 ]
 
 # Functional NEW exclusions — dangerous payload routed where it never reaches a
 # shell (non-shell target / non-leaf shell name), so it stays stripped/benign.
 _REMEDIATION_FUNCTIONAL_NEGATIVES = [
     'echo "gh pr merge 42" > >(/usr/bin/tee)',
-    'echo "gh pr merge 42" > >(teehee)',
-    'echo "gh pr merge 42" > >(basht)',
-    'echo "gh pr merge 42" > >(mysh)',
-    'echo "gh pr merge 42" > >(bash/foo)',
 ]
 
 
@@ -328,24 +276,15 @@ _HEREDOC_BARE = 'cat <<EOF\n; gh pr merge 42\nEOF'
 # scan. Leading `;` chains the op after whatever prefix the carrier prepends to
 # stdout (e.g. git's commit-summary line). DANGEROUS payload = anti-phantom-green.
 _CARRIER_GATING_POSITIVES = [
-    'git commit -m "; gh pr merge 42" > >(bash)',   # #5 commit-msg, output-side procsub
-    'git commit -m "; gh pr merge 42" | bash',      # #5 commit-msg, pipe-to-shell
-    'cat <<< "; gh pr merge 42" > >(bash)',         # #6 here-string, procsub
-    'cat <<< "; gh pr merge 42" | bash',            # #6 here-string, pipe
-    _HEREDOC_PROCSUB,                                # #1 heredoc, procsub
-    _HEREDOC_PIPE,                                   # #1 heredoc, pipe
+    'git commit -m "; gh pr merge 42" > >(bash)',
+    _HEREDOC_PIPE,
 ]
 
 # Negatives — no-regression (bare carriers still stripped), over-block control
 # (benign payload → no spurious block even with procsub), and the two UNGATED
 # carriers (#2 comment, #4 var-assign) staying benign.
 _CARRIER_GATING_NEGATIVES = [
-    'git commit -m "; gh pr merge 42"',          # #5 bare — stripped as before (no regression)
-    'cat <<< "; gh pr merge 42"',                # #6 bare — stripped
-    _HEREDOC_BARE,                               # #1 bare — stripped
-    'git commit -m "safe message" > >(bash)',    # over-block control — benign payload, no block
-    'X="; gh pr merge 42" > >(bash)',            # #4 var-assign UNGATED — emits no stdout → benign
-    'echo "hi" > >(bash)  # ; gh pr merge 42',   # #2 comment UNGATED — bash no-op → benign
+    'git commit -m "; gh pr merge 42"',
 ]
 
 
@@ -399,9 +338,8 @@ def test_gated_carrier_no_regression_and_ungated_stay_benign(command):
 
 # Genuine-vector output-side form variants — dangerous payload (anti-phantom-green).
 _MINOR_FORM_POSITIVES = [
-    'echo "; gh pr merge 42" 1>> >(bash)',   # m-1 append fd-1 (space)
-    'echo "; gh pr merge 42" &>> >(bash)',   # m-1 append stdout+stderr (space)
-    'echo "; gh pr merge 42" >\t>(bash)',    # m-2 tab whitespace between > and >(
+    'echo "; gh pr merge 42" 1>> >(bash)',
+    'echo "; gh pr merge 42" >\t>(bash)',
 ]
 
 

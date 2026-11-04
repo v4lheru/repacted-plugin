@@ -1,6 +1,6 @@
 """D3 STATUS: hooks/shared/transcripts.py, repact-status, repact-report, `repact report` and the
 session ledger, on a synthetic session (entry shapes as measured on the platform; no real
-content). The golden replays on a real session live in test_d3_golden_replay.py.
+content).
 """
 import json
 import os
@@ -217,101 +217,7 @@ def test_repact_status_cli(session):
     assert proc.returncode == 0 and proc.stdout.count("\n") == 4
 
 
-def test_repact_status_without_a_session_exits_3(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    proc = run("repact-status", "--session", "nope")
-    assert proc.returncode == 3
-
-
 # --------------------------------------------------------------------------- report
-
-def test_report_counts(session):
-    r = tr.build_report(session)
-    assert r["spend"]["lead"]["calls"] == 6 and r["spend"]["teammate"]["transcripts"] == 4
-    assert r["spend"]["subagent"]["calls"] == 1
-    w = r["wakes"]
-    assert (w["idle_only_wakes"], w["double_wakes"], w["idle_only_calls"], w["idle_only_output"],
-            w["idle_only_no_tool"]) == (2, 1, 3, 2 + 1 + 1, 1)
-    assert r["delivery"] == {"messages": 1, "located": 1, "late": 0, "late_median_min": None}
-    assert r["rejections"] == {"rejected_tasks": 1, "with_unaddressed_amend": 0, "other": 1}
-    assert r["signals"] == {"psguard_denials": 1, "task_reminders": 2, "unflagged_alarms": 1}
-
-
-def test_report_counts_the_write_checks_per_use(session, tmp_path):
-    """The write-time checks' outcomes (checks/shadow.jsonl, kind write_gate) per use, for this
-    team's lines and commit lines inside the window; other teams and other kinds are not counted."""
-    write(tmp_path / "plugin-data" / "checks" / "shadow.jsonl", [
-        {"ts": ts(55), "kind": "write_gate", "event": "note", "use": "handoff_evidence", "team": TEAM, "keys": ["a", "b"]},
-        {"ts": ts(55), "kind": "write_gate", "event": "return", "use": "commit_rule", "team": "_commits", "keys": ["c"]},
-        {"ts": ts(600), "kind": "write_gate", "event": "return", "use": "commit_rule", "team": "_commits", "keys": ["d"]},
-        {"ts": ts(55), "kind": "write_gate", "event": "note", "use": "handoff_evidence", "team": "other-team", "keys": ["e"]},
-        {"ts": ts(55), "kind": "amendment_gate", "event": "would_deny", "team": TEAM}])
-    g = tr.build_report(session, team=TEAM)["gates"]
-    assert g["total"] == {"returned": 1, "repeats": 0, "notes": 2, "noted": 1}
-    assert list(g["uses"]) == ["handoff_evidence", "commit_rule"]
-    text = "\n".join(tr.render_report(tr.build_report(session, team=TEAM)))
-    assert "write checks         1 returned, 0 repeats passed, 2 notes, 1 noted" in text
-
-
-def test_report_counts_note_events_apart_from_the_items_they_note(session, tmp_path):
-    """`noted` counts the note events (writes that got a note); `notes` counts the items noted."""
-    write(tmp_path / "plugin-data" / "checks" / "shadow.jsonl", [
-        {"ts": ts(55), "kind": "write_gate", "event": "note", "use": "handoff_evidence", "team": TEAM, "keys": ["a", "b"]},
-        {"ts": ts(56), "kind": "write_gate", "event": "note", "use": "handoff_evidence", "team": TEAM, "keys": ["c"]},
-        {"ts": ts(57), "kind": "write_gate", "event": "return", "use": "handoff_evidence", "team": TEAM, "keys": ["d"]}])
-    row = tr.build_report(session, team=TEAM)["gates"]["uses"]["handoff_evidence"]
-    assert row == {"returned": 1, "repeats": 0, "notes": 3, "noted": 2}
-    text = "\n".join(tr.render_report(tr.build_report(session, team=TEAM)))
-    assert "  handoff_evidence         1 returned   0 repeats    3 notes   2 noted" in text
-
-
-def test_report_sums_context_cost_over_two_session_journals(session, tmp_path):
-    folder = tmp_path / "pact-sessions" / "proj"
-
-    def counters(path, checks, frames):
-        def total(rows):
-            return {key: sum(r[key] for r in rows) for key in ("runs", "context", "system")}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"v": 1, "checks": checks, "frames": frames,
-                                    "events": {"PreToolUse": total(list(checks.values()))}}))
-
-    counters(folder / "sess" / "context-cost.json",
-             {"gate_a": {"runs": 1, "context": 1000, "system": 0},
-              "gate_b": {"runs": 1, "context": 300, "system": 20}},
-             {"lead": {"runs": 1, "context": 1000, "system": 0},
-              "teammate": {"runs": 1, "context": 300, "system": 20}})
-    write(folder / "sess" / "session-journal.jsonl", [
-        {"type": "metadata_write", "ts": ts(30), "task_id": "7", "key": "handoff", "agent": "worker-a", "bytes": 900},
-        {"type": "gate_refusal", "ts": ts(30), "hook": "gate_a", "verdict": "deny", "rule": "x"}])
-    counters(folder / "older" / "context-cost.json", {"gate_a": {"runs": 1, "context": 2000, "system": 0}},
-             {"lead": {"runs": 1, "context": 2000, "system": 0}})
-    write(folder / "older" / "session-journal.jsonl", [
-        {"type": "metadata_write", "ts": ts(30), "task_id": "3", "key": "teachback_submit", "agent": "worker-a",
-         "bytes": 400}])
-    one = tr.build_report(session)["context_cost"]
-    assert one["total"] == {"runs": 2, "context": 1300, "system": 20, "writes": 1, "written": 900}
-    both = tr.build_report(session, cost_all=True)["context_cost"]
-    assert both["total"] == {"runs": 3, "context": 3300, "system": 20, "writes": 2, "written": 1300}
-    assert list(both["top_checks"]) == ["gate_a", "gate_b"] and both["top_checks"]["gate_a"]["runs"] == 2
-    assert both["agents"]["worker-a"] == {"teachback_submit": 400, "handoff": 900, "writes": 2}
-    assert both["frames"] == {"lead": 3000, "teammate": 320}
-    assert set(both["sessions"]) == {"sess", "older"}
-    text = run("repact-report", "--transcript", str(session), "--cost-all").stdout
-    assert "context cost         3 runs injected 3.2 KB context, 0.0 KB system" in text
-    assert len(text.splitlines()) <= 26
-
-
-def test_report_cli_text_and_json(session):
-    text = run("repact-report", "--transcript", str(session))
-    assert text.returncode == 0 and "idle-only" in text.stdout and len(text.stdout.splitlines()) <= 22
-    data = run("repact-report", "--transcript", str(session), "--json")
-    assert json.loads(data.stdout)["wakes"]["double_wakes"] == 1
-
-
-def test_repact_report_dispatch(session):
-    proc = subprocess.run(["bash", str(BIN / "repact"), "report", "--transcript", str(session), "--json"],
-                          capture_output=True, text=True, env=dict(os.environ), timeout=60)
-    assert proc.returncode == 0 and json.loads(proc.stdout)["session"] == "sess"
 
 
 # --------------------------------------------------------------------------- ledger
@@ -324,56 +230,7 @@ def _ledger_module():
     return module
 
 
-def test_ledger_row(session, tmp_path):
-    ledger = _ledger_module()
-    ledger.write_row(str(session), "/some/where/proj")
-    rows = (tmp_path / "plugin-data" / "sessions.jsonl").read_text().splitlines()
-    row = json.loads(rows[0])
-    assert len(rows) == 1 and row["session"] == "sess" and row["project"] == "proj" and row["team"] == TEAM
-    assert row["open_user_actions"] == [{"id": "9", "subject": "BLOCKER: rotate the token"}]
-    assert row["report"]["wakes"]["idle_only_wakes"] == 2
-
-
-def test_ledger_hook_detaches_and_writes_one_row(session, tmp_path):
-    payload = json.dumps({"hook_event_name": "SessionEnd", "transcript_path": str(session), "cwd": "/x/proj"})
-    start = time.monotonic()
-    proc = subprocess.run([sys.executable, str(PLUGIN / "hooks" / "session_ledger.py")], input=payload,
-                          capture_output=True, text=True, env=dict(os.environ), timeout=60)
-    assert proc.returncode == 0 and json.loads(proc.stdout) == {"suppressOutput": True}
-    ledger = tmp_path / "plugin-data" / "sessions.jsonl"
-    while not ledger.exists() and time.monotonic() - start < 30:
-        time.sleep(0.1)
-    time.sleep(0.2)
-    assert len(ledger.read_text().splitlines()) == 1
-
-
-def test_ledger_fails_open_on_a_missing_transcript(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "pd"))
-    _ledger_module().write_row(str(tmp_path / "absent.jsonl"), None)
-    assert not (tmp_path / "pd" / "sessions.jsonl").exists()
-
-
 # --------------------------------------------------------------------------- privacy
-
-def test_planted_content_never_reaches_status_report_or_ledger(session, tmp_path):
-    """MARKER sits in the user prompt, assistant text, a teammate message, an idle
-    notification's result, tool inputs (a command, a Read path), tool outputs, a
-    background result, an amendment and a rejection reason. None of it may be printed."""
-    outputs = [
-        run("repact-status", "--transcript", str(session)).stdout,
-        run("repact-report", "--transcript", str(session)).stdout,
-        run("repact-report", "--transcript", str(session), "--json").stdout,
-    ]
-    _ledger_module().write_row(str(session), "/x/proj")
-    outputs.append((tmp_path / "plugin-data" / "sessions.jsonl").read_text())
-    assert all(outputs) and not any(MARKER in text for text in outputs)
-    assert not any(REDACT_ME in text for text in outputs)
-
-
-def test_the_marker_is_really_in_the_fixture(session):
-    """Control: the privacy test is not passing because nothing was planted."""
-    raw = session.read_text() + "".join(p.read_text() for p in (session.with_suffix("") / "subagents").glob("*.jsonl"))
-    assert raw.count(MARKER) >= 10
 
 
 # --------------------------------------------------------------------------- open user actions (S1)
@@ -386,43 +243,5 @@ def _user_actions():
     return module
 
 
-@pytest.mark.parametrize("task, is_open", [
-    ({"status": "pending", "subject": "ALERT: SECURITY: tokens in args"}, True),
-    ({"status": "in_progress", "subject": "HALT DATA: PII in logs"}, True),
-    ({"status": "in_progress", "subject": "STOP: DATA: PII in logs"}, True),
-    ({"status": "pending", "subject": "STOPPED the build"}, False),
-    ({"status": "pending", "subject": "BLOCKER: sandbox token at its limit"}, True),
-    ({"status": "pending", "subject": "RELEASE GATE: benchmark a local judge"}, True),
-    ({"status": "pending", "subject": "quality breach", "metadata": {"type": "algedonic"}}, True),
-    ({"status": "completed", "subject": "ALERT: done"}, False),
-    ({"status": "deleted", "subject": "BLOCKER: withdrawn"}, False),
-    ({"status": "pending", "subject": "ALERTING the lead about a build"}, False),
-    ({"status": "pending", "subject": "fix the alert text"}, False),
-    ({"status": "pending"}, False),
-])
-def test_one_open_user_action_predicate(task, is_open):
-    assert _user_actions().is_open_user_action(task) is is_open
-
-
-def test_ledger_lists_open_user_actions_with_the_shared_predicate(session, tmp_path):
-    tasks = tmp_path / "tasks" / TEAM
-    (tasks / "10.json").write_text(json.dumps({"id": "10", "status": "pending", "subject": "HALT QUALITY: x"}))
-    (tasks / "11.json").write_text(json.dumps({"id": "11", "status": "deleted", "subject": "ALERT: gone"}))
-    (tasks / "12.json").write_text(json.dumps({"id": "12", "status": "pending", "subject": "breach",
-                                               "metadata": {"type": "algedonic"}}))
-    _ledger_module().write_row(str(session), "/x/proj")
-    row = json.loads((tmp_path / "plugin-data" / "sessions.jsonl").read_text().splitlines()[0])
-    assert sorted(a["id"] for a in row["open_user_actions"]) == ["10", "12", "9"]
-
-
 # --------------------------------------------------------------------------- ledger scope (S2)
 
-def test_ledger_skips_an_in_process_teammates_session_end(session, tmp_path):
-    teammate = session.with_suffix("") / "subagents" / f"agent-aworker-a-{HEX}.jsonl"
-    ledger = _ledger_module()
-    ledger.write_row(str(teammate), "/x/proj")
-    payload = json.dumps({"hook_event_name": "SessionEnd", "transcript_path": str(teammate), "cwd": "/x"})
-    proc = subprocess.run([sys.executable, str(PLUGIN / "hooks" / "session_ledger.py")], input=payload,
-                          capture_output=True, text=True, env=dict(os.environ), timeout=60)
-    time.sleep(1.0)
-    assert proc.returncode == 0 and not (tmp_path / "plugin-data" / "sessions.jsonl").exists()

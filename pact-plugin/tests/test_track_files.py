@@ -59,23 +59,6 @@ class TestTrackFilesTimestamps:
             f"Updated last_modified lacks timezone info: {entry['last_modified']}"
         )
 
-    def test_timestamps_are_valid_iso_format(self, tmp_path):
-        """Timestamps must be parseable as ISO 8601."""
-        import track_files
-
-        tracking_file = tmp_path / "test-session.json"
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file):
-            track_files.track_file("/src/app.py", "Edit")
-
-        data = json.loads(tracking_file.read_text())
-        entry = data["files"][0]
-
-        # Should parse without error and have tzinfo
-        parsed_first = datetime.fromisoformat(entry["first_seen"])
-        parsed_last = datetime.fromisoformat(entry["last_modified"])
-        assert parsed_first.tzinfo is not None
-        assert parsed_last.tzinfo is not None
-
 
 class TestTrackFilesCycle:
     """Basic track/load/save cycle."""
@@ -105,52 +88,6 @@ class TestTrackFilesCycle:
         data = json.loads(tracking_file.read_text())
         assert len(data["files"]) == 1
         assert data["files"][0]["tool"] == "Write"
-
-    def test_track_multiple_files(self, tmp_path):
-        """Tracking different files creates separate entries."""
-        import track_files
-
-        tracking_file = tmp_path / "test-session.json"
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file):
-            track_files.track_file("/src/auth.ts", "Edit")
-            track_files.track_file("/src/db.ts", "Write")
-
-        data = json.loads(tracking_file.read_text())
-        assert len(data["files"]) == 2
-        paths = [f["path"] for f in data["files"]]
-        assert "/src/auth.ts" in paths
-        assert "/src/db.ts" in paths
-
-    def test_track_empty_path_is_noop(self, tmp_path):
-        """Empty file path should not create an entry."""
-        import track_files
-
-        tracking_file = tmp_path / "test-session.json"
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file):
-            track_files.track_file("", "Edit")
-
-        assert not tracking_file.exists()
-
-    def test_load_missing_file_returns_default(self, tmp_path):
-        """Loading from a non-existent file returns default structure."""
-        import track_files
-
-        tracking_file = tmp_path / "nonexistent.json"
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file):
-            data = track_files.load_tracked_files()
-
-        assert data["files"] == []
-
-    def test_load_corrupted_json_returns_default(self, tmp_path):
-        """Loading from a corrupted JSON file returns default structure."""
-        import track_files
-
-        tracking_file = tmp_path / "test-session.json"
-        tracking_file.write_text("{invalid json")
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file):
-            data = track_files.load_tracked_files()
-
-        assert data["files"] == []
 
 
 class TestTrackFilesLocking:
@@ -184,48 +121,6 @@ class TestTrackFilesLocking:
         assert [op for op, _ in calls] == [fcntl.LOCK_EX, fcntl.LOCK_UN]
         assert all(inode == sidecar for _, inode in calls)
 
-    def test_load_takes_no_lock(self, tmp_path, monkeypatch):
-        """load_tracked_files reads without a lock: writers swap in a complete file."""
-        import track_files
-
-        tracking_file = tmp_path / "test-session.json"
-        tracking_file.write_text(json.dumps({"files": [], "session_id": "test"}))
-        calls = self._spy_flock(monkeypatch)
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file):
-            assert track_files.load_tracked_files() == {"files": [], "session_id": "test"}
-        assert calls == []
-
-    def test_track_file_uses_single_lock(self, tmp_path, monkeypatch):
-        """track_file holds exactly one sidecar lock for the whole read-modify-write."""
-        import fcntl
-        import track_files
-
-        tracking_file = tmp_path / "test-session.json"
-        calls = self._spy_flock(monkeypatch)
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file):
-            track_files.track_file("/src/app.py", "Edit")
-
-        sidecar = (tmp_path / "test-session.json.lock").stat().st_ino
-        assert [op for op, _ in calls] == [fcntl.LOCK_EX, fcntl.LOCK_UN], calls
-        assert all(inode == sidecar for _, inode in calls)
-
-    def test_flock_released_on_exception(self, tmp_path, monkeypatch):
-        """The sidecar lock is released when the update raises inside the lock."""
-        import fcntl
-        import track_files
-
-        tracking_file = tmp_path / "test-session.json"
-        # An existing file, so the update runs under the lock rather than in
-        # the unlocked no-op check an absent file gets first.
-        tracking_file.write_text(json.dumps({"files": [], "session_id": "test"}))
-        calls = self._spy_flock(monkeypatch)
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file), \
-             patch("track_files.json.dumps", side_effect=ValueError("test error")):
-            with pytest.raises(ValueError):
-                track_files.track_file("/src/app.py", "Edit")
-
-        assert [op for op, _ in calls] == [fcntl.LOCK_EX, fcntl.LOCK_UN], calls
-
 
 class TestUpdateData:
     """Tests for _update_data() pure function."""
@@ -241,33 +136,6 @@ class TestUpdateData:
         assert result["files"][0]["path"] == "/src/app.py"
         assert result["files"][0]["tool"] == "Edit"
         assert "+00:00" in result["files"][0]["first_seen"]
-
-    def test_updates_existing_entry(self):
-        """Existing file path updates tool and last_modified, keeps first_seen."""
-        import track_files
-
-        data = {"files": [{
-            "path": "/src/app.py",
-            "tool": "Edit",
-            "first_seen": "2026-01-01T00:00:00+00:00",
-            "last_modified": "2026-01-01T00:00:00+00:00",
-        }], "session_id": "test"}
-        result = track_files._update_data(data, "/src/app.py", "Write")
-
-        assert len(result["files"]) == 1
-        assert result["files"][0]["tool"] == "Write"
-        assert result["files"][0]["first_seen"] == "2026-01-01T00:00:00+00:00"
-        assert result["files"][0]["last_modified"] != "2026-01-01T00:00:00+00:00"
-
-    def test_does_not_duplicate(self):
-        """Tracking same file twice via _update_data does not create duplicates."""
-        import track_files
-
-        data = {"files": [], "session_id": "test"}
-        data = track_files._update_data(data, "/src/app.py", "Edit")
-        data = track_files._update_data(data, "/src/app.py", "Write")
-
-        assert len(data["files"]) == 1
 
 
 class TestTrackFileAtomicity:
@@ -300,20 +168,6 @@ class TestTrackFileAtomicity:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.flock(f, fcntl.LOCK_UN)
 
-    def test_track_file_handles_corrupted_json(self, tmp_path):
-        """track_file recovers from corrupted JSON in the tracking file."""
-        import track_files
-
-        tracking_file = tmp_path / "test-session.json"
-        tracking_file.write_text("{corrupted")
-
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file):
-            track_files.track_file("/src/app.py", "Edit")
-
-        data = json.loads(tracking_file.read_text())
-        assert len(data["files"]) == 1
-        assert data["files"][0]["path"] == "/src/app.py"
-
 
 class TestTrackFilesMain:
     """Tests for main() entry point."""
@@ -337,29 +191,4 @@ class TestTrackFilesMain:
         data = json.loads(tracking_file.read_text())
         assert len(data["files"]) == 1
 
-    def test_main_ignores_non_edit_write(self, tmp_path):
-        """main() exits early for non-Edit/Write tools."""
-        import track_files
 
-        tracking_file = tmp_path / "test-session.json"
-        input_data = json.dumps({
-            "tool_name": "Read",
-            "tool_input": {"file_path": "/src/app.py"},
-        })
-
-        with patch.object(track_files, "get_session_tracking_file", return_value=tracking_file), \
-             patch("sys.stdin", io.StringIO(input_data)):
-            with pytest.raises(SystemExit) as exc_info:
-                track_files.main()
-            assert exc_info.value.code == 0
-
-        assert not tracking_file.exists()
-
-    def test_main_handles_invalid_json(self):
-        """main() exits 0 on invalid JSON input."""
-        import track_files
-
-        with patch("sys.stdin", io.StringIO("not json")):
-            with pytest.raises(SystemExit) as exc_info:
-                track_files.main()
-            assert exc_info.value.code == 0

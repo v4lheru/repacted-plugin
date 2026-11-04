@@ -148,11 +148,14 @@ REGISTRY: dict[str, tuple[Check, ...]] = {
         _prompt_hook("bootstrap_marker_writer", teams_only=True),
         _prompt_hook("bootstrap_prompt_gate", teams_only=True),
         _prompt_hook("missed_wake_scan", teams_only=True),
+        Check(name="owner_prompt", native="owner_prompt:dispatch_check",
+              timeout_s=USER_PROMPT_TIMEOUT_S),
     ),
     "SessionStart": (
         _hook("session_init"),
         _teams_hook("missed_wake_scan"),
         _hook("doctor_brief"),
+        Check(name="owner_prompt", native="owner_prompt:dispatch_check"),
     ),
     "PreCompact": (_hook("precompact_state_reminder"),),
     "PostCompact": (_hook("postcompact_archive"),),
@@ -167,6 +170,10 @@ REGISTRY: dict[str, tuple[Check, ...]] = {
               native="background_test_gate:dispatch_check", teams_only=True),
         _hook("process_table_guard", "Bash"),
         _security_hook("env_guard", "Read|NotebookRead|Grep|Bash"),
+        # A Monitor ws source has no shell, so no Bash entry sees it: its own entry judges
+        # only the socket (a Monitor command is the Bash entry's, judged once).
+        Check(name="egress_ws", matcher="Monitor", script="hooks/egress_guard.py",
+              argv=("--ws",), timeout_s=SECURITY_TIMEOUTS_S["egress_guard"], on_timeout="deny"),
         _security_hook("egress_guard", "mcp__.*|WebFetch|Artifact|Bash"),
         _security_hook("dispatch_gate", "Agent"),
         _security_hook("worktree_guard", "Edit|Write|MultiEdit|NotebookEdit"),
@@ -178,6 +185,9 @@ REGISTRY: dict[str, tuple[Check, ...]] = {
         Check(name="ops_frame_guard", matcher="Bash", native="ops_frame_guard:dispatch_check",
               timeout_s=SECURITY_TIMEOUTS_S["ops_frame_guard"], on_timeout="deny"),
         _hook("unattended_gate", "AskUserQuestion", journals_refusals=True),
+        # Records what the model schedules, so its wake-up never reads as the owner typing.
+        Check(name="owner_prompt", matcher="ScheduleWakeup|CronCreate",
+              native="owner_prompt:dispatch_check"),
         _hook("merge_question_gate", "AskUserQuestion"),
     ),
     "SubagentStop": (Check(name="subagent_stop", native="subagent_stop:dispatch_check"),

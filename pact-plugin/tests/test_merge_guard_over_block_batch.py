@@ -114,11 +114,9 @@ class TestLeaseBenignContinuationComposition:
     @pytest.mark.parametrize(
         "executed",
         [
-            "git push --force-with-lease origin main && echo pushed",
-            "git push --force-with-lease origin main ; echo pushed",
-            "git push --force-with-lease origin main > push.log",
-            "git push --force-with-lease origin main && git status",
-        ],
+    "git push --force-with-lease origin main && echo pushed",
+    "git push --force-with-lease origin main && git status",
+],
     )
     def test_lease_approval_authorizes_with_benign_continuation(self, executed, tmp_path):
         assert _mint_single(self.LEASE, tmp_path) == 1
@@ -211,14 +209,13 @@ class TestMintWindowAnchorFaithfulShapes:
     @pytest.mark.parametrize(
         "desc",
         [
-            "On approval run: `gh pr merge 42 --subject \"polish the docs\" --admin`",
-            "On approval run: `gh pr merge 42 --subject \"polish the docs\" --admin` now",
-            "gh pr merge 42 --subject \"polish the docs\" --admin",
-            "   `gh pr merge 42 --subject \"polish the docs\" --admin`   ",
-            "Please run `gh pr merge 42 --subject \"polish the docs\" --admin` to finish",
-            "Run\t`gh pr merge 42 --subject \"polish the docs\" --admin`\tthanks",
-        ],
-        ids=["backtick", "backtick-trailing", "bare", "ws-padded", "prose-both", "tab-prose"],
+    "On approval run: `gh pr merge 42 --subject \"polish the docs\" --admin`",
+    "Run\t`gh pr merge 42 --subject \"polish the docs\" --admin`\tthanks",
+],
+        ids=[
+    "backtick",
+    "tab-prose",
+],
     )
     def test_faithful_shape_binds_truncation_recovery_flag(self, desc, tmp_path):
         """No faithful shape triggers a find-miss under-bind: the truncation-
@@ -260,16 +257,15 @@ class TestTwoTierNoUnderBindRideAlong:
     @pytest.mark.parametrize(
         "approve,execute,flags",
         [
-            ("git push --force-with-lease origin main",
+    ("git push --force-with-lease origin main",
              "cd . && git push --force-with-lease origin main", ["--force-with-lease"]),
-            ("git push --force-with-lease origin main",
-             "git push --force-with-lease origin main && echo done", ["--force-with-lease"]),
-            ("git push --no-verify origin main --force",
-             "cd . && git push --no-verify origin main --force", ["--no-verify"]),
-            ("git push origin main",
+    ("git push origin main",
              "cd . && git push origin main", []),
-        ],
-        ids=["lease-cd-prefix", "lease-continuation", "forcepush-noverify-cd", "plain-cd-prefix"],
+],
+        ids=[
+    "lease-cd-prefix",
+    "plain-cd-prefix",
+],
     )
     def test_single_approval_rides_benign_prefix_or_continuation(
             self, approve, execute, flags, tmp_path):

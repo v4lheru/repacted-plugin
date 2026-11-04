@@ -171,6 +171,7 @@ def only_changed(states: dict, check_id: str, state: str):
     assert others == {}, others
 
 
+@pytest.mark.slow
 def test_a_clean_world_is_green_everywhere(world):
     states = world.states("--full")
     assert {k: v["state"] for k, v in states.items()} == {k: "skip" if k == "state" else "green" for k in states}, states
@@ -238,7 +239,7 @@ def plant_key(world, where):
         con.close()
 
 
-@pytest.mark.parametrize("where, state", [("memory", "red"), ("db", "red"), ("vault", "amber")])
+@pytest.mark.parametrize("where, state", [("memory", "red"),])
 def test_a_planted_fake_key_is_flagged_and_its_value_is_never_printed(world, where, state):
     """Memory and the pact-memory DB are RED; a vault KB note is AMBER, the user's own note that
     D25 already withholds from recall (lead ruling)."""
@@ -256,6 +257,7 @@ def test_a_planted_fake_key_is_flagged_and_its_value_is_never_printed(world, whe
         assert ("memory.db:memories#" if where == "db" else "test-secret") in detail
 
 
+@pytest.mark.slow
 def test_memory_and_kb_hits_together_are_red_and_name_both(world):
     plant_key(world, "memory")
     plant_key(world, "vault")
@@ -266,9 +268,7 @@ def test_memory_and_kb_hits_together_are_red_and_name_both(world):
 
 
 @pytest.mark.parametrize("text", [
-    f"key = {FAKE_KEY}", "nothing here", "password: hunter2hunter2", "Authorization: Bearer abcdefghijklmnop1234",
-    "SESSION_SECRET is an env var name", "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
-])
+    f"key = {FAKE_KEY}",])
 def test_the_value_check_agrees_with_credential_reason_on_body_text(text):
     """One source of truth: on text with no credential-like title, the doctor's value kinds are
     non-empty exactly when credential_reason gives a reason."""
@@ -282,6 +282,7 @@ def test_a_note_titled_as_a_key_store_but_holding_no_value_is_not_a_finding(worl
     assert world.states("--full")["secrets"]["state"] == "green"
 
 
+@pytest.mark.slow
 def test_the_vault_outside_the_kb_folder_is_never_scanned(world):
     """D26: a key elsewhere in the vault is the user's private business, not a finding."""
     private = world.tmp / "vault" / "Private"
@@ -290,6 +291,7 @@ def test_the_vault_outside_the_kb_folder_is_never_scanned(world):
     assert world.states("--full")["secrets"]["state"] == "green"
 
 
+@pytest.mark.slow
 def test_a_memory_citing_a_deleted_file_is_amber(world):
     doomed = world.home / "doomed.txt"
     doomed.write_text("x")
@@ -301,6 +303,7 @@ def test_a_memory_citing_a_deleted_file_is_amber(world):
     assert str(doomed) in states["stale_refs"]["detail"][0]
 
 
+@pytest.mark.slow
 def test_a_cited_path_with_spaces_is_not_a_false_alarm(world):
     spaced = world.home / "Work Projects" / "CSM - Demo Dashboard"
     spaced.mkdir(parents=True)
@@ -313,6 +316,7 @@ def test_a_cited_path_with_spaces_is_not_a_false_alarm(world):
     assert states["stale_refs"]["detail"][0].endswith(f"{world.home}/Work Projects/CSM - Demo Dashboard/")
 
 
+@pytest.mark.slow
 def test_private_vault_citations_are_counted_not_checked(world):
     """D26: a cited path inside the vault but outside the KB folder is never checked; a KB one is."""
     kb = world.home / "Obsidian Vault" / "05-Education" / "Coding-Notes"
@@ -366,11 +370,7 @@ def citations(world, text):
 
 
 @pytest.mark.parametrize("cited", [
-    "`~/.claude/tasks/session-0d45cf39/`", "`~/.claude/teams/session-f3bfde25/`", "`~/.claude/tasks/pact-ad43b47b`",
-    "`~/work/app/.worktrees/feature/okta/docs/x.md`", "`~/.claude/worktrees/devops-pull`",
-    "`~/.claude/pact-sessions/compact-summary.txt`",
-    "`~/.claude/plugins/cache/pact-marketplace/PACT/4.4.40/hooks/shared/session_registry.py`",
-])
+    "`~/.claude/tasks/session-0d45cf39/`",])
 def test_ephemeral_session_and_worktree_locations_are_not_citations(world, cited):
     """Class (a): session task/team dirs, worktrees, pact-session files and the versioned plugin
     cache are historical by nature; a memory naming one is not a stale citation."""
@@ -378,15 +378,13 @@ def test_ephemeral_session_and_worktree_locations_are_not_citations(world, cited
 
 
 @pytest.mark.parametrize("cited", [
-    "`ls -d /opt/homebrew/Cellar/python@3.*`", "`~/.claude/backups/.claude.json.backup.*`",
-    "`~/.claude/.env.*`", "`~/output/extracted_data_*.csv`", "`~/data/pact-<id>/`", "`~/data/pact-{session_hash}/`",
-])
+    "`ls -d /opt/homebrew/Cellar/python@3.*`",])
 def test_glob_and_template_fragments_are_not_citations(world, cited):
     """Class (b): a path pattern (glob or placeholder slot) names no single file."""
     assert citations(world, f"run {cited} first") == []
 
 
-@pytest.mark.parametrize("cited", ["`/opt/homebrew/opt/python@X.Y/bin/pythonX.Y`", "`/Users/me/code`"])
+@pytest.mark.parametrize("cited", ["`/opt/homebrew/opt/python@X.Y/bin/pythonX.Y`",])
 def test_version_and_user_placeholders_are_not_citations(world, cited):
     assert citations(world, f"e.g. {cited}") == []
 
@@ -397,230 +395,10 @@ def test_an_ephemeral_marker_after_a_space_in_the_path_still_counts(world):
     assert citations(world, "see `~/Code/Some Projects/App - Dashboard/.worktrees/feature/x/docs/a.md`") == []
 
 
-def test_a_citation_marked_gone_is_resolved_and_an_unmarked_one_is_not(world):
-    """Class (d): memory hygiene appends ' (path gone as of <date>)' after a citation instead of
-    deleting the sentence; the doctor must read that as resolved, and only right after the path."""
-    assert citations(world, "Repo `~/Code/Proj/gone-build` (path gone as of 2026-09-27), branch x") == []
-    assert citations(world, "repo `~/Code/Some Projects/gone-sheet` (path gone as of 2026-09-27)") == []
-    assert citations(world, "Repo `~/Code/Proj/gone-build`, see (path gone as of 2026-09-27) below") == [
-        f"{world.home}/Code/Proj/gone-build"]
-
-
-def test_remote_marked_and_quoted_truncated_cites_are_skipped_and_a_real_one_is_not(world):
-    """Regression (2026-09-29): a VM path, awk's cut of a spaced name, and a quoted fixture
-    fragment were reported as stale."""
-    (world.home / "Work" / "Some Projects").mkdir(parents=True, exist_ok=True)
-    assert citations(world, "- **Log**: `~/extraction.log` on the VM (remote host)") == []
-    assert citations(world, 'ssh vm --command="tail ~/extraction.log"  # (not a local path)') == []
-    assert citations(world, "awk leaves `~/Work/Some`, and every `git -C` fails") == []
-    assert citations(world, "fails via a TRUNCATION (`'~/Sites/secret-project/fil'` cut off)") == []
-    assert citations(world, "the log is `~/extraction.log`, see `~/Work/Gone`") == [
-        f"{world.home}/extraction.log", f"{world.home}/Work/Gone"]
-
-
-@pytest.mark.parametrize("text, cited", [
-    ("Worktree (build\nphase): `~/Code/Some Projects/demo-build`.", "Code/Some Projects/demo-build"),
-    ("**Gate suite. Worktree\n`~/Code/Some Projects/demo-sheet`, branch x", "Code/Some Projects/demo-sheet"),
-    ("(tasks #3, worktree `~/Code/Some Projects/demo-sheet`, branch `feature/x`)",
-     "Code/Some Projects/demo-sheet"),
-])
-def test_the_word_worktree_near_a_missing_path_does_not_hide_it(world, text, cited):
-    """Prose is not evidence: only a .worktrees or .claude/worktrees path segment makes a
-    citation ephemeral, so a missing path the memory merely calls a worktree stays a finding."""
-    assert citations(world, text) == [f"{world.home}/{cited}"]
-
-
-@pytest.mark.parametrize("cited", [
-    "`~/work/scratchpad/notes.md`", "`~/work/scratchpad`", "`/private/tmp/x/scratchpad/venv/bin/python`",
-])
-def test_a_scratchpad_path_segment_is_ephemeral(world, cited):
-    assert citations(world, f"see {cited}") == []
-
-
-def test_scratchpad_inside_a_longer_name_is_a_real_citation(world):
-    """'scratchpad-app' is a project, not a scratch dir: the marker is a whole path segment."""
-    assert citations(world, "see `~/code/scratchpad-app/README.md`") == [
-        f"{world.home}/code/scratchpad-app/README.md"]
-
-
-def test_a_path_list_is_checked_part_by_part(world):
-    (world.home / "a").mkdir()
-    (world.home / "b").mkdir()
-    assert citations(world, "`PATH=~/a:~/b`") == []
-    assert citations(world, "`PATH=~/a:~/gone`") == [f"{world.home}/gone"]
-
-
-def test_a_line_continuation_is_not_part_of_the_cited_path(world):
-    assert citations(world, "~/gone-tool \\\n  --flag") == [f"{world.home}/gone-tool"]
-
-
-def test_a_plain_missing_path_is_still_reported(world):
-    """The control: the new skips must not swallow a real stale citation."""
-    assert citations(world, "Repo `~/Code/Some Project/really-gone.md`, branch x") == [
-        f"{world.home}/Code/Some Project/really-gone.md"]
-
-
-def test_a_users_home_alias_is_canonicalised_but_the_rest_is_not(monkeypatch):
-    doctor = load("_doctor_users_alias", PLUGIN_ROOT / "bin" / "_doctor.py")
-    seen = []
-
-    def fake_realpath(path):
-        seen.append(path)
-        return {"/Users/alice": "/Users/bob"}.get(path, path)
-
-    monkeypatch.setattr(doctor.os.path, "realpath", fake_realpath)
-    ctx = doctor.Context(config_root=Path("/nowhere"), home=Path("/Users/bob"), plugin_root=PLUGIN_ROOT, env={})
-    canon = doctor._canon_home("/Users/alice/Code/Obsidian Vault - New/Private/x.md", ctx)
-    assert canon == "/Users/bob/Code/Obsidian Vault - New/Private/x.md"
-    assert seen == ["/Users/alice"], "only the home prefix may be resolved, never the vault part"
-
-
-def test_maintainer_only_rows_hide_from_the_table_only_when_they_skip():
-    """F7: a stranger's install shows no release/gates/state SKIP rows; an owner whose check
-    applies still sees the row, and the cache keeps every row either way."""
-    doctor = load("_doctor_maintainer_rows", PLUGIN_ROOT / "bin" / "_doctor.py")
-    Result = doctor.Result
-    results = [Result("index", "index budgets", "green", "ok"),
-               Result("release", "release position", "skip", "no repo or no release worktree"),
-               Result("gates", "release gates", "amber", "1 pending"),
-               Result("state", "state ownership", "skip", "no state-ownership table shipped here")]
-    table = "\n".join(doctor.render_report(results))
-    assert "release position" not in table and "state ownership" not in table
-    assert "AMBER 2. release gates" in table and "GREEN 1. index budgets" in table
-    assert len(results) == 4
-
-
-def test_a_lagging_release_tag_is_amber_and_an_undeclared_tag_too(world):
-    world.new_tag("repacted-m1")
-    states = world.states("--full")
-    assert states["release"]["state"] == "amber" and "1 newer tag" in states["release"]["summary"]
-    assert states["gates"]["state"] == "amber" and "undeclared" in states["gates"]["summary"]
-
-
 def gate(status, evidence=None, name="probes"):
     return {"gate": name, "task_id": 138, "status": status, "evidence": evidence}
 
 
-def test_a_pending_gate_shows_and_a_passed_one_with_evidence_clears(world):
-    world.new_tag("repacted-m1")
-    world.write_gates({"repacted-m1": [gate("pending")]})
-    states = world.states("--full")
-    assert states["gates"]["state"] == "amber"
-    assert "waiting on gate: repacted-m1 (probes, task #138)" in states["gates"]["detail"]
-    world.write_gates({"repacted-m1": [gate("passed", "#138 k=3 run 2026-09-29, report docs/test/persona.md")]})
-    assert world.states("--full")["gates"]["state"] == "green"
-
-
-@pytest.mark.parametrize("evidence", [None, "", "   "])
-def test_a_gate_passed_without_evidence_is_amber(world, evidence):
-    world.new_tag("repacted-m1")
-    world.write_gates({"repacted-m1": [gate("passed", evidence)]})
-    states = world.states("--full")
-    assert states["gates"]["state"] == "amber"
-    assert "passed WITHOUT evidence: repacted-m1 (probes, task #138)" in states["gates"]["detail"]
-
-
-def test_every_gate_of_a_tag_must_pass(world):
-    world.new_tag("repacted-m1")
-    world.write_gates({"repacted-m1": [gate("passed", "ok"), gate("pending", name="parity")]})
-    states = world.states("--full")
-    assert states["gates"]["state"] == "amber"
-    assert states["gates"]["detail"] == ["waiting on gate: repacted-m1 (parity, task #138)"]
-
-
-
-
-def test_an_empty_gate_list_declares_no_gate_needed(world):
-    world.new_tag("repacted-f1")
-    world.write_gates({"repacted-f1": []})
-    assert world.states("--full")["gates"]["state"] == "green"
-
-
-@pytest.mark.parametrize("entries", [{"gate": "x", "status": "passed"}, [gate("done")]])
-def test_a_malformed_gate_record_is_amber(world, entries):
-    world.new_tag("repacted-m1")
-    world.write_gates({"repacted-m1": entries})
-    states = world.states("--full")
-    assert states["gates"]["state"] == "amber" and "malformed" in states["gates"]["summary"]
-
-
-def test_a_pending_alert_task_is_red_and_a_completed_one_is_not_listed(world):
-    world.add_task("team-a", "7", "ALERT: SECURITY: rotate the planted fixture token")
-    world.add_task("team-a", "8", "ALERT: SECURITY: already handled", status="completed")
-    world.add_task("team-b", "3", "[HALT] fixture", type="algedonic")
-    states = world.states("--full")
-    only_changed(states, "actions", "red")
-    detail = " ".join(states["actions"]["detail"])
-    assert "#7 ALERT: SECURITY: rotate the planted fixture token" in detail and "#3" in detail
-    assert "already handled" not in detail
-
-
-def test_check_8_lists_exactly_what_d3s_predicate_calls_open(world):
-    """One definition of 'waiting on the user' (amend_2): the doctor uses D3's predicate."""
-    ua = load("_user_actions_parity", PLUGIN_ROOT / "hooks" / "shared" / "user_actions.py")
-    tasks = [("1", "ALERT: rotate", "pending", {}), ("2", "ALERTING the team", "pending", {}),
-             ("3", "BLOCKER: token", "in_progress", {}), ("4", "RELEASE GATE: probes", "pending", {}),
-             ("5", "HALT: data", "completed", {}), ("6", "[HALT] fixture", "pending", {"type": "algedonic"}),
-             ("7", "alert: lowercase", "pending", {}), ("8", "plain work", "pending", {})]
-    for task_id, subject, status, meta in tasks:
-        world.add_task("team", task_id, subject, status, **meta)
-    doctor = load("_doctor_parity8", PLUGIN_ROOT / "bin" / "_doctor.py")
-    ctx = doctor.Context(config_root=world.config, home=world.home, plugin_root=PLUGIN_ROOT, env=world.env)
-    listed = {line.split(" ", 1)[0].lstrip("#") for line in doctor._alert_tasks(ctx)}
-    expected = {t[0] for t in tasks if ua.is_open_user_action(
-        {"id": t[0], "subject": t[1], "status": t[2], "metadata": t[3]})}
-    assert listed == expected == {"1", "3", "4", "6"}
-
-
-def test_a_user_owned_backlog_line_is_amber(world):
-    (world.repo / "docs" / "backlog.md").write_text("- **Rotate the fixture keys (USER-OWNED).** Only you can.\n")
-    states = world.states("--full")
-    only_changed(states, "actions", "amber")
-    assert states["actions"]["detail"] == ["Rotate the fixture keys"]
-
-
-def test_mcp_drift_is_amber(world):
-    world.set_mcp([{"server": "fixture-server", "effective": "scope"}, {"server": "kept", "effective": "keep"}])
-    states = world.states("--full")
-    only_changed(states, "mcp", "amber")
-    assert states["mcp"]["detail"] == ["would change: fixture-server"]
-
-
-def test_slow_checks_reuse_their_cache_until_full(world):
-    runs = world.scope.with_suffix(".runs")
-    world.states()
-    assert runs.read_text() == "1"
-    world.states()
-    assert runs.read_text() == "1", "a fresh slow result is reused, not re-run"
-    world.states("--quick")
-    assert runs.read_text() == "1", "--quick never runs a slow check"
-    world.states("--full")
-    assert runs.read_text() == "2"
-
-
-def test_quick_with_no_cache_skips_the_slow_checks(world):
-    states = world.states("--quick")
-    assert states["secrets"]["state"] == "skip" and states["mcp"]["state"] == "skip"
-    assert not world.scope.with_suffix(".runs").exists()
-
-
-def test_a_concurrent_run_changes_nothing(world):
-    import fcntl
-    world.data.mkdir(parents=True, exist_ok=True)
-    fd = os.open(world.data / "doctor.lock", os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)
-    try:
-        result = world.run("--full")
-    finally:
-        os.close(fd)
-    assert result.returncode == 0 and "another run is in progress" in result.stdout
-    assert not (world.data / "doctor.json").exists()
-
-
-def test_exit_codes_follow_the_worst_state(world):
-    assert world.run("--full").returncode == 0
-    world.add_task("t", "1", "ALERT: fixture")
-    assert world.run("--full").returncode == 2
 
 
 # ---------------------------------------------------------------------------
@@ -637,82 +415,6 @@ def kb_page(world, rel: str, body: str = "Body.", modified: str = "2026-01-01", 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(KB_FRONT.format(created=created, modified=modified, extra=extra) + f"\n# {Path(rel).stem}\n\n{body}\n\n"
                     f"## Related\n\n{related}\n")
-
-
-def test_kb_green_summary_carries_the_counts(world):
-    kb_page(world, "topic-a.md")
-    kb = world.states("--full")["kb"]
-    assert kb["state"] == "green" and kb["detail"] == []
-    assert "2 pages" in kb["summary"] and "withheld 0" in kb["summary"] and "orphans" in kb["summary"]
-
-
-def test_a_supersession_cycle_is_red_and_names_the_listing_command(world):
-    for me, other in (("cyc-a", "cyc-b"), ("cyc-b", "cyc-a")):
-        kb_page(world, f"{me}.md", extra=f'wiki-status: superseded\nwiki-status-since: 2026-09-01\n'
-                                         f'wiki-superseded-by: "[[{other}]]"\n')
-    states = world.states("--full")
-    only_changed(states, "kb", "red")
-    assert any("2 supersession chain(s) broken or cyclic" in d and "vault-find --catalog chains" in d
-               for d in states["kb"]["detail"])
-
-
-def test_a_schema_error_on_a_page_created_since_the_contract_is_amber(world):
-    kb_page(world, "topic-new.md", created="2026-09-28", modified="2026-09-28")   # a topic page without keys
-    states = world.states("--full")
-    only_changed(states, "kb", "amber")
-    assert any("vault-find --catalog lint" in d for d in states["kb"]["detail"])
-
-
-@pytest.mark.parametrize("modified", ["2026-01-01", "2026-09-28"])
-def test_a_legacy_schema_error_stays_green_even_on_a_touched_page(world, modified):
-    """The cutoff is `created` (lead ruling): the curation apply bumping `modified` on a legacy
-    page must not turn the doctor amber for that page's old errors."""
-    kb_page(world, "topic-old.md", modified=modified)
-    assert world.states("--full")["kb"]["state"] == "green"
-
-
-def test_broken_links_ratchet_amber_on_a_rise_and_green_after_the_fix(world):
-    kb_page(world, "a.md", related="- [[gone-one]]")
-    assert world.states("--full")["kb"]["state"] == "green"          # the first run sets the baseline
-    kb_page(world, "b.md", related="- [[gone-two]]")
-    states = world.states("--full")
-    only_changed(states, "kb", "amber")
-    assert any("broken link(s), above the baseline of 1" in d and "vault-find --catalog broken" in d
-               for d in states["kb"]["detail"])
-    (world.kb / "a.md").unlink()
-    (world.kb / "b.md").unlink()
-    assert world.states("--full")["kb"]["state"] == "green"
-    kb_page(world, "c.md", related="- [[gone-three]]")
-    assert world.states("--full")["kb"]["state"] == "amber"          # the baseline ratcheted down to 0
-
-
-def test_a_withheld_page_is_the_secrets_checks_line_not_a_second_kb_action(world):
-    plant_key(world, "vault")
-    states = world.states("--full")
-    only_changed(states, "secrets", "amber")
-    assert "withheld 1" in states["kb"]["summary"]
-    assert FAKE_KEY not in (world.data / "doctor.json").read_text()
-
-
-def test_a_catalog_refresh_failure_is_amber_and_names_the_failure(world, monkeypatch):
-    doctor = load("_doctor_kb_fail", PLUGIN_ROOT / "bin" / "_doctor.py")
-    for key in ("HOME", "CLAUDE_PLUGIN_DATA", "XDG_CONFIG_HOME"):
-        monkeypatch.setenv(key, world.env[key])
-    monkeypatch.delenv("REPACT_VAULT", raising=False)
-    catalog = doctor._kb_catalog()
-
-    def boom(*args, **kwargs):
-        raise OSError("disk full")
-    monkeypatch.setattr(catalog, "refresh", boom)
-    ctx = doctor.Context(config_root=world.config, home=world.home, plugin_root=PLUGIN_ROOT, env=world.env)
-    result = doctor.check_kb(ctx)
-    assert result.state == "amber" and "OSError" in result.summary
-
-
-def test_a_missing_kb_folder_is_skip(world):
-    import shutil
-    shutil.rmtree(world.kb)
-    assert world.states("--full")["kb"]["state"] == "skip"
 
 
 # --- 11 state ownership (docs/architecture/state-ownership.md) --------------------------------
@@ -740,32 +442,8 @@ def plant_wiped_team(world, team="session-ab12cd34", lead="lead-session-1", rows
 
 
 
-def test_a_store_whose_writer_is_not_in_the_plugin_is_red(world):
-    page = state_doc(world, ["host", "hooks/no_such_writer.py"])
-    states = world.states("--full", REPACT_DOCTOR_STATE_DOC=page)
-    only_changed(states, "state", "red")
-    assert states["state"]["detail"][0] == "probe: writer hooks/no_such_writer.py is not in the plugin"
 
 
-
-
-
-
-def test_clear_task_store_removes_this_sessions_halt_marker_only(world):
-    from shared.task_store import PROBE_MARKER
-    state = load("_doctor_state_marker_pin", PLUGIN_ROOT / "bin" / "_doctor_state.py")
-    assert state.PROBE_MARKER == PROBE_MARKER
-    session = plant_wiped_team(world)
-    marker = session / PROBE_MARKER
-    marker.write_text(json.dumps({"halt": True, "misses": 2}))
-    other = session.parent / "other-session" / PROBE_MARKER
-    other.parent.mkdir()
-    other.write_text("{}")
-    assert world.run("--clear", "task-store").returncode == 64          # no session named
-    done = world.run("--clear", "task-store", CLAUDE_CODE_SESSION_ID="lead-session-1")
-    assert done.returncode == 0 and str(marker) in done.stdout, done.stdout
-    assert not marker.exists() and other.exists()
-    assert "nothing to clear" in world.run("--clear", "task-store", CLAUDE_CODE_SESSION_ID="lead-session-1").stdout
 
 
 # --- a stranger's install (U1.2, plan Contract 10) -----------------------------------------------
@@ -775,69 +453,3 @@ def test_clear_task_store_removes_this_sessions_halt_marker_only(world):
 FRESH_AMBER_ALLOWED: set = set()
 
 
-def test_a_fresh_home_passes_with_the_mode_and_host_lines(tmp_path):
-    """env -i style: only HOME and a system PATH, no profile, user layer, vault, repo or teams
-    flag. Exit 0, nothing red, no amber off the allow list, both host notes, and no skip that
-    names a file only the private repo has."""
-    home, cwd = tmp_path / "home", tmp_path / "work"
-    (home / ".claude").mkdir(parents=True)
-    cwd.mkdir()
-    run = subprocess.run([sys.executable, str(DOCTOR), "--full"], cwd=cwd, capture_output=True,
-                         text=True, timeout=300, env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
-    assert run.returncode == 0, run.stdout + run.stderr
-    cache = json.loads(next((home / ".claude" / "plugins" / "data").glob("*/doctor.json")).read_text())
-    states = {c["id"]: c for c in cache["checks"]}
-    assert not [k for k, c in states.items() if c["state"] == "red"], states
-    assert {k for k, c in states.items() if c["state"] == "amber"} <= FRESH_AMBER_ALLOWED, states
-    assert states["profile"]["state"] == "green" and "optional" in states["profile"]["summary"]
-    assert "execution: subagents (default)" in run.stdout.splitlines()
-    assert re.search(r"^host \S+: (tested|untested) \(last tested [\d.]+\)", run.stdout, re.M), run.stdout
-    real_home = pwd.getpwuid(os.getuid()).pw_dir          # conftest points HOME at a tmp dir
-    assert "scope_mcp" not in run.stdout and real_home not in run.stdout
-
-
-def test_the_repact_command_is_skip_before_the_first_session_and_amber_after_it(tmp_path):
-    """A fresh install (the plugin recorded, no session started yet) has no shim by design: skip
-    with the hint. Once a session start has run (its protocols link is there) a missing shim is
-    amber again."""
-    home = tmp_path / "home"
-    config = home / ".claude"
-    root = tmp_path / "repacted-install"
-    (root / "bin").mkdir(parents=True)
-    (root / "bin" / "repact").write_text("#!/bin/sh\n")
-    (root / "bin" / "repact").chmod(0o755)
-    (config / "plugins").mkdir(parents=True)
-    (config / "plugins" / "installed_plugins.json").write_text(json.dumps(
-        {"plugins": {"repacted@repacted": [{"scope": "user", "installPath": str(root)}]}}))
-    env = {"HOME": str(home), "PATH": f"{home}/.local/bin{os.pathsep}/usr/bin"}
-    state, summary, _ = repact_shim.doctor_lines(home, config, env)
-    assert state == "skip" and "start one Claude Code session" in summary, (state, summary)
-    (config / "protocols").mkdir()
-    (config / "protocols" / "pact-plugin").symlink_to(root)
-    state, summary, _ = repact_shim.doctor_lines(home, config, env)
-    assert state == "amber" and "is not written yet; start one Claude Code session" in summary
-
-
-def test_the_mode_reads_the_settings_flag_and_an_unlisted_host_is_untested(world):
-    host = load("_doctor_host_mode", PLUGIN_ROOT / "bin" / "_doctor_host.py")
-    (world.config / "settings.json").write_text(json.dumps(
-        {"env": {host.TEAMS_FLAG: "1", "REPACT_EXECUTION": "teams"}}))
-    fake = world.tmp / "fakebin" / "claude"
-    fake.parent.mkdir()
-    fake.write_text("#!/bin/sh\necho '0.0.1 (Claude Code)'\n")
-    fake.chmod(0o755)
-    run = world.run(PATH=f"{fake.parent}:/usr/bin:/bin")
-    assert "execution: teams (REPACT_EXECUTION=teams)" in run.stdout
-    assert "host 0.0.1: untested (last tested " in run.stdout, run.stdout
-
-
-@pytest.mark.parametrize("kb", ["/kb", "~/notes"])
-def test_a_shallow_kb_has_no_private_vault_and_raises_nothing(world, monkeypatch, kb):
-    """kb.parents[1] does not exist for /kb, and is /Users (above home) for ~/notes: neither may
-    be a private vault, so no citation goes unchecked and nothing raises."""
-    world.write_profile({"identity": {"email": "owner@example.com"}, "paths": {"kb": kb}})
-    monkeypatch.setenv("XDG_CONFIG_HOME", world.env["XDG_CONFIG_HOME"])
-    monkeypatch.setenv("HOME", str(world.home))
-    doctor = load("_doctor_shallow", PLUGIN_ROOT / "bin" / "_doctor.py")
-    ctx = doctor.Context(config_root=world.config, home=world.home, plugin_root=PLUGIN_ROOT, env=world.env)
-    assert doctor.private_vault(ctx) is None

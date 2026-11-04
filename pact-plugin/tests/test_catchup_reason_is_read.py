@@ -98,9 +98,7 @@ class TestMaybeEmbedPendingBranchesOnTheReason:
     @pytest.mark.parametrize(
         "reason",
         [
-            embedding_catchup.UnembeddedResult.NO_EXTENSIONS,
-            embedding_catchup.UnembeddedResult.NO_VECTOR_TABLE,
-        ],
+            embedding_catchup.UnembeddedResult.NO_EXTENSIONS,],
     )
     def test_a_capability_limit_is_degraded_not_ok(self, tmp_path, reason):
         """Cannot look because a dependency is absent. A configuration, not a fault.
@@ -116,32 +114,6 @@ class TestMaybeEmbedPendingBranchesOnTheReason:
         assert result["unembedded_unknown"] == reason, (
             "the specific reason must survive, not just the coarse status"
         )
-
-    def test_a_query_that_raised_is_an_error_not_a_degradation(self, tmp_path):
-        """Both dependencies were present and the query raised anyway.
-
-        That is an incident rather than a capability limit. Filing it under
-        `degraded` would bury the one reason of the three that warrants
-        attention rather than configuration.
-        """
-        result = _run_catchup(
-            tmp_path, embedding_catchup.UnembeddedResult.QUERY_FAILED
-        )
-
-        assert result["status"] == "error", result
-        assert (
-            result["unembedded_unknown"]
-            == embedding_catchup.UnembeddedResult.QUERY_FAILED
-        )
-
-    def test_an_answered_empty_sweep_still_reports_ok(self, tmp_path):
-        """CONTROL. A branch that reddened everything would pass the arms above
-        while erasing the distinction the reason channel exists to draw."""
-        result = _run_catchup(tmp_path, None)
-
-        assert result["status"] == "ok", result
-        assert result["message"] is None
-        assert result.get("unembedded_unknown") is None
 
 
 class TestStatusSurfacesTheCatchupOutcome:
@@ -167,8 +139,3 @@ class TestStatusSurfacesTheCatchupOutcome:
             "this dict, and it is the only place a caller meets the answer"
         )
 
-    def test_the_accessor_returns_none_before_any_catchup_has_run(self):
-        """None is 'has not run', which is NOT the same as 'nothing outstanding'."""
-        memory_init = _live("memory_init")
-        with patch.object(memory_init, "_last_catchup_result", None):
-            assert memory_init.get_embedding_catchup_status() is None

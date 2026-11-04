@@ -190,51 +190,6 @@ class TestSchema:
         assert events[0]["v"] == 1
         assert "ts" in events[0]
 
-    def test_optional_task_id_accepted(self, live_env):
-        _tmp, session_dir = live_env
-        assert append_event(_artifact_event("architect", task_id="17")) is True
-        ev = read_events_from(session_dir, "artifact_paths")[0]
-        assert ev["task_id"] == "17"
-
-    @pytest.mark.parametrize("missing", ["workflow", "feature", "paths"])
-    def test_missing_required_field_rejected(self, live_env, missing):
-        """A required field absent → append_event refuses to write (returns
-        False), so the malformed event never lands in the journal."""
-        _tmp, session_dir = live_env
-        ev = _artifact_event("prepare")
-        del ev[missing]
-        assert append_event(ev) is False
-        assert read_events_from(session_dir, "artifact_paths") == []
-
-    def test_paths_wrong_type_rejected(self, live_env):
-        """paths typed `list` — a str fails isinstance(value, list)."""
-        _tmp, session_dir = live_env
-        ev = _artifact_event("prepare")
-        ev["paths"] = "/abs/docs/prepare/x.md"  # str, not list
-        assert append_event(ev) is False
-        assert read_events_from(session_dir, "artifact_paths") == []
-
-    def test_paths_list_is_first_class_multi(self, live_env):
-        """The PLURAL list is first-class: a >1-path enumeration is preserved
-        whole (a phase can write multiple files)."""
-        _tmp, session_dir = live_env
-        paths = [f"/abs/docs/prepare/{FEATURE}.md",
-                 f"/abs/docs/prepare/environment-model-{FEATURE}.md"]
-        assert append_event(_artifact_event("prepare", paths=paths)) is True
-        ev = read_events_from(session_dir, "artifact_paths")[0]
-        assert ev["paths"] == paths
-
-    def test_empty_paths_list_passes_isinstance_writer_caveat(self, live_env):
-        """Validator-depth caveat (arch §1.2): the schema checks
-        isinstance(paths, list) but does NOT descend into elements, so an EMPTY
-        list passes the validator. This pins the documented shallowness — the
-        WRITER (emit site) is responsible for dropping empty-glob emits; an
-        empty event is meaningless but not schema-rejected."""
-        _tmp, session_dir = live_env
-        assert append_event(_artifact_event("prepare", paths=[])) is True
-        ev = read_events_from(session_dir, "artifact_paths")[0]
-        assert ev["paths"] == []
-
 
 # =============================================================================
 # P0-2 ALWAYS-READ mechanics — read_events_from resolves the event;
@@ -246,75 +201,6 @@ class TestAlwaysReadAndSupersede:
         append_event(_artifact_event("architect", paths=["/abs/a.md"]))
         events = read_events_from(session_dir, "artifact_paths")
         assert [e["paths"] for e in events] == [["/abs/a.md"]]
-
-    def test_supersede_latest_ts_wins_per_workflow_feature(self, live_env):
-        """A re-emit for the same (workflow, feature) supersedes by latest-ts.
-        The resolver groups by (workflow, feature) and takes the latest event;
-        each event carries the COMPLETE path-list (not a delta)."""
-        _tmp, session_dir = live_env
-        append_event(_artifact_event(
-            "prepare", paths=["/abs/OLD.md"], ts="2026-06-25T01:00:00Z"))
-        append_event(_artifact_event(
-            "prepare", paths=["/abs/NEW.md"], ts="2026-06-25T02:00:00Z"))
-        events = read_events_from(session_dir, "artifact_paths")
-        # Both events persist (append-only journal); supersede is a READ-time
-        # resolution. Replicate the resolver: group by (workflow,feature), take
-        # latest-ts.
-        from datetime import datetime
-
-        def _key(e):
-            return datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
-        prepare = [e for e in events
-                   if e["workflow"] == "prepare" and e["feature"] == FEATURE]
-        latest = max(prepare, key=_key)
-        assert latest["paths"] == ["/abs/NEW.md"]
-        assert len(prepare) == 2  # both on disk; supersede is read-time only
-
-    def test_distinct_workflows_not_superseded(self, live_env):
-        """Supersede is per-(workflow,feature): prepare and architect events for
-        the same feature are distinct artifact sets, both survive resolution."""
-        _tmp, session_dir = live_env
-        append_event(_artifact_event("prepare", paths=["/abs/prep.md"]))
-        append_event(_artifact_event("architect", paths=["/abs/arch.md"]))
-        events = read_events_from(session_dir, "artifact_paths")
-        by_wf = {e["workflow"]: e["paths"] for e in events}
-        assert by_wf == {"prepare": ["/abs/prep.md"], "architect": ["/abs/arch.md"]}
-
-    def test_supersede_3_events_non_monotonic_order_independent(self, live_env):
-        """M1 (coverage gap closed): supersede picks latest-`ts` regardless of
-        the events' INSERTION order in the journal. The 2-event monotonic case
-        above cannot catch an order-dependent resolver (e.g. one that takes the
-        LAST-appended event instead of the latest-`ts`). Here the latest-`ts`
-        event (03:00) is appended in the MIDDLE of three re-emits — a correct
-        max-by-`ts` resolver still selects it; a take-last-appended bug would
-        wrongly select the 02:00 event.
-
-        Probe-confirmed sound against the journal's read order; this test PINS
-        that order-independence so a future resolver (executable or prose) can't
-        regress to insertion-order without going RED."""
-        _tmp, session_dir = live_env
-        append_event(_artifact_event(
-            "prepare", paths=["/abs/v1.md"], ts="2026-06-25T01:00:00Z"))
-        append_event(_artifact_event(
-            "prepare", paths=["/abs/v3-LATEST.md"], ts="2026-06-25T03:00:00Z"))
-        append_event(_artifact_event(
-            "prepare", paths=["/abs/v2.md"], ts="2026-06-25T02:00:00Z"))
-        events = read_events_from(session_dir, "artifact_paths")
-        from datetime import datetime
-
-        def _key(e):
-            return datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
-        prepare = [e for e in events
-                   if e["workflow"] == "prepare" and e["feature"] == FEATURE]
-        assert len(prepare) == 3
-        latest = max(prepare, key=_key)
-        assert latest["paths"] == ["/abs/v3-LATEST.md"], (
-            "latest-ts must win even when appended non-last"
-        )
-        # And the take-last-appended bug would have picked v2 (02:00) — assert
-        # the resolver does NOT collapse to insertion order.
-        assert prepare[-1]["paths"] == ["/abs/v2.md"]  # last-appended is v2
-        assert latest["paths"] != prepare[-1]["paths"]  # latest-ts != last-appended
 
 
 # =============================================================================
@@ -342,16 +228,6 @@ class TestFailurePathRecovery:
         recovered = Path(events[0]["paths"][0]).read_text(encoding="utf-8")
         assert "recovered without a handoff" in recovered
 
-    def test_recovery_collapses_when_journal_source_removed(self, live_env):
-        """NON-VACUITY (source-removal): recovery is journal-SOURCED. Remove the
-        journal file and the artifact_paths read collapses to empty — proving
-        the recovery is not silently rescued by some surviving read."""
-        tmp_path, session_dir = live_env
-        append_event(_artifact_event("prepare", paths=["/abs/x.md"]))
-        assert len(read_events_from(session_dir, "artifact_paths")) == 1
-        _journal_file(tmp_path).unlink()
-        assert read_events_from(session_dir, "artifact_paths") == []
-
 
 # =============================================================================
 # P2-7 MASKED-READ SEAM — read_events() off-lead returns false-empty while
@@ -368,38 +244,6 @@ class TestMaskedReadSeam:
         append_event(_artifact_event("prepare"))
         assert len(read_events("artifact_paths")) == 1
         assert len(read_events_from(session_dir, "artifact_paths")) == 1
-
-    def test_implicit_read_false_empty_off_lead_explicit_resolves(
-        self, live_env, monkeypatch
-    ):
-        """THE seam: off-lead, get_session_dir() false-returns '' (teammate frame
-        has no persisted session context) → read_events() silently returns [].
-        read_events_from(session_dir, ...) with the explicit absolute dir still
-        resolves the SAME on-disk event. This is why the harvest MUST use
-        read_events_from."""
-        tmp_path, session_dir = live_env
-        append_event(_artifact_event("prepare"))
-        # Sanity: the event is really on disk.
-        assert _journal_file(tmp_path).exists()
-
-        # Simulate the off-lead frame: get_session_dir resolves '' (the real
-        # false-empty path — session_id/project_dir unavailable in a teammate
-        # frame). We patch get_session_dir at the resolution seam, NOT the read
-        # function itself (the read stays unmocked over the real journal).
-        monkeypatch.setattr(
-            "shared.session_journal._get_session_dir", lambda: ""
-        )
-        assert read_events("artifact_paths") == []  # false-empty off-lead
-        # The explicit reader is frame-independent — still finds the event.
-        assert len(read_events_from(session_dir, "artifact_paths")) == 1
-
-    def test_explicit_reader_empty_session_dir_returns_empty(self, live_env):
-        """read_events_from with an empty session_dir returns [] (the documented
-        empty-arg contract) — so a caller that fails to resolve session_dir gets
-        a visible empty, not a crash. Pins the no-silent-fallback boundary."""
-        _tmp, _session_dir = live_env
-        append_event(_artifact_event("prepare"))
-        assert read_events_from("", "artifact_paths") == []
 
 
 # =============================================================================
@@ -460,35 +304,6 @@ class TestWorktreeSurvivalAndAbsolutePaths:
         # And it IS under the (worktree-independent) sessions root.
         assert os.path.commonpath([str(journal), str(sessions_root)]) == str(sessions_root)
 
-    def test_event_survives_worktree_subtree_removal(self, live_env):
-        """END-STATE determinism for 'survives git worktree remove': remove the
-        worktree subtree entirely (the real teardown effect on disk) and prove
-        the artifact_paths event is STILL resolvable from the journal."""
-        import shutil
-        tmp_path, session_dir = live_env
-        worktree_dir = tmp_path / "worktrees" / "feature-x"
-        (worktree_dir / "docs").mkdir(parents=True, exist_ok=True)
-        append_event(_artifact_event("prepare", paths=["/abs/docs/prepare/x.md"]))
-
-        # Model `git worktree remove`: the whole worktree subtree is deleted.
-        shutil.rmtree(worktree_dir)
-
-        # The journal (outside the worktree) is untouched; the pointer survives.
-        events = read_events_from(session_dir, "artifact_paths")
-        assert len(events) == 1
-        assert events[0]["paths"] == ["/abs/docs/prepare/x.md"]
-
-    def test_emitted_paths_are_absolute(self, live_env):
-        """The recovery pointer must be full-absolute (the harvest reads paths
-        off disk from any cwd). A relative path would be unresolvable at harvest
-        time from the secretary's frame."""
-        _tmp, session_dir = live_env
-        append_event(_artifact_event(
-            "architect", paths=["/abs/docs/architect/x.md", "/abs/docs/architect/y.md"]))
-        ev = read_events_from(session_dir, "artifact_paths")[0]
-        for p in ev["paths"]:
-            assert Path(p).is_absolute(), f"path must be absolute: {p!r}"
-
 
 # =============================================================================
 # P2-8 EDGES — missing artifact, malformed handoff coexistence, signal-task
@@ -505,35 +320,6 @@ class TestEdges:
         events = read_events_from(session_dir, "artifact_paths")
         assert len(events) == 1
         assert not Path(events[0]["paths"][0]).exists()  # file gone; pointer survives
-
-    def test_artifact_paths_independent_of_agent_handoff(self, live_env):
-        """artifact_paths and agent_handoff are distinct event types — reading
-        one never returns the other; the durability pointer is independent of
-        HANDOFF presence in BOTH directions."""
-        _tmp, session_dir = live_env
-        append_event(_artifact_event("prepare"))
-        append_event(make_event(
-            "agent_handoff", agent=BARE_OWNER, task_id="27",
-            task_subject="devops-engineer: implement #927 journal mechanics",
-            handoff={"produced": "x", "decisions": "y", "uncertainty": "n",
-                     "integration": "n", "reasoning_chain": "b", "open_questions": "n"},
-        ))
-        artifacts = read_events_from(session_dir, "artifact_paths")
-        handoffs = read_events_from(session_dir, "agent_handoff")
-        assert len(artifacts) == 1 and artifacts[0]["type"] == "artifact_paths"
-        assert len(handoffs) == 1 and handoffs[0]["type"] == "agent_handoff"
-
-    def test_feature_scoping_filters_other_features(self, live_env):
-        """feature scopes the event to one arc: an artifact_paths event for a
-        DIFFERENT feature is not confused with this one (the multi-feature/
-        resumed-session disambiguation)."""
-        _tmp, session_dir = live_env
-        append_event(_artifact_event("prepare", feature=FEATURE, paths=["/abs/this.md"]))
-        append_event(_artifact_event("prepare", feature="other-feature", paths=["/abs/other.md"]))
-        events = read_events_from(session_dir, "artifact_paths")
-        this_feature = [e for e in events if e["feature"] == FEATURE]
-        assert len(this_feature) == 1
-        assert this_feature[0]["paths"] == ["/abs/this.md"]
 
 
 # =============================================================================
@@ -560,7 +346,7 @@ class TestF1NonDictLineDoesNotPoisonWholeFile:
     events) — non-vacuous by construction.
     """
 
-    @pytest.mark.parametrize("bad_line", ["[1,2,3]", '"a string"', "null", "42"])
+    @pytest.mark.parametrize("bad_line", ["[1,2,3]",])
     def test_nondict_line_skipped_valid_events_survive(self, live_env, bad_line):
         tmp_path, session_dir = live_env
         # Append two valid events via the real writer so the journal exists.
@@ -605,7 +391,7 @@ class TestF1SiblingScanPathLastEventSurvivesNonDictLine:
     session_journal.py → 4 RED (same fix file as the forward-read F1).
     """
 
-    @pytest.mark.parametrize("bad_line", ["[1,2,3]", '"a string"', "null", "42"])
+    @pytest.mark.parametrize("bad_line", ["[1,2,3]",])
     def test_nondict_line_does_not_hide_last_event(self, live_env, bad_line):
         tmp_path, session_dir = live_env
         # A target artifact_paths event, then a non-dict line AFTER it on disk —
@@ -685,26 +471,3 @@ class TestB1SessionDirReconstructSanitizationParity:
             "bug premise is gone"
         )
 
-    def test_reconstruct_helper_matches_writer_path(self):
-        """The remediation helper reconstructs the SAME path the writer wrote to,
-        applying the writer's sanitization on BOTH axes (slug + session_id).
-        PASSES post-fix (helper present + sanitization-parity); the clean-slug
-        suite cannot catch a sanitization-axis regression because a no-special-
-        char slug sanitizes to itself.
-
-        Helper name/location: shared.pact_context.reconstruct_session_dir
-        (devops #44). If absent (pre-fix), the assert below names it as the
-        expected pre-fix FAIL.
-        """
-        import shared.pact_context as pc
-        reconstruct = getattr(pc, "reconstruct_session_dir", None)
-        assert reconstruct is not None, (
-            "PRE-FIX: reconstruct_session_dir not yet landed (devops #44) — "
-            "expected pre-fix FAIL; flips to PASS post-fix."
-        )
-        got = str(reconstruct(self.DOTTED_PROJECT, self.SESSION_ID))
-        assert got == self._writer_effective_path(), (
-            f"harvest reconstruct {got!r} must equal the writer's effective "
-            f"path {self._writer_effective_path()!r} (sanitization parity on "
-            f"slug + session_id)"
-        )

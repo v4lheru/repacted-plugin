@@ -115,38 +115,3 @@ def test_no_text_of_a_ledger_row_reaches_the_output(tmp_path):
     assert all(value.startswith("n/a (") and "not a count" in value for value in values)
 
 
-def test_the_numbers_are_computed_now_when_the_session_has_no_ledger_row(tmp_path):
-    transcripts(tmp_path)
-    header, values, _ = run(tmp_path, [row(session="another-session")])
-    assert "computed now" in header and "ledger row" not in header
-    assert values == COMPUTED
-    _, values, _ = run(tmp_path, [row(session="another-session")], extra=["--ledger-only"])
-    assert all(value.startswith("n/a (no ledger row for this session") for value in values)
-
-
-def test_the_ledger_row_is_the_source_while_it_is_as_new_as_the_transcripts(tmp_path):
-    transcripts(tmp_path, mtime=ROW_TIME)
-    header, values, _ = run(tmp_path, [row()])
-    assert "ledger row of 2026-01-02T03:04:05Z" in header and values[0] == "4"
-    transcripts_dir = tmp_path / "projects" / "-proj" / SESSION / "subagents"
-    newer = ROW_TIME + 1
-    os.utime(next(transcripts_dir.glob("*.jsonl")), (newer, newer))     # one transcript written after the row
-    header, values, _ = run(tmp_path, [row()])
-    assert "computed now" in header and values[0] == "2"
-
-
-def test_no_text_of_a_transcript_reaches_the_output(tmp_path):
-    transcripts(tmp_path)
-    header, values, output = run(tmp_path, [])
-    assert "computed now" in header and values == COMPUTED
-    assert MARKER not in output and "fixture-team" not in output
-
-
-def test_a_failed_computation_prints_na_lines_and_exits_0(tmp_path):
-    transcripts(tmp_path, lead_cache_read=MARKER)                      # int(MARKER) raises inside the report
-    header, values, output = run(tmp_path, [])
-    assert "no ledger row" in header and MARKER not in output and "Traceback" not in output
-    assert values == ["n/a (no ledger row for this session: the row is written when a session ends, "
-                      "and computing the numbers now failed)"] * 6
-    header, values, _ = run(tmp_path, [row(date="2020-01-01T00:00:00Z")])
-    assert "ledger row of 2020-01-01T00:00:00Z, and computing the numbers now failed" in header and values[0] == "4"

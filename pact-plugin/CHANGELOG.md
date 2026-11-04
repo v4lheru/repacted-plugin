@@ -2,6 +2,18 @@
 
 Release notes for rePACTed, newest first. Entries start at the first public release.
 
+## 2.1.3 (2026-11-03)
+
+The shell guards also check Monitor commands, each specialist gets its own compaction cap, the lead no longer asks you to compact, a message you type ends unattended mode, and the red-first check reads .NET tests. Known limits in the release notes.
+
+- The shell guards check Monitor commands as well as Bash ones. Claude Code ignores a hook's rewrite of a Monitor command, so a rewrite becomes a refusal there. Monitor output is not scanned for secrets.
+- Each specialist caps its own compaction window (120,000 tokens for the secretary and auditor, 200,000 for the rest); the secretary runs at low effort and the auditor at medium.
+- The test suite is far smaller: the guard decisions the old suite checked are kept as recorded tables, replayed through the real hooks.
+- The lead no longer warns about its own context or asks you to compact; Claude Code compacts on its own and the work goes on.
+- A message you type in the session turns unattended mode off. Teammate messages, notifications, scheduled wake-ups and the launch prompt of an unattended run do not.
+- The red-first check credits a `dotnet test --filter` red, and a red run on the work with the fix reverted. A green that only sets worker or build flags still covers the red.
+- Teammates are told never to leave work waiting on an approval prompt, and to spell commit and write commands literally.
+
 ## 2.1.2 (2026-10-23)
 
 Fixes from an outside review of 2.1.1, and the upstream PACT 4.8.2 to 4.8.6 fixes that apply. Known limits in the release notes.

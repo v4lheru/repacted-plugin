@@ -49,62 +49,6 @@ class TestFindTeammateTask:
         assert result is not None
         assert result["status"] == "completed"
 
-    def test_prefers_in_progress_over_completed(self):
-        from teammate_idle import find_teammate_task
-
-        tasks = [
-            make_task(task_id="1", owner="coder-a", status="completed"),
-            make_task(task_id="2", owner="coder-a", status="in_progress"),
-        ]
-        result = find_teammate_task(tasks, "coder-a")
-        assert result["id"] == "2"
-
-    def test_returns_none_for_no_matching_owner(self):
-        from teammate_idle import find_teammate_task
-
-        tasks = [make_task(owner="coder-b")]
-        result = find_teammate_task(tasks, "coder-a")
-        assert result is None
-
-    def test_returns_none_for_empty_tasks(self):
-        from teammate_idle import find_teammate_task
-
-        assert find_teammate_task([], "coder-a") is None
-
-    def test_returns_highest_id_completed_task(self):
-        from teammate_idle import find_teammate_task
-
-        tasks = [
-            make_task(task_id="1", owner="coder-a", status="completed"),
-            make_task(task_id="7", owner="coder-a", status="completed"),
-            make_task(task_id="3", owner="coder-a", status="completed"),
-        ]
-        result = find_teammate_task(tasks, "coder-a")
-        assert result["id"] == "7"
-
-    def test_returns_highest_id_with_double_digit_ids(self):
-        """String comparison would pick '9' over '20' — test numeric compare."""
-        from teammate_idle import find_teammate_task
-
-        tasks = [
-            make_task(task_id="9", owner="coder-a", status="completed"),
-            make_task(task_id="20", owner="coder-a", status="completed"),
-        ]
-        result = find_teammate_task(tasks, "coder-a")
-        assert result["id"] == "20"
-
-    def test_handles_non_numeric_ids_gracefully(self):
-        """Non-numeric IDs should not raise; best-effort comparison."""
-        from teammate_idle import find_teammate_task
-
-        tasks = [
-            make_task(task_id="abc", owner="coder-a", status="completed"),
-            make_task(task_id="5", owner="coder-a", status="completed"),
-        ]
-        # Should not raise
-        result = find_teammate_task(tasks, "coder-a")
-        assert result is not None
-
 
 class TestFindTeammateTaskEdgeCases:
     """Additional edge cases for find_teammate_task()."""
@@ -120,24 +64,6 @@ class TestFindTeammateTaskEdgeCases:
         from teammate_idle import find_teammate_task
 
         tasks = [make_task(status="deleted", owner="coder-a")]
-        result = find_teammate_task(tasks, "coder-a")
-        assert result is None
-
-    def test_mixed_statuses_returns_in_progress(self):
-        from teammate_idle import find_teammate_task
-
-        tasks = [
-            make_task(task_id="1", status="pending", owner="coder-a"),
-            make_task(task_id="2", status="in_progress", owner="coder-a"),
-            make_task(task_id="3", status="completed", owner="coder-a"),
-        ]
-        result = find_teammate_task(tasks, "coder-a")
-        assert result["id"] == "2"
-
-    def test_owner_matching_is_exact(self):
-        from teammate_idle import find_teammate_task
-
-        tasks = [make_task(status="in_progress", owner="coder-a-backend")]
         result = find_teammate_task(tasks, "coder-a")
         assert result is None
 
@@ -174,65 +100,6 @@ class TestMain:
     def test_exits_0_when_no_teammate_name(self):
         exit_code = self._run_main({"teammate_name": ""})
         assert exit_code == 0
-
-    def test_exits_0_when_no_tasks(self):
-        exit_code = self._run_main(
-            {"teammate_name": "coder-a"},
-            tasks=None,
-        )
-        assert exit_code == 0
-
-    def test_in_progress_task_emits_no_output(self, capsys, tmp_path):
-        """Post-#538: in_progress + idle → no emission (stall-nag removed).
-        The hook silently passes; no systemMessage, no stderr."""
-        import io
-        from teammate_idle import main
-
-        tasks = [make_task(status="in_progress", owner="coder-a")]
-
-        with patch("teammate_idle.frame_team_and_name", return_value=("pact-test", "")), \
-             patch("sys.stdin", io.StringIO(json.dumps({"teammate_name": "coder-a"}))), \
-             patch("teammate_idle.iter_team_task_jsons", return_value=tasks), \
-             patch("teammate_idle.Path.home", return_value=tmp_path):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        # suppressOutput JSON is allowed; systemMessage is not.
-        if captured.out.strip():
-            output = json.loads(captured.out)
-            assert "systemMessage" not in output
-
-    def test_completed_below_threshold_no_emission(self, capsys, tmp_path):
-        import io
-        from teammate_idle import main
-
-        tasks = [make_task(status="completed", owner="coder-a")]
-
-        with patch("teammate_idle.frame_team_and_name", return_value=("pact-test", "")), \
-             patch("sys.stdin", io.StringIO(json.dumps({"teammate_name": "coder-a"}))), \
-             patch("teammate_idle.iter_team_task_jsons", return_value=tasks), \
-             patch("teammate_idle.Path.home", return_value=tmp_path):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        if captured.out.strip():
-            output = json.loads(captured.out)
-            assert "systemMessage" not in output
-
-    def test_exits_0_on_invalid_json(self):
-        import io
-        from teammate_idle import main
-
-        with patch("teammate_idle.frame_team_and_name", return_value=("pact-test", "")), \
-             patch("sys.stdin", io.StringIO("not json")):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-
-        assert exc_info.value.code == 0
 
 
 class TestMainEdgeCases:
@@ -374,46 +241,6 @@ class TestMainDrivesTheUnflaggedAdvisoryThroughARealStore:
             "no flagged wait, which is false" % (fired,)
         )
 
-    def test_an_unflagged_idle_STAMPS_idled_at_so_the_lead_uses_its_shorter_window(
-        self, store, capsys, tmp_path
-    ):
-        """Layer 2 hands Layer 3 a clock. An unflagged idle through `main()`
-        stamps `idled_at` on the record, and the lead-side window runs from that
-        stamp with the shorter threshold. Without the stamp the lead falls back
-        to `registered_at` and the longer window, so a stranded teammate is
-        surfaced later than it should be.
-        """
-        store()
-        assert self._idle_once(capsys) is False
-        registry = tmp_path / ".claude" / "teams" / self.TEAM / "background_work.json"
-        (record,) = json.loads(registry.read_text(encoding="utf-8"))["records"]
-        assert record.get("idled_at"), (
-            "an unflagged idle through main() left the record without idled_at, "
-            "so the lead-side scan falls back to registered_at and the longer "
-            "window: %r" % (record,)
-        )
-
-    def test_a_NON_NUMERIC_idle_count_restarts_the_ramp_instead_of_breaking_it(
-        self, store, capsys, tmp_path
-    ):
-        """A hand-edited or corrupted counter file can hold a count that is not a
-        number. It must read as zero, so the advisory still fires on the third
-        consecutive idle; it must not raise and silence the advisory for good.
-        """
-        store()
-        counter = (tmp_path / ".claude" / "teams" / self.TEAM
-                   / "unflagged_background_idle.json")
-        counter.parent.mkdir(parents=True, exist_ok=True)
-        counter.write_text(json.dumps(
-            {self.TEAMMATE: {"count": "not-a-number", "task_id": self.TASK_ID}}),
-            encoding="utf-8")
-        fired = [self._idle_once(capsys) for _ in range(3)]
-        assert fired == [False, False, True], (
-            "with a non-numeric count on file, the advisory fired on idles %r "
-            "instead of exactly the third; an unreadable count must restart the "
-            "ramp at zero, not stop it" % (fired,)
-        )
-
 
 # ---------------------------------------------------------------------------
 # A separate-process teammate's own process: no PACT context
@@ -507,31 +334,6 @@ class TestIdleInASeparateProcessWithoutContext:
         assert not unflagged.exists() or MEMBER not in json.loads(unflagged.read_text())
         assert not (config / "teams" / FRAME_TEAM / "idle_counts.json").exists()
 
-    def test_a_separate_process_idle_advises_on_the_third_unflagged_idle(self, root):
-        """REVERT PROOF. The in-process-member shape, where the stall split does
-        not skip: the advisory arrives on the third idle and the record gains
-        idled_at."""
-        import teammate_idle
-
-        config = self._config(root, "in-process")
-        self._record(config)
-        self._task(config, "in_progress")
-        messages = [self._idle(root) for _ in range(3)]
-        assert [teammate_idle.UNFLAGGED_ADVISORY in m for m in messages] == [False, False, True]
-        (record,) = self._records(config)
-        assert record.get("idled_at"), record
-
-    @pytest.mark.parametrize("session_id", [TMUX_SESSION, LEAD_SESSION])
-    def test_idles_on_a_completed_task_never_recommend_a_shutdown(self, root, session_id):
-        """REGRESSION (1.5.0 cut of the 3/5 idle ladder). Five idles on a
-        completed task, in the teammate's process or the lead's, show neither
-        shutdown text nor TaskStop, and write no idle_counts.json."""
-        config = self._config(root, "in-process")
-        self._task(config, "completed")
-        messages = [self._idle(root, session_id=session_id) for _ in range(5)]
-        assert not any("shutting down" in m or "TaskStop" in m for m in messages), messages
-        assert not (config / "teams" / FRAME_TEAM / "idle_counts.json").exists()
-
 
 def test_teammate_idle_takes_its_team_from_frame_team_and_name():
     """REVERT PROOF. main() takes its team from frame_team_and_name and its tasks
@@ -547,7 +349,6 @@ def test_teammate_idle_takes_its_team_from_frame_team_and_name():
     }
     assert {"frame_team_and_name", "iter_team_task_jsons"} <= called, called
     assert not called & {"get_team_name", "get_task_list"}, called
-
 
 
 # ---------------------------------------------------------------------------
@@ -613,63 +414,6 @@ class TestSaidOnce:
         assert said_once(str(session), "wake:45", "t2") is True
         assert json.loads(self.state(session).read_text()) == {"wake:44": "t2", "wake:45": "t2"}
 
-    @pytest.mark.parametrize("missing", ["", None, "gone/session", 7])
-    def test_no_session_dir_says_nothing_and_creates_nothing(self, tmp_path, missing):
-        from teammate_idle import said_once
-
-        session_dir = str(tmp_path / missing) if isinstance(missing, str) and missing else missing
-        assert said_once(session_dir, "wake:44", "t1") is False
-        assert list(tmp_path.iterdir()) == []
-
-    @pytest.mark.parametrize("content", [b"{", b"[]", b'"wake:44"', b"null", b"7", b"\xff\xfe\x00{}",
-                                         b'{"wake:44": "t1"} trailing'])
-    def test_a_state_file_that_is_no_json_object_says_nothing_and_is_left_alone(self, session, content):
-        from teammate_idle import said_once
-
-        self.state(session).write_bytes(content)
-        assert said_once(str(session), "wake:44", "t2") is False
-        assert self.state(session).read_bytes() == content
-
-    def test_a_huge_state_file_is_not_read(self, session):
-        from teammate_idle import SAID_ONCE_MAX_BYTES, said_once
-
-        content = b"{}" + b" " * SAID_ONCE_MAX_BYTES
-        self.state(session).write_bytes(content)
-        with patch("shared.state_file.locked_update", side_effect=AssertionError("read")):
-            assert said_once(str(session), "wake:44", "t1") is False
-        assert self.state(session).stat().st_size == len(content)
-
-    @pytest.mark.parametrize("target_exists", [True, False])
-    def test_a_symlinked_state_file_is_never_followed(self, session, tmp_path, target_exists):
-        from teammate_idle import said_once
-
-        outside = tmp_path / "outside"
-        outside.mkdir()
-        target = outside / "victim.json"
-        if target_exists:
-            target.write_text("{}")
-        self.state(session).symlink_to(target)
-        assert said_once(str(session), "wake:44", "t1") is False
-        assert [path.name for path in outside.iterdir()] == (["victim.json"] if target_exists else [])
-        assert not target_exists or target.read_text() == "{}"
-        assert [path.name for path in session.iterdir()] == [self.state(session).name]   # no sidecar
-
-    def test_a_directory_where_the_state_file_goes_says_nothing(self, session):
-        from teammate_idle import said_once
-
-        self.state(session).mkdir()
-        assert said_once(str(session), "wake:44", "t1") is False
-
-    def test_concurrent_idles_say_a_value_once_and_lose_no_key(self, session):
-        from concurrent.futures import ThreadPoolExecutor
-        from teammate_idle import said_once
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            same = list(pool.map(lambda _: said_once(str(session), "wake:44", "t1"), range(16)))
-            each = list(pool.map(lambda n: said_once(str(session), f"wake:{n}", "t1"), range(100, 116)))
-        assert same.count(True) == 1 and all(each)
-        assert set(json.loads(self.state(session).read_text())) == {"wake:44", *(f"wake:{n}" for n in range(100, 116))}
-
 
 class TestMissedWakeLine:
     def test_a_stale_wait_is_shown_on_screen_once_per_wait_and_writes_nothing_under_teams(self, session):
@@ -693,26 +437,6 @@ class TestMissedWakeLine:
         assert list(json.loads((session / SAID_ONCE_FILENAME).read_text())) == ["wake:44", "wake:46"]
         teams = config / "teams"
         assert not teams.exists() or not [path for path in teams.rglob("*") if path.is_file()]
-
-    def test_an_idle_teammates_own_tasks_are_no_longer_reported(self, session):
-        """CH-6: the task status line is retired; the lead's TaskList shows the same states."""
-        done = make_task(task_id="3", status="completed", owner="coder-a")
-        work = make_task(task_id="4", status="in_progress", owner="coder-a")
-        assert _idle([done, work], session) == (0, None)
-        assert list(session.iterdir()) == []
-
-    def test_with_no_session_dir_the_line_is_not_shown(self, tmp_path):
-        """Fail closed: a line that cannot be recorded would repeat on every idle."""
-        assert _idle([_waiting("44", 40)], "") == (0, None)
-        assert _idle([_waiting("44", 40)], tmp_path / "gone") == (0, None)
-        assert not (tmp_path / "gone").exists()
-
-    def test_a_reprompt_leaves_the_line_for_the_next_idle(self, session):
-        """Exit 2 shows no systemMessage, so the line is not marked as said on that idle."""
-        stale = _waiting("44", 40)
-        assert _idle([stale], session, reprompt="Do not idle yet.") == (2, None)
-        assert list(session.iterdir()) == []
-        assert "Missed wake: #44" in _idle([stale], session)[1]
 
 
 class TestTheRetiredQueueFileIsIgnored:

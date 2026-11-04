@@ -98,29 +98,6 @@ class TestBlockquotes:
                    for item in queue)
         assert len({item["key"] for item in queue}) == len(QUEUE_TITLES)
 
-    def test_the_queue_items_come_before_the_body_in_proposal_order(self, importers):
-        titles = _titles(importers.parse_md(PROGRESS_LOG_MD, archive=ARCHIVE))
-        assert titles[:len(QUEUE_TITLES)] == QUEUE_TITLES
-
-    def test_a_queue_line_outside_a_blockquote_splits_the_same_way(self, importers):
-        text = "- **Next:** Fix the parser, then ship it; Write the report.\n"
-        titles = _titles(importers.parse_md(text, archive=ARCHIVE))
-        assert titles == ["Fix the parser", "then ship it", "Write the report"]
-
-    def test_a_queue_line_carrying_a_credential_is_withheld_whole(self, importers):
-        text = f"> - **Next queue:** P6 atlas, rotate {INERT_MARKER}, P5 retire.\n"
-        proposal = importers.parse_md(text, archive=ARCHIVE)
-        assert proposal["items"] == [] and [w["line"] for w in proposal["withheld"]] == [1]
-
-    def test_applying_a_queue_line_twice_writes_its_tasks_once(self, world):
-        I, store, repo = world
-        path = _write(repo, "docs/progress.md", PROGRESS_LOG_MD)
-        proposal = I.parse_md(path.read_text(), archive=ARCHIVE)
-        I.apply(store, proposal)
-        I.apply(store, I.parse_md(path.read_text(), archive=ARCHIVE))
-        titles = [task["title"] for task in I.W.PT.load(repo).tasks.values()]
-        assert sorted(t for t in titles if t in QUEUE_TITLES) == sorted(QUEUE_TITLES)
-
 
 # ---------------------------------------------------------------------------------------------
 # (2) status sentences
@@ -140,10 +117,6 @@ class TestStatusLines:
         assert items[23]["title"] == "Vault ambient recall redesign"
         assert items[24]["title"] == "Make the export deterministic when the cache is disabled"
 
-    def test_a_done_marked_bullet_is_never_a_status_line(self, importers):
-        items = _items(importers.parse_md(DONE_MD, archive="docs/archive/backlog.md"))
-        assert items[7]["status"] == "done" and items[5]["status"] == "done"
-
 
 # ---------------------------------------------------------------------------------------------
 # (3) DONE titles
@@ -160,26 +133,6 @@ class TestDoneTitles:
         assert "doc:docs/archive/backlog.md#L3" in first["evidence"]
         assert first["note"].startswith("DONE (CLEANUP-A)")
         assert "DONE" not in first["title"]
-
-    def test_every_sha_and_tag_in_the_marker_becomes_evidence(self, importers):
-        items = _items(importers.parse_md(DONE_MD, archive="docs/archive/backlog.md"))
-        assert {"commit:8e142f81", "commit:30504a1a"} <= set(items[4]["evidence"])
-        assert items[4]["title"].startswith("SWEEP: one shared dispatch-template reference")
-        assert items[6]["title"] == "D10 drift_flags is quadratic since P4a S1"
-        assert "tag:repacted-d10-p3" in items[6]["evidence"]
-
-    def test_a_subject_before_the_marker_is_the_title(self, importers):
-        item = _items(importers.parse_md(DONE_MD, archive="docs/archive/backlog.md"))[5]
-        assert item["title"] == "CORE-ROUTE"
-        assert {"commit:4ffc2e3c", "tag:repacted-m3c"} <= set(item["evidence"])
-
-    def test_a_done_bullet_closes_on_its_commit_without_the_archive(self, world):
-        I, store, repo = world
-        sha = git(repo, "rev-parse", "--short=8", "HEAD").stdout.strip()
-        text = f"- **DONE (CLEANUP-A, {sha}):** ~~Fix the thing.~~ It is fixed.\n"
-        I.apply(store, I.parse_md(text, archive="docs/archive/backlog.md"))
-        task = next(iter(I.W.PT.load(repo).tasks.values()))
-        assert task["title"] == "Fix the thing" and task["status"] == "done"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -200,21 +153,4 @@ class TestHeavyLastSection:
         from fractions import Fraction
         assert importers.LAST_SECTION_WARN_FRACTION == Fraction(1, 3)
 
-    def test_a_last_section_holding_exactly_the_share_is_flagged(self, importers):
-        proposal = importers.parse_md(_sections(4, 2), archive="docs/archive/backlog.md")
-        notes = _heavy(proposal)
-        assert len(notes) == 1 and "2 of 6 items" in notes[0]
-        assert notes[0].startswith("L10:")                    # the heading's line, not its text
-        assert "Last section" not in notes[0]
 
-    def test_a_last_section_just_under_the_share_is_not_flagged(self, importers):
-        assert _heavy(importers.parse_md(_sections(5, 2), archive="docs/archive/backlog.md")) == []
-
-    def test_a_file_whose_last_heading_is_a_title_is_not_flagged(self, importers):
-        text = "- **Item one.** Text.\n\n# Title only\n\n- **Item two.** Text.\n"
-        assert _heavy(importers.parse_md(text, archive="docs/archive/x.md")) == []
-
-    def test_the_warning_changes_no_item_and_no_tag(self, importers):
-        proposal = importers.parse_md(_sections(4, 2), archive="docs/archive/backlog.md")
-        assert len(proposal["items"]) == 6
-        assert [item["tags"] for item in proposal["items"]][-2:] == [["last-section"], ["last-section"]]

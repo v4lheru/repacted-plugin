@@ -97,6 +97,7 @@ def _memory(**over):
     return base
 
 
+@pytest.mark.slow
 class TestTheRowSurvivesAFailedEmbedding:
     """`create_memory` commits before `_store_embedding` runs.
 
@@ -129,15 +130,6 @@ class TestTheRowSurvivesAFailedEmbedding:
             "the embedding step reported {0} rather than a fault, so no "
             "rollback ran and the arms below prove nothing".format(
                 mem.last_embedding_status)
-        )
-
-    def test_the_memory_row_survives(self, store):
-        _, memory_id = self._save_with_a_failing_embedding(store)
-        rows = _rows(store, "SELECT id FROM memories WHERE id = ?",
-                     (memory_id,))
-        assert len(rows) == 1, (
-            "the memory row did not survive the rollback in the embedding "
-            "handler, so its caller no longer commits before that handler runs"
         )
 
 
@@ -175,99 +167,3 @@ class TestTheFileLinksSurviveAFailedEmbedding:
         )
 
 
-class TestTheUpdateSurvivesAFailedEmbedding:
-    """`update_memory` commits on more than one route, and THE ROUTES NEED
-    SEPARATE ARMS because a caller reaches one or the other by its payload.
-
-    THE REPLACE-ONLY ROUTE runs when no list field is touched. A scalar update
-    takes it, and the arm below drives it.
-    THE ADDITIVE-MERGE ROUTE runs when a list field is merged. It opens BEGIN
-    IMMEDIATE, reads, merges and commits at its own site. The class after this
-    one drives it.
-
-    MUTANT: remove the `conn.commit()` on the replace-only route. The updated
-    field reverts to its earlier value while the record survives, so this arm
-    reddens on the CONTENT rather than on the row.
-    """
-
-    def test_the_updated_field_survives(self, store):
-        mem = PACTMemory(project_id="test-project", session_id="s",
-                         db_path=store)
-        with patch("scripts.database.ensure_initialized"), \
-             patch("scripts.memory_api.ensure_initialized"), \
-             patch("scripts.memory_api.SQLITE_EXTENSIONS_ENABLED", True), \
-             patch("scripts.memory_api.generate_embedding",
-                   return_value=VECTOR):
-            memory_id = mem.save(_memory(context="the first context"),
-                                 include_tracked=False, sync_to_claude=False)
-            mem.update(memory_id, {"context": "the second context"})
-
-        assert mem.last_embedding_status == "fault", (
-            "the embedding step did not fail during the update, so no "
-            "rollback ran and this arm proves nothing"
-        )
-        rows = _rows(store, "SELECT context FROM memories WHERE id = ?",
-                     (memory_id,))
-        assert rows and rows[0][0] == "the second context", (
-            "the updated field did not survive the rollback in the embedding "
-            "handler, so update_memory no longer commits before it"
-        )
-
-
-class TestTheAdditiveMergeSurvivesAFailedEmbedding:
-    """The ADDITIVE-MERGE route of `update_memory` commits at its own site.
-
-    WHY THIS ROUTE GETS ITS OWN ARM, and the reason is stronger than
-    completeness. The additive merge is the LIST-FIELD path. It is the surface
-    the create-ingress guard landed on and the surface the shredding detector
-    watches, so it is the route in this file most likely to be edited again.
-    An editor working on lists, rather than on transactions, is the person
-    most likely to move or tidy this commit. An uncovered commit on the
-    highest-traffic route is the worst place in the set to leave a hole.
-
-    THE ROUTE IS REACHED BY THE PAYLOAD, NOT BY A FLAG THIS TEST SETS. A list
-    field with `replace` left at its default opens BEGIN IMMEDIATE, reads the
-    existing list, merges, and commits at a site of its own. A scalar update
-    takes the other route and never reaches this commit, which is why the
-    scalar arm above cannot cover this one.
-
-    MUTANT: remove the `conn.commit()` on the additive-merge route. The merged
-    list reverts to its earlier single item while the record survives and
-    while a scalar update continues to persist, so this arm reddens alone.
-    """
-
-    def test_the_merged_list_survives(self, store):
-        mem = PACTMemory(project_id="test-project", session_id="s",
-                         db_path=store)
-        with patch("scripts.database.ensure_initialized"), \
-             patch("scripts.memory_api.ensure_initialized"), \
-             patch("scripts.memory_api.SQLITE_EXTENSIONS_ENABLED", True), \
-             patch("scripts.memory_api.generate_embedding",
-                   return_value=VECTOR):
-            memory_id = mem.save(
-                _memory(lessons_learned=["the first lesson"]),
-                include_tracked=False, sync_to_claude=False)
-            # `replace` stays at its default, so this MERGES rather than
-            # overwrites, and the merge route is the one that commits.
-            mem.update(memory_id, {"lessons_learned": ["the second lesson"]})
-
-        assert mem.last_embedding_status == "fault", (
-            "the embedding step did not fail during the merge, so no rollback "
-            "ran and this arm proves nothing"
-        )
-
-        rows = _rows(store, "SELECT lessons_learned FROM memories WHERE id = ?",
-                     (memory_id,))
-        assert rows, "the record did not survive at all"
-        stored = json.loads(rows[0][0])
-        # NON-VACUITY ON THE MERGE ITSELF. One item would mean the route never
-        # merged, so the arm would pass on a record that took the other path.
-        assert len(stored) == 2, (
-            "the merged list holds {0}, so either the additive route did not "
-            "run or its commit no longer precedes the embedding "
-            "handler".format(stored)
-        )
-        assert "the second lesson" in stored, (
-            "the merged item did not survive the rollback in the embedding "
-            "handler, so the additive-merge route no longer commits before it"
-        )

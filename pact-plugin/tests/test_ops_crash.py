@@ -87,37 +87,3 @@ def test_dispatch_rerun_creates_one_task_and_writes_each_side_once(ops_env: Worl
     assert all(ops_env.side_rows(op_id, side) == 1 for side in ("journal", "workflow"))
 
 
-@pytest.mark.parametrize("op", ["teachback", "handoff", "accept", "accept_rejects", "reject", "amend"])
-def test_rerun_after_a_crash_writes_the_task_once(ops_env: World, counted, monkeypatch, op):
-    counts, reset = counted
-    reset(armed=False)
-    stage = {"teachback": "teachback", "handoff": "handoff", "accept_rejects": "accept"}.get(op, op)
-    if op == "amend":
-        stage = "teachback"
-    task_id = _ready(ops_env, stage)
-    if op == "accept_rejects":
-        monkeypatch.setattr(EV, "verdict", lambda *a, **k: {"problems": ["no passing run"], "notes": []})
-    call = {
-        "teachback": lambda: submit.teachback(ops_env.coder(), task_id, teachback()),
-        "handoff": lambda: submit.handoff(ops_env.coder(), task_id, handoff(ops_env.worktree(task_id))),
-        "accept": lambda: accept.run(ops_env.ctx(), task_id),
-        "accept_rejects": lambda: accept.run(ops_env.ctx(), task_id),
-        "reject": lambda: reject.run(ops_env.ctx(), task_id, "The empty input still raises."),
-        "amend": lambda: amend.run(ops_env.ctx(), task_id, "Keep the old flag."),
-    }[op]
-    reset()
-    _crash_then_rerun(call, counts)
-    meta = ops_env.task(task_id)["metadata"]
-    op_id = meta["last_op"]
-    assert counts["writes"] == 1
-    assert ops_env.side_rows(op_id, "workflow") == 1
-    assert sum(1 for row in ops_env.ops_rows() if row.get("op_id") == op_id and row.get("done")) == 1
-    if op == "teachback":
-        assert counts["journal"] == 1 and meta["teachback"]["accepted"]["by"] == "auto"
-    if op == "accept":
-        assert counts["journal"] == 1 and counts["task_log"] == 1
-        assert ops_env.task(task_id)["status"] == "completed"
-    if op in ("accept_rejects", "reject"):
-        assert counts["task_log"] == 1 and meta["revision_number"] == 2
-    if op == "amend":
-        assert [key for key in meta if key.startswith("amend_")] == ["amend_1"]

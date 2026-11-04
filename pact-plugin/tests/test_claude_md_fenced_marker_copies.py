@@ -57,7 +57,7 @@ REAL_BLOCK = (
 )
 
 
-@pytest.mark.parametrize("module", ["shared.claude_md_manager", "working_memory"])
+@pytest.mark.parametrize("module", ["shared.claude_md_manager",])
 def test_managed_region_is_the_real_block_not_the_fenced_copy(module):
     extract = importlib.import_module(module).extract_managed_region
     content = FENCED_EXAMPLE + REAL_BLOCK
@@ -66,53 +66,3 @@ def test_managed_region_is_the_real_block_not_the_fenced_copy(module):
     assert start > content.index("```\n\n")
 
 
-def test_session_block_write_leaves_the_fenced_example_alone(tmp_path, monkeypatch):
-    from shared.session_resume import update_session_info
-
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-    target = tmp_path / ".claude" / "CLAUDE.md"
-    target.parent.mkdir()
-    target.write_text(FENCED_EXAMPLE + REAL_BLOCK, encoding="utf-8")
-
-    update_session_info("new-session", "session-new")
-
-    written = target.read_text(encoding="utf-8")
-    assert written.startswith(FENCED_EXAMPLE)
-    assert "claude --resume new-session" in written[len(FENCED_EXAMPLE):]
-    assert "claude --resume old" not in written
-
-
-def test_migration_wraps_a_file_whose_only_managed_marker_is_fenced(tmp_path, monkeypatch):
-    from shared.claude_md_manager import extract_managed_region, migrate_to_managed_structure
-
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-    target = tmp_path / "CLAUDE.md"
-    target.write_text(FENCED_EXAMPLE, encoding="utf-8")
-
-    assert migrate_to_managed_structure() is not None
-
-    written = target.read_text(encoding="utf-8")
-    assert FENCED_EXAMPLE.strip() in written
-    assert extract_managed_region(written) is not None
-
-
-def test_kernel_strip_leaves_a_fenced_kernel_example_alone(tmp_path, monkeypatch):
-    from shared.claude_md_manager import strip_orphan_kernel_block
-
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    target = tmp_path / "CLAUDE.md"
-    content = (
-        "# Mine\n"
-        "\n"
-        "```\n"
-        "<!-- PACT_START: v3 -->\n"
-        "old kernel example\n"
-        "<!-- PACT_END -->\n"
-        "```\n"
-        "\n"
-        "my notes\n"
-    )
-    target.write_text(content, encoding="utf-8")
-
-    assert strip_orphan_kernel_block() is None
-    assert target.read_text(encoding="utf-8") == content

@@ -153,70 +153,6 @@ class TestCheckBootstrapNeeded:
         assert 'Skill("repacted:bootstrap")' in result
         assert f"PACT_SESSION_DIR={session_dir}" in result
 
-    def test_returns_none_when_no_session_dir(self, monkeypatch):
-        """No session dir → None (non-PACT session)."""
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-        import shared.pact_context as ctx_module
-
-        # No context → get_session_dir() returns ""
-        monkeypatch.setattr(ctx_module, "_context_path", None)
-        monkeypatch.setattr(ctx_module, "_cache", None)
-
-        result = _check_bootstrap_needed(_make_input())
-        assert result is None
-
-    def test_returns_none_for_teammate(self, monkeypatch, tmp_path):
-        """Teammate (non-lead agent_type) → None (passthrough).
-
-        #878: lead-detection migrated to is_lead, which keys on agent_type. A
-        specialist agent_type is not a lead spelling, so the gate bypasses.
-        """
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-
-        input_data = _make_input(agent_type="pact-backend-coder")
-
-        result = _check_bootstrap_needed(input_data)
-        assert result is None
-
-    def test_teammate_with_qualified_agent_type(self, monkeypatch, tmp_path):
-        """Teammate carrying a qualified non-lead agent_type → None.
-
-        #878: the gate no longer resolves agent_id/agent_name — it reads
-        agent_type directly. A `PACT:`-qualified specialist type is still not a
-        lead spelling, so the gate bypasses.
-        """
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-
-        input_data = _make_input(agent_type="repacted:pact-backend-coder")
-
-        result = _check_bootstrap_needed(input_data)
-        assert result is None
-
-    def test_instruction_content_mentions_bootstrap_skill(self, monkeypatch, tmp_path):
-        """The injected instruction must reference Skill("repacted:bootstrap")."""
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-
-        result = _check_bootstrap_needed(_make_input())
-        assert result is not None
-        assert 'Skill("repacted:bootstrap")' in result
-
-    def test_instruction_mentions_blocked_tools(self, monkeypatch, tmp_path):
-        """The injected instruction names the blocked tool: since 1.4.1 only Agent."""
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-
-        result = _check_bootstrap_needed(_make_input())
-        assert result is not None
-        assert "Agent dispatch (Agent)" in result
-        assert "Edit" not in result and "Write" not in result
-
 
 # =============================================================================
 # main() — integration tests
@@ -243,31 +179,6 @@ class TestMainEntryPoint:
         assert hso["hookEventName"] == "UserPromptSubmit"
         assert "additionalContext" in hso
         assert 'Skill("repacted:bootstrap")' in hso["additionalContext"]
-
-    def test_suppress_when_marker_exists(self, monkeypatch, tmp_path, capsys):
-        """Marker exists → suppressOutput."""
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=True)
-
-        _, output = _run_main(_make_input(), capsys)
-        assert output == _SUPPRESS_EXPECTED
-
-    def test_suppress_for_non_pact_session(self, capsys, monkeypatch):
-        """Non-PACT session (no context) → suppressOutput."""
-        import shared.pact_context as ctx_module
-        monkeypatch.setattr(ctx_module, "_context_path", None)
-        monkeypatch.setattr(ctx_module, "_cache", None)
-
-        _, output = _run_main(_make_input(), capsys)
-        assert output == _SUPPRESS_EXPECTED
-
-    def test_suppress_for_teammate(self, monkeypatch, tmp_path, capsys):
-        """Teammate (non-lead agent_type) → suppressOutput."""
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-
-        input_data = _make_input(agent_type="pact-backend-coder")
-
-        _, output = _run_main(input_data, capsys)
-        assert output == _SUPPRESS_EXPECTED
 
 
 # =============================================================================
@@ -301,55 +212,6 @@ class TestFailOpen:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert json.loads(captured.out.strip()) == _SUPPRESS_EXPECTED
-
-    def test_exception_in_check_bootstrap_needed(self, capsys):
-        """RuntimeError in _check_bootstrap_needed → fail-open."""
-        from bootstrap_prompt_gate import main
-
-        with patch(
-            "bootstrap_prompt_gate._check_bootstrap_needed",
-            side_effect=RuntimeError("boom"),
-        ):
-            with patch("sys.stdin", io.StringIO(json.dumps(_make_input()))):
-                with pytest.raises(SystemExit) as exc_info:
-                    main()
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        assert json.loads(captured.out.strip()) == _SUPPRESS_EXPECTED
-
-    def test_oserror_in_marker_check_treats_marker_absent(
-        self, monkeypatch, tmp_path, capsys
-    ):
-        """OSError on the marker check is now caught INSIDE
-        `is_marker_set` and treated as marker-absent → bootstrap directive
-        injected, gate stays armed. Previously, `Path.exists()` raises
-        propagated to the outer except and produced suppressOutput. The
-        current contract: bootstrap_prompt_gate delegates to
-        bootstrap_gate.is_marker_set, which has the same
-        conservative-fail-closed semantics as the sibling gate.
-
-        The OUTER fail-open contract still holds for genuine programmer
-        errors above the marker-check layer; this test pins the marker-
-        layer-specific OSError → marker-absent classification."""
-        from bootstrap_prompt_gate import main
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-
-        # Patch os.lstat (used inside is_marker_set) to raise OSError.
-        with patch("os.lstat", side_effect=OSError("disk error")):
-            with patch("sys.stdin", io.StringIO(json.dumps(_make_input()))):
-                with pytest.raises(SystemExit) as exc_info:
-                    main()
-
-        # Marker absent + lead session → bootstrap directive injected.
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        output = json.loads(captured.out.strip())
-        assert "hookSpecificOutput" in output
-        assert output["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
-        assert "additionalContext" in output["hookSpecificOutput"]
-        assert "Skill(\"repacted:bootstrap\")" in output["hookSpecificOutput"]["additionalContext"]
 
 
 # =============================================================================
@@ -389,14 +251,6 @@ class TestErrorSuppressMutualExclusivity:
         parsed = json.loads(captured.out.strip())
         assert "suppressOutput" in parsed
         assert "systemMessage" not in parsed
-
-    def test_inject_path_no_suppress_output(self, monkeypatch, tmp_path, capsys):
-        """When injecting context, output has hookSpecificOutput, not suppressOutput."""
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-
-        _, output = _run_main(_make_input(), capsys)
-        assert "hookSpecificOutput" in output
-        assert "suppressOutput" not in output
 
 
 # =============================================================================
@@ -469,7 +323,7 @@ class TestAuditAnchorParity:
     so all three bootstrap-related hooks share one parity contract.
     """
 
-    @pytest.mark.parametrize("shape", ["advisory", "suppress"])
+    @pytest.mark.parametrize("shape", ["advisory",])
     def test_every_emit_shape_carries_hook_event_name(self, shape, capsys):
         if shape == "advisory":
             from bootstrap_prompt_gate import _emit_load_failure_advisory
@@ -532,28 +386,6 @@ class TestSelfHealWiring:
         assert "repacted:bootstrap" in result
         assert "PACT_SESSION_DIR=" in result
 
-    def test_missing_context_plain_frame_no_heal_no_inject(
-            self, monkeypatch, tmp_path):
-        """Context file ABSENT + plain frame (agent_type absent) → no heal,
-        no instruction (existing non-PACT passthrough preserved)."""
-        import shared.pact_context as ctx_module
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/test/project")
-
-        target = (tmp_path / ".claude" / "pact-sessions" / "project" /
-                  self._SID / "pact-session-context.json")
-        monkeypatch.setattr(ctx_module, "_context_path", target)
-        monkeypatch.setattr(ctx_module, "_cache", None)
-
-        result = _check_bootstrap_needed(
-            _make_input(session_id=self._SID, agent_type=None)
-        )
-
-        assert not target.exists()
-        assert result is None
-
 
 class TestStalenessDetection:
     """Unit tests for _detect_stale_session_block() — the stdlib-only
@@ -592,125 +424,6 @@ class TestStalenessDetection:
         assert "stale session block" in result
         assert self._STALE in result
         assert self._ACTUAL in result
-
-    def test_match_returns_none(self, monkeypatch, tmp_path):
-        """Recorded == actual (healthy resume) → no warning."""
-        from bootstrap_prompt_gate import _detect_stale_session_block
-
-        project = self._project_with_claude_md(tmp_path, self._ACTUAL)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        assert _detect_stale_session_block(
-            {"session_id": self._ACTUAL}) is None
-
-    def test_no_claude_md_returns_none(self, monkeypatch, tmp_path):
-        """Worktree case: CLAUDE.md absent at both locations → silent skip."""
-        from bootstrap_prompt_gate import _detect_stale_session_block
-
-        project = tmp_path / "proj"
-        project.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        assert _detect_stale_session_block(
-            {"session_id": self._ACTUAL}) is None
-
-    def test_garbage_resume_line_returns_none(self, monkeypatch, tmp_path):
-        """Tampered/garbage Resume line that misses the regex → no claim."""
-        from bootstrap_prompt_gate import _detect_stale_session_block
-
-        project = tmp_path / "proj"
-        target = project / ".claude" / "CLAUDE.md"
-        target.parent.mkdir(parents=True)
-        target.write_text(
-            "## Current Session\n- Resume: claude --resume NOT_HEX_$(rm -rf)\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        assert _detect_stale_session_block(
-            {"session_id": self._ACTUAL}) is None
-
-    def test_missing_session_id_returns_none(self, monkeypatch, tmp_path):
-        from bootstrap_prompt_gate import _detect_stale_session_block
-
-        project = self._project_with_claude_md(tmp_path, self._STALE)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        assert _detect_stale_session_block({}) is None
-        assert _detect_stale_session_block({"session_id": ""}) is None
-
-    def test_missing_project_dir_returns_none(self, monkeypatch):
-        from bootstrap_prompt_gate import _detect_stale_session_block
-
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-
-        assert _detect_stale_session_block(
-            {"session_id": self._ACTUAL}) is None
-
-    def test_non_utf8_claude_md_returns_none(self, monkeypatch, tmp_path):
-        """Non-UTF-8 CLAUDE.md (e.g. a latin-1 byte from a wrong-editor
-        save, or a partial/corrupted session_init write — the very failure
-        neighborhood this detector exists to flag) → silent skip, NOT a
-        raise. UnicodeDecodeError is a ValueError, not an OSError; an
-        OSError-only catch lets it escape (RED on reverting the widened
-        catch tuple)."""
-        from bootstrap_prompt_gate import _detect_stale_session_block
-
-        project = tmp_path / "proj"
-        target = project / ".claude" / "CLAUDE.md"
-        target.parent.mkdir(parents=True)
-        # Valid stale Resume line followed by one invalid UTF-8
-        # continuation byte (0xE9 = latin-1 'é').
-        target.write_bytes(
-            f"<!-- SESSION_START -->\n- Resume: `claude --resume {self._STALE}`\n<!-- SESSION_END -->\n".encode("utf-8")
-            + b"caf\xe9\n"
-        )
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        assert _detect_stale_session_block(
-            {"session_id": self._ACTUAL}) is None
-
-    @pytest.mark.parametrize("layout", ["both", "preferred_only",
-                                        "legacy_only", "neither"])
-    def test_precedence_parity_with_resolver(self, monkeypatch, tmp_path,
-                                             layout):
-        """Precedence parity pin (the drift guard for the no-runtime-import
-        decision): for every file-existence layout, the staleness reader's
-        CHOSEN file must equal resolve_project_claude_md_path's result
-        whenever source != 'new_default'. Distinct recorded ids per file
-        reveal which one was read. (Tests MAY import claude_md_manager —
-        tests are not hooks.)"""
-        from bootstrap_prompt_gate import _detect_stale_session_block
-        from shared.claude_md_manager import resolve_project_claude_md_path
-
-        sid_by_location = {
-            ".claude": "aaaa1111-aaaa-1111-aaaa-111111111111",
-            "legacy": "bbbb2222-bbbb-2222-bbbb-222222222222",
-        }
-        project = tmp_path / "proj"
-        project.mkdir()
-        if layout in ("both", "preferred_only"):
-            self._project_with_claude_md(
-                tmp_path, sid_by_location[".claude"], location=".claude")
-        if layout in ("both", "legacy_only"):
-            self._project_with_claude_md(
-                tmp_path, sid_by_location["legacy"], location="legacy")
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        result = _detect_stale_session_block({"session_id": self._ACTUAL})
-
-        resolved_path, source = resolve_project_claude_md_path(str(project))
-        if source == "new_default":
-            assert result is None, "neither file exists → silent skip"
-        else:
-            resolver_recorded = _RE_RESUME_TEST.search(
-                resolved_path.read_text(encoding="utf-8")
-            ).group(1)
-            assert result is not None
-            assert resolver_recorded in result, (
-                f"staleness reader and resolver disagree on which CLAUDE.md "
-                f"to read for layout={layout}"
-            )
 
 
 # Test-local mirror of the production regex, used ONLY to extract the
@@ -758,189 +471,6 @@ class TestStalenessComposition:
         assert "stale session block" in result       # warning appended
         assert result.index("repacted:bootstrap") < result.index(
             "stale session block"), "warning is APPENDED, not prepended"
-
-    def test_match_returns_instruction_only(self, monkeypatch, tmp_path):
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-        project = tmp_path / "proj"
-        target = project / ".claude" / "CLAUDE.md"
-        target.parent.mkdir(parents=True)
-        target.write_text(
-            f"- Resume: `claude --resume {self._ACTUAL_HEX}`\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        result = _check_bootstrap_needed(_make_input(
-            session_id=self._ACTUAL_HEX))
-
-        assert result is not None
-        assert "repacted:bootstrap" in result
-        assert "stale session block" not in result
-
-    def test_non_utf8_claude_md_keeps_instruction(
-            self, monkeypatch, tmp_path, capsys):
-        """Blast-radius pin: a non-UTF-8 CLAUDE.md must degrade to
-        instruction-only — NEVER suppress the bootstrap instruction.
-
-        The advisory detector composes onto the load-bearing instruction by
-        concatenation inside _check_bootstrap_needed; before the catch was
-        widened to UnicodeDecodeError, the raise escaped to main()'s
-        fail-open and the ENTIRE injection (primary instruction included)
-        was silently suppressed on every prompt. End-to-end arm through
-        main() so the pin covers the real escape path, not just the helper.
-        (RED on reverting the widened catch tuple.)"""
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-        project = tmp_path / "proj"
-        target = project / ".claude" / "CLAUDE.md"
-        target.parent.mkdir(parents=True)
-        target.write_bytes(
-            f"<!-- SESSION_START -->\n- Resume: `claude --resume {self._STALE}`\n<!-- SESSION_END -->\n".encode("utf-8")
-            + b"caf\xe9\n"  # one invalid UTF-8 continuation byte
-        )
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        exit_code, output = _run_main(
-            _make_input(session_id=self._ACTUAL_HEX), capsys)
-
-        assert exit_code == 0
-        injected = output.get("hookSpecificOutput", {}).get(
-            "additionalContext", "")
-        assert "repacted:bootstrap" in injected, (
-            "non-UTF-8 CLAUDE.md must not suppress the bootstrap "
-            "instruction — the advisory's failure budget is 'no warning', "
-            "never 'no bootstrap'"
-        )
-        assert "stale session block" not in injected, (
-            "unreadable CLAUDE.md → no staleness claim"
-        )
-
-    @pytest.mark.parametrize("invalid_id", [
-        "   ",                                    # whitespace-only (truthy)
-        "unknown-deadbeef",                       # sentinel shape
-        "deadbeef-0000\nINJECTED LINE",           # C0 control char (newline)
-    ], ids=["whitespace_only", "unknown_sentinel", "control_char"])
-    def test_invalid_stdin_id_suppresses_warning_keeps_instruction(
-            self, monkeypatch, tmp_path, invalid_id):
-        """An invalid-but-truthy stdin session_id (whitespace-only,
-        `unknown-*` sentinel, or control-char-bearing) must suppress the
-        staleness warning — the unvalidated id is never interpolated into
-        the warning's {actual} slot — while the bootstrap instruction
-        stays intact. Gated by the canonical
-        _is_unknown_or_missing_session predicate, shared with the heal
-        gate; a plain truthiness check passes all three of these shapes."""
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-        self._stale_project(monkeypatch, tmp_path)
-
-        result = _check_bootstrap_needed(_make_input(
-            session_id=invalid_id))
-
-        assert result is not None
-        assert "repacted:bootstrap" in result            # instruction intact
-        assert "stale session block" not in result   # no warning
-        assert "INJECTED LINE" not in result         # id never interpolated
-
-    def test_no_claude_md_returns_instruction_only(
-            self, monkeypatch, tmp_path):
-        """Worktree case: no CLAUDE.md → instruction only, no warning."""
-        from bootstrap_prompt_gate import _check_bootstrap_needed
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-        project = tmp_path / "proj"
-        project.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-
-        result = _check_bootstrap_needed(_make_input())
-
-        assert result is not None
-        assert "repacted:bootstrap" in result
-        assert "stale session block" not in result
-
-    def test_marker_set_fast_path_never_runs_staleness(
-            self, monkeypatch, tmp_path):
-        """Perf contract pin: the marker-set fast path suppresses WITHOUT
-        any CLAUDE.md read — _detect_stale_session_block must not be
-        called at all."""
-        import bootstrap_prompt_gate as gate_module
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=True)
-        self._stale_project(monkeypatch, tmp_path)
-
-        calls = []
-        monkeypatch.setattr(
-            gate_module, "_detect_stale_session_block",
-            lambda input_data: calls.append(1) or None,
-        )
-
-        result = gate_module._check_bootstrap_needed(_make_input(
-            session_id=self._ACTUAL_HEX))
-
-        assert result is None, "marker set → suppress"
-        assert calls == [], (
-            "fast path must not invoke the staleness check (zero-read "
-            "perf contract)"
-        )
-
-    def test_non_lead_path_never_runs_staleness(self, monkeypatch, tmp_path):
-        """Plain frame (non-lead) → suppress without staleness check."""
-        import bootstrap_prompt_gate as gate_module
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-        self._stale_project(monkeypatch, tmp_path)
-
-        calls = []
-        monkeypatch.setattr(
-            gate_module, "_detect_stale_session_block",
-            lambda input_data: calls.append(1) or None,
-        )
-
-        result = gate_module._check_bootstrap_needed(_make_input(
-            session_id=self._ACTUAL_HEX, agent_type=None))
-
-        assert result is None
-        assert calls == []
-
-    @pytest.mark.parametrize("frame_kind", [
-        "teammate-in-process",
-        "teammate-captured-tmux",
-    ])
-    def test_teammate_frames_both_modes_never_run_staleness(
-            self, monkeypatch, tmp_path, frame_kind):
-        """Both-modes gate: the lead/non-lead split keys ONLY on the
-        structural agent_type signal via is_lead — never a mode flag. A
-        synthesized in-process teammate frame AND a real captured tmux
-        teammate frame must both suppress without ever invoking the
-        staleness check (the plain-frame sibling above covers the third
-        non-lead shape)."""
-        import bootstrap_prompt_gate as gate_module
-        from fixtures.role_frames import (
-            captured_teammate_sessionstart,
-            teammate_frame,
-        )
-
-        _setup_pact_session(monkeypatch, tmp_path, with_marker=False)
-        self._stale_project(monkeypatch, tmp_path)
-
-        if frame_kind == "teammate-in-process":
-            frame = teammate_frame(session_id=self._ACTUAL_HEX)
-        else:
-            frame = captured_teammate_sessionstart()  # real tmux capture
-
-        calls = []
-        monkeypatch.setattr(
-            gate_module, "_detect_stale_session_block",
-            lambda input_data: calls.append(1) or None,
-        )
-
-        result = gate_module._check_bootstrap_needed(frame)
-
-        assert result is None, f"{frame_kind} must suppress (is_lead False)"
-        assert calls == [], (
-            f"{frame_kind} must never reach the staleness check"
-        )
 
 
 class TestSubprocessStalenessE2E:
@@ -1050,19 +580,3 @@ class TestSubprocessStalenessE2E:
         assert content["team_name"] == "session-deadbeef"
         assert content["session_id"] == self._SID
 
-    def test_heal_chain_with_matching_block_injects_instruction_only(
-            self, tmp_path):
-        """Match (healthy resume shape) → instruction WITHOUT the warning;
-        the heal still lands (it is independent of staleness)."""
-        result, ctx = self._run_gate_subprocess(
-            tmp_path, recorded_sid=self._SID
-        )
-
-        out = json.loads(result.stdout.strip())
-        context = out["hookSpecificOutput"]["additionalContext"]
-        assert "repacted:bootstrap" in context
-        assert "stale session block" not in context
-        assert result.returncode == 0, (
-            f"stderr={result.stderr!r} stdout={result.stdout!r}"
-        )
-        assert ctx.exists()

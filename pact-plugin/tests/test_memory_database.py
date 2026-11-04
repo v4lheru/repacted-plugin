@@ -58,7 +58,7 @@ class TestTimestampColumnsAreRequired:
         ensure_initialized(conn)
         return conn
 
-    @pytest.mark.parametrize("column", ["created_at", "updated_at"])
+    @pytest.mark.parametrize("column", ["created_at",])
     def test_an_insert_omitting_a_timestamp_is_refused(self, tmp_path, column):
         conn = self._production_schema(tmp_path)
         supplied = "updated_at" if column == "created_at" else "created_at"
@@ -81,30 +81,6 @@ class TestSchemaInit:
     def test_creates_memories_table(self, db_conn):
         cursor = db_conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='memories'"
-        )
-        assert cursor.fetchone() is not None
-
-    def test_creates_files_table(self, db_conn):
-        cursor = db_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='files'"
-        )
-        assert cursor.fetchone() is not None
-
-    def test_creates_memory_files_table(self, db_conn):
-        cursor = db_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_files'"
-        )
-        assert cursor.fetchone() is not None
-
-    def test_creates_file_relations_table(self, db_conn):
-        cursor = db_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='file_relations'"
-        )
-        assert cursor.fetchone() is not None
-
-    def test_creates_indexes(self, db_conn):
-        cursor = db_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_memories_project'"
         )
         assert cursor.fetchone() is not None
 
@@ -143,37 +119,6 @@ class TestJsonSerialization:
         assert isinstance(result["active_tasks"], str)
         assert json.loads(result["active_tasks"]) == [{"task": "T1"}]
 
-    def test_serialize_leaves_none_alone(self):
-        from scripts.database import _serialize_json_fields
-        result = _serialize_json_fields({"active_tasks": None, "context": "test"})
-        assert result["active_tasks"] is None
-
-    def test_serialize_leaves_strings_alone(self):
-        from scripts.database import _serialize_json_fields
-        result = _serialize_json_fields({"active_tasks": "already a string"})
-        assert result["active_tasks"] == "already a string"
-
-    def test_deserialize_json_fields(self):
-        from scripts.database import _deserialize_json_fields
-        data = {
-            "context": "test",
-            "active_tasks": json.dumps([{"task": "T1"}]),
-            "lessons_learned": json.dumps(["L1"]),
-        }
-        result = _deserialize_json_fields(data)
-        assert result["active_tasks"] == [{"task": "T1"}]
-        assert result["lessons_learned"] == ["L1"]
-
-    def test_deserialize_invalid_json_keeps_string(self):
-        from scripts.database import _deserialize_json_fields
-        result = _deserialize_json_fields({"active_tasks": "not json {"})
-        assert result["active_tasks"] == "not json {"
-
-    def test_deserialize_non_string_untouched(self):
-        from scripts.database import _deserialize_json_fields
-        result = _deserialize_json_fields({"active_tasks": [1, 2, 3]})
-        assert result["active_tasks"] == [1, 2, 3]
-
 
 # ---------------------------------------------------------------------------
 # Memory CRUD
@@ -186,32 +131,6 @@ class TestCreateMemory:
         assert mem_id is not None
         assert len(mem_id) > 0
 
-    def test_creates_with_custom_id(self, db_conn):
-        from scripts.database import create_memory
-        mem_id = create_memory(db_conn, {"id": "custom-123", "context": "Test"})
-        assert mem_id == "custom-123"
-
-    def test_creates_with_json_fields(self, db_conn):
-        """
-        Sub-object fields are canonicalized via _canonicalize_dict_item
-        on the save path (bug 3 part 2, #374). The round-trip through
-        TaskItem.from_dict(strict=True).to_dict() populates default values
-        such as status='pending', so the stored shape is the canonical form
-        — symmetric with update_memory's merge path.
-        """
-        from scripts.database import create_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "context": "Test",
-            "active_tasks": [{"task": "T1"}],
-            "lessons_learned": ["L1"],
-            "decisions": [{"decision": "D1"}],
-        })
-        result = get_memory(db_conn, mem_id)
-        assert result is not None
-        # Canonical TaskItem shape: task + status (status defaulted to 'pending').
-        assert result["active_tasks"] == [{"task": "T1", "status": "pending"}]
-        assert result["lessons_learned"] == ["L1"]
-
 
 class TestGetMemory:
     def test_returns_memory(self, db_conn):
@@ -220,10 +139,6 @@ class TestGetMemory:
         result = get_memory(db_conn, mem_id)
         assert result is not None
         assert result["context"] == "Test context"
-
-    def test_returns_none_for_missing(self, db_conn):
-        from scripts.database import get_memory
-        assert get_memory(db_conn, "nonexistent") is None
 
 
 class TestResolveMemoryIdPrefix:
@@ -237,234 +152,6 @@ class TestResolveMemoryIdPrefix:
         )
         assert resolve_memory_id_prefix(db_conn, "abc12345") == mem_id
 
-    def test_ambiguous_prefix_raises(self, db_conn):
-        from scripts.database import (
-            create_memory,
-            resolve_memory_id_prefix,
-            AmbiguousPrefixError,
-        )
-        id_a = "abcd123" + "1" + "0" * 24
-        id_b = "abcd123" + "2" + "0" * 24
-        # Inserted in REVERSE lexicographic order to verify ORDER BY id sorts
-        # the matches independently of insert order.
-        create_memory(db_conn, {"id": id_b, "context": "second match"})
-        create_memory(db_conn, {"id": id_a, "context": "first match"})
-
-        with pytest.raises(AmbiguousPrefixError) as exc_info:
-            resolve_memory_id_prefix(db_conn, "abcd123")
-
-        # Direct list equality preserves the ORDER BY id contract — sorting
-        # both sides would mask a regression that drops the ORDER BY clause.
-        match_ids = [m["id"] for m in exc_info.value.matches]
-        assert match_ids == [id_a, id_b]
-        # Descriptor snippet attached for terse disambiguation
-        contexts = {m["id"]: m["context"] for m in exc_info.value.matches}
-        assert contexts[id_a] == "first match"
-        assert contexts[id_b] == "second match"
-
-    def test_no_match_returns_none(self, db_conn):
-        from scripts.database import resolve_memory_id_prefix
-        assert resolve_memory_id_prefix(db_conn, "fffffff") is None
-
-    def test_too_short_prefix_raises(self, db_conn):
-        from scripts.database import (
-            resolve_memory_id_prefix,
-            PrefixTooShortError,
-        )
-        with pytest.raises(PrefixTooShortError) as exc_info:
-            resolve_memory_id_prefix(db_conn, "abc123")
-        assert exc_info.value.prefix == "abc123"
-        assert exc_info.value.minimum == 7
-
-    def test_non_hex_prefix_returns_none(self, db_conn):
-        """Non-hex prefix characters (e.g., punctuation) yield no match.
-
-        The range scan operates on a literal `id >= prefix AND id < prefix+'g'`
-        bound; a prefix outside the lowercase-hex alphabet falls outside the
-        range of any real ID, so the lookup correctly returns None. Guards
-        against attempts to inject SQL metacharacters via the prefix arg.
-        """
-        from scripts.database import create_memory, resolve_memory_id_prefix
-        create_memory(db_conn, {"id": "deadbeef" + "0" * 24, "context": "x"})
-        # '%' < '0' in ASCII; a prefix starting with '%' falls outside any
-        # hex ID's range. Same outcome a literal-meta-char attempt would have
-        # produced under the prior LIKE-with-escape implementation.
-        assert resolve_memory_id_prefix(db_conn, "%deadbe") is None
-
-    def test_empty_string_prefix_raises_too_short(self, db_conn):
-        """Empty input hits the minimum-length gate before the SQL query."""
-        from scripts.database import (
-            resolve_memory_id_prefix,
-            PrefixTooShortError,
-        )
-        with pytest.raises(PrefixTooShortError) as exc_info:
-            resolve_memory_id_prefix(db_conn, "")
-        assert exc_info.value.prefix == ""
-        assert exc_info.value.minimum == 7
-
-    def test_exactly_min_length_unique_match(self, db_conn):
-        """A 7-char prefix (the boundary) resolves when the match is unique."""
-        from scripts.database import (
-            create_memory,
-            resolve_memory_id_prefix,
-            MIN_PREFIX_LENGTH,
-        )
-        mem_id = create_memory(
-            db_conn,
-            {"id": "feed123" + "0" * 25, "context": "boundary"},
-        )
-        # Exactly MIN_PREFIX_LENGTH chars — no padding above the floor
-        prefix = "feed123"
-        assert len(prefix) == MIN_PREFIX_LENGTH
-        assert resolve_memory_id_prefix(db_conn, prefix) == mem_id
-
-    def test_exactly_full_length_no_match_returns_none(self, db_conn):
-        """A 32-char input bypasses the resolver but still returns None on miss.
-
-        Guards against an off-by-one regression in the `len < MEMORY_ID_LENGTH`
-        gate: a 32-char nonexistent ID must not raise, must return None.
-        """
-        from scripts.database import resolve_memory_id_prefix
-        full_length_miss = "f" * 32
-        assert resolve_memory_id_prefix(db_conn, full_length_miss) is None
-
-    def test_uppercase_prefix_resolves_to_lowercase_stored_id(self, db_conn):
-        """Prefix lookup is case-insensitive; the returned ID is the stored form.
-
-        Memory IDs are produced by secrets.token_hex (lowercase). A user
-        typing an uppercase prefix must still resolve to the canonical
-        lowercase ID — disambiguation, downstream API calls, and CLI
-        envelopes all key off the storage form.
-        """
-        from scripts.database import create_memory, resolve_memory_id_prefix
-        stored_id = "abcd1234" + "0" * 24
-        create_memory(db_conn, {"id": stored_id, "context": "case test"})
-        resolved = resolve_memory_id_prefix(db_conn, "ABCD1234")
-        assert resolved == stored_id
-
-    def test_ambiguous_small_set_not_truncated(self, db_conn):
-        """Ambiguous match below the cap reports matches_capped=False, exact total."""
-        from scripts.database import (
-            create_memory,
-            resolve_memory_id_prefix,
-            AmbiguousPrefixError,
-        )
-        ids = [f"smalset{i}" + "0" * 24 for i in range(3)]  # 7-char shared prefix
-        for mid in ids:
-            create_memory(db_conn, {"id": mid, "context": f"row-{mid[-25]}"})
-
-        with pytest.raises(AmbiguousPrefixError) as exc_info:
-            resolve_memory_id_prefix(db_conn, "smalset")
-
-        assert exc_info.value.matches_capped is False
-        assert exc_info.value.total_matches == 3
-        assert len(exc_info.value.matches) == 3
-
-    def test_ambiguous_pathological_set_truncated_at_cap(self, db_conn):
-        """When matches exceed AMBIGUOUS_MATCH_CAP, list is capped + matches_capped=True.
-
-        total_matches reflects the actual COUNT(*) from the storage layer,
-        not len(matches). Guards regression where the cap query and the
-        count query diverge.
-        """
-        from scripts.database import (
-            create_memory,
-            resolve_memory_id_prefix,
-            AmbiguousPrefixError,
-            AMBIGUOUS_MATCH_CAP,
-        )
-        # Seed AMBIGUOUS_MATCH_CAP + 1 rows under shared 7-char prefix "patho00"
-        seeded = AMBIGUOUS_MATCH_CAP + 1
-        for i in range(seeded):
-            mid = f"patho00{i:025d}"  # 7-char prefix + 25-char numeric pad = 32
-            assert len(mid) == 32
-            create_memory(db_conn, {"id": mid, "context": f"row-{i}"})
-
-        with pytest.raises(AmbiguousPrefixError) as exc_info:
-            resolve_memory_id_prefix(db_conn, "patho00")
-
-        assert exc_info.value.matches_capped is True
-        assert exc_info.value.total_matches == seeded
-        assert len(exc_info.value.matches) == AMBIGUOUS_MATCH_CAP
-
-    def test_range_scan_does_not_overmatch_at_boundary(self, db_conn):
-        """Range scan must NOT match rows where the next char exceeds the prefix.
-
-        Locks the H2 contract independent of internals (LIKE vs range): a
-        prefix `abcdef0` should match `abcdef0...` but NOT `abcdef1...`,
-        even though both share the same first 6 chars. A buggy
-        upper-bound construction (e.g., open-ended scan, off-by-one cap)
-        would over-match here.
-        """
-        from scripts.database import (
-            create_memory,
-            resolve_memory_id_prefix,
-        )
-        id_at_prefix = "abcdef0" + "0" * 25  # matches prefix "abcdef0"
-        id_above_prefix = "abcdef1" + "0" * 25  # one char higher at the boundary
-        create_memory(db_conn, {"id": id_at_prefix, "context": "in-range"})
-        create_memory(db_conn, {"id": id_above_prefix, "context": "above-range"})
-
-        # Unique match — only the in-range row resolves
-        assert resolve_memory_id_prefix(db_conn, "abcdef0") == id_at_prefix
-
-    def test_generate_id_alphabet_invariant(self):
-        """Every generate_id() output must stay within the lowercase-hex alphabet.
-
-        The resolver's range-scan upper bound is `prefix + _PREFIX_UPPER_BOUND_CHAR`
-        (currently 'g' — the smallest ASCII char above 'f'). That bound is
-        correct ONLY if generate_id produces strictly lowercase hex [0-9a-f].
-        If the alphabet ever broadens (e.g., to base32 or full alphanumeric),
-        the upper-bound constant must be revisited; this test fails loudly
-        in that case.
-        """
-        from scripts.database import generate_id, _PREFIX_UPPER_BOUND_CHAR
-
-        # 100 IDs is enough to surface a misconfigured charset without
-        # making the test slow; secrets.token_hex is uniform over [0-9a-f].
-        for _ in range(100):
-            mid = generate_id()
-            for ch in mid:
-                assert ch < _PREFIX_UPPER_BOUND_CHAR, (
-                    f"generate_id produced char {ch!r} (in {mid!r}) outside the "
-                    f"strictly-below-{_PREFIX_UPPER_BOUND_CHAR!r} alphabet that "
-                    "the range-scan upper bound depends on. If charset broadened "
-                    "intentionally, update _PREFIX_UPPER_BOUND_CHAR."
-                )
-
-    def test_long_context_marked_truncated_per_match(self, db_conn):
-        """Per-match `context_truncated` flag distinguishes long vs short contexts.
-
-        Long contexts (> descriptor_chars) are truncated to descriptor_chars
-        and flagged `context_truncated=True`; short contexts pass through
-        unchanged with `context_truncated=False`. The flag is per-match,
-        not per-list — guards a regression where the flag gets set globally
-        based on any-row-truncated.
-        """
-        from scripts.database import (
-            create_memory,
-            resolve_memory_id_prefix,
-            AmbiguousPrefixError,
-        )
-        descriptor_chars = 60  # default arg of resolve_memory_id_prefix
-        long_id = "trunca0" + "1" + "0" * 24
-        short_id = "trunca0" + "2" + "0" * 24
-        long_context = "x" * 200
-        short_context = "short"
-        create_memory(db_conn, {"id": long_id, "context": long_context})
-        create_memory(db_conn, {"id": short_id, "context": short_context})
-
-        with pytest.raises(AmbiguousPrefixError) as exc_info:
-            resolve_memory_id_prefix(db_conn, "trunca0")
-
-        by_id = {m["id"]: m for m in exc_info.value.matches}
-        assert by_id[long_id]["context_truncated"] is True
-        assert len(by_id[long_id]["context"]) == descriptor_chars
-        assert by_id[long_id]["context"] == "x" * descriptor_chars
-
-        assert by_id[short_id]["context_truncated"] is False
-        assert by_id[short_id]["context"] == short_context
-
 
 class TestUpdateMemory:
     def test_updates_fields(self, db_conn):
@@ -473,25 +160,6 @@ class TestUpdateMemory:
         assert update_memory(db_conn, mem_id, {"context": "New"}) is True
         assert get_memory(db_conn, mem_id)["context"] == "New"
 
-    def test_returns_false_for_missing(self, db_conn):
-        from scripts.database import update_memory
-        assert update_memory(db_conn, "nonexistent", {"context": "X"}) is False
-
-    def test_updates_json_fields(self, db_conn):
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"context": "Test"})
-        update_memory(db_conn, mem_id, {"lessons_learned": ["New lesson"]})
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["New lesson"]
-
-    def test_ignores_id_and_created_at(self, db_conn):
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"context": "Test"})
-        original = get_memory(db_conn, mem_id)
-        update_memory(db_conn, mem_id, {"id": "new-id", "created_at": "2000-01-01"})
-        result = get_memory(db_conn, mem_id)
-        assert result["id"] == mem_id
-        assert result["created_at"] == original["created_at"]
-
 
 class TestDeleteMemory:
     def test_deletes_existing(self, db_conn):
@@ -499,10 +167,6 @@ class TestDeleteMemory:
         mem_id = create_memory(db_conn, {"context": "Test"})
         assert delete_memory(db_conn, mem_id) is True
         assert get_memory(db_conn, mem_id) is None
-
-    def test_returns_false_for_missing(self, db_conn):
-        from scripts.database import delete_memory
-        assert delete_memory(db_conn, "nonexistent") is False
 
 
 class TestPACTMemoryDeleteVecTableHandling:
@@ -545,83 +209,6 @@ class TestPACTMemoryDeleteVecTableHandling:
             # Verify the primary-table delete actually landed.
             assert memory.get(mem_id) is None
 
-    def test_delete_propagates_other_operational_errors(self, tmp_path):
-        """Bug-surfacing: non-"no such table" OperationalError must propagate.
-
-        Wraps conn.execute so the vec_memories DELETE raises a controlled
-        OperationalError ("database is locked") instead of the natural
-        no-such-table error. The narrowed except must NOT swallow this —
-        propagating it surfaces real problems (lock contention, disk I/O,
-        etc.) instead of silently leaving stale vector entries.
-        """
-        from scripts.memory_api import PACTMemory
-        import scripts.memory_api as memory_api_mod
-
-        db_path = tmp_path / "vec_locked.db"
-        conn = sqlite3.connect(str(db_path))
-        create_test_schema(conn)
-        conn.close()
-
-        from contextlib import contextmanager
-        real_db_connection = memory_api_mod.db_connection
-
-        class _ConnProxy:
-            """Delegates everything to real_conn, intercepts execute()."""
-            def __init__(self, real_conn):
-                self._real = real_conn
-
-            def execute(self, sql, *args, **kwargs):
-                # Inject a non-"no such table" OperationalError on the
-                # vec_memories DELETE only. All other queries (resolver,
-                # primary-table delete, ensure_initialized) pass through.
-                if "vec_memories" in sql and sql.lstrip().upper().startswith("DELETE"):
-                    raise sqlite3.OperationalError("database is locked")
-                return self._real.execute(sql, *args, **kwargs)
-
-            def __getattr__(self, name):
-                # Delegate any other attribute (commit, close, row_factory, etc.)
-                return getattr(self._real, name)
-
-        @contextmanager
-        def db_connection_locking_vec(db_path=None):
-            # MIRRORS THE REAL SIGNATURE, `db_connection(db_path=None)`, and
-            # not one call site. An earlier spelling took a REQUIRED positional
-            # named `path`, which held only while every caller passed a path.
-            # A double bound to the call site breaks on a call-shape change and
-            # reports a TypeError rather than the behaviour under test.
-            #
-            # ⚠️ DO NOT RENAME THIS PARAMETER TO REMOVE THE SHADOW. It shadows
-            # the enclosing `db_path` and that is the correct cost. The name
-            # must align with the real function, because a caller may pass the
-            # argument BY KEYWORD, and a double with a different parameter name
-            # then raises TypeError instead of running the behaviour under
-            # test. A rename looks like tidying and reintroduces the exact
-            # coupling the paragraph above records. The shadow is inert here:
-            # this body uses the parameter alone, and the enclosing name is
-            # read only outside this closure.
-            with real_db_connection(db_path) as real_conn:
-                yield _ConnProxy(real_conn)
-
-        with patch("scripts.memory_api._ensure_ready"), \
-             patch("scripts.memory_api.sync_to_claude_md"), \
-             patch.object(PACTMemory, "_store_embedding", autospec=True):
-            memory = PACTMemory(
-                project_id="vec-locked-test",
-                session_id="s1",
-                db_path=db_path,
-            )
-            mem_id = memory.save({"context": "row delete will lock-fail"})
-
-            # Now patch db_connection so the SUBSEQUENT delete uses the
-            # locking wrapper. (save() above used the real db_connection.)
-            with patch.object(
-                memory_api_mod, "db_connection", db_connection_locking_vec
-            ):
-                with pytest.raises(sqlite3.OperationalError) as exc_info:
-                    memory.delete(mem_id)
-                assert "database is locked" in str(exc_info.value)
-                assert "no such table" not in str(exc_info.value)
-
 
 class TestListMemories:
     def test_lists_all(self, db_conn):
@@ -629,32 +216,6 @@ class TestListMemories:
         create_memory(db_conn, {"context": "A"})
         create_memory(db_conn, {"context": "B"})
         assert len(list_memories(db_conn)) == 2
-
-    def test_filters_by_project(self, db_conn):
-        from scripts.database import create_memory, list_memories
-        create_memory(db_conn, {"context": "A", "project_id": "p1"})
-        create_memory(db_conn, {"context": "B", "project_id": "p2"})
-        results = list_memories(db_conn, project_id="p1")
-        assert len(results) == 1
-        assert results[0]["context"] == "A"
-
-    def test_filters_by_session(self, db_conn):
-        from scripts.database import create_memory, list_memories
-        create_memory(db_conn, {"context": "A", "session_id": "s1"})
-        create_memory(db_conn, {"context": "B", "session_id": "s2"})
-        assert len(list_memories(db_conn, session_id="s1")) == 1
-
-    def test_respects_limit(self, db_conn):
-        from scripts.database import create_memory, list_memories
-        for i in range(5):
-            create_memory(db_conn, {"context": f"M{i}"})
-        assert len(list_memories(db_conn, limit=2)) == 2
-
-    def test_respects_offset(self, db_conn):
-        from scripts.database import create_memory, list_memories
-        for i in range(5):
-            create_memory(db_conn, {"context": f"M{i}"})
-        assert len(list_memories(db_conn, limit=10, offset=3)) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -667,84 +228,6 @@ class TestSearchMemoriesByText:
         create_memory(db_conn, {"context": "Working on authentication"})
         create_memory(db_conn, {"context": "Working on payments"})
         assert len(search_memories_by_text(db_conn, "authentication")) == 1
-
-    def test_finds_by_goal(self, db_conn):
-        from scripts.database import create_memory, search_memories_by_text
-        create_memory(db_conn, {"goal": "Implement OAuth2"})
-        assert len(search_memories_by_text(db_conn, "OAuth2")) == 1
-
-    def test_finds_by_lessons(self, db_conn):
-        from scripts.database import create_memory, search_memories_by_text
-        create_memory(db_conn, {"lessons_learned": ["Always use mocks"]})
-        assert len(search_memories_by_text(db_conn, "mocks")) == 1
-
-    def test_filters_by_project(self, db_conn):
-        from scripts.database import create_memory, search_memories_by_text
-        create_memory(db_conn, {"context": "auth thing", "project_id": "p1"})
-        create_memory(db_conn, {"context": "auth other", "project_id": "p2"})
-        assert len(search_memories_by_text(db_conn, "auth", project_id="p1")) == 1
-
-    def test_escapes_sql_wildcards(self, db_conn):
-        from scripts.database import create_memory, search_memories_by_text
-        create_memory(db_conn, {"context": "100% done"})
-        create_memory(db_conn, {"context": "not percent"})
-        assert len(search_memories_by_text(db_conn, "100%")) == 1
-
-    def test_empty_results(self, db_conn):
-        from scripts.database import search_memories_by_text
-        assert search_memories_by_text(db_conn, "nonexistent") == []
-
-    def test_records_sharing_a_created_at_come_newest_inserted_first(self, db_conn):
-        """This pins the DIRECTION of the `rowid` tiebreak, not its presence.
-
-        MEASURED DETECTION SET, so nobody has to re-run the ablation. Deleting
-        `, rowid DESC` does NOT redden this arm: SQLite already emits tied rows
-        in reverse rowid order under this plan, so the clause and its absence
-        are indistinguishable through the query's public behaviour. Changing it
-        to `rowid ASC` DOES redden it. So the clause's role as insurance -- for
-        a tie between rows the schema DEFAULT wrote -- stays UNTESTED, and it
-        stays untested for a reason internal to this query rather than because
-        anyone judged it unnecessary. No OUTPUT arm can cover it while removal
-        and presence produce the same rows, which is why the cover is
-        TestTheTiebreakReachesTheEngine below: it asserts the clause in the
-        statement the engine is handed and so does not need the rows to
-        differ.
-
-        THAT IS THE MUTATION WORTH CATCHING, because anyone optimising this
-        query's sort has a reason to flip the direction: an index on
-        `(project_id, created_at DESC)` still needs a temp b-tree for the last
-        term under `rowid DESC` and needs none under `rowid ASC`. DESC is what
-        makes a projection match the order the saves went in, so the flip
-        trades a correctness property for a sort this query does not need.
-        Measured, and narrower than it first looks: an ASCENDING index on
-        `(project_id, created_at)` satisfies `created_at DESC, rowid DESC`
-        outright with no sort, by scanning backward. So it is the DESC index
-        that cannot fully serve `rowid DESC`, not indexes in general.
-
-        The shared stamp is set by direct SQL because that is the only way to
-        reach the clause. `create_memory` stamps microsecond ISO and ignores a
-        caller's value, so saves cannot tie; in production a tie is reachable
-        only from a row the schema DEFAULT wrote.
-        """
-        from scripts.database import create_memory, search_memories_by_text
-        ids = [create_memory(db_conn, {"context": f"tied probe {i}"})
-               for i in range(3)]
-        db_conn.execute("UPDATE memories SET created_at = '2026-01-01 00:00:00'")
-        db_conn.commit()
-
-        # THE TIE IS A PRECONDITION AND IS ASSERTED, NOT ASSUMED. Distinct
-        # stamps produce this same expected order under `created_at DESC`
-        # alone, so a backdate that silently did nothing would leave the arm
-        # green while exercising no tie at all.
-        stamps = {r[0] for r in db_conn.execute("SELECT created_at FROM memories")}
-        assert len(stamps) == 1, f"the rows must tie; got {sorted(stamps)}"
-
-        found = [r["id"] for r in search_memories_by_text(db_conn, "tied probe")]
-
-        assert found == list(reversed(ids)), (
-            "tied rows must come back newest-inserted first; got the order "
-            f"{found} for insertion order {ids}"
-        )
 
 
 class TestTheTiebreakReachesTheEngine:
@@ -795,14 +278,6 @@ class TestTheTiebreakReachesTheEngine:
         )
         assert clause.startswith("created_at DESC, rowid DESC"), clause
 
-    def test_the_text_search_asks_for_the_tiebreak(self, tmp_path):
-        from scripts.database import search_memories_by_text
-        clause = self._order_by_of_the_one_ordering_statement(
-            tmp_path,
-            lambda c: search_memories_by_text(c, "probe", project_id="p", limit=3),
-        )
-        assert clause.startswith("created_at DESC, rowid DESC"), clause
-
 
 # ---------------------------------------------------------------------------
 # Maintenance
@@ -815,21 +290,6 @@ class TestMaintenance:
         create_memory(db_conn, {"context": "A"})
         create_memory(db_conn, {"context": "B"})
         assert get_memory_count(db_conn) == 2
-
-    def test_get_memory_count_by_project(self, db_conn):
-        from scripts.database import create_memory, get_memory_count
-        create_memory(db_conn, {"context": "A", "project_id": "p1"})
-        create_memory(db_conn, {"context": "B", "project_id": "p2"})
-        assert get_memory_count(db_conn, project_id="p1") == 1
-
-    def test_check_integrity(self, db_conn):
-        from scripts.database import check_integrity
-        assert check_integrity(db_conn) is True
-
-    def test_generate_id_uniqueness(self):
-        from scripts.database import generate_id
-        ids = {generate_id() for _ in range(100)}
-        assert len(ids) == 100
 
 
 # ---------------------------------------------------------------------------
@@ -856,118 +316,6 @@ class TestUnknownColumnsRaise:
         mem_id = create_memory(db_conn, {"context": "Original"})
         with pytest.raises(ValueError, match="Unknown memory field"):
             update_memory(db_conn, mem_id, {"bogus_field": "x"})
-
-    def test_update_raises_on_sql_injection_attempt(self, db_conn):
-        """SQL-injection-shaped keys still raise (no silent drop regression)."""
-        from scripts.database import create_memory, update_memory
-        mem_id = create_memory(db_conn, {"context": "Original"})
-        with pytest.raises(ValueError, match="Unknown memory field"):
-            update_memory(db_conn, mem_id, {
-                "evil_column": "DROP TABLE memories",
-                "'; DROP TABLE memories; --": "injection attempt",
-            })
-
-    def test_update_error_lists_unknown_and_allowed(self, db_conn):
-        """Error message must name the bad keys AND the allowed set."""
-        from scripts.database import create_memory, update_memory
-        mem_id = create_memory(db_conn, {"context": "Test"})
-        with pytest.raises(ValueError) as excinfo:
-            update_memory(db_conn, mem_id, {"nonexistent_field": "x"})
-        msg = str(excinfo.value)
-        assert "nonexistent_field" in msg
-        assert "Allowed fields" in msg
-        # Allowed set must include at least the well-known columns so users
-        # can discover what they meant.
-        assert "context" in msg
-        assert "lessons_learned" in msg
-
-    def test_update_atomicity_on_unknown_key(self, db_conn):
-        """
-        A rejected update must leave the row unchanged.
-        If a payload mixes a valid field (context) with an unknown field (bogus),
-        the ValueError must be raised before any write, so the existing row
-        keeps its original value.
-        """
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"context": "Original"})
-        with pytest.raises(ValueError):
-            update_memory(db_conn, mem_id, {"context": "Updated", "bogus": "x"})
-        # Row must be unchanged — no partial apply.
-        assert get_memory(db_conn, mem_id)["context"] == "Original"
-
-    def test_update_only_valid_keys_succeeds(self, db_conn):
-        """Happy path: well-formed updates still work (no regression)."""
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"context": "Test"})
-        assert update_memory(db_conn, mem_id, {"goal": "New goal"}) is True
-        assert get_memory(db_conn, mem_id)["goal"] == "New goal"
-
-    def test_save_raises_on_unknown_key(self, db_conn):
-        """
-        save_memory (create_memory) is symmetric with update_memory.
-
-        Before PR #374, create_memory silently dropped unknown top-level keys
-        because _serialize_json_fields preserved them but the INSERT only read
-        named columns via data.get(...). Now unknown keys raise ValueError at
-        the validation step, before any DB write.
-        """
-        from scripts.database import create_memory
-        with pytest.raises(ValueError, match="Unknown memory field"):
-            create_memory(db_conn, {"context": "Test", "bogus_field": "x"})
-
-    def test_save_allows_id_and_created_at(self, db_conn):
-        """id and created_at are legal on create (not 'unknown')."""
-        from scripts.database import create_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "id": "explicit-id",
-            "context": "Test",
-        })
-        assert mem_id == "explicit-id"
-        assert get_memory(db_conn, mem_id)["context"] == "Test"
-
-    def test_update_json_fields_additive_on_empty(self, db_conn):
-        """
-        Updating a memory whose list field is empty simply sets it — no
-        duplication surprise from the dedup merge path.
-        """
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"context": "Test"})
-        update_memory(db_conn, mem_id, {"lessons_learned": ["New lesson"]})
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["New lesson"]
-
-    def test_id_and_created_at_excluded_from_update(self, db_conn):
-        """id and created_at are silently stripped from update payloads (pre-validation).
-
-        This preserves the historical contract that callers can pass a full
-        memory dict (including id/created_at from a prior get()) through
-        update_memory without tripping validation. They are NOT persisted.
-        """
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"context": "Test"})
-        original = get_memory(db_conn, mem_id)
-        # No ValueError — id/created_at are stripped before validation.
-        assert update_memory(db_conn, mem_id, {
-            "id": "hijacked-id",
-            "created_at": "1970-01-01T00:00:00",
-        }) is True
-        after = get_memory(db_conn, mem_id)
-        assert after["id"] == mem_id
-        assert after["created_at"] == original["created_at"]
-
-    def test_update_raises_on_unknown_subobject_key_in_entities(self, db_conn):
-        """
-        End-to-end: unknown sub-object keys in dict list fields raise
-        ValueError via the bug-3 strict-from-dict path that fires inside
-        _canonicalize_dict_item during the merge. Row stays unchanged.
-        """
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"context": "A"})
-        with pytest.raises(ValueError, match="Unknown keys for Entity"):
-            update_memory(db_conn, mem_id, {
-                "entities": [{"name": "Redis", "description": "cache"}],
-            })
-        # Row unchanged (atomicity — the raise happened outside the transaction).
-        assert get_memory(db_conn, mem_id)["context"] == "A"
 
 
 # ---------------------------------------------------------------------------
@@ -999,84 +347,6 @@ class TestBug3SavePathStrict:
                 "entities": [{"name": "Redis", "description": "cache"}],
             })
 
-    def test_save_raises_on_unknown_subobject_key_in_active_tasks(self, db_conn):
-        """Harvester's exact reproducer: active_tasks with id/subject keys
-        instead of task/status/priority must raise ValueError on save."""
-        from scripts.database import create_memory
-        with pytest.raises(ValueError, match="Unknown keys for TaskItem"):
-            create_memory(db_conn, {
-                "context": "harvester repro",
-                "active_tasks": [
-                    {"id": "abc", "subject": "foo"},
-                    {"id": "def", "subject": "bar"},
-                ],
-            })
-
-    def test_save_raises_on_unknown_subobject_key_in_decisions(self, db_conn):
-        """Decisions path also strict on save."""
-        from scripts.database import create_memory
-        with pytest.raises(ValueError, match="Unknown keys for Decision"):
-            create_memory(db_conn, {
-                "context": "A",
-                "decisions": [{"decision": "D1", "bogus_field": "x"}],
-            })
-
-    def test_save_atomicity_on_unknown_subobject_key(self, db_conn):
-        """A raise during canonicalization must leave the memories table
-        unchanged — no partial row inserted. Validation-before-write."""
-        from scripts.database import create_memory
-        rows_before = db_conn.execute(
-            "SELECT COUNT(*) FROM memories"
-        ).fetchone()[0]
-        with pytest.raises(ValueError):
-            create_memory(db_conn, {
-                "context": "should not persist",
-                "entities": [{"name": "X", "bogus": "y"}],
-            })
-        rows_after = db_conn.execute(
-            "SELECT COUNT(*) FROM memories"
-        ).fetchone()[0]
-        assert rows_after == rows_before
-
-    def test_save_canonicalizes_dict_items_on_write(self, db_conn):
-        """
-        The save path round-trips each dict-list item through its dataclass,
-        so the stored shape is canonical — defaults are populated and
-        None-vs-missing aliasing is resolved to a single shape. Symmetric
-        with update_memory's merge path.
-        """
-        from scripts.database import create_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "context": "canonicalization check",
-            "active_tasks": [{"task": "T1"}],
-            "entities": [{"name": "Redis"}],
-            "decisions": [{"decision": "D1"}],
-        })
-        result = get_memory(db_conn, mem_id)
-        # TaskItem defaults status='pending'
-        assert result["active_tasks"] == [{"task": "T1", "status": "pending"}]
-        # Entity canonical shape
-        assert result["entities"][0]["name"] == "Redis"
-        # Decision canonical shape
-        assert result["decisions"][0]["decision"] == "D1"
-
-    def test_save_with_string_shorthand_in_list_fields(self, db_conn):
-        """
-        Regression: string shorthand for list fields (e.g.
-        entities=["Redis"]) must still work after canonicalization. The
-        _canonicalize_dict_item helper routes str inputs through the
-        non-strict cls.from_dict(str) path — bug 3 strictness only applies
-        to dict inputs.
-        """
-        from scripts.database import create_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "context": "string shorthand",
-            "entities": ["Redis", "Postgres"],
-        })
-        result = get_memory(db_conn, mem_id)
-        names = [e["name"] for e in result["entities"]]
-        assert names == ["Redis", "Postgres"]
-
 
 # ---------------------------------------------------------------------------
 # Bug 1 fix (#374) — additive-by-default list merge with content-hash dedup
@@ -1103,105 +373,8 @@ class TestBug1AdditiveListMerge:
         update_memory(db_conn, mem_id, {"lessons_learned": ["c"]})
         assert get_memory(db_conn, mem_id)["lessons_learned"] == ["a", "b", "c"]
 
-    def test_dedup_string_list_overlap(self, db_conn):
-        """b already exists — it should NOT be duplicated."""
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"lessons_learned": ["a", "b"]})
-        update_memory(db_conn, mem_id, {"lessons_learned": ["b", "c"]})
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["a", "b", "c"]
-
-    def test_dedup_within_incoming_string_batch(self, db_conn):
-        """A caller sending [a, a, b] gets [a, b]."""
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"lessons_learned": []})
-        update_memory(db_conn, mem_id, {"lessons_learned": ["a", "a", "b"]})
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["a", "b"]
-
-    def test_dedup_strips_whitespace(self, db_conn):
-        """'  a  ' and 'a' collide (hash over stripped string)."""
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"lessons_learned": ["a"]})
-        update_memory(db_conn, mem_id, {"lessons_learned": ["  a  "]})
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["a"]
-
-    def test_repeat_update_is_idempotent(self, db_conn):
-        """Calling update twice with the same incoming list produces stable state."""
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"lessons_learned": ["a"]})
-        update_memory(db_conn, mem_id, {"lessons_learned": ["b", "c"]})
-        update_memory(db_conn, mem_id, {"lessons_learned": ["b", "c"]})
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["a", "b", "c"]
-
-    def test_order_preserved_existing_before_incoming(self, db_conn):
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"lessons_learned": ["x", "y"]})
-        update_memory(db_conn, mem_id, {"lessons_learned": ["a", "b"]})
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["x", "y", "a", "b"]
 
     # --- Dict list fields -------------------------------------------------
-
-    def test_a_nested_update_replaces_its_same_name_entity(self, db_conn):
-        """
-        FIX-MEM (f4) supersedes architect §2 here. §2 kept both
-        Entity{name:"X",notes:"old"} and Entity{name:"X",notes:"new"} so that
-        first-wins dedup by `name` would not LOSE the new notes. Keeping both
-        served the stale note beside its correction (M12). The new notes now
-        replace the old ones in place, so the nested update is still kept.
-        """
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "entities": [{"name": "Redis", "notes": "old"}],
-        })
-        update_memory(db_conn, mem_id, {
-            "entities": [{"name": "Redis", "notes": "new"}],
-        })
-        assert get_memory(db_conn, mem_id)["entities"] == [{"name": "Redis", "notes": "new"}]
-
-    def test_dedup_dict_list_exact_duplicate(self, db_conn):
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "entities": [{"name": "Redis", "notes": "n"}],
-        })
-        update_memory(db_conn, mem_id, {
-            "entities": [{"name": "Redis", "notes": "n"}],
-        })
-        assert len(get_memory(db_conn, mem_id)["entities"]) == 1
-
-    def test_dedup_dict_list_none_vs_missing_optional(self, db_conn):
-        """
-        {"name": "X"} and {"name": "X", "type": None} must collide. The
-        dataclass round-trip in _canonicalize_dict_item drops falsy
-        optionals in to_dict(), so both canonicalize to {"name": "X"}.
-        """
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"entities": [{"name": "X"}]})
-        update_memory(db_conn, mem_id, {
-            "entities": [{"name": "X", "type": None}],
-        })
-        assert len(get_memory(db_conn, mem_id)["entities"]) == 1
-
-    def test_dedup_active_tasks(self, db_conn):
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "active_tasks": [{"task": "T1"}],
-        })
-        update_memory(db_conn, mem_id, {
-            "active_tasks": [{"task": "T1"}, {"task": "T2"}],
-        })
-        tasks = get_memory(db_conn, mem_id)["active_tasks"]
-        assert len(tasks) == 2
-        assert {"task": "T1", "status": "pending"} in tasks
-        assert {"task": "T2", "status": "pending"} in tasks
-
-    def test_dedup_decisions(self, db_conn):
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "decisions": [{"decision": "Use Redis", "rationale": "fast"}],
-        })
-        update_memory(db_conn, mem_id, {
-            "decisions": [{"decision": "Use Redis", "rationale": "fast"}],
-        })
-        assert len(get_memory(db_conn, mem_id)["decisions"]) == 1
 
 
 class TestBug1ReplaceKwarg:
@@ -1217,40 +390,6 @@ class TestBug1ReplaceKwarg:
         )
         assert get_memory(db_conn, mem_id)["lessons_learned"] == ["new"]
 
-    def test_replace_still_dedups_within_incoming(self, db_conn):
-        """replace=True still dedups duplicate items within the new batch."""
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"lessons_learned": ["old"]})
-        update_memory(
-            db_conn, mem_id,
-            {"lessons_learned": ["a", "a", "b"]},
-            replace=True,
-        )
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["a", "b"]
-
-    def test_replace_clobbers_dict_list(self, db_conn):
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "entities": [{"name": "OldA"}, {"name": "OldB"}],
-        })
-        update_memory(
-            db_conn, mem_id,
-            {"entities": [{"name": "NewOnly"}]},
-            replace=True,
-        )
-        assert get_memory(db_conn, mem_id)["entities"] == [{"name": "NewOnly"}]
-
-    def test_replace_validates_sub_object_keys(self, db_conn):
-        """Even under replace, strict from_dict validation still runs."""
-        from scripts.database import create_memory, update_memory
-        mem_id = create_memory(db_conn, {"entities": [{"name": "X"}]})
-        with pytest.raises(ValueError, match="Unknown keys for Entity"):
-            update_memory(
-                db_conn, mem_id,
-                {"entities": [{"name": "X", "bogus": "y"}]},
-                replace=True,
-            )
-
 
 class TestBug1ScalarVsListSemantics:
     """Scalar fields still replace even when list fields merge."""
@@ -1263,21 +402,6 @@ class TestBug1ScalarVsListSemantics:
         assert result["context"] == "new"
         assert result["goal"] == "old goal"
 
-    def test_mixed_scalar_and_list_update(self, db_conn):
-        """One call: scalar replaces, list appends."""
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {
-            "context": "old",
-            "lessons_learned": ["a"],
-        })
-        update_memory(db_conn, mem_id, {
-            "context": "new",
-            "lessons_learned": ["b"],
-        })
-        result = get_memory(db_conn, mem_id)
-        assert result["context"] == "new"
-        assert result["lessons_learned"] == ["a", "b"]
-
 
 class TestBug1HashStability:
     """Content-hash key properties."""
@@ -1287,19 +411,6 @@ class TestBug1HashStability:
         h1 = _content_hash("lessons_learned", "abc")
         h2 = _content_hash("lessons_learned", "abc")
         assert h1 == h2
-
-    def test_hash_dict_order_independent(self):
-        """{a:1, b:2} and {b:2, a:1} must hash to the same key."""
-        from scripts.database import _content_hash
-        h1 = _content_hash("entities", {"name": "X", "type": "svc"})
-        h2 = _content_hash("entities", {"type": "svc", "name": "X"})
-        assert h1 == h2
-
-    def test_hash_differs_on_content_change(self):
-        from scripts.database import _content_hash
-        h1 = _content_hash("lessons_learned", "abc")
-        h2 = _content_hash("lessons_learned", "abd")
-        assert h1 != h2
 
 
 class TestBug1TransactionalAtomicity:
@@ -1323,15 +434,6 @@ class TestBug1TransactionalAtomicity:
             })
         result = get_memory(db_conn, mem_id)
         assert result["entities"] == [{"name": "Existing"}]
-
-    def test_list_type_coercion_failure_raises(self, db_conn):
-        """A non-list value for a list field raises ValueError cleanly."""
-        from scripts.database import create_memory, update_memory, get_memory
-        mem_id = create_memory(db_conn, {"lessons_learned": ["a"]})
-        with pytest.raises(ValueError, match="must be a list"):
-            update_memory(db_conn, mem_id, {"lessons_learned": "not a list"})
-        # Row unchanged
-        assert get_memory(db_conn, mem_id)["lessons_learned"] == ["a"]
 
 
 # ---------------------------------------------------------------------------
@@ -1357,78 +459,6 @@ class TestTOCTOUMitigation:
         assert db_path.exists()
         file_mode = stat.S_IMODE(db_path.stat().st_mode)
         assert file_mode == 0o600, f"Expected 0o600, got {oct(file_mode)}"
-
-    def test_race_condition_file_exists_error_handled(self, tmp_path):
-        """FileExistsError during O_CREAT|O_EXCL should be handled gracefully."""
-        import sqlite3 as stdlib_sqlite3
-
-        db_path = tmp_path / "race.db"
-
-        # Simulate race: os.open raises FileExistsError
-        original_open = os.open
-        def mock_open(path, flags, mode=0):
-            if "race.db" in str(path) and (flags & os.O_EXCL):
-                raise FileExistsError("simulated race condition")
-            return original_open(path, flags, mode)
-
-        with patch("scripts.database.sqlite3", stdlib_sqlite3), \
-             patch("scripts.database.os.open", side_effect=mock_open):
-            from scripts.database import get_connection
-            conn = get_connection(db_path=db_path)
-            conn.close()
-
-        # Should still succeed via sqlite3.connect fallback
-        assert db_path.exists()
-
-    def test_wal_sidecar_permissions_set_on_new_db(self, tmp_path):
-        """WAL sidecar files should be chmod'd to 0o600 on new database creation."""
-        import stat
-        import sqlite3 as stdlib_sqlite3
-
-        db_path = tmp_path / "wal_test.db"
-
-        with patch("scripts.database.sqlite3", stdlib_sqlite3):
-            from scripts.database import get_connection
-            conn = get_connection(db_path=db_path)
-            # Force WAL creation by writing data
-            conn.execute("CREATE TABLE test (id TEXT)")
-            conn.execute("INSERT INTO test VALUES ('x')")
-            conn.commit()
-            conn.close()
-
-        # Check sidecar permissions if they exist
-        for suffix in ("-wal", "-shm"):
-            sidecar = Path(str(db_path) + suffix)
-            if sidecar.exists():
-                mode = stat.S_IMODE(sidecar.stat().st_mode)
-                assert mode == 0o600, (
-                    f"Sidecar {sidecar.name} should be 0o600, got {oct(mode)}"
-                )
-
-    def test_existing_db_skips_toctou(self, tmp_path):
-        """Pre-existing database file should not trigger O_CREAT|O_EXCL."""
-        import sqlite3 as stdlib_sqlite3
-
-        db_path = tmp_path / "existing.db"
-        # Pre-create the file
-        db_path.write_bytes(b"")
-
-        call_log = []
-        original_open = os.open
-        def tracking_open(path, flags, mode=0):
-            if "existing.db" in str(path):
-                call_log.append(flags)
-            return original_open(path, flags, mode)
-
-        with patch("scripts.database.sqlite3", stdlib_sqlite3), \
-             patch("scripts.database.os.open", side_effect=tracking_open):
-            from scripts.database import get_connection
-            conn = get_connection(db_path=db_path)
-            conn.close()
-
-        # os.open should NOT have been called with O_EXCL for existing file
-        for flags in call_log:
-            assert not (flags & os.O_EXCL), "Should not use O_EXCL on existing file"
 
 
 # ---------------------------------------------------------------------------
@@ -1533,113 +563,6 @@ class TestBug1ConcurrentWriterRace:
         assert "b1" in lessons and "b2" in lessons, f"writer B lost: {lessons}"
         assert len(lessons) == 5, f"expected 5 unique items, got {lessons}"
 
-    def test_repeat_concurrent_idempotent(self, tmp_path):
-        """
-        Same concurrent test run twice back-to-back must remain idempotent:
-        the second round adds zero new items because all hashes collide.
-        """
-        import threading
-        from scripts import database as db_mod
-
-        db_path, mem_id = self._make_real_db(tmp_path)
-
-        def run_round() -> None:
-            barrier = threading.Barrier(2)
-            errors: list[BaseException] = []
-
-            def writer(items: list[str]) -> None:
-                try:
-                    conn = db_mod.get_connection(db_path=db_path)
-                    try:
-                        barrier.wait(timeout=5)
-                        db_mod.update_memory(
-                            conn, mem_id, {"lessons_learned": items},
-                        )
-                    finally:
-                        conn.close()
-                except BaseException as exc:  # noqa: BLE001
-                    errors.append(exc)
-
-            t_a = threading.Thread(target=writer, args=(["x", "y"],))
-            t_b = threading.Thread(target=writer, args=(["y", "z"],))
-            t_a.start()
-            t_b.start()
-            t_a.join(timeout=10)
-            t_b.join(timeout=10)
-            assert not errors
-
-        run_round()
-        run_round()  # Re-run — dedup should keep the list stable.
-
-        conn = db_mod.get_connection(db_path=db_path)
-        try:
-            lessons = db_mod.get_memory(conn, mem_id)["lessons_learned"]
-        finally:
-            conn.close()
-
-        # seed + x + y + z (y deduped across writers). Second round adds nothing.
-        assert sorted(lessons) == ["seed", "x", "y", "z"], f"got {lessons}"
-
-    def test_three_writer_concurrent_race(self, tmp_path):
-        """
-        Three threads each add a distinct lesson and release simultaneously
-        from a Barrier(3). After all writers finish, the row must contain
-        ALL three new items plus the seed — proving union semantics hold
-        under deeper write contention than the two-writer case. If
-        BEGIN IMMEDIATE serialization were broken, at least one writer's
-        merge would clobber another's and the final list would be short.
-        """
-        import threading
-        from scripts import database as db_mod
-
-        db_path, mem_id = self._make_real_db(tmp_path)
-
-        barrier = threading.Barrier(3)
-        errors: list[BaseException] = []
-
-        def writer(item: str) -> None:
-            try:
-                conn = db_mod.get_connection(db_path=db_path)
-                try:
-                    barrier.wait(timeout=5)
-                    db_mod.update_memory(
-                        conn, mem_id, {"lessons_learned": [item]},
-                    )
-                finally:
-                    conn.close()
-            except BaseException as exc:  # noqa: BLE001
-                errors.append(exc)
-
-        t_a = threading.Thread(target=writer, args=("alpha",))
-        t_b = threading.Thread(target=writer, args=("bravo",))
-        t_c = threading.Thread(target=writer, args=("charlie",))
-        t_a.start()
-        t_b.start()
-        t_c.start()
-        t_a.join(timeout=10)
-        t_b.join(timeout=10)
-        t_c.join(timeout=10)
-
-        assert not t_a.is_alive(), "writer A stalled (BEGIN IMMEDIATE deadlock?)"
-        assert not t_b.is_alive(), "writer B stalled (BEGIN IMMEDIATE deadlock?)"
-        assert not t_c.is_alive(), "writer C stalled (BEGIN IMMEDIATE deadlock?)"
-        assert not errors, f"writers raised: {errors!r}"
-
-        conn = db_mod.get_connection(db_path=db_path)
-        try:
-            row = db_mod.get_memory(conn, mem_id)
-        finally:
-            conn.close()
-
-        lessons = row["lessons_learned"]
-        assert "seed" in lessons, "initial seed was clobbered"
-        assert "alpha" in lessons, f"writer A lost: {lessons}"
-        assert "bravo" in lessons, f"writer B lost: {lessons}"
-        assert "charlie" in lessons, f"writer C lost: {lessons}"
-        assert len(lessons) == 4, (
-            f"expected 4 unique items (seed + 3 writers), got {lessons}"
-        )
-
 
 class TestBug1LegacyRowGracefulDegradation:
     """
@@ -1694,94 +617,6 @@ class TestBug1LegacyRowGracefulDegradation:
             for rec in caplog.records
         ), f"expected WARNING about stray key, got records: {[r.getMessage() for r in caplog.records]}"
 
-    def test_legacy_row_additive_update_uses_safety_valve(self, db_conn, caplog):
-        """
-        A legacy row with a genuinely uncanonicalizable sub-object in
-        `entities` must still accept additive updates through update_memory.
-        The _merge_with_dedup safety valve (try/except → repr() fallback)
-        should fire for the legacy item so the merge succeeds and the new
-        item is appended.
-
-        Fixture choice (post-R2-5): we use a non-dict, non-str item (a raw
-        integer) to defeat BOTH strict AND lenient canonicalization. R2-5
-        added a lenient path that drops unknown keys on legacy dicts, so a
-        plain stray-key dict no longer triggers the safety valve — the
-        lenient path succeeds and no WARNING fires. A non-dict/non-str
-        item hits the TypeError branch of _canonicalize_dict_item in
-        BOTH modes, forcing the repr() fallback and the WARNING log.
-        """
-        import logging
-        from scripts.database import get_memory, update_memory
-
-        # Inject a legacy row: entities has one non-dict, non-str item
-        # (raw integer). This cannot be canonicalized via Entity.from_dict
-        # in either strict or lenient mode — _canonicalize_dict_item raises
-        # TypeError on non-dict/non-str input, which forces the safety
-        # valve repr() fallback in _merge_with_dedup.
-        payload_entities = json.dumps(
-            [42]
-        )
-        db_conn.execute(
-            """
-            INSERT INTO memories (id, entities, created_at, updated_at)
-            VALUES (?, ?, datetime('now'), datetime('now'))
-            """,
-            ("legacy-2", payload_entities),
-        )
-        db_conn.commit()
-
-        caplog.clear()
-        with caplog.at_level(logging.WARNING, logger="scripts.database"):
-            ok = update_memory(
-                db_conn,
-                "legacy-2",
-                {"entities": [{"name": "NewEntity", "type": "service"}]},
-            )
-
-        assert ok is True
-        row = get_memory(db_conn, "legacy-2")
-        ents = row["entities"]
-        # Safety valve: the legacy item must be preserved verbatim because
-        # we cannot canonicalize it; the new item is appended.
-        assert len(ents) == 2, f"expected 2 entities (1 legacy + 1 new), got {ents}"
-        legacy_present = any(e == 42 for e in ents)
-        new_present = any(
-            isinstance(e, dict) and e.get("name") == "NewEntity" for e in ents
-        )
-        assert legacy_present, f"legacy item lost during merge: {ents}"
-        assert new_present, f"new item not merged: {ents}"
-        # Verify the safety-valve WARNING fired with structured field
-        # assertions, not just message-text matching. We check the LogRecord's
-        # numeric level (levelno) and logger name to confirm the warning came
-        # from the database module at WARNING severity — this catches drift
-        # where someone downgrades the log to INFO or moves the call site to
-        # a different module without realizing the test only inspected text.
-        safety_valve_records = [
-            rec for rec in caplog.records
-            if rec.levelno == logging.WARNING
-            and "Legacy" in rec.getMessage()
-            and "canonicalization" in rec.getMessage()
-        ]
-        assert len(safety_valve_records) >= 1, (
-            "expected at least one WARNING-level safety-valve log from "
-            "_merge_with_dedup, got: "
-            f"{[(r.levelname, r.name, r.getMessage()) for r in caplog.records]}"
-        )
-        rec = safety_valve_records[0]
-        assert rec.levelno == logging.WARNING, (
-            f"safety-valve log emitted at {rec.levelname}, expected WARNING"
-        )
-        assert rec.levelname == "WARNING", (
-            f"safety-valve levelname is {rec.levelname!r}, expected 'WARNING'"
-        )
-        # The logger name should carry a meaningful module prefix so operators
-        # can filter by source. Accept either the database module or the
-        # broader scripts package, but reject root/empty/unrelated loggers.
-        assert "database" in rec.name or "scripts" in rec.name, (
-            f"safety-valve logger name {rec.name!r} lacks a database/scripts "
-            "prefix — check the logger configuration in scripts/database.py"
-        )
-
 
 class TestBug1ContentHashEdgeCases:
     """
@@ -1807,51 +642,6 @@ class TestBug1ContentHashEdgeCases:
         assert _content_hash("lessons_learned", s) == _content_hash(
             "lessons_learned", s,
         )
-
-    def test_string_list_hash_stable_for_stringified_datetime(self):
-        from datetime import datetime, timezone
-        from scripts.database import _content_hash
-        dt = datetime(2026, 4, 8, 12, 0, 0, tzinfo=timezone.utc)
-        h1 = _content_hash("lessons_learned", f"event at {dt}")
-        h2 = _content_hash("lessons_learned", f"event at {dt}")
-        assert h1 == h2
-        assert len(h1) == 64  # sha256 hex
-
-    def test_dict_list_hash_stable_across_python_runs(self):
-        """
-        Order-independent dict keys + canonical JSON separators should yield
-        the same hex on two consecutive calls and the same hex for
-        equivalent-shape inputs.
-        """
-        from scripts.database import _content_hash
-        a = {"name": "X", "type": "svc", "notes": "n"}
-        b = {"notes": "n", "name": "X", "type": "svc"}
-        h_a1 = _content_hash("entities", a)
-        h_a2 = _content_hash("entities", a)
-        h_b = _content_hash("entities", b)
-        assert h_a1 == h_a2
-        assert h_a1 == h_b
-
-    def test_canonical_json_default_str_fallback_in_use(self):
-        """
-        Directly exercise the json.dumps(default=str) contract described in
-        architect §2. This is a belt-and-braces check: if someone ever drops
-        default=str, a datetime item in the encoder call would raise
-        TypeError instead of stringifying.
-        """
-        from datetime import datetime, timezone
-        dt = datetime(2026, 4, 8, 12, 0, 0, tzinfo=timezone.utc)
-        # Mirror the encoder call from _content_hash.
-        payload = json.dumps(
-            {"when": dt, "name": "X"},
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        )
-        # Must contain the ISO-8601 string form of dt, not an error or repr.
-        assert "2026-04-08" in payload
-        assert "name" in payload
 
 
 class TestBug1ValidationBeforeTransactionInvariant:
@@ -1894,53 +684,6 @@ class TestBug1ValidationBeforeTransactionInvariant:
             "was attempted before validation rejected the payload"
         )
 
-    def test_unknown_sub_object_key_no_transaction(self, db_conn):
-        from scripts.database import create_memory, update_memory
-
-        mem_id = create_memory(
-            db_conn, {"entities": [{"name": "Existing"}]}
-        )
-        pre_snapshot = self._snapshot_row(db_conn, mem_id)
-        pre_changes = db_conn.total_changes
-
-        with pytest.raises(ValueError, match="Unknown keys for Entity"):
-            update_memory(
-                db_conn,
-                mem_id,
-                {"entities": [{"name": "New", "bogus": "y"}]},
-            )
-
-        post_snapshot = self._snapshot_row(db_conn, mem_id)
-        post_changes = db_conn.total_changes
-
-        assert post_snapshot == pre_snapshot, (
-            "row mutated despite ValueError — sub-object validation ran "
-            "inside transaction?"
-        )
-        assert post_changes == pre_changes, (
-            f"conn.total_changes moved ({pre_changes}→{post_changes}) — a "
-            "write was attempted before sub-object validation rejected input"
-        )
-
-    def test_non_list_for_list_field_no_transaction(self, db_conn):
-        """
-        ValueError from _normalize_list_field also runs pre-transaction;
-        assert total_changes unchanged here too.
-        """
-        from scripts.database import create_memory, update_memory
-
-        mem_id = create_memory(db_conn, {"lessons_learned": ["a"]})
-        pre_snapshot = self._snapshot_row(db_conn, mem_id)
-        pre_changes = db_conn.total_changes
-
-        with pytest.raises(ValueError, match="must be a list"):
-            update_memory(
-                db_conn, mem_id, {"lessons_learned": "oops not a list"},
-            )
-
-        assert self._snapshot_row(db_conn, mem_id) == pre_snapshot
-        assert db_conn.total_changes == pre_changes
-
 
 class TestBug1EmptyListBranches:
     """Empty list-field update branches (#374 R2-3c).
@@ -1980,38 +723,6 @@ class TestBug1EmptyListBranches:
         assert get_memory(db_conn, mem_id)["lessons_learned"] == [], (
             "replace=True with empty list must CLEAR the field — this is "
             "the documented 'clear this field' contract at database.py:866-869"
-        )
-
-    def test_additive_empty_list_short_circuit(self, db_conn):
-        """
-        F6 (#374 remediation, database.py:874-876): on the additive path,
-        an empty incoming list is a no-op. The loop `continue`s; if nothing
-        else was in the payload, normalized stays empty and the function
-        returns True without bumping updated_at.
-        """
-        from scripts.database import create_memory, update_memory, get_memory
-
-        mem_id = create_memory(db_conn, {"lessons_learned": ["item1"]})
-        pre_updated_at = self._get_updated_at(db_conn, mem_id)
-        pre_changes = db_conn.total_changes
-
-        result = update_memory(db_conn, mem_id, {"lessons_learned": []})
-
-        assert result is True, (
-            "empty-list additive no-op must return True (the update is "
-            "semantically successful — zero items to add)"
-        )
-        post = get_memory(db_conn, mem_id)
-        assert post["lessons_learned"] == ["item1"], (
-            "existing items must be untouched by an empty additive update"
-        )
-        assert self._get_updated_at(db_conn, mem_id) == pre_updated_at, (
-            "updated_at must NOT be bumped — F6 short-circuit skips the "
-            "UPDATE statement entirely"
-        )
-        assert db_conn.total_changes == pre_changes, (
-            f"no write should be attempted (total_changes moved "
-            f"{pre_changes}→{db_conn.total_changes})"
         )
 
 

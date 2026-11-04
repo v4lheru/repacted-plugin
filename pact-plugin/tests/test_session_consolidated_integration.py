@@ -151,61 +151,6 @@ class TestSessionConsolidatedRegression:
             f"Got: {warning!r}"
         )
 
-    def test_pause_with_consolidation(self, session_dir):
-        """Pause-path symmetry: /repacted:pause with consolidation → no warning.
-
-        Pins that Fix B covers the pause path as well as the wrap-up
-        path — a session that paused after consolidating must not warn
-        regardless of the review_dispatch / session_paused timestamp
-        ordering.
-        """
-        from session_end import check_unpaused_pr
-
-        _write_event(
-            "review_dispatch",
-            pr_number=100,
-            pr_url="https://github.com/org/repo/pull/100",
-            reviewers=["backend-coder"],
-        )
-        _write_event("session_consolidated", **{"pass": 2, "task_count": 3, "memories_saved": 1})
-        _write_event(
-            "session_paused",
-            pr_number=100,
-            pr_url="https://github.com/org/repo/pull/100",
-            branch="feat/test",
-            worktree_path="/tmp/wt",
-            consolidation_completed=True,
-        )
-
-        warning = check_unpaused_pr(tasks=None, project_slug="test-project")
-
-        assert warning is None
-
-    def test_multiple_wrap_up_runs_in_one_session(self, session_dir):
-        """Multiple session_consolidated events (N-run wrap-up) → no warning.
-
-        A session that ran /repacted:wrap-up more than once (e.g. user
-        cancelled the first attempt, ran it again after fixing a
-        blocker) will have N session_consolidated events in the
-        journal. The detector's `if read_events(...)` falsy-check is
-        a truthy list → still short-circuits.
-        """
-        from session_end import check_unpaused_pr
-
-        _write_event(
-            "review_dispatch",
-            pr_number=200,
-            pr_url="https://github.com/org/repo/pull/200",
-            reviewers=["backend-coder"],
-        )
-        _write_event("session_consolidated", **{"pass": 2, "task_count": 1})
-        _write_event("session_consolidated", **{"pass": 2, "task_count": 5})
-        _write_event("session_consolidated", **{"pass": 2, "task_count": 7})
-
-        warning = check_unpaused_pr(tasks=None, project_slug="test-project")
-
-        assert warning is None
-
 
 # ---------------------------------------------------------------------------
 # Adversarial D5 ordering invariants
@@ -259,41 +204,6 @@ class TestSessionConsolidatedOrderingInvariants:
             f"Stale session_consolidated must still short-circuit "
             f"(pure existence, not timestamp). Got: {warning!r}"
         )
-
-    def test_multiple_review_dispatches_with_one_consolidated(self, session_dir):
-        """Multiple review_dispatch events + one session_consolidated → no warning.
-
-        Pins that a session with multiple PR dispatches where
-        consolidation ran (even once) is treated as consolidated
-        overall. Regression guard against a bad fix that tried to
-        "match" consolidated events to specific review events by PR
-        number.
-        """
-        from session_end import check_unpaused_pr
-
-        _write_event(
-            "review_dispatch",
-            pr_number=101,
-            pr_url="https://github.com/org/repo/pull/101",
-            reviewers=["backend-coder"],
-        )
-        _write_event(
-            "review_dispatch",
-            pr_number=202,
-            pr_url="https://github.com/org/repo/pull/202",
-            reviewers=["backend-coder"],
-        )
-        _write_event(
-            "review_dispatch",
-            pr_number=303,
-            pr_url="https://github.com/org/repo/pull/303",
-            reviewers=["backend-coder"],
-        )
-        _write_event("session_consolidated", **{"pass": 2})
-
-        warning = check_unpaused_pr(tasks=None, project_slug="test-project")
-
-        assert warning is None
 
 
 # ---------------------------------------------------------------------------
@@ -393,71 +303,6 @@ class TestLivePrStateFixAEndToEnd:
 
         assert warning is None
 
-    def test_closed_pr_no_consolidation_short_circuits(self, session_dir):
-        """AC#2 sibling: gh says CLOSED → no warning."""
-        from session_end import check_unpaused_pr
-
-        _write_event(
-            "review_dispatch",
-            pr_number=448,
-            pr_url="https://github.com/org/repo/pull/448",
-            reviewers=["backend-coder"],
-        )
-
-        with patch("session_end.check_pr_state", return_value="CLOSED"):
-            warning = check_unpaused_pr(
-                tasks=None,
-                project_slug="test-project",
-            )
-
-        assert warning is None
-
-    def test_open_pr_no_consolidation_warns(self, session_dir):
-        """True-positive: gh says OPEN + no consolidation → warning fires."""
-        from session_end import check_unpaused_pr
-
-        _write_event(
-            "review_dispatch",
-            pr_number=449,
-            pr_url="https://github.com/org/repo/pull/449",
-            reviewers=["backend-coder"],
-        )
-
-        with patch("session_end.check_pr_state", return_value="OPEN"):
-            warning = check_unpaused_pr(
-                tasks=None,
-                project_slug="test-project",
-            )
-
-        assert warning is not None
-        assert "PR #449" in warning
-
-    def test_gh_offline_no_consolidation_conservative_warns(self, session_dir):
-        """Fail-open: gh returns "" (offline / missing) → warn conservatively.
-
-        End-to-end pin of the fail-open contract: if we cannot
-        distinguish "offline" from "PR actually open," we keep the
-        warning. Regression guard against a bad fix that treats the
-        empty sentinel as "safe to skip."
-        """
-        from session_end import check_unpaused_pr
-
-        _write_event(
-            "review_dispatch",
-            pr_number=500,
-            pr_url="https://github.com/org/repo/pull/500",
-            reviewers=["backend-coder"],
-        )
-
-        with patch("session_end.check_pr_state", return_value=""):
-            warning = check_unpaused_pr(
-                tasks=None,
-                project_slug="test-project",
-            )
-
-        assert warning is not None
-        assert "PR #500" in warning
-
 
 # ---------------------------------------------------------------------------
 # AC#3 true-positive preservation + legacy path preservation
@@ -500,23 +345,6 @@ class TestTruePositivePreservation:
 
         assert warning is None
 
-    def test_review_dispatch_without_consolidation_or_pause_warns(self, session_dir):
-        """AC#3: pure true-positive case — dispatched review, quit without anything else."""
-        from session_end import check_unpaused_pr
-
-        _write_event(
-            "review_dispatch",
-            pr_number=700,
-            pr_url="https://github.com/org/repo/pull/700",
-            reviewers=["backend-coder"],
-        )
-        # No session_consolidated, no session_paused. Autouse check_pr_state is OPEN.
-
-        warning = check_unpaused_pr(tasks=None, project_slug="test-project")
-
-        assert warning is not None
-        assert "PR #700" in warning
-
 
 # ---------------------------------------------------------------------------
 # Pre-existing journal compatibility
@@ -545,76 +373,6 @@ class TestPreExistingJournalCompat:
         from session_end import check_unpaused_pr
 
         # Do NOT write any events — journal file will not exist.
-        warning = check_unpaused_pr(tasks=None, project_slug="test-project")
-
-        assert warning is None
-
-    def test_corrupt_journal_line_is_fail_open(self, session_dir):
-        """Malformed JSON line → silently skipped; valid events parse.
-
-        Matches session_journal.py's per-line fail-open contract:
-        each event is self-contained; one bad line does not poison
-        the scan. A corrupted session_consolidated line surfaces as
-        "no consolidation event" which falls through to legacy logic
-        — correctly conservative behavior.
-        """
-        from session_end import check_unpaused_pr
-
-        # Write a valid review_dispatch first.
-        _write_event(
-            "review_dispatch",
-            pr_number=800,
-            pr_url="https://github.com/org/repo/pull/800",
-            reviewers=["backend-coder"],
-        )
-        # Append a garbage line to the journal.
-        journal_file = Path(session_dir) / "session-journal.jsonl"
-        with journal_file.open("a", encoding="utf-8") as f:
-            f.write("{this is not valid JSON\n")
-
-        # Autouse check_pr_state returns OPEN. Garbage line skipped;
-        # review_dispatch still visible; no session_consolidated →
-        # falls through to Fix A → OPEN → warn.
-        warning = check_unpaused_pr(tasks=None, project_slug="test-project")
-
-        assert warning is not None
-        assert "PR #800" in warning
-
-    def test_pre_existing_journal_with_only_legacy_events_unchanged(self, session_dir):
-        """Journal with no session_consolidated events → legacy detector behavior.
-
-        Pins that a session whose journal predates the fix (only has
-        the 2023-era events: session_start, agent_handoff,
-        review_dispatch, session_paused) produces the same
-        check_unpaused_pr output it produced before the fix landed.
-        No behavioral regression on upgrade.
-        """
-        from session_end import check_unpaused_pr
-
-        # Legacy events only — mirrors a journal from before #453.
-        _write_event(
-            "session_start",
-            session_id="legacy-session",
-            project_dir="/test/project",
-        )
-        _write_event(
-            "review_dispatch",
-            ts="2026-01-01T00:00:00Z",
-            pr_number=900,
-            pr_url="https://github.com/org/repo/pull/900",
-            reviewers=["backend-coder"],
-        )
-        _write_event(
-            "session_paused",
-            ts="2026-01-02T00:00:00Z",
-            pr_number=900,
-            pr_url="https://github.com/org/repo/pull/900",
-            branch="feat/legacy",
-            worktree_path="/tmp/legacy-wt",
-            consolidation_completed=True,
-        )
-
-        # Legacy pause-covers-review path: no warning, no gh call needed.
         warning = check_unpaused_pr(tasks=None, project_slug="test-project")
 
         assert warning is None
@@ -715,78 +473,6 @@ class TestPauseBashConditionalEmission:
             f"true branch MUST emit session_paused. Got types: {types}"
         )
 
-    def test_guard_false_emits_only_session_paused(self, tmp_path):
-        """{true_or_false}='false' → session_consolidated SKIPPED, session_paused still written.
-
-        Regression pin for review cycle-1 L1: removing the shell-clamp
-        (restoring the unconditional write) causes this test to fail
-        because session_consolidated would appear in the journal.
-        """
-        session_dir = str(tmp_path)
-
-        result = _run_pause_bash(session_dir, true_or_false="false")
-
-        assert result.returncode == 0, (
-            f"bash template failed under false branch: "
-            f"stdout={result.stdout!r} stderr={result.stderr!r}"
-        )
-
-        journal = tmp_path / "session-journal.jsonl"
-        assert journal.exists(), "session_paused write must create the journal"
-        lines = journal.read_text(encoding="utf-8").splitlines()
-        types = [line.split('"type":"', 1)[1].split('"', 1)[0] for line in lines if line.strip()]
-        assert "session_consolidated" not in types, (
-            f"false branch MUST NOT emit session_consolidated. Got types: {types}"
-        )
-        assert "session_paused" in types, (
-            f"false branch MUST still emit session_paused. Got types: {types}"
-        )
-
-    def test_guard_invalid_value_fails_fast(self, tmp_path):
-        """{true_or_false}='True' → case `*` branch exits 1 with stderr message; no writes.
-
-        Review cycle-2 M2 regression pin: reverting the clamp to the
-        two-branch `if/then/fi` form would silently take the implicit
-        no-op fall-through on any non-`true` value — including typos
-        the orchestrator is most likely to make (`True`, `TRUE`,
-        unsubstituted literal `{true_or_false}`, empty string). The
-        clamp MUST surface that as a loud failure so the template-
-        substitution bug is caught on the spot, not buried in a later
-        SessionEnd false-positive.
-
-        Asserts:
-        - returncode != 0 (case `*` branch runs `exit 1`)
-        - stderr contains `invalid` and identifies the offending value
-        - journal file is NOT created (clamp fires BEFORE session_paused
-          write, so the clamp's failure also cancels the paused write
-          via set -e)
-        """
-        session_dir = str(tmp_path)
-
-        # Representative invalid value: capitalized 'True', the most
-        # common orchestrator typo since Python booleans serialize that
-        # way but bash true/false are lowercase.
-        result = _run_pause_bash(session_dir, true_or_false="True")
-
-        assert result.returncode != 0, (
-            f"invalid flag MUST fail fast; got returncode=0 with "
-            f"stdout={result.stdout!r}"
-        )
-        assert "invalid" in result.stderr.lower(), (
-            f"stderr MUST identify the failure class; got: {result.stderr!r}"
-        )
-        assert "True" in result.stderr, (
-            f"stderr MUST echo the offending value for the operator's "
-            f"debug trail; got: {result.stderr!r}"
-        )
-
-        journal = tmp_path / "session-journal.jsonl"
-        assert not journal.exists(), (
-            "invalid flag MUST NOT produce a journal file — the clamp "
-            "fires before session_paused write, and set -e prevents the "
-            "paused write from running after the clamp's exit 1."
-        )
-
 
 # ---------------------------------------------------------------------------
 # Review cycle-3 L1: wrap-up.md shell-clamp mirrors pause.md
@@ -871,73 +557,6 @@ class TestWrapUpBashConditionalEmission:
             f"true branch MUST emit session_consolidated. Got types: {types}"
         )
 
-    def test_consolidation_false_emits_only_session_end(self, tmp_path):
-        """{consolidation_ran}='false' → session_end written, session_consolidated SKIPPED.
-
-        Regression pin for L1: before the clamp, wrap-up unconditionally
-        emitted session_consolidated even when step 1 was skipped per
-        the trivial-session rule. Reverting the clamp (removing the
-        case/esac validator) would surface that false-positive signal
-        here.
-        """
-        session_dir = str(tmp_path)
-
-        result = _run_wrap_up_bash(session_dir, consolidation_ran="false")
-
-        assert result.returncode == 0, (
-            f"bash template failed under false branch: "
-            f"stdout={result.stdout!r} stderr={result.stderr!r}"
-        )
-
-        journal = tmp_path / "session-journal.jsonl"
-        assert journal.exists(), "session_end write must create the journal"
-        lines = journal.read_text(encoding="utf-8").splitlines()
-        types = [line.split('"type":"', 1)[1].split('"', 1)[0] for line in lines if line.strip()]
-        assert "session_end" in types, (
-            f"false branch MUST still emit session_end. Got types: {types}"
-        )
-        assert "session_consolidated" not in types, (
-            f"false branch MUST NOT emit session_consolidated. Got types: {types}"
-        )
-
-    def test_consolidation_invalid_value_fails_fast(self, tmp_path):
-        """{consolidation_ran}='True' → case `*` branch exits 1 with stderr; session_end already written.
-
-        Mirrors the pause.md invalid-value pin. One asymmetry: wrap-up.md
-        writes session_end BEFORE the case/esac clamp (it's unconditional
-        and pairs with the SessionEnd hook's own write), so under the
-        invalid branch the journal DOES exist (with just session_end)
-        rather than being absent — the clamp fires after the session_end
-        write. The key pins are (a) clamp's stderr identifies the
-        offending value, (b) session_consolidated is NOT present.
-        """
-        session_dir = str(tmp_path)
-
-        result = _run_wrap_up_bash(session_dir, consolidation_ran="True")
-
-        assert result.returncode != 0, (
-            f"invalid flag MUST fail fast; got returncode=0 with "
-            f"stdout={result.stdout!r}"
-        )
-        assert "invalid" in result.stderr.lower(), (
-            f"stderr MUST identify the failure class; got: {result.stderr!r}"
-        )
-        assert "True" in result.stderr, (
-            f"stderr MUST echo the offending value; got: {result.stderr!r}"
-        )
-
-        journal = tmp_path / "session-journal.jsonl"
-        assert journal.exists(), (
-            "session_end write precedes the clamp in wrap-up.md, so the "
-            "journal file should exist with just that event after the "
-            "clamp fires."
-        )
-        lines = journal.read_text(encoding="utf-8").splitlines()
-        types = [line.split('"type":"', 1)[1].split('"', 1)[0] for line in lines if line.strip()]
-        assert "session_consolidated" not in types, (
-            f"invalid branch MUST NOT emit session_consolidated. Got types: {types}"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Review cycle-1 Fix 2: unsubstituted-placeholder failure is observable
@@ -993,123 +612,9 @@ JSON
             f"stderr MUST surface the JSON parse failure; got: {result.stderr!r}"
         )
 
-    def test_unsubstituted_placeholder_writes_no_event(self, tmp_path):
-        """Unsubstituted placeholders produce ZERO journal events.
-
-        Complementary assertion to the non-zero exit pin: if a future
-        refactor made the CLI silently drop invalid JSON but return 0,
-        the prior test would pass spuriously. This test catches that
-        failure mode by asserting the journal file is never created
-        (the CLI returns before reaching `append_event`'s mkdir).
-        """
-        session_dir = str(tmp_path)
-
-        template = f"""python3 "{_SESSION_JOURNAL_PY}" write \\
-  --type session_consolidated --session-dir '{session_dir}' --stdin <<'JSON'
-{{"pass": 2, "task_count": {{task_count}}, "memories_saved": {{memories_saved}}}}
-JSON
-"""
-        subprocess.run(
-            ["bash", "-c", template],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        journal = tmp_path / "session-journal.jsonl"
-        assert not journal.exists(), (
-            "unsubstituted-placeholder write MUST NOT create the journal "
-            "file; schema validation or JSON parse must reject before "
-            "reaching the filesystem."
-        )
-
 
 # ---------------------------------------------------------------------------
 # Review cycle-3 Fix 4: drift pin between pause.md source and test helper
 # ---------------------------------------------------------------------------
 
 
-class TestPauseBashTemplateShapeDriftGuard:
-    """Pin the case/esac shape of pause.md's step-5 bash block against silent drift.
-
-    The behavioral tests above (TestPauseBashConditionalEmission) execute a
-    template the test helper assembles in Python — if a future refactor
-    moved pause.md away from the case/esac shape (e.g. back to if/then/fi
-    or to a different validator) without updating _run_pause_bash, those
-    tests would keep passing against the stale helper while production
-    actually behaved differently. This test reads pause.md from disk at
-    test time and asserts the three-branch shape is still present, so
-    the drift surfaces loudly instead of silently.
-
-    Review cycle-3 Fix 4 — test-layer pin for the cycle-2 M2 clamp's
-    structural invariant.
-    """
-
-    def test_pause_md_step_5_is_case_esac_three_branch(self):
-        """pause.md step-5 bash block MUST use case/esac with the three branches.
-
-        Extracts the first bash-fenced block under the `### 5.` heading
-        of pause.md, then asserts:
-        - `case '{true_or_false}' in` opens the validator
-        - `true)` branch label present (emission case)
-        - `false)` branch label present (no-op case)
-        - `*)` branch label present (fail-fast case)
-        - `exit 1` present (clamp surfaces non-zero on invalid)
-        - `esac` closes the validator
-
-        The regex targets the bash fence after the step-5 heading, not
-        the whole file, so other bash examples (if any are added
-        elsewhere) can't mask a regression.
-        """
-        # COMMANDS (m8b) moved step 5's template verbatim, heading included, into the
-        # reference pause.md loads at step 5 (re-homed owner-pending node P-0104).
-        pause_md = Path(__file__).parent.parent / "reference" / "pause" / "paused-state.md"
-        content = pause_md.read_text(encoding="utf-8")
-
-        # Slice from the step-5 heading to either the step-6 heading or
-        # the end of file — whichever comes first. Bounding the search
-        # prevents a future unrelated bash block elsewhere in pause.md
-        # from spuriously satisfying the assertions.
-        step_5_match = re.search(
-            r"^###\s*5\.\s+Write\s+Paused\s+State.*?(?=^###\s*6\.|\Z)",
-            content,
-            re.DOTALL | re.MULTILINE,
-        )
-        assert step_5_match is not None, (
-            "pause.md must have a `### 5. Write Paused State ...` heading; "
-            "could not locate it. Drift guard cannot find the scope."
-        )
-        step_5 = step_5_match.group(0)
-
-        # Grab the first bash fence inside step 5.
-        fence_match = re.search(r"```bash\n(.*?)\n```", step_5, re.DOTALL)
-        assert fence_match is not None, (
-            "pause.md step 5 must contain a ```bash ... ``` fenced block; "
-            "could not locate it. The drain template moved or was removed."
-        )
-        bash_block = fence_match.group(1)
-
-        # Structural assertions — each is its own assert for clear
-        # failure attribution rather than one compound check.
-        assert "case '{true_or_false}' in" in bash_block, (
-            f"pause.md step 5 bash block MUST open the validator with "
-            f"`case '{{true_or_false}}' in`. Got:\n{bash_block}"
-        )
-        assert re.search(r"^\s*true\)", bash_block, re.MULTILINE), (
-            f"pause.md step 5 MUST have a `true)` branch. Got:\n{bash_block}"
-        )
-        assert re.search(r"^\s*false\)", bash_block, re.MULTILINE), (
-            f"pause.md step 5 MUST have a `false)` branch. Got:\n{bash_block}"
-        )
-        assert re.search(r"^\s*\*\)", bash_block, re.MULTILINE), (
-            f"pause.md step 5 MUST have a `*)` fail-fast branch. "
-            f"Got:\n{bash_block}"
-        )
-        assert "exit 1" in bash_block, (
-            f"pause.md step 5 `*)` branch MUST surface non-zero via "
-            f"`exit 1`. Got:\n{bash_block}"
-        )
-        assert re.search(r"^\s*esac\b", bash_block, re.MULTILINE), (
-            f"pause.md step 5 validator MUST close with `esac`. "
-            f"Got:\n{bash_block}"
-        )

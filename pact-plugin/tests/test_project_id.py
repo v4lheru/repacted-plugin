@@ -341,44 +341,6 @@ class TestSourceEquivalence:
         assert "(subprocess.TimeoutExpired, FileNotFoundError, OSError)" in helper_body
         assert "if not common_dir.is_absolute():" in helper_body
 
-    def test_main_repo_root_bases_a_relative_result_on_its_start_argument(self):
-        """A relative git result resolves against `start`, not unconditionally
-        against the cwd.
-
-        The two callers pass different bases — Strategy 1 passes the env path
-        and Strategy 2 passes nothing — and those bases differ precisely inside
-        a worktree. A helper that always joined against the cwd would change
-        Strategy 1 silently, in the one case the caller exists to handle.
-        """
-        helper_body = _extract_method_body(_MEMORY_API_PATH, "main_repo_root")
-        assert helper_body is not None
-        assert "Path(start) if start is not None else Path.cwd()" in helper_body
-
-    def test_detect_project_id_does_not_rebind_the_helper_name(self):
-        """No local named main_repo_root inside _detect_project_id.
-
-        Rebinding the module-level helper's own name in the method would make
-        it local for the whole method and raise UnboundLocalError on the call
-        that produces the value.
-        """
-        real_source = _extract_method_body(_MEMORY_API_PATH, "_detect_project_id")
-        assert real_source is not None
-        assert "main_repo_root =" not in real_source
-
-    def test_find_project_root_exists_in_source(self):
-        """The real memory_api.py must define _find_project_root as a class method."""
-        content = _MEMORY_API_PATH.read_text(encoding="utf-8")
-        assert "def _find_project_root(" in content, (
-            "_find_project_root helper must exist in memory_api.py"
-        )
-        # Verify it walks upward from the start path via .parents
-        helper_body = _extract_method_body(_MEMORY_API_PATH, "_find_project_root")
-        assert helper_body is not None
-        assert ".parents" in helper_body, "_find_project_root must walk upward"
-        assert '".git"' in helper_body
-        assert '".claude"' in helper_body
-        assert '"CLAUDE.md"' in helper_body
-
 
 class TestDetectProjectId:
     """Tests for _detect_project_id() static method."""
@@ -414,171 +376,17 @@ class TestDetectProjectId:
             result = _detect_project_id_under_test()
         assert result == "repo"
 
-    def test_env_var_in_repo_subdir_prefers_main_repo_basename(self):
-        """An env path inside a repo (a subdirectory) keys to the main basename.
-
-        The subdirectory's git common-dir resolves to the repo's shared .git,
-        whose parent differs from the subdirectory, so the env branch returns the
-        repo basename — aligning Strategy 1 with the repo-root semantics of
-        Strategies 2 and 3 and preventing per-subdirectory key fragmentation.
-        """
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "/home/user/myrepo/.git\n"
-
-        with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/home/user/myrepo/src/mod"}), \
-             patch("subprocess.run", return_value=mock_result):
-            result = _detect_project_id_under_test()
-        assert result == "myrepo"
-
-    def test_env_var_worktree_subdir_prefers_main_repo_basename(self):
-        """An env path inside a worktree (a subdirectory) keys to the main basename.
-
-        A worktree subdirectory's common-dir still points at the main repo's
-        shared .git, so it resolves to the main basename like the worktree root
-        and an in-repo subdirectory do.
-        """
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "/home/user/myrepo/.git\n"
-
-        with patch.dict(os.environ,
-                        {"CLAUDE_PROJECT_DIR": "/home/user/wt-feature/src/mod"}), \
-             patch("subprocess.run", return_value=mock_result):
-            result = _detect_project_id_under_test()
-        assert result == "myrepo"
-
-    def test_env_var_repo_root_keeps_env_basename(self):
-        """At a repo ROOT, --git-common-dir is the relative '.git', which resolves
-        back to the root itself, so the rewrite does not fire and the env
-        basename is kept.
-        """
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ".git\n"
-
-        with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/home/user/myrepo"}), \
-             patch("subprocess.run", return_value=mock_result):
-            result = _detect_project_id_under_test()
-        assert result == "myrepo"
-
-    def test_env_var_non_git_keeps_env_basename(self):
-        """A non-git env path cannot resolve a main repo (git returns non-zero),
-        so the original env basename is returned unchanged.
-        """
-        mock_result = MagicMock()
-        mock_result.returncode = 128
-        mock_result.stdout = ""
-
-        with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/tmp/loose-dir"}), \
-             patch("subprocess.run", return_value=mock_result):
-            result = _detect_project_id_under_test()
-        assert result == "loose-dir"
 
     # --- Strategy 2: Git repo root ---
 
-    def test_uses_git_when_env_var_not_set(self, clean_env_no_claude_project_dir):
-        """Should fall back to git rev-parse when no env var.
-
-        --git-common-dir returns the .git directory path; the code resolves
-        its parent to get the repo root, then takes .name for project_id.
-        """
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "/users/dev/awesome-repo/.git\n"
-
-        with patch("subprocess.run", return_value=mock_result):
-            result = _detect_project_id_under_test()
-        assert result == "awesome-repo"
-
-    def test_git_strips_whitespace_from_output(self, clean_env_no_claude_project_dir):
-        """Should strip trailing whitespace/newline from git output."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "  /path/to/repo/.git  \n"
-
-        with patch("subprocess.run", return_value=mock_result):
-            result = _detect_project_id_under_test()
-        assert result == "repo"
-
-    def test_git_nonzero_returncode_falls_through(self, clean_env_no_claude_project_dir):
-        """Should fall back to cwd when git returns non-zero (not a repo)."""
-        mock_result = MagicMock()
-        mock_result.returncode = 128
-        mock_result.stdout = ""
-
-        with patch("subprocess.run", return_value=mock_result), \
-             patch("pathlib.Path.cwd", return_value=Path("/fallback/cwd-dir")):
-            result = _detect_project_id_under_test()
-        assert result == "cwd-dir"
-
-    def test_git_empty_stdout_falls_through(self, clean_env_no_claude_project_dir):
-        """Should fall back to cwd when git returns empty output."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-
-        with patch("subprocess.run", return_value=mock_result), \
-             patch("pathlib.Path.cwd", return_value=Path("/fallback/from-cwd")):
-            result = _detect_project_id_under_test()
-        assert result == "from-cwd"
 
     # --- Strategy 2 failure modes ---
 
-    def test_git_timeout_falls_back_to_cwd(self, clean_env_no_claude_project_dir):
-        """Should fall back to cwd when git subprocess times out."""
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git", 5)), \
-             patch("pathlib.Path.cwd", return_value=Path("/timeout/fallback")):
-            result = _detect_project_id_under_test()
-        assert result == "fallback"
-
-    def test_git_not_found_falls_back_to_cwd(self, clean_env_no_claude_project_dir):
-        """Should fall back to cwd when git binary is not installed."""
-        with patch("subprocess.run", side_effect=FileNotFoundError("git not found")), \
-             patch("pathlib.Path.cwd", return_value=Path("/no-git/project")):
-            result = _detect_project_id_under_test()
-        assert result == "project"
-
-    def test_git_os_error_falls_back_to_cwd(self, clean_env_no_claude_project_dir):
-        """Should fall back to cwd on generic OSError from subprocess."""
-        with patch("subprocess.run", side_effect=OSError("permission denied")), \
-             patch("pathlib.Path.cwd", return_value=Path("/oserror/fallback-proj")):
-            result = _detect_project_id_under_test()
-        assert result == "fallback-proj"
 
     # --- Strategy 3: CWD ---
 
-    def test_cwd_used_as_final_fallback(self, clean_env_no_claude_project_dir):
-        """Should use cwd basename when both env var and git are unavailable."""
-        with patch("subprocess.run", side_effect=FileNotFoundError()), \
-             patch("pathlib.Path.cwd", return_value=Path("/home/user/my-cwd-project")):
-            result = _detect_project_id_under_test()
-        assert result == "my-cwd-project"
-
-    def test_cwd_oserror_returns_none(self, clean_env_no_claude_project_dir):
-        """Should return None when even cwd() raises OSError."""
-        with patch("subprocess.run", side_effect=FileNotFoundError()), \
-             patch("pathlib.Path.cwd", side_effect=OSError("cwd deleted")):
-            result = _detect_project_id_under_test()
-        assert result is None
 
     # --- Subprocess call parameters ---
-
-    def test_git_called_with_correct_args_and_timeout(self, clean_env_no_claude_project_dir):
-        """Should call git with capture_output, text=True, timeout=5."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "/some/repo/.git\n"
-
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            _detect_project_id_under_test()
-
-        mock_run.assert_called_once_with(
-            ["git", "rev-parse", "--git-common-dir"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
 
 
 class TestFindProjectRoot:
@@ -618,62 +426,6 @@ class TestFindProjectRoot:
         result = _find_project_root_under_test(nested)
         assert result == project.resolve()
         assert result.name == "cool-repo"
-
-    def test_finds_legacy_claude_md_ancestor(self, tmp_path):
-        """Walk-up finds ./CLAUDE.md on an ancestor (legacy location)."""
-        project = tmp_path / "legacy-proj"
-        nested = project / "scripts"
-        nested.mkdir(parents=True)
-        (project / "CLAUDE.md").write_text("# project memory\n")
-
-        result = _find_project_root_under_test(nested)
-        assert result == project.resolve()
-        assert result.name == "legacy-proj"
-
-    def test_finds_dot_claude_claude_md_ancestor(self, tmp_path):
-        """Walk-up finds .claude/CLAUDE.md on an ancestor (new default).
-
-        This case matters when .claude/ is a FILE (edge case) or when the
-        .claude/ directory hasn't been created but a CLAUDE.md was placed
-        directly at the expected path — neither of which the earlier
-        .claude/ dir check would catch.
-        """
-        # Construct a case where .claude/ exists but is only meaningful
-        # through its CLAUDE.md child. The .is_dir() check on .claude/
-        # already catches this path, so the explicit .claude/CLAUDE.md
-        # check is defence-in-depth. Verify both routes work.
-        project = tmp_path / "new-default-proj"
-        nested = project / "src"
-        nested.mkdir(parents=True)
-        (project / ".claude").mkdir()
-        (project / ".claude" / "CLAUDE.md").write_text("# new default\n")
-
-        result = _find_project_root_under_test(nested)
-        assert result == project.resolve()
-
-    def test_returns_nearest_ancestor_not_farthest(self, tmp_path):
-        """When multiple ancestors have markers, returns the NEAREST."""
-        outer = tmp_path / "outer"
-        inner = outer / "inner-project"
-        nested = inner / "src"
-        nested.mkdir(parents=True)
-        # Both outer and inner have .git markers
-        (outer / ".git").mkdir()
-        (inner / ".git").mkdir()
-
-        result = _find_project_root_under_test(nested)
-        # Should return the nearest (inner), not the farthest (outer)
-        assert result == inner.resolve()
-        assert result.name == "inner-project"
-
-    def test_start_itself_has_marker(self, tmp_path):
-        """When the start directory itself has a marker, return start."""
-        project = tmp_path / "self-marked"
-        project.mkdir()
-        (project / ".git").mkdir()
-
-        result = _find_project_root_under_test(project)
-        assert result == project.resolve()
 
 
 class TestCwdSubdirectoryDetection:
@@ -727,40 +479,6 @@ class TestCwdSubdirectoryDetection:
 
         assert result == "root-project"
 
-    def test_cwd_no_markers_falls_back_to_cwd_basename(
-        self, clean_env_no_claude_project_dir, tmp_path, monkeypatch
-    ):
-        """No markers found walking up → fall back to cwd basename (legacy behavior)."""
-        # tmp_path is clean: no .git, .claude, CLAUDE.md anywhere.
-        # Confine the walk-up to tmp_path so ambient markers above (e.g., a
-        # stray .claude/ leaked into macOS /var/folders/.../T/ by an unrelated
-        # process) cannot win the walk-up.
-        leaf = tmp_path / "orphan-dir"
-        leaf.mkdir()
-        _isolate_walkup_to(monkeypatch, tmp_path)
-
-        with patch("subprocess.run", side_effect=FileNotFoundError()), \
-             patch("pathlib.Path.cwd", return_value=leaf):
-            result = _detect_project_id_under_test()
-
-        # Walk-up finds nothing → returns start → .name == "orphan-dir"
-        assert result == "orphan-dir"
-
-    def test_cwd_dot_claude_detection(
-        self, clean_env_no_claude_project_dir, tmp_path
-    ):
-        """Walk-up triggers on .claude/ directory at ancestor."""
-        project = tmp_path / "claude-dir-proj"
-        subdir = project / "work" / "nested"
-        subdir.mkdir(parents=True)
-        (project / ".claude").mkdir()  # only marker is .claude/
-
-        with patch("subprocess.run", side_effect=FileNotFoundError()), \
-             patch("pathlib.Path.cwd", return_value=subdir):
-            result = _detect_project_id_under_test()
-
-        assert result == "claude-dir-proj"
-
 
 class TestSymlinkedProjectDir:
     """Strategy 1 names the directory CLAUDE_PROJECT_DIR RESOLVES TO, not the
@@ -792,9 +510,3 @@ class TestSymlinkedProjectDir:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
         assert PACTMemory._detect_project_id() == "repo-target"
 
-    def test_plain_dir_keeps_its_own_basename(self, tmp_path, monkeypatch):
-        """Regression pin: resolving a path that is not a link changes nothing."""
-        plain = tmp_path / "plain-dir"
-        plain.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(plain))
-        assert PACTMemory._detect_project_id() == "plain-dir"

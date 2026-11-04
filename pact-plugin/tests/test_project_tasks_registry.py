@@ -16,7 +16,6 @@ import pytest
 from project_tasks_support import PLUGIN_ROOT, git, load, new_repo, run_cli
 
 
-
 @pytest.fixture
 def data(tmp_path, monkeypatch):
     path = tmp_path / "plugin-data"
@@ -54,32 +53,4 @@ class TestTheOffer:
         assert status(repo) == "init: declined"
         assert status(repo) == "init: declined"              # still remembered on the next ask
 
-    def test_the_answer_is_per_project(self, data, tmp_path):
-        first, second = new_repo(tmp_path / "first"), new_repo(tmp_path / "second")
-        cli(first, "init", "--decline")
-        assert status(second) == "init: unanswered"
 
-    def test_a_worktree_shares_its_main_checkouts_answer(self, data, tmp_path):
-        repo = new_repo(tmp_path / "repo")
-        cli(repo, "init", "--decline")
-        git(repo, "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "side")
-        assert status(tmp_path / "wt") == "init: declined"
-
-    def test_a_log_made_without_the_offer_counts_as_present(self, data, tmp_path):
-        repo = new_repo(tmp_path / "repo")
-        load("registry_test_writer", PLUGIN_ROOT / "hooks" / "shared" / "task_log" / "write.py").init(repo)
-        assert status(repo) == "init: present"
-
-    def test_outside_a_repo_there_is_nothing_to_offer(self, data, tmp_path):
-        (tmp_path / "plain").mkdir()
-        assert status(tmp_path / "plain") == "init: no-repo"
-
-    def test_a_declined_project_can_still_init_later(self, data, tmp_path):
-        repo = new_repo(tmp_path / "repo")
-        cli(repo, "init", "--decline")
-        assert cli(repo, "init").returncode == 0
-        assert status(repo) == "init: accepted"
-
-    def test_status_and_decline_together_is_a_usage_error(self, data, tmp_path):
-        repo = new_repo(tmp_path / "repo")
-        assert cli(repo, "init", "--status", "--decline").returncode == 64

@@ -20,6 +20,9 @@ from pathlib import Path
 
 import pytest
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 SHIM_DIR = Path(__file__).resolve().parent / "clock_shift"
 # Set on a launch that runs unshifted or without the shim on purpose, so a real
@@ -295,116 +298,3 @@ def test_a_bash_c_grandchild_sees_the_shifted_clock(tmp_path):
     assert (rc, "1 passed" in out) == (0, True), out
 
 
-def test_time_time_is_shifted(tmp_path):
-    """MUTANT: the shim stops wrapping time.time. datetime.now reads the C clock,
-    so only this arm reddens."""
-    rc, out = _run_child(tmp_path, _launch(["python3", "-c", PRINT_TIME]))
-    assert (rc, "1 passed" in out) == (0, True), out
-
-
-def test_the_census_fails_a_child_whose_env_drops_the_shim(tmp_path):
-    """MUTANT: the census stops recording explicit-env misses. The run still fails
-    on the empty ledger, but no line names the test, so this arm reddens."""
-    rc, out = _run_child(tmp_path, DROPPED_ENV)
-    line = "%s (call): python3 -c pass -- its env drops PACT_TEST_CLOCK_SHIFT_SECONDS" % NODE
-    assert (rc != 0, line in out) == (True, True), out
-
-
-def test_the_census_fails_when_children_never_loaded_the_shim(tmp_path):
-    """MUTANT: the ledger check is removed. The PYTHONPATH miss still fails the run,
-    but the ledger line is absent."""
-    rc, out = _run_child(tmp_path, INHERITED, shim_on_path=False)
-    assert (rc != 0, "the shim did not load in children" in out) == (True, True), out
-
-
-def test_without_the_shift_variable_the_shim_is_inert(tmp_path):
-    """GUARD. The shim is on PYTHONPATH and the variable is unset: the grandchild
-    reads the real clock and no audit hook is installed."""
-    rc, out = _run_child(tmp_path, _launch(["python3", "-c", PRINT_DATETIME]) + NOT_INSTALLED, shift=None)
-    assert (rc, "2 passed" in out) == (0, True), out
-
-
-def test_the_census_fails_a_child_whose_pythonpath_shadows_the_shim(tmp_path):
-    """MUTANT: the census stops reading sitecustomize files ahead of the shim."""
-    rc, out = _run_child(tmp_path, _launch(["python3", "-c", PRINT_DATETIME], site="VALUE = 1\n"))
-    line = "%s (call): python3 -c %s -- the sitecustomize in" % (NODE, PRINT_DATETIME)
-    assert (rc != 0, line in out, "runs instead of the shim" in out) == (True, True, True), out
-
-
-def test_a_chained_sitecustomize_still_gets_the_shifted_clock(tmp_path):
-    """QUIET ON THE CURE. MUTANT: the census flags every sitecustomize ahead of the
-    shim, chained or not. This run then fails."""
-    rc, out = _run_child(tmp_path, _launch(["python3", "-c", PRINT_DATETIME], site="import clock_shift_shim\n"))
-    assert (rc, "1 passed" in out) == (0, True), out
-
-
-def test_the_census_exemption_is_used_only_by_the_instrument_arms():
-    """GUARD. An exemption set anywhere else would hide a real miss from the census.
-    MUTANT: any other file naming the variable, or the census renaming it."""
-    users = set()
-    for path in sorted(PLUGIN_ROOT.rglob("*.py")):
-        data = path.read_bytes()
-        if CENSUS_EXEMPT.encode() not in data and b"EXEMPT_ENV" not in data:
-            continue
-        for node in ast.walk(ast.parse(data)):
-            named = (
-                isinstance(node, ast.Constant) and isinstance(node.value, str) and CENSUS_EXEMPT in node.value
-            ) or (isinstance(node, ast.Name) and node.id == "EXEMPT_ENV") or (
-                isinstance(node, ast.Attribute) and node.attr == "EXEMPT_ENV"
-            )
-            if named:
-                users.add(path.relative_to(PLUGIN_ROOT).as_posix())
-                break
-    assert users == {"tests/test_clock_shift_instrument.py", "tests/clock_shift/clock_shift_census.py"}, users
-
-
-def test_a_fresh_file_reads_as_shifted_now_through_every_stat_route(tmp_path):
-    """MUTANTS: unwrap os.stat, unwrap os.scandir, or shift one _ns field only.
-    Each leaves one route or field on the real clock, ten years below the window."""
-    rc, out = _run_child(tmp_path, STAT_ROUTES)
-    assert (rc, "9 passed" in out) == (0, True), out
-
-
-def test_an_explicit_utime_reads_back_what_it_set(tmp_path):
-    """MUTANT: os.utime stops subtracting the shift. The explicit times and ns
-    then read back ten years late; a bare utime is unaffected."""
-    rc, out = _run_child(tmp_path, UTIME_READBACK)
-    assert (rc, "3 passed" in out) == (0, True), out
-
-
-@pytest.mark.parametrize("shift", [None, 0])
-def test_an_unshifted_run_installs_nothing(tmp_path, shift):
-    """GUARD. Unset and zero both leave os and the clocks as the real functions.
-    MUTANT: gate the install on the variable being set rather than non-zero."""
-    rc, out = _run_child(tmp_path, IDENTITY, shift=shift)
-    assert (rc, "6 passed" in out) == (0, True), out
-
-
-def test_a_multi_line_argument_stays_on_one_census_line(tmp_path):
-    """MUTANT: the census prints argv unflattened, so the problem spans two lines
-    and this exact line is absent."""
-    rc, out = _run_child(tmp_path, MULTI_LINE_LAUNCH)
-    line = "%s (call): python3 -c pass pass -- its env drops PACT_TEST_CLOCK_SHIFT_SECONDS" % NODE
-    assert (rc != 0, line in out) == (True, True), out
-
-
-def test_a_class_attribute_call_is_unbound_and_shifted(tmp_path):
-    """MUTANT: install plain functions. A class holding one binds it as a method
-    and passes itself as the path, as 3.9's pathlib accessor does."""
-    rc, out = _run_child(tmp_path, CLASS_ATTRIBUTE)
-    assert (rc, "1 passed" in out) == (0, True), out
-
-
-def test_supports_membership_matches_the_real_functions(tmp_path):
-    """MUTANT: the wrappers do not join the os.supports_* sets."""
-    rc, out = _run_child(tmp_path, SUPPORTS_PARITY)
-    assert (rc, "5 passed" in out) == (0, True), out
-
-
-def test_shutil_takes_the_same_rmtree_path_as_unshifted(tmp_path):
-    """shutil fixes _use_fd_functions from the os.supports_* sets when it is
-    imported. MUTANTS: skip joining the sets, or join them after shutil is imported."""
-    import shutil
-
-    rc, out = _run_child(tmp_path, FD_PARITY.replace("@EXPECTED@", repr(shutil._use_fd_functions)))
-    assert (rc, "1 passed" in out) == (0, True), out

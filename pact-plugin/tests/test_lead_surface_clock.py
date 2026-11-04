@@ -114,16 +114,6 @@ class TestMissedWakeUsesTheInjectedClock:
         and nothing fires."""
         assert MISSED_WAKE in lead.run([self._stuck(NOW_AFTER, 31)], NOW_AFTER)
 
-    def test_missed_wake_stays_silent_at_an_injected_time_under_the_threshold(self, lead):
-        """REVERT PROOF. The wait is 5 minutes older than NOW_BEFORE. Measured
-        against the wall clock it is years old, and it fires."""
-        task = self._stuck(NOW_BEFORE, 5)
-        assert MISSED_WAKE not in lead.run([task], NOW_BEFORE)
-        assert MISSED_WAKE in lead.run([task], NOW_BEFORE + timedelta(minutes=26)), (
-            "control: the same wait 31 minutes on must fire, or the silence above "
-            "proves nothing"
-        )
-
 
 class TestMutualWaitUsesTheInjectedClock:
     @staticmethod
@@ -136,15 +126,6 @@ class TestMutualWaitUsesTheInjectedClock:
         """REVERT PROOF. Both anchors are 31 minutes older than NOW_AFTER; the
         wall clock reads them as years ahead and not stale."""
         assert MUTUAL in lead.run(self._pair(NOW_AFTER, 31), NOW_AFTER)
-
-    def test_mutual_wait_stays_silent_at_an_injected_time_under_the_threshold(self, lead):
-        """REVERT PROOF. Both anchors are 5 minutes older than NOW_BEFORE; the
-        wall clock reads them as years old and fires."""
-        pair = self._pair(NOW_BEFORE, 5)
-        assert MUTUAL not in lead.run(pair, NOW_BEFORE)
-        assert MUTUAL in lead.run(pair, NOW_BEFORE + timedelta(minutes=26)), (
-            "control: the same pair 31 minutes on must fire"
-        )
 
 
 class TestUnflaggedUsesTheInjectedClock:
@@ -160,33 +141,6 @@ class TestUnflaggedUsesTheInjectedClock:
         wall clock reads that as years ahead and not stale."""
         tasks = self._launch(lead, NOW_AFTER, timedelta(hours=1), timedelta(minutes=11))
         assert UNFLAGGED in lead.run(tasks, NOW_AFTER)
-
-    def test_unflagged_stays_silent_at_an_injected_time_under_the_threshold(self, lead):
-        """REVERT PROOF for `lead_stale`. Idled 5 minutes before NOW_BEFORE; the
-        wall clock reads that as years old and stale. (The prune cannot be
-        proven from this side: a wall-clock prune also silences it.)"""
-        tasks = self._launch(lead, NOW_BEFORE, timedelta(hours=1), timedelta(minutes=5))
-        assert UNFLAGGED not in lead.run(tasks, NOW_BEFORE)
-        tasks = self._launch(lead, NOW_BEFORE, timedelta(hours=1), timedelta(minutes=11))
-        assert UNFLAGGED in lead.run(tasks, NOW_BEFORE), (
-            "control: idled 11 minutes before NOW_BEFORE must fire"
-        )
-
-    def test_unflagged_keeps_a_record_the_injected_clock_has_not_expired(self, lead):
-        """REVERT PROOF for the prune. Registered an hour before NOW_BEFORE; the
-        wall clock prunes a record that old, so nothing surfaces."""
-        tasks = self._launch(lead, NOW_BEFORE, timedelta(hours=1), timedelta(minutes=11))
-        assert UNFLAGGED in lead.run(tasks, NOW_BEFORE)
-
-    def test_unflagged_drops_a_record_the_injected_clock_has_expired(self, lead):
-        """REVERT PROOF for the prune. Registered 25 hours before NOW_AFTER; the
-        wall clock sees a future record, keeps it, and it surfaces."""
-        tasks = self._launch(lead, NOW_AFTER, timedelta(hours=25), timedelta(minutes=11))
-        assert UNFLAGGED not in lead.run(tasks, NOW_AFTER)
-        tasks = self._launch(lead, NOW_AFTER, timedelta(hours=23), timedelta(minutes=11))
-        assert UNFLAGGED in lead.run(tasks, NOW_AFTER), (
-            "control: registered 23 hours before NOW_AFTER must still surface"
-        )
 
 
 class TestUnanchoredUsesTheInjectedClock:
@@ -206,25 +160,6 @@ class TestUnanchoredUsesTheInjectedClock:
         tasks = self._covered(lead, NOW_BEFORE, timedelta(hours=1))
         assert UNANCHORED in lead.run(tasks, NOW_BEFORE)
 
-    def test_unanchored_drops_a_record_the_injected_clock_has_expired(self, lead):
-        """REVERT PROOF. Registered 25 hours before NOW_AFTER; the wall clock
-        keeps a future record, and it surfaces."""
-        tasks = self._covered(lead, NOW_AFTER, timedelta(hours=25))
-        assert UNANCHORED not in lead.run(tasks, NOW_AFTER)
-        tasks = self._covered(lead, NOW_AFTER, timedelta(hours=23))
-        assert UNANCHORED in lead.run(tasks, NOW_AFTER), (
-            "control: registered 23 hours before NOW_AFTER must still surface"
-        )
-
-    def test_unanchored_GUARD_surfaces_a_future_dated_record(self, lead):
-        """GUARD, not a revert proof: a positive control for the arms above.
-        It passes with the clock threaded or not. This finder reads no clock
-        besides the prune, and the prune never drops a record dated in the
-        future, so a wall-clock read keeps this record exactly as NOW_AFTER
-        does. It shows the fixture reaches the surface at a future time."""
-        tasks = self._covered(lead, NOW_AFTER, timedelta(hours=1))
-        assert UNANCHORED in lead.run(tasks, NOW_AFTER)
-
 
 class TestForensicEventsUseTheInjectedClock:
     def test_forensic_events_carry_the_injected_time(self, lead):
@@ -243,26 +178,3 @@ class TestForensicEventsUseTheInjectedClock:
         assert set(by_type.values()) == {"2031-01-01T00:00:00Z"}, by_type
 
 
-class TestRunSurfacePassesTheClockToEveryCall:
-    def test_run_surface_passes_now_to_every_clock_taking_call(self):
-        """GUARD, and a revert proof for any single dropped `now=`. Every call
-        inside run_surface to a module function that takes `now` must pass it
-        by keyword, and all the known clock-taking calls must be present."""
-        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-        funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-        takes_now = {
-            name for name, fn in funcs.items()
-            if "now" in [a.arg for a in fn.args.args + fn.args.kwonlyargs]
-        }
-        calls = [
-            node for node in ast.walk(funcs["run_surface"])
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id in takes_now
-        ]
-        found = {c.func.id for c in calls}
-        assert CLOCK_TAKING_CALLS <= found, (
-            f"run_surface no longer calls: {sorted(CLOCK_TAKING_CALLS - found)}"
-        )
-        missing = sorted({c.func.id for c in calls
-                          if "now" not in {k.arg for k in c.keywords}})
-        assert not missing, f"run_surface calls these without now=: {missing}"

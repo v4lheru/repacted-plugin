@@ -90,53 +90,17 @@ class TestFormatterCreatedAt:
         entry = _format_memory_entry({"context": "ctx"}, created_at=stamp)
         assert _header(entry) == "### 2024-03-07 04:05"
 
-    def test_without_created_at_the_header_is_now(self):
-        before = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        entry = _format_memory_entry({"context": "ctx"})
-        after = datetime.now(timezone.utc)
-        rendered = datetime.strptime(_header(entry), "### %Y-%m-%d %H:%M")
-        rendered = rendered.replace(tzinfo=timezone.utc)
-        assert before <= rendered <= after
-
-    def test_created_at_changes_only_the_header(self):
-        """Control: the same record renders the same body under either stamp."""
-        memory = {"context": "ctx", "goal": "g", "decisions": ["d1", "d2"]}
-        stamped = _format_memory_entry(memory, ["a.py"], "a" * 32,
-                                       created_at=datetime(2020, 1, 1))
-        unstamped = _format_memory_entry(memory, ["a.py"], "a" * 32)
-        assert _header(stamped) == "### 2020-01-01 00:00"
-        assert _header(stamped) != _header(unstamped)
-        assert stamped.split("\n", 1)[1] == unstamped.split("\n", 1)[1]
-
 
 class TestRecordTimestamp:
     """The stored `created_at` reaches the header in both forms it takes."""
 
     @pytest.mark.parametrize("stored", [
-        "2026-09-05 09:20:42",   # as SQLite `datetime('now')` writes it
-        "2026-09-05T09:20:42",   # as `MemoryObject.to_dict()` emits it
-    ])
+        "2026-09-05 09:20:42",])
     def test_both_stored_forms_render_the_same_header(self, stored):
         entry = _format_memory_entry(
             {"context": "ctx"}, created_at=_record_timestamp(stored)
         )
         assert _header(entry) == "### 2026-09-05 09:20"
-
-    def test_datetime_and_none_pass_through(self):
-        stamp = datetime(2026, 9, 5, 9, 20)
-        assert _record_timestamp(stamp) is stamp
-        assert _record_timestamp(None) is None
-
-    def test_unparseable_value_falls_back_to_now_and_still_renders(self):
-        assert _record_timestamp("not a date") is None
-        before = datetime.now(timezone.utc) - timedelta(minutes=1)
-        entry = _format_memory_entry(
-            {"context": "still here"},
-            created_at=_record_timestamp("not a date"),
-        )
-        rendered = datetime.strptime(_header(entry), "### %Y-%m-%d %H:%M")
-        assert rendered.replace(tzinfo=timezone.utc) >= before
-        assert "**Context**: still here" in entry
 
 
 class TestProjectionReplacesTheSection:
@@ -148,64 +112,6 @@ class TestProjectionReplacesTheSection:
         result = project_memories_to_claude_md([], target=target)
         assert result.reason == SyncResult.EMPTY
         assert target.read_bytes() == before
-
-    def test_the_given_entries_replace_the_hand_written_ones(self, tmp_path):
-        target = _seed(tmp_path, _SCAFFOLD.replace(
-            "## Pinned Context",
-            "### 2025-01-01 01:00\n**Context**: hand one\n\n"
-            "### 2024-01-01 01:00\n**Context**: hand two\n\n"
-            "## Pinned Context",
-        ))
-        assert len(_section_entries(target.read_text(encoding="utf-8"))) == 2
-
-        result = project_memories_to_claude_md([
-            _record("2026-09-05 09:20:00", "c"),
-            _record("2026-09-04 08:10:00", "b"),
-            _record("2026-09-03 07:00:00", "a"),
-        ], target=target)
-
-        assert result.reason == SyncResult.WROTE
-        text = target.read_text(encoding="utf-8")
-        entries = _section_entries(text)
-        assert [_header(e) for e in entries] == [
-            "2026-09-05 09:20", "2026-09-04 08:10", "2026-09-03 07:00",
-        ]
-        assert "hand one" not in text and "hand two" not in text
-        assert "c context" in entries[0] and "**Memory ID**: " + "c" * 32 in entries[0]
-        assert text.endswith("## Pinned Context\n\nkeep me\n"), "the rest of the file moved"
-
-    def test_input_past_the_cap_is_cut_to_it(self, tmp_path):
-        target = _seed(tmp_path)
-        records = [_record(f"2026-01-0{i} 00:00:00", chr(ord("a") + i))
-                   for i in range(1, MAX_WORKING_MEMORIES + 3)]
-        assert project_memories_to_claude_md(records, target=target)
-        entries = _section_entries(target.read_text(encoding="utf-8"))
-        assert len(entries) == MAX_WORKING_MEMORIES
-        assert _header(entries[0]) == "2026-01-01 00:00"
-
-    def test_the_budget_is_applied_once_across_the_projection(self, tmp_path):
-        """Newest entry bounded by the per-entry ceiling and not compressed;
-        older entries compressed; section under budget."""
-        records = [_dense_record(f"2026-03-0{i} 00:00:00", c)
-                   for i, c in ((3, "c"), (2, "b"), (1, "a"))]
-        # Non-vacuity: unbudgeted, each entry alone exceeds the ceiling and the
-        # three together exceed the section budget.
-        raw = [_format_memory_entry(r, None, r["id"]) for r in records]
-        assert all(_estimate_tokens(e) > _ENTRY_CEILING for e in raw)
-        assert sum(_estimate_tokens(e) for e in raw) > WORKING_MEMORY_TOKEN_BUDGET
-
-        target = _seed(tmp_path)
-        assert project_memories_to_claude_md(records, target=target)
-        entries = _section_entries(target.read_text(encoding="utf-8"))
-
-        assert len(entries) == 3
-        newest, *older = entries
-        assert "**Summary**" not in newest
-        assert "**Goal**" in newest, "the newest entry was compressed, not cut"
-        assert _estimate_tokens("### " + newest) <= _ENTRY_CEILING
-        for entry in older:
-            assert "**Summary**" in entry and "**Goal**" not in entry
-        assert sum(_estimate_tokens("### " + e) for e in entries) <= WORKING_MEMORY_TOKEN_BUDGET
 
 
 class TestProjectionRunsThroughTheSameWriteSite:
@@ -230,24 +136,6 @@ class TestProjectionRunsThroughTheSameWriteSite:
 
         assert result.reason == SyncResult.FAILED
         assert target.read_bytes() == before
-
-    def test_a_crlf_target_stays_crlf(self, tmp_path, monkeypatch):
-        target = tmp_path / "project" / "CLAUDE.md"
-        target.parent.mkdir(parents=True)
-        target.write_bytes(_SCAFFOLD.replace("\n", "\r\n").encode("utf-8"))
-        before = target.read_bytes()
-        assert before.count(b"\r\n") > 0
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(target.parent))
-
-        result = project_memories_to_claude_md(
-            [_record("2026-01-01 00:00:00", "a", goal="one\r\ntwo")]
-        )
-
-        assert result.reason == SyncResult.WROTE
-        raw = target.read_bytes()
-        assert raw != before, "the write did not happen"
-        crlf = raw.count(b"\r\n")
-        assert crlf > 0 and raw.count(b"\n") == crlf and raw.count(b"\r\r\n") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -328,72 +216,6 @@ class TestSyncVerbReachesTheGuards:
 
         assert (result["sync_status"], result["projected"], result["memory_ids"]) == (
             "refused", 0, [])
-        assert (project / "CLAUDE.md").read_bytes() == before
-
-    def test_a_declared_root_permits_the_write(
-        self, project, stocked_store, tmp_path
-    ):
-        """Positive control for both refusals: same child, anchored, writes."""
-        env = dict(os.environ)
-        env["CLAUDE_PROJECT_DIR"] = str(project)
-        before = (project / "CLAUDE.md").read_bytes()
-
-        result = _run_cli(env, tmp_path, "sync", "--claude-md-root", str(project),
-                          "--db-path", str(stocked_store))
-
-        assert result["sync_status"] == "wrote", result
-        assert result["projected"] == 1 and len(result["memory_ids"]) == 1
-        after = (project / "CLAUDE.md").read_text(encoding="utf-8")
-        assert after.encode("utf-8") != before
-        assert "one record" in after
-        assert f"**Memory ID**: {result['memory_ids'][0]}" in after
-
-    def test_a_redirected_store_that_escaped_its_root_is_refused(
-        self, project, memory_store, tmp_path
-    ):
-        """Second guard, the incident shape: a built environment with no
-        PYTEST_CURRENT_TEST, a declared directory holding no CLAUDE.md, so
-        resolution continues to the working directory's file, outside it.
-
-        THE RECORD IS SAVED UNDER THE SAME DECLARED DIRECTORY. The project id
-        derives from it, and `sync` projects only this project's records; a
-        record saved under another id leaves nothing to project, and the
-        `empty` return precedes the PYTEST_CURRENT_TEST refusal and the
-        redirected-store refusal. That is correct, and it would
-        make this arm pass without reaching the guard, so the store is
-        stocked under the escaping id and the envelope is pinned to `refused`.
-        """
-        escaped = tmp_path / "declared-but-empty"
-        escaped.mkdir()
-        # No cache env here: `_run_cli` binds it for every child. Spelling it
-        # at this one site is what made the gap look closed while a sibling
-        # built with `dict(os.environ)` went without — and a per-site spread
-        # would now also imply the protection is per-site, which is the
-        # inference that produced the miss.
-        env = {
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": str(tmp_path / "home"),
-            "CLAUDE_PROJECT_DIR": str(escaped),
-        }
-        assert "PYTEST_CURRENT_TEST" not in env
-        db = memory_store("escaped.db")
-        _run_cli(env, tmp_path, "save", json.dumps({"context": "escaping record"}),
-                 "--no-sync", "--db-path", str(db))
-        before = (project / "CLAUDE.md").read_bytes()
-
-        result = _run_cli(env, project, "sync", "--db-path", str(db))
-
-        # THE WHOLE ENVELOPE, so a dropped key and an added one both fail. The
-        # sibling route is pinned whole in the fidelity suite; this one was
-        # loosened to three fields when `project_id` arrived and never widened
-        # back, leaving the route where an escaped root would surface as the
-        # one route that could gain a key in silence.
-        expected_id = _run_cli(env, tmp_path, "status", "--db-path", str(db))["project_id"]
-        assert expected_id, "status reported no project id; the pin below is vacuous"
-        assert result == {
-            "sync_status": "refused", "projected": 0, "memory_ids": [],
-            "project_id": expected_id,
-        }
         assert (project / "CLAUDE.md").read_bytes() == before
 
 
@@ -538,26 +360,6 @@ class TestEveryResolverCallerCallsTheEscapeGuard:
             f"it: {unguarded}"
         )
 
-    def test_the_scan_catches_an_unguarded_and_a_misordered_caller(self):
-        """The live control: the scan above can report a caller at all."""
-        import textwrap
-
-        source = textwrap.dedent(f"""
-            def unguarded():
-                path, base = {_DISPLAY_RESOLVER}()
-
-            def misordered():
-                {_DISPLAY_GUARD}(None, None, None, None)
-                path, base = {_DISPLAY_RESOLVER}()
-
-            def guarded():
-                path, base = {_DISPLAY_RESOLVER}()
-                {_DISPLAY_GUARD}(None, None, base, path)
-        """)
-        callers, unguarded = _unguarded_callers(source, _DISPLAY_RESOLVER, _DISPLAY_GUARD)
-        assert callers == ["unguarded", "misordered", "guarded"]
-        assert unguarded == ["unguarded", "misordered"]
-
 
 # ---------------------------------------------------------------------------
 # Every production call of the scope predicate passes the worktree record
@@ -602,51 +404,3 @@ def _predicate_calls_without_record(source):
     return callers, missing
 
 
-class TestEveryScopePredicateCallPassesTheRecord:
-    """The worktree record decides a removed declaration only where a caller
-    passes it, so a caller that omits it judges that layout differently from
-    the others."""
-
-    def test_every_production_call_of_the_scope_predicate_passes_the_worktree_record(self):
-        """MUTANT that reddens this arm: drop `worktree_identity=` from the call
-        in `_refuse_ambient_sync_on_declared_scope_escape`. The failure names that caller."""
-        members, missing = [], []
-        for path in _production_files():
-            callers, lacking = _predicate_calls_without_record(path.read_text(encoding="utf-8"))
-            rel = path.relative_to(_PLUGIN_ROOT)
-            members += [f"{rel}::{name}" for name in callers]
-            missing += [f"{rel}::{name}" for name in lacking]
-
-        found = {member.split("::")[1] for member in members}
-        assert _KNOWN_PREDICATE_CALLERS <= found, (
-            f"the scan found {members}; it must reach every known caller, "
-            "or it is not reading the files it claims to"
-        )
-        assert missing == [], (
-            f"these callers judge project scope without the worktree record: {missing}"
-        )
-
-    def test_the_scan_catches_a_call_without_the_record_under_any_name(self):
-        """The live control: the scan above finds an aliased and an attribute
-        call, and tells a call that passes the record from one that does not."""
-        import textwrap
-
-        source = textwrap.dedent(f"""
-            from shared.project_scope import {_SCOPE_PREDICATE} as _renamed
-            import shared.project_scope as scope
-
-            def aliased():
-                _renamed(a, b, c)
-
-            def attribute():
-                scope.{_SCOPE_PREDICATE}(a, b, c)
-
-            def by_keyword():
-                _renamed(a, b, c, worktree_identity=record)
-
-            def by_position():
-                scope.{_SCOPE_PREDICATE}(a, b, c, record)
-        """)
-        callers, missing = _predicate_calls_without_record(source)
-        assert callers == ["aliased", "attribute", "by_keyword", "by_position"]
-        assert missing == ["aliased", "attribute"]

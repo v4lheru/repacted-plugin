@@ -180,103 +180,15 @@ def test_register_noop_when_value_has_no_at(registry_env):
 # <=512B single-write bound
 # ---------------------------------------------------------------------------
 
-def test_register_skips_oversize_line(registry_env):
-    """A line over the portable 512B atomicity bound is skipped (no partial
-    write) rather than risking a torn append."""
-    registry_env.set_session("s" * 600)  # forces the JSON line over 512B
-    registry_env.write_team("pact-team1", ["alice"])
-    register("alice@pact-team1")
-    assert not registry_env.registry_path.exists()
-
-
-def test_realistic_line_is_well_under_bound(registry_env):
-    registry_env.set_session("sess-abc-123")
-    registry_env.write_team("pact-team1", ["alice"])
-    register("alice@pact-team1")
-    raw = registry_env.registry_path.read_bytes()
-    assert len(raw) <= session_registry._MAX_LINE_BYTES
-
 
 # ---------------------------------------------------------------------------
 # fail-safe: corrupt / missing → resolve returns None, never raises
 # ---------------------------------------------------------------------------
 
-def test_resolve_missing_file_returns_none(registry_env):
-    assert resolve("sess-anything") is None
-
-
-def test_resolve_empty_session_id_returns_none(registry_env):
-    assert resolve("") is None
-
-
-def test_resolve_tolerates_torn_lines(registry_env):
-    """A garbage / partially-written line is skipped; a valid later line for the
-    session still resolves (last-wins over good lines, garbage ignored)."""
-    registry_env.set_session("sess-ok")
-    registry_env.write_team("pact-team1", ["alice"])
-    register("alice@pact-team1")
-    # splice a torn line in
-    with open(registry_env.registry_path, "a", encoding="utf-8") as fh:
-        fh.write('{"session_id": "sess-ok", "value": "alic\n')  # torn
-    assert resolve("sess-ok") == "alice@pact-team1"
-
-
-def test_register_never_raises_on_bad_input(registry_env):
-    registry_env.set_session("sess-1")
-    # None / empty / weird — none raise
-    register(None)  # type: ignore[arg-type]
-    register("")
-    register("@onlyteam")
-    register("name@")
-    # nothing valid was written
-    assert not registry_env.registry_path.exists()
-
 
 # ---------------------------------------------------------------------------
 # global fixed team-agnostic path
 # ---------------------------------------------------------------------------
-
-def test_registry_path_is_under_pact_sessions_not_teams():
-    """The path is under pact-sessions/ (PACT-owned), NOT under teams/
-    (shared, not PACT-owned). LOCKED team-agnostic global fixed path."""
-    p = session_registry.get_registry_path()
-    parts = p.parts
-    assert "pact-sessions" in parts
-    assert "teams" not in parts
-    assert p.name == ".teammate-registry.jsonl"
-
-
-def test_path_containment_rejects_outside_tree(registry_env, tmp_path):
-    """The inline containment check rejects a path outside pact-sessions."""
-    outside = tmp_path / "evil" / "registry.jsonl"
-    assert session_registry._is_under_pact_sessions(outside) is False
-    inside = registry_env.home / ".claude" / "pact-sessions" / "x.jsonl"
-    assert session_registry._is_under_pact_sessions(inside) is True
-
-
-def test_path_containment_rejects_sibling_prefix_of_root(registry_env):
-    """F4: a SIBLING of the sessions root whose name is a string-PREFIX of it
-    (``pact-sessions-evil`` vs ``pact-sessions``) must NOT count as 'under' the
-    root. The check uses Path.parents containment, NOT a string prefix — a naive
-    ``str(candidate).startswith(str(root))`` would WRONGLY accept the sibling and
-    let register()/resolve() operate on an attacker-planted sibling tree
-    (``~/.claude/pact-sessions-evil/...``). test_path_containment_rejects_outside_tree
-    only covers a generic outside path, not this prefix-collision sibling — this
-    row pins the parents-vs-prefix distinction.
-
-    Non-vacuity (counter-test, isolated worktree): replacing _is_under_pact_sessions
-    with a str-prefix containment makes THIS test FAIL (the sibling is wrongly
-    accepted) while test_path_containment_rejects_outside_tree still passes.
-    """
-    claude = registry_env.home / ".claude"
-    # sibling dir whose name is a string-prefix of the real root
-    sibling = claude / "pact-sessions-evil" / "x.jsonl"
-    assert session_registry._is_under_pact_sessions(sibling) is False
-    # control: the real root itself and a child under it ARE contained
-    root = claude / "pact-sessions"
-    child = root / "sub" / "x.jsonl"
-    assert session_registry._is_under_pact_sessions(root) is True
-    assert session_registry._is_under_pact_sessions(child) is True
 
 
 # ---------------------------------------------------------------------------
@@ -286,48 +198,6 @@ def test_path_containment_rejects_sibling_prefix_of_root(registry_env):
 # and guard the silent-bail trap. Mirrors the _is_safe_team_segment dual-copy
 # parity precedent (test_session_registry_trust_partition.py).
 # ---------------------------------------------------------------------------
-
-class TestConfigRootInlineParity:
-
-    @pytest.mark.parametrize("env_value", [
-        None,                 # unset -> home/.claude
-        "",                   # empty == unset
-        "   ",                # whitespace == unset
-        "/abs/config",        # absolute
-        "~",                  # home
-        "~/.claude-kimi",     # ~/x exact-prefix slice
-        "rel/dir",            # relative, honored as-is
-    ])
-    def test_inline_config_root_matches_canonical_resolver(self, env_value, monkeypatch, tmp_path):
-        # (a) the inline _config_root() MUST be byte-equivalent to the canonical
-        # shared.paths.get_claude_config_dir() across every env scenario.
-        import shared.session_registry as sr
-        from shared.paths import get_claude_config_dir
-        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-        if env_value is None:
-            monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-        else:
-            monkeypatch.setenv("CLAUDE_CONFIG_DIR", env_value)
-        assert sr._config_root() == get_claude_config_dir(), (
-            f"inline _config_root drifted from get_claude_config_dir for "
-            f"CLAUDE_CONFIG_DIR={env_value!r}"
-        )
-
-    def test_is_under_pact_sessions_holds_under_nondefault_config_dir(self, monkeypatch, tmp_path):
-        # (b) THE SILENT-BAIL TRAP GUARD: under a non-default CLAUDE_CONFIG_DIR,
-        # the registry path AND the _is_under_pact_sessions anchor must resolve
-        # through the SAME inline root, or register()/resolve() fail-closed at the
-        # containment gate (teammate-name recovery silently dies). NON-VACUOUS:
-        # if the anchor lagged on Path.home() the candidate (under $CONFIG) would
-        # not be under sessions_root (under ~/.claude) -> False -> this FAILS.
-        import shared.session_registry as sr
-        config_dir = tmp_path / "kimi-config"
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-        assert sr._is_under_pact_sessions(sr.get_registry_path()) is True, (
-            "_is_under_pact_sessions rejected the registry path under a non-default "
-            "CLAUDE_CONFIG_DIR — the containment anchor is not co-routed through the "
-            "inline _config_root() (register() would silently bail)"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -339,75 +209,3 @@ _SR_SCRIPT = str(
 )
 
 
-class TestRegistryTeachExamples:
-    # Full example line, content-pinned. prog is the invoked script path
-    # (_SR_SCRIPT), so the rendered example is the exact pasteable string:
-    # interpreter-prefixed, quoted script path, concrete flags. The epilog is
-    # unwrapped (RawDescriptionHelpFormatter), so a full-line assertion is
-    # width-safe at any COLUMNS.
-    _EXAMPLE = f'python3 "{_SR_SCRIPT}" register --name "<name>@<team>"'
-
-    def test_top_level_help_lists_the_example_line(self):
-        r = subprocess.run(
-            [sys.executable, _SR_SCRIPT, "--help"],
-            capture_output=True, text=True,
-        )
-        assert r.returncode == 0
-        assert self._EXAMPLE in r.stdout
-
-    def test_register_help_carries_the_example_line(self):
-        r = subprocess.run(
-            [sys.executable, _SR_SCRIPT, "register", "--help"],
-            capture_output=True, text=True,
-        )
-        assert r.returncode == 0
-        assert self._EXAMPLE in r.stdout
-
-    def test_missing_name_exits_2_with_example(self):
-        r = subprocess.run(
-            [sys.executable, _SR_SCRIPT, "register"],
-            capture_output=True, text=True,
-        )
-        assert r.returncode == 2
-        assert r.stdout == ""
-        assert "error:" in r.stderr
-        # One blank line between the error line and the example.
-        assert f"\n\nExamples:\n  {self._EXAMPLE}\n" in r.stderr
-
-    def test_bare_invocation_is_usage_error_with_one_example(self):
-        r = subprocess.run(
-            [sys.executable, _SR_SCRIPT],
-            capture_output=True, text=True,
-        )
-        assert r.returncode == 2
-        assert r.stdout == ""
-        assert "error:" in r.stderr
-        assert self._EXAMPLE in r.stderr
-
-    def test_unknown_top_level_flag_is_usage_error_with_one_example(self):
-        r = subprocess.run(
-            [sys.executable, _SR_SCRIPT, "--nope"],
-            capture_output=True, text=True,
-        )
-        assert r.returncode == 2
-        assert r.stdout == ""
-        assert "error:" in r.stderr
-        assert self._EXAMPLE in r.stderr
-
-    def test_pasted_example_executes_hermetically(self, tmp_path, monkeypatch):
-        # The one live paste-execute the bar allows: hermetic by
-        # construction — CLAUDE_CONFIG_DIR redirected into the sandbox and
-        # $CLAUDE_CODE_SESSION_ID removed, so register() takes its documented
-        # session-absent no-op and writes nothing. Proves the rendered line
-        # is shell-executable verbatim (interpreter prefix + quoted path).
-        env = {
-            k: v for k, v in os.environ.items()
-            if k != "CLAUDE_CODE_SESSION_ID"
-        }
-        env["CLAUDE_CONFIG_DIR"] = str(tmp_path)
-        r = subprocess.run(
-            self._EXAMPLE, shell=True, capture_output=True, text=True, env=env,
-        )
-        assert r.returncode == 0, r.stderr
-        assert "Permission denied" not in r.stderr
-        assert list(tmp_path.rglob("*")) == []

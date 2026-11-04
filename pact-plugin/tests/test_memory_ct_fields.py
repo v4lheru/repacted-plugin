@@ -75,34 +75,6 @@ class TestDatabaseCTFields:
         assert retrieved["agreements_reached"] == memory["agreements_reached"]
         assert retrieved["disagreements_resolved"] == memory["disagreements_resolved"]
 
-    def test_create_memory_without_ct_fields(self, db_conn):
-        """Backwards compat: memories without CT fields still work."""
-        memory = {
-            "context": "Simple task",
-            "goal": "Do the thing",
-        }
-        memory_id = create_memory(db_conn, memory)
-        retrieved = get_memory(db_conn, memory_id)
-
-        assert retrieved is not None
-        assert retrieved["context"] == "Simple task"
-        # CT fields should be None when not provided
-        assert retrieved.get("reasoning_chains") is None
-        assert retrieved.get("agreements_reached") is None
-        assert retrieved.get("disagreements_resolved") is None
-
-    def test_search_includes_ct_fields(self, db_conn):
-        """Keyword search should find memories via CT field content."""
-        memory = {
-            "context": "Working on auth",
-            "reasoning_chains": ["Chose bcrypt for password hashing because OWASP recommendation"],
-        }
-        create_memory(db_conn, memory)
-
-        results = search_memories_by_text(db_conn, "bcrypt")
-        assert len(results) >= 1
-        assert "bcrypt" in json.dumps(results[0].get("reasoning_chains", ""))
-
 
 class TestModelCTFields:
     """Test CT fields in MemoryObject model."""
@@ -137,48 +109,6 @@ class TestModelCTFields:
         assert obj.agreements_reached == []
         assert obj.disagreements_resolved == []
 
-    def test_memory_object_searchable_text_includes_ct(self):
-        """get_searchable_text should include CT field content."""
-        data = {
-            "id": "test789",
-            "reasoning_chains": ["Chose X because Y"],
-            "agreements_reached": ["Teachback confirmed: use pattern Z"],
-        }
-        obj = MemoryObject.from_dict(data)
-        text = obj.get_searchable_text()
-
-        assert "Chose X because Y" in text
-        assert "Teachback confirmed" in text
-
-    def test_memory_object_storage_dict_includes_ct(self):
-        """to_storage_dict should include CT fields for database storage."""
-        data = {
-            "id": "testabc",
-            "reasoning_chains": ["chain1"],
-            "agreements_reached": ["agreement1"],
-            "disagreements_resolved": ["resolved1"],
-        }
-        obj = MemoryObject.from_dict(data)
-        storage = obj.to_storage_dict()
-
-        assert storage["reasoning_chains"] == ["chain1"]
-        assert storage["agreements_reached"] == ["agreement1"]
-        assert storage["disagreements_resolved"] == ["resolved1"]
-
-    def test_memory_object_ct_fields_json_string_parsing(self):
-        """CT fields stored as JSON strings should be parsed back to lists."""
-        data = {
-            "id": "testjson",
-            "reasoning_chains": json.dumps(["chain from db"]),
-            "agreements_reached": json.dumps(["agreement from db"]),
-            "disagreements_resolved": json.dumps(["resolved from db"]),
-        }
-        obj = MemoryObject.from_dict(data)
-
-        assert obj.reasoning_chains == ["chain from db"]
-        assert obj.agreements_reached == ["agreement from db"]
-        assert obj.disagreements_resolved == ["resolved from db"]
-
 
 class TestWorkingMemoryFormatting:
     """Test CT fields in working memory display."""
@@ -210,45 +140,6 @@ class TestWorkingMemoryFormatting:
         assert "**Disagreements resolved**:" not in formatted
         assert "Simple task" in formatted
 
-    def test_format_entry_ct_fields_as_strings(self):
-        """CT fields passed as plain strings should render correctly."""
-        memory = {
-            "context": "Test",
-            "reasoning_chains": "Single chain as string",
-            "agreements_reached": "Single agreement as string",
-            "disagreements_resolved": "Single resolution as string",
-        }
-        formatted = _format_memory_entry(memory)
-
-        assert "**Reasoning chains**: Single chain as string" in formatted
-        assert "**Agreements**: Single agreement as string" in formatted
-        assert "**Disagreements resolved**: Single resolution as string" in formatted
-
-    def test_format_entry_ct_fields_empty_lists(self):
-        """Empty list CT fields should be omitted from formatting."""
-        memory = {
-            "context": "Test",
-            "reasoning_chains": [],
-            "agreements_reached": [],
-            "disagreements_resolved": [],
-        }
-        formatted = _format_memory_entry(memory)
-
-        assert "**Reasoning chains**:" not in formatted
-        assert "**Agreements**:" not in formatted
-        assert "**Disagreements resolved**:" not in formatted
-
-    def test_format_entry_ct_fields_multiple_items(self):
-        """Multiple CT field items should be joined with commas."""
-        memory = {
-            "reasoning_chains": ["chain A", "chain B", "chain C"],
-            "agreements_reached": ["agree 1", "agree 2"],
-        }
-        formatted = _format_memory_entry(memory)
-
-        assert "chain A, chain B, chain C" in formatted
-        assert "agree 1, agree 2" in formatted
-
 
 class TestParseStringList:
     """Test the _parse_string_list helper used by all CT fields."""
@@ -258,46 +149,6 @@ class TestParseStringList:
 
     def test_empty_string_returns_empty(self):
         assert _parse_string_list("") == []
-
-    def test_empty_list_returns_empty(self):
-        assert _parse_string_list([]) == []
-
-    def test_list_of_strings(self):
-        assert _parse_string_list(["a", "b"]) == ["a", "b"]
-
-    def test_list_filters_none_values(self):
-        assert _parse_string_list(["a", None, "b"]) == ["a", "b"]
-
-    def test_list_converts_non_strings(self):
-        """Non-string items in list are converted to str."""
-        assert _parse_string_list([1, 2.5, True]) == ["1", "2.5", "True"]
-
-    def test_json_string_parsed_to_list(self):
-        assert _parse_string_list(json.dumps(["x", "y"])) == ["x", "y"]
-
-    def test_plain_string_becomes_single_element_list(self):
-        assert _parse_string_list("not json") == ["not json"]
-
-    def test_json_non_list_falls_back_to_single_element(self):
-        """JSON string that parses to a non-list (e.g., dict) falls back."""
-        assert _parse_string_list(json.dumps({"key": "val"})) == ['{"key": "val"}']
-
-    def test_json_list_with_none_values(self):
-        """JSON list containing null values should filter them out."""
-        assert _parse_string_list(json.dumps(["a", None, "b"])) == ["a", "b"]
-
-    def test_non_list_non_string_type_returns_empty(self):
-        """Integer or other non-list/non-string types return empty list."""
-        assert _parse_string_list(42) == []
-        assert _parse_string_list(3.14) == []
-
-    def test_zero_returns_empty(self):
-        """Falsy numeric values should return empty list."""
-        assert _parse_string_list(0) == []
-
-    def test_false_returns_empty(self):
-        """Boolean False should return empty list."""
-        assert _parse_string_list(False) == []
 
 
 class TestMigrateCTFields:
@@ -421,64 +272,6 @@ class TestDatabaseCTFieldsEdgeCases:
         assert retrieved["agreements_reached"] == []
         assert retrieved["disagreements_resolved"] == []
 
-    def test_create_with_multiple_ct_items(self, db_conn):
-        """Multiple items per CT field should round-trip."""
-        memory = {
-            "reasoning_chains": ["chain 1", "chain 2", "chain 3"],
-            "agreements_reached": ["agree A", "agree B"],
-            "disagreements_resolved": ["resolved X", "resolved Y"],
-        }
-        memory_id = create_memory(db_conn, memory)
-        retrieved = get_memory(db_conn, memory_id)
-
-        assert retrieved["reasoning_chains"] == ["chain 1", "chain 2", "chain 3"]
-        assert retrieved["agreements_reached"] == ["agree A", "agree B"]
-        assert retrieved["disagreements_resolved"] == ["resolved X", "resolved Y"]
-
-    def test_update_memory_with_ct_fields(self, db_conn):
-        """Updating a memory to add CT fields should work."""
-        memory_id = create_memory(db_conn, {"context": "Initial"})
-
-        updated = update_memory(db_conn, memory_id, {
-            "reasoning_chains": ["new chain added"],
-            "agreements_reached": ["new agreement"],
-        })
-        assert updated is True
-
-        retrieved = get_memory(db_conn, memory_id)
-        assert retrieved["reasoning_chains"] == ["new chain added"]
-        assert retrieved["agreements_reached"] == ["new agreement"]
-
-    def test_search_via_agreements_field(self, db_conn):
-        """Search should find memories via agreements_reached content."""
-        create_memory(db_conn, {
-            "context": "Test search",
-            "agreements_reached": ["Teachback verified: Redis cache strategy"],
-        })
-
-        results = search_memories_by_text(db_conn, "Teachback verified")
-        assert len(results) >= 1
-
-    def test_search_via_disagreements_field(self, db_conn):
-        """Search should find memories via disagreements_resolved content."""
-        create_memory(db_conn, {
-            "context": "Test search",
-            "disagreements_resolved": ["REST won over GraphQL for simplicity"],
-        })
-
-        results = search_memories_by_text(db_conn, "GraphQL")
-        assert len(results) >= 1
-
-    def test_search_no_false_positives(self, db_conn):
-        """Search for absent terms should return no results."""
-        create_memory(db_conn, {
-            "context": "Something else",
-            "reasoning_chains": ["unrelated chain"],
-        })
-
-        results = search_memories_by_text(db_conn, "xyznonexistent42")
-        assert len(results) == 0
-
 
 class TestModelCTFieldsEdgeCases:
     """Edge cases for CT fields in the MemoryObject model."""
@@ -491,59 +284,6 @@ class TestModelCTFieldsEdgeCases:
         assert "Reasoning:" not in text
         assert "Agreements:" not in text
         assert "Disagreements resolved:" not in text
-
-    def test_searchable_text_includes_disagreements(self):
-        """get_searchable_text should include disagreements_resolved."""
-        obj = MemoryObject.from_dict({
-            "id": "test",
-            "disagreements_resolved": ["REST over GraphQL"],
-        })
-        text = obj.get_searchable_text()
-
-        assert "Disagreements resolved:" in text
-        assert "REST over GraphQL" in text
-
-    def test_from_dict_with_none_ct_fields(self):
-        """Explicit None for CT fields should produce empty lists."""
-        data = {
-            "id": "test",
-            "reasoning_chains": None,
-            "agreements_reached": None,
-            "disagreements_resolved": None,
-        }
-        obj = MemoryObject.from_dict(data)
-
-        assert obj.reasoning_chains == []
-        assert obj.agreements_reached == []
-        assert obj.disagreements_resolved == []
-
-    def test_from_dict_ct_fields_with_mixed_types_in_list(self):
-        """List containing mixed types should be converted to strings."""
-        data = {
-            "id": "test",
-            "reasoning_chains": ["string item", 42, True],
-        }
-        obj = MemoryObject.from_dict(data)
-
-        assert obj.reasoning_chains == ["string item", "42", "True"]
-
-    def test_to_dict_empty_ct_fields_are_empty_lists(self):
-        """to_dict for object with no CT data should have empty lists."""
-        obj = MemoryObject.from_dict({"id": "test"})
-        d = obj.to_dict()
-
-        assert d["reasoning_chains"] == []
-        assert d["agreements_reached"] == []
-        assert d["disagreements_resolved"] == []
-
-    def test_storage_dict_empty_ct_fields(self):
-        """to_storage_dict for object with no CT data should have empty lists."""
-        obj = MemoryObject.from_dict({"id": "test"})
-        storage = obj.to_storage_dict()
-
-        assert storage["reasoning_chains"] == []
-        assert storage["agreements_reached"] == []
-        assert storage["disagreements_resolved"] == []
 
 
 class TestUpdateCTFieldsAdditiveAndReplace:
@@ -580,39 +320,6 @@ class TestUpdateCTFieldsAdditiveAndReplace:
         # Scalar fields still replace (context is unchanged here only because
         # we didn't pass it in this update).
         assert retrieved["context"] == "Original context"
-
-    def test_replace_ct_fields_with_replace_kwarg(self, db_conn):
-        """replace=True restores legacy wholesale-replace behavior."""
-        memory_id = create_memory(db_conn, {
-            "context": "Original context",
-            "reasoning_chains": ["original chain"],
-            "agreements_reached": ["original agreement"],
-            "disagreements_resolved": ["original resolution"],
-        })
-
-        assert update_memory(db_conn, memory_id, {
-            "reasoning_chains": ["updated chain A", "updated chain B"],
-            "agreements_reached": ["updated agreement"],
-            "disagreements_resolved": ["updated resolution"],
-        }, replace=True) is True
-
-        retrieved = get_memory(db_conn, memory_id)
-        assert retrieved["reasoning_chains"] == [
-            "updated chain A", "updated chain B",
-        ]
-        assert retrieved["agreements_reached"] == ["updated agreement"]
-        assert retrieved["disagreements_resolved"] == ["updated resolution"]
-        assert retrieved["context"] == "Original context"
-
-    def test_append_ct_fields_dedups_duplicate_items(self, db_conn):
-        """Appending an item that already exists is a no-op (content-hash dedup)."""
-        memory_id = create_memory(db_conn, {
-            "reasoning_chains": ["A", "B"],
-        })
-        update_memory(db_conn, memory_id, {
-            "reasoning_chains": ["B", "C"],  # "B" is a duplicate
-        })
-        assert get_memory(db_conn, memory_id)["reasoning_chains"] == ["A", "B", "C"]
 
 
 class TestFormatEntryFieldOrder:

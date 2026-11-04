@@ -3,6 +3,7 @@ name: pact-devops-engineer
 description: "Implements CI/CD, Dockerfiles, scripts, Makefiles and infrastructure as code."
 color: "#FF6600"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

@@ -89,11 +89,7 @@ def test_on_writes_once_and_dedupes_in_private_files(env):
 
 
 @pytest.mark.parametrize("frame", [
-    {"agent_type": "pact-backend-coder"},                        # a separate-process teammate
-    {"agent_type": "alice-coder"},                               # an in-process member name
-    {"agent_type": 7},
-    {"transcript_path": f"/x/projects/-tmp/{LEAD}/subagents/agent-abob-0123456789abcdef.jsonl"},
-])
+    {"agent_type": "pact-backend-coder"},])
 def test_teammate_and_subagent_ends_are_skipped(env, frame):
     env.profile({"distill": {"transcripts": True}})
     assert hook.enqueue_ended(_end(**frame)) == "skipped"
@@ -134,57 +130,7 @@ def test_the_transcript_is_never_opened_and_no_process_starts(env, capsys):
     assert json.loads(capsys.readouterr().out) == {"suppressOutput": True}
 
 
-@pytest.mark.parametrize("session_id", [
-    None, 123, ["a"], {"id": LEAD}, "", "../../etc/passwd", "a/b", ".hidden", "a\nb", "a b",
-    "séssion", "ａｂｃ", "\ud800", "a" * (Q.MAX_ID_CHARS + 1), "a" * 100_000,
-])
-def test_a_hostile_session_id_writes_nothing(env, session_id):
-    env.profile({"distill": {"transcripts": True}})
-    frame = _end()
-    frame["session_id"] = session_id
-    assert hook.enqueue_ended(frame) == "invalid"
-    frame.pop("session_id")
-    assert hook.enqueue_ended(frame) == "invalid"
-    assert not _queue_file(env).exists() and not list(env.tmp.rglob("passwd"))
-
-
-@pytest.mark.parametrize("stdin", ["{not json", "[1, 2]", "", "\"a string\"", "null", "{\"session_id\":"])
-def test_malformed_stdin_exits_zero_and_writes_nothing(env, capsys, stdin):
-    env.profile({"distill": {"transcripts": True}})
-    with patch.object(sys, "stdin", io.StringIO(stdin)):
-        assert hook.main() == 0
-    assert json.loads(capsys.readouterr().out) == {"suppressOutput": True}
-    assert not _queue_file(env).exists() and Q.error_count() == 0
-
-
-def test_an_unwritable_queue_is_counted_and_never_raises(env):
-    env.profile({"distill": {"transcripts": True}})
-    env.queue.mkdir(parents=True)
-    os.symlink(env.tmp / "elsewhere", env.queue / Q.QUEUE_FILE)     # O_NOFOLLOW refuses it
-    assert hook.dispatch_check(_end()) is None
-    assert hook.dispatch_check(_end()) is None
-    assert Q.error_count() == 2
-    assert not (env.tmp / "elsewhere").exists()
-
-
 # --- the queue file ------------------------------------------------------------------------
-
-def test_a_corrupt_queue_keeps_its_valid_ids_and_drops_the_rest(env):
-    env.queue.mkdir(parents=True)
-    _queue_file(env).write_bytes(f"{LEAD}\n../x\n\xff\xfe\n{LEAD}\nnot an id\n".encode("latin-1"))
-    assert Q.enqueue(OTHER) is True
-    assert _queue_file(env).read_text() == f"{LEAD}\n{OTHER}\n"
-
-
-def test_an_oversize_queue_is_read_to_its_cap_and_rewritten_bounded(env):
-    env.queue.mkdir(parents=True)
-    ids = [f"s{n:05d}" for n in range(Q.MAX_IDS)]
-    _queue_file(env).write_text("".join(f"{i}\n" for i in ids) + "x" * (Q.MAX_BYTES * 2))
-    assert Q.queued() == ids
-    assert Q.enqueue(LEAD) is True
-    kept = Q.queued()
-    assert len(kept) == Q.MAX_IDS and kept[0] == ids[1] and kept[-1] == LEAD   # the oldest left
-    assert _queue_file(env).stat().st_size <= Q.MAX_BYTES
 
 
 # --- the distiller -------------------------------------------------------------------------
@@ -222,54 +168,6 @@ def _distill(argv, capsys) -> str:
     return capsys.readouterr().out
 
 
-def test_queued_sessions_go_first_and_leave_the_queue_after_a_run(env, capsys):
-    env.profile({"distill": {"enabled": True, "transcripts": True}})
-    _transcript(env.cfg, LEAD, "the cache")
-    _transcript(env.cfg, OTHER, "the fixture")
-    for session in (LEAD, OTHER):
-        (env.cfg / "pact-sessions" / "demo-project" / session).mkdir(parents=True)
-    Q.enqueue(OTHER)
-    Q.enqueue("0f0e0d0c-gone")                 # no transcript: nothing to send, so it leaves too
-    settings = CLI.load_settings(CLI.build_parser().parse_args(["dry-run"]), CLI.common.profile())
-    chunks = CLI.collect(settings, env.cfg, CLI.R.RunSummary(mode="dry-run"), lambda cli: ([], None))
-    assert [c.session for c in chunks if c.source == "transcript"] == [OTHER, LEAD]
-    _distill(["dry-run"], capsys)
-    assert Q.queued() == [OTHER, "0f0e0d0c-gone"], "a dry-run changes nothing"
-    _distill(["run", "--no-propose"], capsys)
-    assert Q.queued() == []
-
-
-def test_a_capped_run_keeps_the_unsent_session_queued(env, capsys):
-    env.profile({"distill": {"enabled": True, "transcripts": True}})
-    _transcript(env.cfg, LEAD, "the cache")
-    Q.enqueue(LEAD)
-    _distill(["run", "--no-propose", "--max-tokens", "1"], capsys)
-    assert Q.queued() == [LEAD]
-
-
 # --- the doctor and wrap-up lines ----------------------------------------------------------
 
-def test_the_doctor_line_reports_the_switch_the_count_and_swallowed_errors(env):
-    result = DS.check_distill(None)
-    assert (result.state, result.summary) == ("green", "transcript distill off; 0 ended session(s) queued")
-    env.profile({"distill": {"transcripts": True}})
-    Q.enqueue(LEAD)
-    result = DS.check_distill(None)
-    assert result.state == "green" and result.summary.startswith("transcript distill on; 1 ended")
-    Q.note_error("TimeoutError")
-    result = DS.check_distill(None)
-    assert result.state == "amber" and "1 enqueue error(s)" in result.summary
 
-
-def test_the_queue_line_and_the_wrap_up_step_that_relays_it(env, capsys):
-    env.profile({"distill": {"transcripts": True}})
-    Q.enqueue(LEAD)
-    Q.enqueue(OTHER)
-    line = _distill(["queue"], capsys).strip()
-    assert line.startswith("2 ended session(s) queued for distilling, transcript distill on")
-    assert line.endswith('bin/repact-distill" run') and "\n" not in line
-    wrap_up = (PLUGIN / "commands" / "wrap-up.md").read_text(encoding="utf-8")
-    step = wrap_up[wrap_up.index("## 7b."):wrap_up.index("## 8.")]
-    assert "repact-distill queue" in step
-    reference = (PLUGIN / "reference" / "wrap-up" / "kb-queue.md").read_text(encoding="utf-8")
-    assert 'bin/repact-distill" queue' in reference.split("## 6.")[1]

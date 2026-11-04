@@ -1,6 +1,6 @@
 {
  "version": 1,
- "about": "T1 recall triggers (repacted-wave-d.md D9.2, D9.6): per skill, the command regexes, URL-host regexes and file globs its own SKILL.md names. Patterns only, never prose. Written from the skills' text on 2026-09-27 BEFORE any D9a moment was replayed. `commands` match a Bash command; `hosts` match the host of any URL in a Bash command or a WebFetch; `globs` match an Edit/Write/Read file path. `why` is the pointer's reason, taken from the skill's description.",
+ "about": "T1 recall triggers (the design notes D9.2, D9.6): per skill, the command regexes, URL-host regexes and file globs its own SKILL.md names. Patterns only, never prose. Written from the skills' text on 2026-09-27 BEFORE any D9a moment was replayed. `commands` match a Bash command; `hosts` match the host of any URL in a Bash command or a WebFetch; `globs` match an Edit/Write/Read file path. `why` is the pointer's reason, taken from the skill's description.",
  "skills": {
   "postgres-supabase": {
    "why": "you are touching Postgres or Supabase: catalog checks over grep, grant and anon traps, proving a policy fires",

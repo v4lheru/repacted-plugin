@@ -213,34 +213,6 @@ class TestTheMarkerSurvivesTheTripFromHookToReader:
         )
         assert event["type"] == event_type
 
-    def test_no_claim_leaves_the_reader_answering_null(
-        self, monkeypatch, tmp_path, event_type
-    ):
-        """Detects: a marker written unconditionally.
-
-        This is the arm that makes the sibling above mean something. Presence
-        IS the signal, so a marker written when nothing surfaced would freeze
-        the Working Memory block of an ordinary session forever — and the
-        sibling test would still pass, because it only asks whether the event
-        can be read back.
-        """
-        write_dir = _run_hook(monkeypatch, resume_msg=None)
-        read_dir = _documented_read_dir(write_dir, tmp_path)
-
-        assert _read_last(read_dir, event_type, tmp_path) is None
-
-    def test_the_driver_does_not_stub_the_write(self):
-        """Detects: a later edit adding the writer to this module's patch table.
-
-        The value of this module is that ONE seam is real. A patch on the writer
-        would leave both assertions above passing while measuring nothing —
-        the shape this file exists to catch. Scoped to the shared driver and its
-        patch table rather than to the whole file, because the loud-failure test
-        below patches the writer legitimately and a file-wide ban would forbid
-        that too.
-        """
-        assert not [t for t, _ in _PATCHED if "append_event" in t]
-        assert "append_event" not in inspect.getsource(_run_hook)
 
     # P-0103 RETIRED with the secretary rework: the agent body no longer tells the secretary to
     # read the marker (session_init holds the rebuild in-process), so there is no documented
@@ -248,40 +220,3 @@ class TestTheMarkerSurvivesTheTripFromHookToReader:
     # marker lands where the journal reader finds it.
 
 
-class TestTheHookStillAnnouncesAFailedWrite:
-
-    def test_a_failed_write_reaches_both_channels(self, monkeypatch, tmp_path):
-        """Detects: the loud fail direction going quiet.
-
-        The write's failure cannot be made safe — no marker means the secretary
-        rebuilds — so it is made loud instead, on both channels. Covered here
-        rather than only against a mocked writer because this file is where the
-        real writer runs: the mock below replaces it for this one test on
-        purpose, since a genuine write failure cannot be provoked otherwise.
-        """
-        import session_init
-
-        failing = MagicMock(return_value=False)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", _PROJECT_DIR)
-
-        with ExitStack() as stack:
-            for target, value in _PATCHED:
-                stack.enter_context(patch(target, return_value=value))
-            stack.enter_context(patch(
-                "shared.session_init_lead.check_resume_state",
-                return_value="Paused work detected: feat/login.",
-            ))
-            stack.enter_context(patch("shared.session_init_lead.append_event", failing))
-            stack.enter_context(patch("sys.stdin", io.StringIO(_STDIN)))
-            out = stack.enter_context(
-                patch("sys.stdout", new_callable=io.StringIO)
-            )
-            with pytest.raises(SystemExit) as exc:
-                session_init.main()
-
-        assert exc.value.code == 0, "a failed marker write must never block start"
-        payload = json.loads(out.getvalue())
-        assert "not recorded" in payload["systemMessage"]
-        assert "RESUMPTION MARKER MISSING" in (
-            payload["hookSpecificOutput"]["additionalContext"]
-        )

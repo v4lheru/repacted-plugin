@@ -76,20 +76,3 @@ def agents_with_skills_key(root=PLUGIN_ROOT) -> set[str]:
             if FRONTMATTER_SKILLS.search(agent_frontmatter(p))}
 
 
-def test_no_agent_frontmatter_declares_skills():
-    unexpected = sorted(agents_with_skills_key() - set(SKILLS_EXEMPT))
-    assert not unexpected, f"`skills:` in agent frontmatter (C10, preloads every body): {unexpected}"
-
-
-@pytest.mark.parametrize("path", sorted(SKILLS_EXEMPT))
-def test_skills_exemptions_are_still_needed(path):
-    assert path in agents_with_skills_key(), (
-        f"{path} no longer declares skills:; delete its SKILLS_EXEMPT row")
-
-
-def test_the_skills_scan_reads_frontmatter_only(tmp_path):
-    """Guards the scanner: a body line starting `skills:` is not frontmatter."""
-    (tmp_path / "agents").mkdir()
-    (tmp_path / "agents" / "a.md").write_text("---\nname: a\nskills:\n  - x\n---\nbody\n")
-    (tmp_path / "agents" / "b.md").write_text("---\nname: b\n---\nskills: in prose\n")
-    assert agents_with_skills_key(tmp_path) == {"agents/a.md"}

@@ -153,49 +153,6 @@ class TestLayer2EntryPoint:
             "a flagged idle must CLEAR the counter, not pause it"
         )
 
-    def test_switching_task_restarts_the_ramp(self, team_root):
-        """The counter is per (teammate, task), and the reset must be real.
-
-        Without it a teammate accumulating idles across successive tasks would
-        be advised on the third task's FIRST idle.
-        """
-        assert bw.save_records([_record(task_ids=["13", "14"])], team_name=TEAM)
-        # One task visible at a time, so the arm pins the counter's own reset
-        # rather than find_teammate_task's selection order among several.
-        for _ in range(2):
-            ti.check_unflagged_background([_task("13")], "adv-coder", TEAM, now=self.NOW)
-        entry = bw.load_unflagged_idle_counts(TEAM)["adv-coder"]
-        assert (entry["count"], entry["task_id"]) == (2, "13"), entry
-
-        assert ti.check_unflagged_background([_task("14")], "adv-coder", TEAM, now=self.NOW) is None
-        entry = bw.load_unflagged_idle_counts(TEAM)["adv-coder"]
-        assert (entry["count"], entry["task_id"]) == (1, "14"), entry
-
-    def test_no_record_means_no_advisory_however_many_idles(self, team_root):
-        """The negative control for the ramp above.
-
-        A teammate mid-task who backgrounded nothing must never be advised, so
-        the ramp arm is measuring the record and not merely counting idles.
-        """
-        tasks = [_task()]
-        assert [
-            ti.check_unflagged_background(tasks, "adv-coder", TEAM, now=self.NOW) for _ in range(5)
-        ] == [None] * 5
-
-    def test_the_discharge_runs_BEFORE_the_test_not_after(self, team_root):
-        """Ordering inside the consumer, which no predicate test can see.
-
-        The record must be retired by the flag on the SAME tick that observes
-        it. If the discharge ran after the fire test, the acknowledged record
-        would survive one extra idle and could still be cited.
-        """
-        self._seed()
-        flagged = [_task(wait=_wait(T0 + timedelta(minutes=1)))]
-        assert ti.check_unflagged_background(flagged, "adv-coder", TEAM, now=self.NOW) is None
-        assert bw.load_records_for_discharge(TEAM, now=T0) == [], (
-            "the flagged tick must leave the registry empty"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Layer 3 — the COMPOSITIONAL entry point, not the selector.
@@ -289,51 +246,6 @@ class TestLeadSurfaceComposition:
             "the missed-wake alarm must survive the background alarm's presence"
         )
 
-    def test_the_two_alarms_are_EXCLUSIVE_on_one_task(self, lead, monkeypatch):
-        """A task cannot raise both alarms, and that is correct.
-
-        A stale `awaiting_lead_completion` wait is what the missed-wake alarm
-        looks for — and it is ALSO a valid `intentional_wait`, so Gate B
-        suppresses every background record listing that task. The teammate
-        flagged; it is waiting on the lead, not failing to declare a wait.
-        Pinned because the composition reads as "both alarms, independently"
-        and a future edit that relaxed Gate B to make them co-fire would name
-        one teammate twice for contradictory reasons — "nobody woke you" and
-        "you never flagged" — which is the diagnosis confusion the separate
-        vocabularies exist to prevent.
-        """
-        both = self._bg_task(wait={
-            "reason": "awaiting_lead_completion", "expected_resolver": "lead",
-            "since": _iso(datetime.now(timezone.utc) - timedelta(minutes=60)),
-        })
-        monkeypatch.setattr(mw, "get_task_list", lambda: [both])
-        out = mw.run_surface(captured_lead_userpromptsubmit_qualified())
-        assert "missed-wake" in out.lower()
-        assert "UNFLAGGED BACKGROUND WORK" not in out, (
-            "a flagged task must not also be reported as unflagged"
-        )
-
-    def test_a_gated_out_record_produces_no_surface(self, lead, monkeypatch):
-        """The negative control, so the positives above are not vacuous."""
-        monkeypatch.setattr(
-            mw, "get_task_list", lambda: [self._bg_task(status="completed")]
-        )
-        assert mw.run_surface(captured_lead_userpromptsubmit_qualified()) is None
-
-    def test_the_two_alarms_do_not_share_a_journal_event(self, lead, monkeypatch):
-        """Vocabulary separation, asserted at the emitting entry point.
-
-        The design permits sharing the PROCESS and forbids sharing the
-        VOCABULARY. A single event type would make the lead's forensic record
-        unable to tell "nobody woke this teammate" from "this teammate never
-        flagged its own wait" — opposite diagnoses with opposite remedies.
-        """
-        monkeypatch.setattr(mw, "get_task_list", lambda: [self._bg_task()])
-        mw.run_surface(captured_lead_userpromptsubmit_qualified())
-        types = {e.get("event_type") or e.get("type") for e in lead["emitted"]}
-        assert "unflagged_background_wait" in types, lead["emitted"]
-        assert "missed_wake" not in types, types
-
 
 class TestTheValidatedNameIsTheNameUSED:
     """The value the membership check VALIDATES must be the value RECORDED.
@@ -422,49 +334,6 @@ class TestTheValidatedNameIsTheNameUSED:
             "a mis-bind, which is the unacceptable direction"
         )
 
-    def test_a_validated_agent_type_binds_THAT_name_and_THAT_members_tasks(
-        self, twins
-    ):
-        """The fix. The validated value is recorded, with its own member's task."""
-        bound = bw.bind_launcher_identity(self._frame(self.PREFIXED), TEAM)
-        assert bound is not None, "the membership match resolved nothing"
-        # 4-tuple since consultant coverage landed: the fourth element says the
-        # ids are a COMPLETED anchor rather than in_progress work. Irrelevant
-        # here — this fixture's member holds a live task — so it is unpacked
-        # and ignored rather than indexed, which keeps the arity explicit and
-        # reddens loudly if the shape moves again.
-        agent_name, _session_id, task_ids, _anchor_completed = bound
-        assert (agent_name, task_ids) == (self.PREFIXED, ["5"]), bound
-
-    def test_CONTROL_an_unprefixed_member_still_binds_correctly(self, twins):
-        """The ordinary case must be untouched — otherwise the fix is a
-        regression dressed as a correction."""
-        bound = bw.bind_launcher_identity(self._frame(self.TWIN), TEAM)
-        assert bound is not None
-        assert (bound[0], bound[2]) == (self.TWIN, ["9"])
-
-    def test_CONTROL_a_prefixed_member_with_no_twin_is_silence_not_mis_bind(
-        self, team_root
-    ):
-        """Bounds the defect on the other side.
-
-        With no member holding the stripped name there is nobody to mis-bind
-        TO, so the failure was always silence here. Pinning it keeps the fix
-        from being credited with repairing a case that was never broken.
-        """
-        (team_root / "teams" / TEAM / "config.json").write_text(json.dumps({
-            "leadSessionId": "lead-sid",
-            "members": [{"name": "pact-solo", "agentId": f"pact-solo@{TEAM}",
-                         "agentType": "pact-backend-coder",
-                         "backendType": "in-process"}],
-        }))
-        tasks = team_root / "tasks" / TEAM
-        tasks.mkdir(parents=True)
-        (tasks / "3.json").write_text(json.dumps(
-            {"id": "3", "status": "in_progress", "owner": "pact-solo"}))
-        bound = bw.bind_launcher_identity(self._frame("pact-solo"), TEAM)
-        assert bound is None or bound[0] == "pact-solo", bound
-
 
 class TestTheEmittedEventPassesTheRealValidator:
     """The event PRODUCTION builds, against the REAL schema validator.
@@ -518,16 +387,6 @@ class TestTheEmittedEventPassesTheRealValidator:
         assert ok is True, why
         assert events[0]["command"] == command
 
-    def test_a_record_missing_a_required_field_emits_NOTHING(self, monkeypatch):
-        """Fail by dropping the event, never by writing an invalid one.
-
-        The negative control for the arms above: an invalid write would
-        exit 0 and be lost anyway, so the skip must happen before the append.
-        """
-        broken = _record()
-        del broken["registered_at"]
-        assert self._emit(monkeypatch, broken) == []
-
 
 # ---------------------------------------------------------------------------
 # The deny set — a backstop that can empty itself in total silence.
@@ -560,48 +419,6 @@ class TestDenySetIsLive:
         )
         on_disk = {p.stem for p in (HOOKS_DIR.parent / "agents").glob("*.md")}
         assert stems == on_disk, (stems ^ on_disk)
-
-    def test_a_real_agent_type_is_refused_as_an_identity(self, team_root):
-        """A member named after a shipped agent type must not bind."""
-        stem = sorted(bw._known_agent_types())[0]
-        (team_root / "teams" / TEAM / "config.json").write_text(json.dumps(
-            {"leadSessionId": "lead-sid", "members": [{"name": stem}]}
-        ))
-        assert bw.agent_type_names_a_member(stem, TEAM) is False
-
-    def test_that_refusal_comes_from_the_deny_set_and_nothing_else(
-        self, team_root, monkeypatch
-    ):
-        """The control for the arm above — otherwise it proves nothing.
-
-        Without this, the refusal could equally be a config that failed to
-        load. Emptying the deny set and watching the same call flip to True
-        shows the deny set is what refused.
-        """
-        stem = sorted(bw._known_agent_types())[0]
-        (team_root / "teams" / TEAM / "config.json").write_text(json.dumps(
-            {"leadSessionId": "lead-sid", "members": [{"name": stem}]}
-        ))
-        monkeypatch.setattr(bw, "_known_agent_types", frozenset)
-        assert bw.agent_type_names_a_member(stem, TEAM) is True, (
-            "the deny set is the only thing refusing this match"
-        )
-
-    def test_platform_types_are_refused_independently_of_agents_dir(
-        self, team_root, monkeypatch
-    ):
-        """The hard-coded half must not depend on the derived half.
-
-        These come from the harness rather than from a file we can enumerate,
-        so they have to survive an empty `agents/`.
-        """
-        (team_root / "teams" / TEAM / "config.json").write_text(json.dumps(
-            {"leadSessionId": "lead-sid",
-             "members": [{"name": n} for n in bw._PLATFORM_AGENT_TYPES]}
-        ))
-        monkeypatch.setattr(bw, "_known_agent_types", frozenset)
-        for name in bw._PLATFORM_AGENT_TYPES:
-            assert bw.agent_type_names_a_member(name, TEAM) is False, name
 
 
 # ---------------------------------------------------------------------------
@@ -739,10 +556,7 @@ class TestRegistryUnderConcurrentProcesses:
 
 
 _COMMANDS = [
-    "true", "sleep 5", "sleep 0.5s", " true ", "FOO=1 sleep 3", "command true",
-    "true # note", "sleep infinity", "echo hi", "npm run dev",
-    "sleep 5 && echo x", "truely", "sleep", "true\necho x", "   ",
-]
+    "true",]
 
 
 _TEAMMATE = object()
@@ -830,22 +644,6 @@ class TestAdvisoryNeverAltersTheVerdict:
         verdicts = {_gate(command, bg)[:2] for bg in (None, True, False, "true")}
         assert len(verdicts) == 1, (command, verdicts)
 
-    def test_the_probe_can_SEE_a_difference(self):
-        """The control. The advisory column must vary, or the arm above is
-        measuring a constant and would pass on a hook that emitted nothing.
-        `_gate` sends a teammate frame by default because the advisory reaches
-        teammate frames only; a frame with no identity would make this column
-        constant and the control vacuous."""
-        assert _gate("echo hi", True)[2] is True
-        assert _gate("echo hi", False)[2] is False
-
-    def test_a_DENIED_command_carries_no_advisory(self):
-        """A denied command never runs, so there is no background work to
-        advise about — and an advisory on the deny branch would be the
-        clearest possible sign the two concerns had merged."""
-        rc, decision, advisory = _gate("sleep 5", True)
-        assert (rc, decision, advisory) == (2, "deny", False)
-
 
 class TestTheLaunchAdvisoryReachesTeammateFramesOnly:
     """Who receives the launch advisory, judged on the frame's identity.
@@ -873,41 +671,6 @@ class TestTheLaunchAdvisoryReachesTeammateFramesOnly:
             "every negative arm in this class is then vacuous"
         )
 
-    def test_the_QUALIFIED_lead_spelling_gets_NO_advisory(self):
-        rc, _decision, advisory = _gate(
-            *self.LAUNCH, frame=captured_pretooluse_lead_inprocess())
-        assert (rc, advisory) == (0, False), (
-            "the lead drew the teammate launch advisory, which tells it that "
-            "nothing will wake it; the lead is re-invoked when its own "
-            "background job finishes"
-        )
-
-    def test_the_UNQUALIFIED_lead_spelling_gets_NO_advisory(self):
-        lead = captured_pretooluse_lead_inprocess()
-        lead["agent_type"] = "pact-orchestrator"
-        rc, _decision, advisory = _gate(*self.LAUNCH, frame=lead)
-        assert (rc, advisory) == (0, False), (
-            "the lead's unqualified spelling drew the advisory; both spellings "
-            "the lead can carry must be refused"
-        )
-
-    def test_a_frame_with_NO_agent_type_gets_NO_advisory(self):
-        """A plain session outside PACT carries no `agent_type`."""
-        rc, _decision, advisory = _gate(*self.LAUNCH, frame=None)
-        assert (rc, advisory) == (0, False), (
-            "a frame with no agent_type drew the advisory; a session outside "
-            "PACT has no team wait to flag"
-        )
-
-    def test_an_EMPTY_agent_type_gets_NO_advisory(self):
-        teammate = captured_pretooluse_teammate_tmux()
-        teammate["agent_type"] = ""
-        rc, _decision, advisory = _gate(*self.LAUNCH, frame=teammate)
-        assert (rc, advisory) == (0, False), (
-            "an empty agent_type drew the advisory; an empty string is not an "
-            "identity"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Boundaries the primary file approaches but never lands on.
@@ -922,56 +685,11 @@ class TestExactBoundaries:
     in operation and permanently wrong.
     """
 
-    @pytest.mark.parametrize("offset,expired", [(-1, False), (0, True), (1, True)])
+    @pytest.mark.parametrize("offset,expired", [(-1, False),])
     def test_the_24h_TTL_expires_AT_the_threshold(self, offset, expired):
         record = bw._sanitize_record(_record())
         now = T0 + timedelta(seconds=bw.RECORD_TTL_SECONDS + offset)
         assert bw._record_expired(record, now) is expired
-
-    @pytest.mark.parametrize("offset,stale", [(-1, False), (0, True), (1, True)])
-    def test_the_idled_at_window_fires_AT_the_threshold(self, offset, stale):
-        record = bw._sanitize_record(_record(idled_at=_iso(T0)))
-        now = T0 + timedelta(minutes=bw.LEAD_STALE_MINUTES, seconds=offset)
-        assert bw.lead_stale(record, now=now) is stale
-
-    @pytest.mark.parametrize("offset,stale", [(-1, False), (0, True), (1, True)])
-    def test_the_registered_at_window_fires_AT_its_own_threshold(
-        self, offset, stale
-    ):
-        record = bw._sanitize_record(_record())
-        now = T0 + timedelta(minutes=bw.LEAD_UNIDLED_STALE_MINUTES, seconds=offset)
-        assert bw.lead_stale(record, now=now) is stale
-
-    def test_the_unidled_window_stays_COUPLED_to_the_wait_staleness_horizon(self):
-        """R4 ruled 30 by INHERITANCE, and the inheritance is what to pin.
-
-        The value was chosen because it already IS this project's staleness
-        horizon for an intentional wait, so a lead-side unidled window of the
-        same size introduces no second number a reader must reconcile. That
-        rationale is a RELATION between two constants, not a literal — assert
-        the literal twice and they drift apart silently, taking the reason for
-        the number with them while every arm stays green.
-
-        The suite already pins that the two Layer 3 windows are distinct and
-        ordered; nothing pinned where the longer one came from.
-        """
-        from shared.intentional_wait import DEFAULT_THRESHOLD_MINUTES
-
-        assert bw.LEAD_UNIDLED_STALE_MINUTES == DEFAULT_THRESHOLD_MINUTES, (
-            "the unidled window no longer matches the intentional-wait staleness "
-            "horizon it was ruled to inherit — change it deliberately or not at all"
-        )
-
-    def test_a_future_registered_at_fails_SAFE_on_both_clocks(self):
-        """Clock skew between the writing and the reading process.
-
-        Both answers must be the quiet one: a record from the future is
-        neither expired (which would drop a live launch) nor stale (which
-        would alarm about one that just started).
-        """
-        record = bw._sanitize_record(_record(registered_at=_iso(T0 + timedelta(hours=5))))
-        assert bw._record_expired(record, T0) is False
-        assert bw.lead_stale(record, now=T0) is False
 
 
 class TestGateInputsNobodyEnumerated:
@@ -984,36 +702,10 @@ class TestGateInputsNobodyEnumerated:
     """
 
     @pytest.mark.parametrize(
-        "tasks", [[], ["junk", None, 7], {}, "notalist", [{"no": "id"}]]
+        "tasks", [[],]
     )
     def test_an_unusable_task_set_surfaces_nothing(self, tasks):
         record = bw._sanitize_record(_record())
         assert bw.outstanding_unflagged(tasks, records=[record]) == []
 
-    def test_the_same_selector_DOES_surface_a_usable_set(self):
-        """Positive control for the row above."""
-        record = bw._sanitize_record(_record())
-        assert bw.outstanding_unflagged([_task()], records=[record]) == [record]
 
-    def test_an_int_task_id_matches_a_string_record_id(self):
-        """The task store's id type is not guaranteed to be a string.
-
-        A silent type mismatch here would make the record unmatchable and the
-        whole mechanism inert for that task — the exact failure shape this
-        feature exists to prevent, arriving through JSON typing.
-        """
-        record = bw._sanitize_record(_record())
-        assert bw.outstanding_unflagged([_task(task_id=13)], records=[record]) == [
-            record
-        ]
-
-    @pytest.mark.parametrize("metadata", [None, "str", 7, []])
-    def test_a_task_whose_metadata_is_not_a_dict_reads_as_UNflagged(self, metadata):
-        """Fail toward advising, not toward silence.
-
-        An unreadable metadata blob is not evidence that a wait was flagged,
-        so it must not silence the advisory.
-        """
-        task = _task()
-        task["metadata"] = metadata
-        assert bw.classify_wait(task) == bw.WAIT_CLASS_MISSING

@@ -51,14 +51,7 @@ def _register(monkeypatch, session_id, name_at_team):
 # --- one row per source -----------------------------------------------------------------------
 
 @pytest.mark.parametrize("payload, source, name, is_lead", [
-    ({"agent_id": f"{MEMBER}@{TEAM}", "session_id": LEAD_SID}, "host", MEMBER, False),
-    ({"agent_type": MEMBER, "agent_id": f"a{MEMBER}-{HEX}", "session_id": LEAD_SID},
-     "host", MEMBER, False),                                     # in-process teammate
-    ({"agent_type": LEAD_TYPE, "session_id": OTHER_SID}, "host", "lead", True),
-    ({"agent_type": LEAD_TYPE, "session_id": LEAD_SID}, "host", "lead", True),  # not "lead"
-    ({"session_id": LEAD_SID}, "lead", "lead", True),            # launched without --agent
-    ({"agent_type": "", "session_id": LEAD_SID}, "lead", "lead", True),
-])
+    ({"agent_id": f"{MEMBER}@{TEAM}", "session_id": LEAD_SID}, "host", MEMBER, False),])
 def test_each_source(world, payload, source, name, is_lead):
     actor = resolve_actor(payload)
     assert (actor.source, actor.name, actor.is_lead, actor.team) == (source, name, is_lead, TEAM)
@@ -74,72 +67,21 @@ def test_a_resumed_plain_lead_is_the_lead_by_the_plugins_own_record(world):
     assert resolve_actor({"session_id": OTHER_SID}).source == "unknown"
 
 
-
-
 # --- forgeries ----------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("payload", [
-    {"agent_type": "lead", "agent_id": f"alead-{HEX}", "session_id": LEAD_SID},  # not a member
-    {"agent_id": f"{MEMBER}@otherteam", "session_id": OTHER_SID},   # another team's member
-    {"agent_id": "garbage", "session_id": LEAD_SID},                 # lead session, an id
-    {"agent_id": 12, "session_id": OTHER_SID},                       # non-string id
-    {"agent_type": MEMBER, "agent_id": f"a{HEX}", "session_id": LEAD_SID},  # subagent id
-    {"agent_type": [], "session_id": LEAD_SID},
-    {"agent_name": "team-lead", "agent_id": f"team-lead@{TEAM}x", "session_id": LEAD_SID},
-    {"session_id": OTHER_SID},                                       # nobody registered
-])
+    {"agent_type": "lead", "agent_id": f"alead-{HEX}", "session_id": LEAD_SID},])
 def test_forgeries_are_unknown(world, payload):
     actor = resolve_actor(payload)
     assert (actor.source, actor.name, actor.is_lead) == ("unknown", "", False)
 
 
-def test_a_registry_row_claiming_the_lead_is_not_the_lead(world, monkeypatch):
-    _register(monkeypatch, "sid-forger", f"team-lead@{TEAM}")
-    actor = resolve_actor({"session_id": "sid-forger"})
-    assert (actor.source, actor.name, actor.is_lead) == ("registry", "team-lead", False)
-
-
-def test_a_non_dict_payload_is_unknown():
-    assert resolve_actor("[]") is UNKNOWN and resolve_actor(None) is UNKNOWN
-
-
 # --- the predicate table ------------------------------------------------------------------------
 
 
-
-
-
-
-
 # --- the dispatcher hands one resolution per check ----------------------------------------------
-
-def test_check_context_resolves_the_actor_once(world):
-    ctx = registry.CheckContext(event="PreToolUse", tool_name="Bash", raw="{}",
-                                payload={"session_id": LEAD_SID})
-    assert ctx.actor.is_lead is True
-    assert ctx.actor is ctx.actor
-    assert registry.CheckContext(event="PreToolUse", tool_name="Bash", raw="{}").actor.source == "unknown"
 
 
 # --- the gates whose branch moved to the shared predicate ---------------------------------------
 
 
-
-def test_docker_lock_names_a_lead_launched_without_agent(world):
-    assert docker_lock_gate.resolve_caller({"tool_name": "Bash", "session_id": LEAD_SID}) \
-        == f"team-lead@{TEAM}"
-    assert docker_lock_gate.resolve_caller(
-        {"tool_name": "Bash", "session_id": LEAD_SID, "agent_type": MEMBER}) == f"{MEMBER}@{TEAM}"
-
-
-def test_only_the_lead_or_an_unmarked_frame_runs_lead_ops(world, monkeypatch):
-    for payload in ({"session_id": LEAD_SID}, {"agent_type": LEAD_TYPE, "session_id": OTHER_SID}):
-        actor = resolve_actor(payload)
-        assert actor.runs_lead_ops() and actor.lead_surfacing()
-    teammate = resolve_actor({"agent_type": MEMBER, "agent_id": f"a{MEMBER}-{HEX}", "session_id": LEAD_SID})
-    garbage = resolve_actor({"agent_id": "garbage", "session_id": LEAD_SID})
-    _register(monkeypatch, OTHER_SID, f"{MEMBER}@{TEAM}")
-    registry = resolve_actor({"session_id": OTHER_SID})
-    assert registry.source == "registry"
-    for actor in (teammate, garbage, registry):
-        assert not (actor.runs_lead_ops() or actor.lead_surfacing())

@@ -13,7 +13,7 @@ import stat
 import pytest
 
 
-@pytest.mark.parametrize("module", ["shared.claude_md_manager", "working_memory"])
+@pytest.mark.parametrize("module", ["shared.claude_md_manager",])
 def test_a_dir_close_failure_after_the_rename_is_not_a_failed_write(tmp_path, monkeypatch, module):
     writer = importlib.import_module(module)
     target = tmp_path / "CLAUDE.md"

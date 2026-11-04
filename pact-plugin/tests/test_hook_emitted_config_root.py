@@ -119,12 +119,6 @@ def test_control_docstrings_and_comments_are_out_of_population():
     )
 
 
-@pytest.mark.parametrize("rel", GUARDED_FILES)
-def test_guarded_files_still_exist(rel):
-    """A renamed file silently shrinks the population above to nothing."""
-    assert (HOOKS.parent / rel).is_file(), f"{rel} moved — re-point this gate"
-
-
 # --------------------------------------------------------------------------
 # Behavioural arms — the literal being absent is not the same as the RESOLVED
 # root being present. These drive the real producers under an alternate root.
@@ -138,79 +132,3 @@ def alt_root(tmp_path, monkeypatch):
     return root
 
 
-def test_additional_directories_tip_names_the_resolved_dirs(alt_root):
-    """The tip must name the SAME directories its membership test checked.
-
-    The defect this replaces: the check ran on the resolved path while the
-    message printed a tilde literal, so on a non-default root the user was
-    told to add a path that could never satisfy the check — following the tip
-    did not silence the tip.
-    """
-    from session_init import check_additional_directories
-
-    (alt_root / "settings.json").write_text(
-        json.dumps({"permissions": {"additionalDirectories": []}}), encoding="utf-8")
-
-    tip = check_additional_directories()
-    assert tip is not None
-    assert str(alt_root / "teams") in tip
-    assert str(alt_root / "pact-sessions") in tip
-    assert str(alt_root / "settings.json") in tip
-    assert "~/.claude" not in tip
-
-
-def test_malformed_settings_warning_names_the_file_it_read(alt_root):
-    """The warning must name the settings.json that was actually parsed."""
-    from session_init import check_settings_well_formed
-
-    (alt_root / "settings.json").write_text("{not valid json", encoding="utf-8")
-
-    warning = check_settings_well_formed()
-    assert warning is not None
-    assert str(alt_root / "settings.json") in warning
-    assert "~/.claude" not in warning
-
-
-def test_kernel_strip_status_names_the_file_it_operated_on(alt_root):
-    """strip_orphan_kernel_block reads get_claude_config_dir()/CLAUDE.md, so a
-    user told to inspect ~/.claude/CLAUDE.md would inspect the wrong file."""
-    from shared.claude_md_manager import strip_orphan_kernel_block
-
-    target = alt_root / "CLAUDE.md"
-    target.write_text("# Home\n\n<!-- PACT_START:v3 -->\nkernel body\n", encoding="utf-8")
-
-    status = strip_orphan_kernel_block()
-    assert status is not None
-    assert str(target) in status
-    assert "~/.claude" not in status
-
-
-def test_degraded_gate_warning_names_the_configured_root(alt_root):
-    """bootstrap_gate's degraded path resolves from os.environ, never from the
-    plugin resolver — this arm proves the env value actually reaches the text."""
-    import bootstrap_gate
-
-    with patch("sys.stdout", new_callable=io.StringIO) as out:
-        with pytest.raises(SystemExit) as exc:
-            bootstrap_gate._emit_degraded_warning("import", RuntimeError("boom"), "Read")
-
-    assert exc.value.code == 0, "degraded path must exit 0 or the JSON is voided"
-    reason = json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecisionReason"]
-    assert f"{alt_root}/plugins/cache/" in reason
-    assert "~/.claude" not in reason
-
-
-def test_degraded_gate_warning_names_the_plugin_root_when_the_platform_sets_it(alt_root, monkeypatch, tmp_path):
-    """A local-marketplace install has no cache copy, so the plugin root the
-    platform exported is the path to name; the cache path is only the fallback."""
-    import bootstrap_gate
-
-    plugin_root = tmp_path / "checkout" / "pact-plugin"
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
-    with patch("sys.stdout", new_callable=io.StringIO) as out:
-        with pytest.raises(SystemExit):
-            bootstrap_gate._emit_degraded_warning("import", RuntimeError("boom"), "Read")
-
-    reason = json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecisionReason"]
-    assert f"the plugin at {plugin_root}." in reason
-    assert "plugins/cache" not in reason

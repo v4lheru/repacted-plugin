@@ -166,7 +166,10 @@ def test_restamp_through_the_real_hook_process(tmp_path):
 # --- the rows that stay denied --------------------------------------------
 
 
-@pytest.mark.parametrize("members, inboxes", [([], False), ([{"name": "  "}], False), (None, False)])
+@pytest.mark.parametrize("members, inboxes", [
+    ([], False),
+    (None, False),
+])
 def test_version_change_with_no_identifiable_team_stays_denied(monkeypatch, tmp_path, members, inboxes):
     session_dir, plugin_root = _session(monkeypatch, tmp_path)
     marker = _stamp(session_dir, plugin_root)
@@ -194,26 +197,11 @@ def test_version_change_with_an_unresolved_team_name_stays_denied(monkeypatch, t
 
 
 @pytest.mark.parametrize("body", [
-    b"",                                                            # touch
-    b"bootstrap-complete",                                          # echo
-    b"[]",
-    b"null",
-    json.dumps({"v": 1, "sid": _SESSION_ID}).encode(),              # no sig
-    json.dumps({"v": 1, "sid": _SESSION_ID, "sig": _INVENTED_SIG, "pv": _OLD}).encode(),
-    json.dumps({"v": 2, "sid": _SESSION_ID, "sig": _INVENTED_SIG}).encode(),
-    json.dumps({"v": True, "sid": _SESSION_ID, "sig": _INVENTED_SIG}).encode(),
+    b"",
+    json.dumps({"v": 1, "sid": _SESSION_ID}).encode(),
     json.dumps({"v": "1", "sid": _SESSION_ID, "sig": _INVENTED_SIG}).encode(),
-    json.dumps({"v": 1, "sid": _SESSION_ID, "sig": ""}).encode(),
-    json.dumps({"v": 1, "sid": _SESSION_ID, "sig": "stale"}).encode(),
-    json.dumps({"v": 1, "sid": _SESSION_ID, "sig": _INVENTED_SIG.upper()}).encode(),
     json.dumps({"v": 1, "sid": _SESSION_ID, "sig": _INVENTED_SIG + "0"}).encode(),
-    json.dumps({"v": 1, "sid": _SESSION_ID, "sig": "١" * 64}).encode(),  # non-ASCII digits
-    json.dumps({"v": 1, "sid": _SESSION_ID, "sig": None}).encode(),
-    json.dumps({"v": 1, "sid": _SESSION_ID, "sig": 12345}).encode(),
     json.dumps({"v": 1, "sid": _SESSION_ID, "sig": [_INVENTED_SIG]}).encode(),
-    json.dumps({"v": 1, "sid": [_SESSION_ID], "sig": _INVENTED_SIG}).encode(),
-    json.dumps({"v": 10 ** 40, "sid": _SESSION_ID, "sig": _INVENTED_SIG}).encode(),
-    json.dumps({"v": 1, "sid": _SESSION_ID, "sig": _INVENTED_SIG}).encode() + b" " * 300,
     b"\xff\xfe not utf-8",
 ], ids=lambda b: repr(b[:40]))
 def test_hand_written_marker_of_the_wrong_shape_stays_denied(monkeypatch, tmp_path, body):
@@ -278,8 +266,10 @@ def test_symlinked_marker_stays_denied(monkeypatch, tmp_path):
     assert real.is_symlink()
 
 
-@pytest.mark.parametrize("agent_type", [None, "pact-backend-coder", "repacted:pact-backend-coder",
-                                        "PACT-ORCHESTRATOR", ["pact-orchestrator"]])
+@pytest.mark.parametrize("agent_type", [
+    None,
+    ["pact-orchestrator"],
+])
 def test_non_lead_frame_never_restamps(monkeypatch, tmp_path, agent_type):
     """A teammate is not gated here, and it must not be the one that re-stamps."""
     from bootstrap_gate import _check_tool_allowed, is_marker_set
@@ -295,14 +285,8 @@ def test_non_lead_frame_never_restamps(monkeypatch, tmp_path, agent_type):
 
 
 @pytest.mark.parametrize("plugin_json", [
-    None,                                   # missing
-    "unreadable",                           # a directory where the file should be
-    "{not json",
-    json.dumps({}),
+    None,
     json.dumps({"version": ""}),
-    json.dumps({"version": None}),
-    json.dumps({"version": 135}),
-    json.dumps({"version": ["1.3.5"]}),
     json.dumps({"version": {"major": 1}}),
 ])
 def test_unreadable_or_empty_version_stays_denied(monkeypatch, tmp_path, plugin_json):

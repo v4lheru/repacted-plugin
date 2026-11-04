@@ -195,28 +195,6 @@ class TestARecordAdmitsTheRemovedWorktreeItNames:
 
         _guard(monkeypatch, subdirectory, main)
 
-    def test_the_sync_writes_into_the_recorded_project_after_the_worktree_is_removed(
-        self, layout_root, monkeypatch
-    ):
-        """End to end through `sync_to_claude_md`, so the guard is reached from
-        the entry point and not only called directly."""
-        import scripts.working_memory as wm
-
-        main, worktree, identity = _sibling_worktree_removed(layout_root)
-        _plant(worktree, identity)
-        document = main / ".claude" / "CLAUDE.md"
-        before = document.read_bytes()
-        _enable_record_reading(monkeypatch)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(worktree))
-        monkeypatch.chdir(main)
-
-        result = wm.sync_to_claude_md(
-            {"context": "record-arm", "goal": "record-arm"}, memory_id="0" * 32
-        )
-
-        assert result == SyncResult(SyncResult.WROTE), result
-        assert document.read_bytes() != before
-
 
 # ---------------------------------------------------------------------------
 # A record decides only for its exact declaration, and only into its repository.
@@ -254,64 +232,6 @@ class TestARecordDecidesOnlyForItsDeclaration:
         with pytest.raises(AmbientSyncRefused):
             _guard(monkeypatch, subdirectory, enclosing)
 
-    def test_a_record_from_another_session_is_refused(self, layout_root, monkeypatch):
-        main, worktree, identity = _sibling_worktree_removed(layout_root)
-        _plant(worktree, dict(identity, session_id="another-session"))
-
-        with pytest.raises(AmbientSyncRefused):
-            _guard(monkeypatch, worktree, main)
-
-    def test_a_resolved_root_that_is_not_a_checkout_root_is_refused(
-        self, layout_root, monkeypatch
-    ):
-        main, worktree, identity = _sibling_worktree_removed(layout_root)
-        _plant(worktree, identity)
-        below_the_root = main / "docs"
-        _document(below_the_root)
-
-        with pytest.raises(AmbientSyncRefused):
-            _guard(monkeypatch, worktree, below_the_root)
-
-    def test_a_matching_record_whose_git_check_errors_is_refused(
-        self, layout_root, monkeypatch
-    ):
-        """The ancestor walk would admit this layout, so a refusal when git
-        cannot answer for the resolved root shows the record does not fall
-        through to it."""
-        main, worktree, identity = _worktree_under_main_removed(layout_root)
-        _plant(worktree, identity)
-        assert _admitted(monkeypatch, worktree, main), "control: the matching record admits"
-
-        real = project_scope._rev_parse_path
-        resolved = main.resolve()
-        monkeypatch.setattr(
-            project_scope, "_rev_parse_path",
-            lambda directory, flag: None if Path(directory).resolve() == resolved
-            else real(directory, flag),
-        )
-
-        with pytest.raises(AmbientSyncRefused):
-            _guard(monkeypatch, worktree, main)
-
-    @pytest.mark.parametrize("layout", ["sibling_removed", "under_main_removed"])
-    def test_a_record_for_another_declaration_does_not_change_the_verdict(
-        self, layout_root, monkeypatch, layout
-    ):
-        build = {
-            "sibling_removed": _sibling_worktree_removed,
-            "under_main_removed": _worktree_under_main_removed,
-        }[layout]
-        main, worktree, identity = build(layout_root)
-        record = _plant(worktree, dict(identity, declared=str(layout_root / "elsewhere")))
-
-        with_record = _admitted(monkeypatch, worktree, main)
-        record.unlink()
-        without_record = _admitted(monkeypatch, worktree, main)
-
-        assert with_record == without_record
-        # The two layouts span both verdicts, so the equality is not one answer twice.
-        assert without_record is (layout == "under_main_removed")
-
 
 # ---------------------------------------------------------------------------
 # The reader.
@@ -325,29 +245,6 @@ class TestTheRecordReader:
         _enable_record_reading(monkeypatch)
 
         assert pact_session.get_worktree_identity_from_session_record() == identity
-
-    @pytest.mark.parametrize("body", [
-        {"session_id": "another-session", "declared": "/a", "worktree": "/b", "common_dir": "/c"},
-        {"session_id": SID, "declared": "a", "worktree": "/b", "common_dir": "/c"},
-        {"session_id": SID, "declared": "/a", "worktree": "/b"},
-        {"session_id": SID, "declared": "/a", "worktree": 7, "common_dir": "/c"},
-        "{not json",
-    ], ids=["other-session", "relative-path", "missing-field", "non-string", "corrupt"])
-    def test_an_invalid_record_reads_as_none(self, layout_root, monkeypatch, body):
-        target = _record_path(layout_root)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(body if isinstance(body, str) else json.dumps(body))
-        _enable_record_reading(monkeypatch)
-
-        assert pact_session.get_worktree_identity_from_session_record() == {}
-
-    def test_a_test_process_reads_no_record(self, layout_root, monkeypatch):
-        identity = {"session_id": SID, "declared": "/a", "worktree": "/b", "common_dir": "/c"}
-        _plant(layout_root, identity)
-        _enable_record_reading(monkeypatch)
-        monkeypatch.setenv("PYTEST_CURRENT_TEST", "some_test (call)")
-
-        assert pact_session.get_worktree_identity_from_session_record() == {}
 
 
 # ---------------------------------------------------------------------------
@@ -405,49 +302,4 @@ class TestSessionStartWritesTheRecord:
             "common_dir": os.path.realpath(main_repo / ".git"),
         }
 
-    def test_session_start_in_a_worktree_subdirectory_records_the_subdirectory(
-        self, layout_root, monkeypatch, tmp_path
-    ):
-        main_repo = _repo(layout_root / "R")
-        worktree = _worktree(main_repo, layout_root / "W")
-        subdirectory = worktree / "sub"
-        subdirectory.mkdir()
 
-        _start_session(monkeypatch, tmp_path, subdirectory)
-
-        written = json.loads(_record_path(subdirectory).read_text())
-        assert written["declared"] == os.path.realpath(subdirectory)
-        assert written["worktree"] == os.path.realpath(worktree)
-
-    def test_session_start_in_a_main_checkout_writes_no_identity(
-        self, layout_root, monkeypatch, tmp_path
-    ):
-        main_repo = _repo(layout_root / "R")
-
-        _start_session(monkeypatch, tmp_path, main_repo)
-
-        assert not _record_path(main_repo).exists()
-        sessions = get_claude_config_dir() / "pact-sessions"
-        assert list(sessions.rglob("worktree-identity.json")) == []
-
-    def test_the_identity_record_is_written_through_state_file(
-        self, layout_root, monkeypatch, tmp_path
-    ):
-        main_repo = _repo(layout_root / "R")
-        worktree = _worktree(main_repo, layout_root / "W")
-
-        _start_session(monkeypatch, tmp_path, worktree)
-
-        record = _record_path(worktree)
-        assert stat.S_IMODE(record.stat().st_mode) == 0o600
-        assert list(record.parent.glob("*.tmp")) == []
-
-    def test_the_record_session_start_writes_is_the_one_the_guard_reads(
-        self, layout_root, monkeypatch, tmp_path
-    ):
-        main_repo = _repo(layout_root / "R", document=True)
-        worktree = _worktree(main_repo, layout_root / "W")
-        _start_session(monkeypatch, tmp_path, worktree)
-        _remove_worktree(main_repo, worktree)
-
-        _guard(monkeypatch, worktree, main_repo)

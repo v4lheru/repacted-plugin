@@ -20,7 +20,11 @@ Summary: PreToolUse(mcp__.*|WebFetch|Artifact|Bash) hook that denies a credentia
                      handled by the git hooks. A git command that names a remote
                      URL whose user part holds a password, a variable or a token (git remote
                      add|set-url, clone, config, fetch) is refused as well: git keeps that URL
-                     in .git/config and prints it with the remote.
+                     in .git/config and prints it with the remote. Any tool_name with a string
+                     tool_input.command is judged here as Bash (the host matched it to Bash).
+           Monitor   `egress_guard.py --ws` (its own Monitor entry): a ws source's url, the
+                     url unquoted and its protocols, like WebFetch. Websocat and wscat are
+                     network programs in Bash and Monitor commands.
          Loopback is inside the boundary: a curl/wget/http command whose every URL in the
          text and every target its clients are aimed at (scheme-less `localhost:3000/api` too,
          read as the shell passes it) is localhost/127.x/::1, and a local-browser MCP call
@@ -64,6 +68,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import egress_uploads
+from shell.tools import SHELL_TOOLS, shell_command
 from shell_words import segments, strip_prefix
 
 _ALLOW_OUTPUT = json.dumps({"suppressOutput": True})
@@ -71,9 +76,11 @@ _ALLOW_OUTPUT = json.dumps({"suppressOutput": True})
 NETWORK_PROGRAMS = frozenset({
     "curl", "wget", "http", "https", "gh", "glab", "ssh", "scp", "rsync", "nc", "ncat",
     "netcat", "pbcopy", "osascript", "xh", "xhs", "curlie",
+    "websocat", "wscat",
 }) | egress_uploads.CLOUD_PROGRAMS        # aws, gsutil, gcloud, az, azcopy, rclone, s3cmd
 # Clients whose target is a URL on the command line: aimed only at loopback, nothing leaves.
-URL_CLIENTS = frozenset({"curl", "wget", "http", "https", "xh", "xhs", "curlie"})
+URL_CLIENTS = frozenset({"curl", "wget", "http", "https", "xh", "xhs", "curlie",
+                         "websocat", "wscat"})
 # MCP servers that are a browser on this machine: loopback pages stay local too.
 LOCAL_BROWSER_SERVERS = ("plugin_playwright_playwright", "Claude_Browser")
 BROWSER_SCRIPT_TOOLS = ("browser_evaluate", "browser_run_code_unsafe")
@@ -347,10 +354,11 @@ def policy_settings(cwd: str) -> tuple[bool, frozenset]:
         return True, frozenset()
 
 
-def decide(payload: dict) -> dict | None:
+def decide(payload: dict, ws_only: bool = False) -> dict | None:
     """The hook's output for one payload: a deny object, or None to allow. A deny names the
-    team policy when the policy changed this guard (shared.team_policy.refusal_note)."""
-    output = _decide(payload)
+    team policy when the policy changed this guard (shared.team_policy.refusal_note).
+    ws_only (the Monitor entry, `egress_guard.py --ws`): judge only a Monitor ws source."""
+    output = _decide(payload, ws_only)
     specific = (output or {}).get("hookSpecificOutput", {})
     if specific.get("permissionDecision") == "deny":
         try:
@@ -362,17 +370,44 @@ def decide(payload: dict) -> dict | None:
     return output
 
 
-def _decide(payload: dict) -> dict | None:
+def _named_tool(tool: str) -> bool:
+    """True for the tools this guard judges by name rather than by a shell command."""
+    return tool.startswith(("mcp__", "Artifact")) or tool == "WebFetch"
+
+
+def ws_texts(tool_input: dict) -> list[str] | None:
+    """What a Monitor `ws` source sends off this machine: its url, the url unquoted, and
+    every protocol string (a token can ride in a subprotocol header). None: no ws source."""
+    source = tool_input.get("ws")
+    if not isinstance(source, dict):
+        return None
+    texts = list(strings_in(source))
+    url = source.get("url")
+    if isinstance(url, str):
+        texts.append(unquote(url))
+    return texts
+
+
+def _decide(payload: dict, ws_only: bool = False) -> dict | None:
     tool = payload.get("tool_name")
     tool_input = payload.get("tool_input")
-    if not isinstance(tool, str) or not isinstance(tool_input, dict):
+    if not isinstance(tool_input, dict):
         return None
+    tool = tool if isinstance(tool, str) else ""
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
     allow_pragma, extra_programs = policy_settings(cwd)
     files: list[tuple[str, str]] = []
-    if tool == "Bash":
-        command = tool_input.get("command")
-        if not isinstance(command, str):
+    command = shell_command(payload)
+    if ws_only:
+        # The Monitor entry: only the socket source. A Monitor command is judged by the
+        # Bash entry the host also runs for it, so no shell check runs twice on one call.
+        texts = ws_texts(tool_input)
+        if texts is None:
+            return None
+        where = "Monitor ws source"
+    elif tool in SHELL_TOOLS or (command is not None and not _named_tool(tool)):
+        # Any tool_name with a string command: the host matched this guard to Bash.
+        if command is None:
             return None
         parts = segments(command)
         try:
@@ -441,7 +476,8 @@ def main() -> int:
     except ValueError:
         print(_ALLOW_OUTPUT)
         return 0
-    output = decide(payload) if isinstance(payload, dict) else None
+    ws_only = "--ws" in sys.argv[1:]
+    output = decide(payload, ws_only) if isinstance(payload, dict) else None
     if not output:
         print(_ALLOW_OUTPUT)
         return 0

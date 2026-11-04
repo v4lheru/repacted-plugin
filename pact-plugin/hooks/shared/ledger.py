@@ -47,7 +47,7 @@ LEDGER_FIELDS = (
 # run_dir: on a hook row, the real path of the directory its test run started in (tcount's own
 # directory, else the one in force at the runner segment of the command: shared/run_place.py),
 # taken when the row was written; the only place the evidence gate gives a hook row.
-# env: on a tcount row, the variables of acceptance.SELECTING_ENV that were set ({name: value}):
+# env: on a tcount row, the variables acceptance.selecting_env names that were set ({name: value}):
 # they change what a run selects or imports, so the evidence check reads them.
 LEDGER_OPTIONAL_FIELDS = ("cmd_executed", "duration_s", "slowest", "tree", "run_dir", "env")
 LEDGER_MAP_FIELDS = ("env",)                  # optional, a {str: str} map

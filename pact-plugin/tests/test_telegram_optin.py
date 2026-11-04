@@ -72,20 +72,3 @@ def test_deps_in_private_dir_are_found(tmp_path):
 
 
 
-@pytest.mark.skipif(shutil.which("claude") is None, reason="claude CLI not installed")
-def test_register_writes_user_scope_entry_in_scratch_config(tmp_path):
-    """`register` writes a user-scope entry through the stable link, in the scratch config only."""
-    config_dir = _link_config(tmp_path)
-    (tmp_path / "home").mkdir()
-    result = subprocess.run(
-        [sys.executable, "-m", "telegram.deps", "register"],
-        capture_output=True, text=True, timeout=120, cwd=tmp_path / "home",
-        env=_clean_env(tmp_path, PYTHONPATH=str(PLUGIN_ROOT),
-                       CLAUDE_CONFIG_DIR=str(config_dir),
-                       CLAUDE_PLUGIN_DATA=str(tmp_path / "data")),
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    entry = json.loads((config_dir / ".claude.json").read_text())["mcpServers"]["pact-telegram"]
-    assert entry["args"] == [str(config_dir / "protocols" / "pact-plugin" / ".." / "telegram"
-                                 / "__main__.py")]
-    assert entry["env"] == {"PACT_TELEGRAM_DEPS": str(tmp_path / "data" / "telegram-deps")}

@@ -10,7 +10,8 @@ the same write path stores a rejection (shared/ops/reject.rejection) and accept 
 Used by: bin/_repact_ops.py (run); shared/ops/submit.py (ac_problems, for its preview).
 
 Waivers and park: `--waive "<why>"` over failing facts completes the task with
-metadata.evidence_waiver only when attended. With unattended mode on (shared.unattended
+metadata.evidence_waiver only when attended, also on a rev a plain accept already rejected (a
+rejection by the lead, `repact reject`, still needs a new submit). With unattended mode on (shared.unattended
 controls_on) it never completes: ONE write of metadata.parked {why, inbox_ref, at, rev, problems},
 the task stays in_progress, its bound task-log rows are parked (status blocked) and repact decide
 lists the question; exit 0. The same park replaces the third rejection of an unattended task
@@ -200,10 +201,14 @@ def _parked(task_id: str, op_id: str, record: dict) -> Result:
         "Next: dispatch the next task; the owner decides this one from repact decide."])
 
 
-def _waived(ctx, task_id: str, dispatched: dict, handoff: dict, args: str, why: str, checked: dict) -> Result:
+def _waived(ctx, task_id: str, dispatched: dict, handoff: dict, args: str, why: str, checked: dict,
+            problems: list) -> Result:
+    """Complete over failing facts; the WAIVED line and metadata.evidence_waiver name every problem
+    the waiver closed (evidence, inputs, criteria, amendments alike)."""
     op_id = records.op_id_of("accept_waive", task_id, args)
     record = dict(_record(op_id, handoff, checked), waived=True)
-    waiver = {"why": why, "by": "lead", "at": records.now(), "attended": True}
+    closed = [str(problem)[:300] for problem in problems]
+    waiver = {"why": why, "by": "lead", "at": records.now(), "attended": True, "problems": closed}
 
     def mutate(current: dict) -> None:
         current["status"] = "completed"
@@ -212,7 +217,7 @@ def _waived(ctx, task_id: str, dispatched: dict, handoff: dict, args: str, why: 
 
     records.execute(ctx, "accept_waive", task_id, args, mutate, _pass_sides(ctx, task_id, dispatched, handoff))
     result = _accepted(task_id, op_id, handoff, record)
-    result.lines.insert(0, f"WAIVED: {why[:200]}")
+    result.lines.insert(0, f"WAIVED: {why[:200]}. Closes {len(closed)}: " + "; ".join(closed))
     return result
 
 
@@ -250,7 +255,9 @@ def run(ctx: records.Context, task_id: str, waive=None) -> Result:
         return _finish_crashed(ctx, task_id, task, dispatched, handoff, meta["last_op"])
     if task.get("status") != "in_progress":
         raise OpError("ops.wrong_state", [f"task #{task_id} is {task.get('status')}, not in_progress"])
-    if (meta.get("handoff_rejection") or {}).get("rev") == AM.handoff_rev(handoff):
+    rejected = meta.get("handoff_rejection") or {}
+    # A waiver may answer the gate's own rejection of this rev; the lead's needs a new submit.
+    if rejected.get("rev") == AM.handoff_rev(handoff) and not (why and rejected.get("by") == "accept"):
         raise OpError("ops.wrong_state", [f"rev {AM.handoff_rev(handoff)} on #{task_id} is already rejected; "
                                           "wait for a new submit"])
     if alone and (meta.get("parked") or {}).get("rev") == AM.handoff_rev(handoff):
@@ -261,7 +268,7 @@ def run(ctx: records.Context, task_id: str, waive=None) -> Result:
     if problems and why and alone:
         return _park(ctx, task_id, dispatched, handoff, "accept_park", args, why, problems)
     if problems and why:
-        return _waived(ctx, task_id, dispatched, handoff, args, why, checked)
+        return _waived(ctx, task_id, dispatched, handoff, args, why, checked, problems)
     count = rejections(ctx, task_id, meta) if problems and alone else 0
     if count >= REJECTION_LIMIT - 1:
         limit = f"rejection limit: {count} rejections, and rev {AM.handoff_rev(handoff)} fails again"

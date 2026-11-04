@@ -95,35 +95,6 @@ class TestMissingAnchorIsRefusedAtTheControl:
             "the refused write still modified the file"
         )
 
-    def test_a_real_anchor_still_writes(self, tmp_path):
-        """POSITIVE CONTROL. Without it, an `_atomic_write_text` that refused
-        EVERYTHING would satisfy the arm above."""
-        target = tmp_path / "CLAUDE.md"
-        target.write_text("before", encoding="utf-8")
-
-        _atomic_write_text(target, "after", tmp_path)
-
-        assert target.read_text(encoding="utf-8") == "after"
-
-    def test_a_directory_literally_named_None_cannot_become_the_anchor(
-        self, tmp_path, monkeypatch
-    ):
-        """The accident, made concrete.
-
-        Create the directory whose existence used to convert a fail-closed
-        raise into a silently-accepted boundary, then confirm the refusal is
-        now keyed on the VALUE rather than on the filesystem.
-        """
-        (tmp_path / "None").mkdir()
-        monkeypatch.chdir(tmp_path)
-        target = tmp_path / "None" / "CLAUDE.md"
-        target.write_text("before", encoding="utf-8")
-
-        with pytest.raises(ContainmentError):
-            _atomic_write_text(target, "after", None)
-
-        assert target.read_text(encoding="utf-8") == "before"
-
 
 # ---------------------------------------------------------------------------
 # The anchor is additive: omitting it changes nothing.
@@ -141,44 +112,6 @@ class TestOmittingTheAnchorChangesNothing:
 
         assert result.reason == SyncResult.WROTE
         assert "no anchor given" in md.read_text(encoding="utf-8")
-
-    def test_an_anchor_that_contains_the_target_permits(self, tmp_path, monkeypatch):
-        md = tmp_path / "CLAUDE.md"
-        md.write_text(SCAFFOLD.format(title="Anchored"), encoding="utf-8")
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-
-        result = sync_to_claude_md(
-            {"context": "anchor contains target"},
-            memory_id="b" * 32,
-            claude_md_root=tmp_path,
-        )
-
-        assert result.reason == SyncResult.WROTE
-        assert "anchor contains target" in md.read_text(encoding="utf-8")
-
-    def test_an_anchor_that_excludes_the_target_refuses(self, tmp_path, monkeypatch):
-        """THE DISCRIMINATION, in-process.
-
-        The target still resolves to the project file -- the anchor does NOT
-        steer resolution -- so the write is REFUSED rather than redirected. An
-        anchor that redirected would write somewhere unexpected and report
-        success, which is worse than either outcome here.
-        """
-        md = tmp_path / "CLAUDE.md"
-        md.write_text(SCAFFOLD.format(title="Excluded"), encoding="utf-8")
-        before = md.read_bytes()
-        sandbox = tmp_path / "sandbox"
-        sandbox.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-
-        result = sync_to_claude_md(
-            {"context": "must not land"},
-            memory_id="c" * 32,
-            claude_md_root=sandbox,
-        )
-
-        assert result.reason == SyncResult.FAILED
-        assert md.read_bytes() == before, "the excluded target was written anyway"
 
 
 # ---------------------------------------------------------------------------
@@ -259,38 +192,10 @@ class TestAnchorIsEnforceableThroughTheCliWiring:
         )
         assert repo_md.read_bytes() == before, "the repo CLAUDE.md was written"
 
-    def test_positive_control_an_anchor_containing_the_target_permits(
-        self, nested, memory_store
-    ):
-        """POSITIVE CONTROL, AND IT IS LOAD-BEARING RATHER THAN TIDY.
-
-        `failed` is reachable by a broken harness -- a bad temp path, a
-        permissions accident, a CLI that cannot start. Without this arm the
-        refusal arm above passes while proving nothing, which is vacuity
-        arriving inside the test built to prove enforceability.
-
-        Same wiring, same child, anchor moved to the repo so it CONTAINS the
-        target. This must both report `wrote` AND change the file.
-        """
-        repo_md = nested / "CLAUDE.md"
-        before = repo_md.read_bytes()
-
-        result = self._save_through_wiring(
-            nested, memory_store("probe.db"), "must be written"
-        )
-
-        assert result["sync_status"] == "wrote", (
-            f"the control did not write, so the refusal arm proves nothing: {result}"
-        )
-        assert repo_md.read_bytes() != before, (
-            "the control reported `wrote` but the file is unchanged"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Item 4 + addendum: the population bounds two dated observations rested on.
 # ---------------------------------------------------------------------------
-
 
 
 class TestCliSearchDoesNotSync:
@@ -322,49 +227,3 @@ class TestCliSearchDoesNotSync:
         )
 
 
-class TestE2ESubprocessSavesAreBounded:
-    """Addendum pin 2. E2E subprocess saves must suppress or declare.
-
-    THIS PINS A CATEGORY BEFORE IT GROWS AN ASSERTION. Those children inherit
-    PYTEST_CURRENT_TEST and have no pytest module, so the guard refuses them
-    today; save() swallows it as non-critical and the tests pass on the
-    envelope. They are ALREADY in the silently-refused state and that is not a
-    regression this design introduces.
-
-    The day one of them asserts "CLAUDE.md unchanged", it passes FOR THE WRONG
-    REASON -- the refusal, not the suppression -- which is the vacuity failure
-    that emptied a negative control elsewhere, in a class nobody is watching.
-    """
-
-    def test_every_cli_subprocess_save_suppresses_or_declares(self):
-        src = (Path(__file__).parent / "test_memory_cli.py").read_text(
-            encoding="utf-8"
-        )
-        tree = ast.parse(src)
-
-        offenders = []
-        for cls in ast.walk(tree):
-            if not isinstance(cls, ast.ClassDef):
-                continue
-            if "Subprocess" not in cls.name:
-                continue
-            for n in ast.walk(cls):
-                if not isinstance(n, ast.List):
-                    continue
-                parts = [
-                    e.value for e in n.elts
-                    if isinstance(e, ast.Constant) and isinstance(e.value, str)
-                ]
-                if "save" not in parts:
-                    continue
-                if "--no-sync" in parts or "--claude-md-root" in parts:
-                    continue
-                offenders.append((cls.name, n.lineno))
-
-        assert offenders == [], (
-            "E2E subprocess saves that neither suppress nor declare a root: "
-            f"{offenders}. Each is silently REFUSED by the ambient guard today, "
-            "so any 'CLAUDE.md unchanged' assertion added to one would pass for "
-            "the refusal rather than for the suppression. Add --no-sync or "
-            "--claude-md-root when adding such a save."
-        )

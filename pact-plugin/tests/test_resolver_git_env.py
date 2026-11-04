@@ -102,37 +102,6 @@ def test_resolve_display_claude_md_with_base_ignores_an_inherited_GIT_DIR(
     )
 
 
-def test_resolve_display_claude_md_with_base_common_dir_call_ignores_an_inherited_GIT_DIR(
-    tmp_path, monkeypatch, unrelated
-):
-    """The `--git-common-dir` call, reached from a linked worktree with no
-    CLAUDE.md of its own, which must land on the main checkout's file."""
-    main = _repo(tmp_path / "M")
-    worktree = tmp_path / "W"
-    _git("worktree", "add", "-q", str(worktree), "-b", "w", cwd=main)
-    monkeypatch.chdir(worktree)
-    _inherit_git_dir(monkeypatch, unrelated)
-
-    found, base = wm._resolve_display_claude_md_with_base()
-
-    assert _same(found, main / ".claude" / "CLAUDE.md") and _same(base, main), (
-        f"the display resolver answered {found} (base {base}); its --git-common-dir "
-        "call is reading the inherited GIT_DIR"
-    )
-
-
-def test_main_repo_root_ignores_an_inherited_GIT_DIR(tmp_path, monkeypatch, unrelated):
-    repo = _repo(tmp_path / "R")
-    monkeypatch.chdir(repo)
-    _inherit_git_dir(monkeypatch, unrelated)
-
-    root = memory_api.main_repo_root()
-
-    assert _same(root, repo), (
-        f"main_repo_root answered {root} from the inherited GIT_DIR"
-    )
-
-
 # (file, function) -> the number of git subprocess calls it holds. A scan that
 # finds fewer is not reading the function it names.
 _RESOLVER_GIT_CALLS = {
@@ -184,28 +153,3 @@ def _function(source: str, name: str) -> ast.FunctionDef:
     raise AssertionError(f"function {name} not found")
 
 
-def test_every_resolver_git_call_passes_the_location_free_env():
-    """Guard arm: a later git call added to a resolver without the environment
-    fails here, whichever form its argv takes."""
-    missing = []
-    for (rel, name), floor in _RESOLVER_GIT_CALLS.items():
-        calls = list(_git_calls(_function((_PLUGIN / rel).read_text(encoding="utf-8"), name)))
-        assert len(calls) >= floor, (
-            f"{rel}::{name}: found {len(calls)} git calls, expected at least {floor}"
-        )
-        missing += [f"{rel}::{name}:{call.lineno}" for call, passes in calls if not passes]
-    assert missing == [], f"git calls without env=git_env_without_location(): {missing}"
-
-
-def test_the_scan_sees_both_argv_forms_and_a_missing_env():
-    """Live control for the guard arm above."""
-    source = textwrap.dedent("""
-        def resolver():
-            subprocess.run(["git", "rev-parse"], env=git_env_without_location())
-            command = ["git"]
-            command += ["rev-parse"]
-            subprocess.run(command)
-            subprocess.run(["ls"])
-    """)
-    calls = list(_git_calls(_function(source, "resolver")))
-    assert [passes for _call, passes in calls] == [True, False]

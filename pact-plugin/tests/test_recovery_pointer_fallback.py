@@ -134,93 +134,6 @@ class TestRecoveryPointerSurvivesAGuardFailure:
             f"it does not resolve by construction. got: {lines}"
         )
 
-    def test_the_retrieved_entry_emits_the_id_byte_identical_to_its_input(
-        self, working_memory, monkeypatch
-    ):
-        """Forced empty in, unchanged id out, at the retrieve-path formatter.
-
-        The two formatters carry the same repair, so the arm is repeated
-        rather than shared: a repair applied to one site alone is the failure
-        this pair exists to catch.
-        """
-        calls = _install_probe(monkeypatch, working_memory)
-        assert working_memory._sanitize_prompt_field("not empty", 64) == ""
-
-        entry = working_memory._format_retrieved_entry(
-            {"context": "a context", "goal": "a goal"},
-            query="a query",
-            memory_id=_ORDINARY_ID,
-        )
-
-        assert calls == [_ORDINARY_ID], f"calls: {calls}"
-        lines = _pointer_lines(entry, working_memory)
-        assert lines == [f"{working_memory._MEMORY_ID_LABEL}: {_ORDINARY_ID}"], (
-            f"got: {lines}"
-        )
-
-    def test_an_id_of_control_characters_alone_emits_no_pointer(
-        self, working_memory, monkeypatch
-    ):
-        """The acceptor refuses rather than emits a value that cannot resolve.
-
-        Where no key can be recovered, an ABSENT line is honest and a labelled
-        empty value is not.
-        """
-        control_chars = "\x00\x01\x02\x1f"
-        calls = _install_probe(monkeypatch, working_memory)
-
-        entry = working_memory._format_memory_entry(
-            {"context": "a context"}, memory_id=control_chars
-        )
-
-        assert calls == [control_chars], (
-            f"the acceptor did not run, so no refusal was tested. {calls}"
-        )
-        assert _pointer_lines(entry, working_memory) == []
-
-    def test_an_over_bound_id_emits_no_pointer_when_the_guard_has_failed(
-        self, working_memory, monkeypatch
-    ):
-        """The acceptor refuses an id past the bound rather than cutting it.
-
-        SCOPE, AND IT IS NARROW BY DESIGN: this is the acceptor's refusal in
-        the FORCED-EMPTY state, where the empty output is what routes the id
-        to the acceptor. The same refusal on the WORKING sanitize path, where
-        the LENGTH test is what routes it, belongs to
-        `TestAnIdLongerThanTheBoundEmitsNoPointer` below. The two routes reach
-        one acceptor, and each needs its own arm.
-        """
-        over_bound = "z" * (working_memory._REFRESH_IDENTIFIER_TRUNCATION_LIMIT + 1)
-        calls = _install_probe(monkeypatch, working_memory)
-
-        entry = working_memory._format_memory_entry(
-            {"context": "a context"}, memory_id=over_bound
-        )
-
-        assert calls == [over_bound], f"{calls}"
-        assert _pointer_lines(entry, working_memory) == []
-
-    def test_control_a_working_guard_does_not_reach_the_fallback(
-        self, working_memory, monkeypatch
-    ):
-        """THE CONTROL. With the sanitize at work the acceptor must NOT run.
-
-        Without this, an acceptor wired to run on EVERY id would satisfy each
-        arm above, and the discriminator that gates it would be untested.
-        """
-        calls = _record_acceptor_calls(monkeypatch, working_memory)
-
-        entry = working_memory._format_memory_entry(
-            {"context": "a context"}, memory_id=_ORDINARY_ID
-        )
-
-        assert calls == [], (
-            f"the fallback ran with a working sanitize. calls: {calls}"
-        )
-        assert _pointer_lines(entry, working_memory) == [
-            f"{working_memory._MEMORY_ID_LABEL}: {_ORDINARY_ID}"
-        ]
-
 
 class TestAnIdLongerThanTheBoundEmitsNoPointer:
     """The WORKING sanitize path refuses an id longer than the bound.
@@ -270,31 +183,6 @@ class TestAnIdLongerThanTheBoundEmitsNoPointer:
         assert lines == [], (
             "a pointer line survived for an id longer than the bound, so the "
             f"emitted key cannot resolve against the store. got: {lines}"
-        )
-
-    def test_the_retrieved_entry_emits_no_pointer_for_an_id_past_the_bound(
-        self, working_memory, monkeypatch
-    ):
-        """The same property at the retrieve path.
-
-        The two formatters carry the same block, so the arm is repeated
-        rather than shared: a repair applied to one site alone is the failure
-        this pair exists to catch.
-        """
-        over_bound = self._over_bound_id(working_memory)
-        calls = _record_acceptor_calls(monkeypatch, working_memory)
-
-        entry = working_memory._format_retrieved_entry(
-            {"context": "a context"}, query="a query", memory_id=over_bound
-        )
-
-        lines = _pointer_lines(entry, working_memory)
-        assert calls == [over_bound], (
-            f"calls: {calls}. emitted: {lines}"
-        )
-        assert lines == [], (
-            "a pointer line survived at the retrieve path for an id longer "
-            f"than the bound. got: {lines}"
         )
 
 

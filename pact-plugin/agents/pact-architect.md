@@ -3,6 +3,7 @@ name: pact-architect
 description: "Designs architecture, component boundaries, API contracts and data flows."
 color: "#6A0DAD"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

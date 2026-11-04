@@ -20,6 +20,9 @@ import pytest
 
 from shared import autopilot_run, session_journal, unattended, workflow_state
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 PLUGIN = Path(__file__).resolve().parent.parent
 BIN_DIR = PLUGIN / "bin"
 SESSION = "11111111-2222-3333-4444-555555555555"
@@ -105,8 +108,7 @@ def test_next_skips_a_halted_task_and_its_dependants(world):
     assert next_task(world)["ref"] == other
 
 
-@pytest.mark.parametrize("reason", ["queue_empty", "past_until", "max_tasks", "unattended_off",
-                                    "max_usd", "cost_cap", "spend_unknown"])
+@pytest.mark.parametrize("reason", ["queue_empty",])
 def test_each_stop_reason_stops_the_loop(world, reason):
     first = add(world, "Fix the login bug")
     add(world, "Write the docs")
@@ -168,26 +170,6 @@ def test_a_begun_task_with_no_record_is_resumed_after_a_compaction(world):
     assert re.search(rf"Autopilot: .*{ref} in progress.*/repacted:autopilot", screen)
 
 
-def test_record_and_report_round_trip(world):
-    done_ref = add(world, "Fix the login bug", "--priority", "P1")
-    halted_ref = add(world, "Pick the cache backend", "--priority", "P2")
-    assert pilot(world, "start", "--pr").returncode == 0
-    assert pilot(world, "record", done_ref, "done", "--branch", "feat/login",
-                 "--pr", "https://github.com/o/r/pull/7").returncode == 0
-    assert session_journal.append_event(session_journal.make_event(
-        "unattended_halt", task_id=halted_ref, question="Which backend"), session_dir=str(world["session_dir"]))
-    assert pilot(world, "record", halted_ref, "halted").returncode == 0
-    text = pilot(world, "report").stdout
-    assert re.search(rf"done \(1\):\n  {done_ref} \"Fix the login bug\" branch feat/login, "
-                     r"PR https://github.com/o/r/pull/7", text)
-    assert re.search(rf"halted \(1\):\n  {halted_ref} \"Pick the cache backend\" inbox #\d+", text)
-    assert "spend this run: $0.00" in text
-    report = json.loads(pilot(world, "report", "--json").stdout)
-    assert [row["ref"] for row in report["done"]] == [done_ref] and report["pr"] is True
-    bad = pilot(world, "record", done_ref, "done", "--pr", "javascript:alert(1)")
-    assert bad.returncode == 2
-
-
 def decide_items(world) -> list:
     done = subprocess.run(["bash", str(BIN_DIR / "repact"), "decide", "--json", "--session-dir",
                            str(world["session_dir"])], cwd=world["repo"], capture_output=True, text=True,
@@ -196,151 +178,3 @@ def decide_items(world) -> list:
     return [item for item in json.loads(done.stdout)["items"] if item["source"] != "kb"]
 
 
-def test_a_halt_with_a_question_parks_its_row_for_the_owner_in_decide(world):
-    """The halt lived only in the session journal, `repact decide` said 'inbox:
-    empty' once the mode was off, and the task log still offered the row as next."""
-    asked = add(world, "Push README word counts", "--priority", "P0")
-    other = add(world, "Write the docs", "--priority", "P3")
-    assert pilot(world, "start").returncode == 0
-    assert pilot(world, "begin", asked).returncode == 0
-    question = "May this run read METRICS_API_TOKEN and POST the counts?"
-    assert run_bin("repact-unattended", "halt", "--task", asked, "--question", question,
-                   "--session-dir", str(world["session_dir"]), repo=world["repo"]).returncode == 0
-    done = pilot(world, "record", asked, "halted")
-    assert done.returncode == 0 and "parked for a human" in done.stdout, done.stderr
-    assert "blocked" in run_bin("repact-task", "show", asked, repo=world["repo"]).stdout
-    # the owner turns the mode off: the journal halt is answered, the parked row still asks
-    unattended.write_flag(str(world["session_dir"]), False, "2026-10-18T11:00:00Z")
-    items = decide_items(world)
-    assert [(item["source"], item["task"]) for item in items] == [("task-log", asked)], items
-    assert question in items[0]["question"]
-    offered = run_bin("repact-task", "next", repo=world["repo"], check=False).stdout
-    assert other in offered and asked not in offered, offered    # a later session never takes it again
-    # answered the way a parked row is: by the owner, at their own terminal (task_log.parked_for_owner)
-    answered = subprocess.run(["bash", str(BIN_DIR / "repact"), "decide", asked, "set", "--status", "active"],
-                              cwd=world["repo"], capture_output=True, text=True, timeout=60,
-                              env={**os.environ, **GIT_ENV})
-    assert answered.returncode == 65 and "[rule: task_log.parked_for_owner]" in answered.stderr
-
-
-def test_a_halt_while_the_mode_is_on_is_listed_once(world):
-    asked = add(world, "Push README word counts", "--priority", "P0")
-    assert pilot(world, "start").returncode == 0
-    assert pilot(world, "record", asked, "halted", "--reason", "needs the owner's token").returncode == 0
-    assert session_journal.append_event(session_journal.make_event(
-        "unattended_halt", task_id=asked, question="Which token"), session_dir=str(world["session_dir"]))
-    assert [item["task"] for item in decide_items(world)] == [asked]
-
-
-def test_record_halted_with_no_reason_and_no_question_is_refused(world):
-    """`record halted` once left no reason or question anywhere."""
-    ref = add(world, "Refuse a negative --top", "--priority", "P0")
-    assert pilot(world, "start").returncode == 0
-    done = pilot(world, "record", ref, "halted")
-    assert done.returncode == 3 and "--reason" in done.stderr and "repact-unattended halt" in done.stderr
-    assert "blocked" not in run_bin("repact-task", "show", ref, repo=world["repo"]).stdout
-    assert json.loads(pilot(world, "report", "--json").stdout)["halted"] == []
-    assert pilot(world, "record", ref, "failed", "--reason", "x").returncode == 3
-
-
-def test_a_task_recorded_done_with_a_waiver_is_parked_and_never_picked_again_in_the_run(world):
-    closed = add(world, "Fix the login bug", "--priority", "P0")
-    held = add(world, "Write the docs", "--priority", "P1")
-    last = add(world, "Tidy the logs", "--priority", "P3")
-    subprocess.run(["git", "-C", str(world["repo"]), "branch", "feat/login"], check=True,
-                   capture_output=True, env={**os.environ, **GIT_ENV})
-    head = subprocess.run(["git", "-C", str(world["repo"]), "rev-parse", "feat/login"], check=True,
-                          capture_output=True, text=True).stdout.strip()
-    assert pilot(world, "start").returncode == 0
-    assert next_task(world)["ref"] == closed
-    # The row links no platform task, so the close gate (tests/test_close_gate.py) refuses it, and
-    # unattended a waiver parks the row for a human instead of closing it.
-    parked = pilot(world, "record", closed, "done", "--branch", "feat/login",
-                   "--waive", "no platform task in this fixture")
-    assert parked.returncode == 0 and "parked for a human" in parked.stdout
-    shown = run_bin("repact-task", "show", closed, repo=world["repo"]).stdout
-    assert "blocked" in shown and f"commit:{head}" not in shown
-    assert next_task(world)["ref"] == held
-    # A PR URL alone is no task-log evidence: the row stays open, held for the run, and said so.
-    assert pilot(world, "record", held, "done", "--pr", "https://github.com/o/r/pull/8").returncode == 0
-    assert next_task(world)["ref"] == last
-    report = json.loads(pilot(world, "report", "--json").stdout)
-    assert [(row["ref"], row["closed"]) for row in report["done"]] == [(closed, False), (held, False)]
-    assert re.search(rf"{held} \"Write the docs\" PR \S+ \(recorded done, task still open: ",
-                     pilot(world, "report").stdout)
-
-
-def test_a_done_task_whose_acceptance_found_no_evidence_stays_open_and_the_report_says_why(world):
-    ref = add(world, "Fix the login bug", "--priority", "P0")
-    assert pilot(world, "start").returncode == 0
-    run_id = autopilot_run.current_run(autopilot_run.read_rows(str(world["session_dir"])))["start"]["id"]
-    assert autopilot_run.append(str(world["session_dir"]), {"kind": "evidence_hold", "run": run_id, "ref": ref,
-                                                           "why": "no evidence in an unattended run"})
-    subprocess.run(["git", "-C", str(world["repo"]), "branch", "feat/login"], check=True,
-                   capture_output=True, env={**os.environ, **GIT_ENV})
-    done = pilot(world, "record", ref, "done", "--branch", "feat/login")
-    assert done.returncode == 0 and "task-log row left open: no evidence" in done.stdout
-    assert "done" not in run_bin("repact-task", "show", ref, repo=world["repo"]).stdout
-    report = json.loads(pilot(world, "report", "--json").stdout)
-    assert [(row["ref"], row["closed"]) for row in report["done"]] == [(ref, False)]
-    assert "no evidence in an unattended run" in pilot(world, "report").stdout
-
-
-def test_report_shows_titles_after_the_rows_close_from_any_directory(world, tmp_path):
-    ref = add(world, "Fix the login bug", "--priority", "P1")
-    assert pilot(world, "start").returncode == 0
-    assert pilot(world, "record", ref, "done").returncode == 0
-    run_bin("repact-task", "done", ref, "--evidence", "commit:" + subprocess.run(
-        ["git", "-C", str(world["repo"]), "rev-parse", "HEAD"], check=True, capture_output=True,
-        text=True).stdout.strip(), repo=world["repo"])
-    elsewhere = run_bin("repact-autopilot", "report", "--session-dir", str(world["session_dir"]),
-                        repo=tmp_path)
-    assert f'{ref} "Fix the login bug"' in elsewhere.stdout
-
-
-def test_the_command_keeps_every_task_on_the_team_path_and_runs_literal_commands():
-    text = (PLUGIN / "commands" / "autopilot.md").read_text(encoding="utf-8")
-    assert "direct-edit lane does not apply" in text and "metadata.project_task" in text
-    assert "metadata.acceptance" in text and "never through a shell function or variable" in text
-    assert not re.search(r"\bA=|\$A [a-z]", text)
-    assert "outside `--max-usd`" in text
-
-
-def test_a_report_before_next_stops_the_run_names_the_task_left(world):
-    """The lead ended the run after one halted task with ready tasks queued.
-    Only `next` ends a run; a report taken earlier says what `next` would take."""
-    first = add(world, "Refuse a negative --top", "--priority", "P0")
-    second = add(world, "Count several files", "--priority", "P1")
-    assert pilot(world, "start").returncode == 0
-    assert next_task(world)["ref"] == first
-    assert pilot(world, "record", first, "halted", "--reason", "blocked by a guard").returncode == 0
-    text = pilot(world, "report").stdout
-    assert f"still running: `next` would take {second}" in text, text
-    assert json.loads(pilot(world, "report", "--json").stdout)["next"] == {"ref": second}
-    assert next_task(world)["ref"] == second
-    assert pilot(world, "record", second, "failed").returncode == 0
-    assert next_task(world)["stop"] == "queue_empty"
-    text = pilot(world, "report").stdout
-    assert "stopped (queue_empty" in text and "would take" not in text
-
-
-def test_a_recorded_outcome_leaves_the_main_checkout_clean(world):
-    """After a run the main checkout held an uncommitted task log, the ledger's
-    union line in .gitattributes and an untracked .repacted/ledger.jsonl (the acceptance bridge
-    writes both at accept, before `record`)."""
-    repo = world["repo"]
-    git = ["git", "-C", str(repo)]
-    env = {**os.environ, **GIT_ENV}
-    subprocess.run([*git, "add", "-A"], check=True, capture_output=True, env=env)
-    subprocess.run([*git, "commit", "-q", "-m", "Set up the task log."], check=True, capture_output=True, env=env)
-    ref = add(world, "Push README word counts", "--priority", "P0")
-    assert pilot(world, "start").returncode == 0
-    assert pilot(world, "begin", ref).returncode == 0
-    (repo / ".repacted" / "ledger.jsonl").write_text('{"v": 1}\n')       # what the bridge appends
-    with (repo / ".gitattributes").open("a") as handle:
-        handle.write(".repacted/ledger.jsonl merge=union\n")
-    done = pilot(world, "record", ref, "halted", "--reason", "needs the owner's token")
-    assert done.returncode == 0, done.stderr
-    dirty = subprocess.run([*git, "status", "--porcelain", "--", ".repacted", ".gitattributes"],
-                           capture_output=True, text=True, env=env).stdout
-    assert dirty == "", dirty

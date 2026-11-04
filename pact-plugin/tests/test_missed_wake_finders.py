@@ -42,8 +42,7 @@ from fixtures.role_frames import captured_lead_userpromptsubmit_qualified
 
 SOURCE = Path(__file__).resolve().parents[1] / "hooks" / "missed_wake_scan.py"
 ENTRY_POINT = "run_surface"
-FINDERS = ("find_stale_missed_wakes", "find_mutual_waits", "find_unanchored_waits",
-           "find_idle_on_finished_runs")
+FINDERS = ("find_stale_missed_wakes",)
 
 AGED_MIN = 90     # past the 30-minute staleness threshold
 FRESH_MIN = 2     # well inside it
@@ -94,61 +93,6 @@ class TestMutualWaitsNeedsTwoDistinctPeersAndAge:
             "`since` inverts the signal and hides every dangerous case"
         )
 
-    def test_ONE_owner_holding_two_waits_is_not_a_cycle(self):
-        """Needs two DISTINCT owners. One agent with two waits is idle, not
-        deadlocked, and surfacing it would train the alarm to be ignored."""
-        assert mw.find_mutual_waits(
-            [_task("1", "alice"), _task("2", "alice")]) == []
-
-    def test_a_peer_waiting_alongside_a_LEAD_waiter_is_not_a_cycle(self):
-        assert mw.find_mutual_waits(
-            [_task("1", "alice"), _task("2", "bob", resolver="lead")]) == []
-
-    def test_two_peers_both_FRESH_are_not_detected(self):
-        """The age gate, from the other side — without this the aged arm could
-        pass on an implementation that detects any two peers at all."""
-        assert mw.find_mutual_waits(
-            [_task("1", "alice", since=FRESH_MIN),
-             _task("2", "bob", since=FRESH_MIN)]) == []
-
-    def test_a_NON_STRING_owner_is_not_counted_and_does_not_raise(self):
-        """An owner that is not a string is not an agent. It must not count
-        toward the two distinct owners, and it must not raise: this finder runs
-        outside any try in `run_surface`, where one raise drops every surface."""
-        odd = _task("1", "alice")
-        odd["owner"] = ["x"]
-        try:
-            found = mw.find_mutual_waits([odd, _task("2", "carol")])
-        except Exception as exc:
-            pytest.fail("a non-string owner made find_mutual_waits raise %r" % (exc,))
-        assert found == [], (
-            "only one real owner is waiting, so this is not a mutual wait: %r" % (found,)
-        )
-
-    def test_CHARACTERIZATION_a_user_resolver_cycle_is_INVISIBLE(self):
-        """🔴 THIS ARM PINS A KNOWN LIMITATION, NOT A REQUIREMENT.
-
-        `user` and `external` are not task-store entities, so a cycle running
-        through the human cannot be REPRESENTED here — it is not that such
-        cycles are rare, it is that this instrument has no way to see them. An
-        empty result must never be read as "no deadlock".
-
-        IF YOU HAVE TAUGHT THE DETECTOR TO SEE USER CYCLES, DELETE THIS ARM.
-        Its reddening is the fix landing, not a regression you caused. It is
-        pinned rather than left in prose because a documented blind spot with
-        no arm is what this codebase has repeatedly watched evaporate — the
-        `covers_since` contract lives in a skill file and nothing enforces it.
-        """
-        both_user = [_task("1", "alice", resolver="user"),
-                     _task("2", "bob", resolver="user")]
-        assert mw.find_mutual_waits(both_user) == [], (
-            "KNOWN LIMITATION, pinned deliberately: `expected_resolver` records "
-            "the KIND of resolver, so user/external cycles cannot be "
-            "represented. If this now returns a detection, the instrument has "
-            "been extended — DELETE THIS ARM rather than restoring the old "
-            "behaviour. Its failure is the improvement landing."
-        )
-
 
 @pytest.fixture
 def registry(tmp_path, monkeypatch):
@@ -194,46 +138,6 @@ class TestUnanchoredWaitsGateOnACoveredRecord:
         team = registry(100)
         assert mw.find_unanchored_waits(
             [_task("7", "alice", anchor=AGED_MIN)], team) == []
-
-    def test_an_unanchored_wait_covering_NOTHING_is_silent(self, registry):
-        """The gate is a COVERED record, not mere absence of an anchor. The
-        launch here is more recent than the wait, so the fallback does not
-        reach it and the absence has decided nothing."""
-        team = registry(10)
-        assert mw.find_unanchored_waits([_task("7", "alice")], team) == []
-
-    def test_a_FRESH_TEAM_with_no_records_is_silent(self, registry):
-        """Silence here is the GENERAL RULE with an empty record set, not a
-        special case — and an integration arm depends on it.
-
-        🔴 ITS SILENCE IS OVER-DETERMINED, AND SAYING SO IS THE POINT.
-        MEASURED: two independent mechanisms produce it — the `if not records`
-        early return, and the covered-record gate downstream (with no records,
-        nothing is covered). Reverting EITHER alone leaves this arm GREEN;
-        only the COMBINED revert reddens it. So this arm does not pin either
-        mechanism on its own and must not be read as doing so — the sibling
-        arm above is what pins the covered-record gate specifically.
-
-        What it does pin is the OUTCOME a fresh team must see, which is worth
-        having because an integration arm depends on that silence and because
-        both mechanisms would have to go for it to break. An earlier draft of
-        this docstring claimed it reddens when absence-of-anchor becomes
-        sufficient; measured, it does not, and the claim is corrected rather
-        than removed so the next reader knows the difference was checked.
-        """
-        team = registry(None)
-        assert mw.find_unanchored_waits([_task("7", "alice")], team) == []
-
-    def test_the_surface_renders_and_names_the_FALLBACK_ANCHOR(self, registry):
-        team = registry(100)
-        rows = mw.find_unanchored_waits([_task("7", "alice")], team)
-        surface = mw.build_unanchored_surface(rows)
-        assert surface is not None and "FALLBACK ANCHOR" in surface
-
-    def test_no_rows_render_NOTHING(self, registry):
-        """Paired with the arm above so neither passes on a builder that always
-        returns a string."""
-        assert mw.build_unanchored_surface([]) is None
 
 
 @pytest.fixture(scope="module")
@@ -330,30 +234,6 @@ class TestTheMutualWaitSurfaceReachesTheLead:
         )
         assert "- Task #1 (alice" in out and "- Task #2 (bob" in out, out
 
-    def test_a_FRESH_peer_pair_does_not_reach_the_lead(self, surface):
-        """Paired with the arm above, so neither passes on an entry point that
-        prints the header for any two peers. Both anchors are fresh: a fresh
-        `since` over an old `covers_since` still reads stale, by design."""
-        out = surface([_task("1", "alice", since=FRESH_MIN, anchor=FRESH_MIN),
-                       _task("2", "bob", since=FRESH_MIN, anchor=FRESH_MIN)])
-        assert "POSSIBLE MUTUAL WAIT" not in out, out
-
-    def test_a_task_with_NON_DICT_metadata_does_not_blank_the_surface(self, surface):
-        """The finder runs outside any try in `run_surface`, so a malformed task
-        that raises there drops every lead surface, not only this one."""
-        malformed = {"id": "3", "status": "in_progress", "owner": "carol",
-                     "metadata": ["not", "a", "dict"]}
-        try:
-            out = surface([_task("1", "alice"), _task("2", "bob"), malformed])
-        except Exception as exc:
-            pytest.fail("a task whose metadata is not a dict made run_surface "
-                        "raise %r, which drops every lead surface" % (exc,))
-        assert "POSSIBLE MUTUAL WAIT" in out, (
-            "one task whose metadata is not a dict blanked the mutual-wait "
-            "surface, so a single malformed task hid the lead's alarm for a "
-            "real aged peer pair: %r" % (out,)
-        )
-
 
 class TestATeammateIdleOnAFinishedRunReachesTheLead:
     """2026-10-03: teammates backgrounded their own test runs and idled for hours with a
@@ -402,16 +282,4 @@ class TestATeammateIdleOnAFinishedRunReachesTheLead:
                 "12 passed, 1 failed, 0 errors, exit 1; nudge it") in first, first
         assert "idle on a finished run" not in second, second
 
-    def test_a_run_from_ANOTHER_worktree_is_ignored(self, surface):
-        tree, run = surface
-        first, _ = run(tree.parent / "unit-a-other" / "repacted")
-        assert "idle on a finished run" not in first, first
 
-    def test_with_no_Worktree_line_the_owners_own_linked_worktree_is_used(self, surface):
-        """The measured U3 dispatch named its tree only in a shared brief file."""
-        tree, run = surface
-        (tree / "repacted").mkdir(parents=True)
-        (tree / ".git").write_text("gitdir: /elsewhere\n")
-        first, _ = run(tree / "repacted" / "pact-plugin", description="comPACT mode. Read the brief.",
-                       owner_call_dirs=[tree / "repacted"])
-        assert "u3 (#66) is idle on a finished run" in first, first

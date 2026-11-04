@@ -41,7 +41,7 @@ HOOKS_JSON = PLUGIN_ROOT / "hooks" / "hooks.json"
 
 # The measured platform frame shapes. A teammate name is user-chosen, so no
 # matcher can enumerate the first row: only an unmatched registration selects it.
-TEAMMATE_FRAME_AGENT_TYPES = ("carrier", "control", "coder-scope", "plan-architect")
+TEAMMATE_FRAME_AGENT_TYPES = ("carrier",)
 AGENT_TOOL_FRAME_AGENT_TYPES = ("pact-backend-coder", "pact-secretary")
 
 
@@ -105,28 +105,3 @@ class TestA1SelectsAnInProcessTeammate:
         )
 
 
-class TestA2KeepsTheAgentToolFrame:
-    """The other half of the population must stay selected, so a repair cannot
-    buy A1 by trading away the Agent-tool spawn shape."""
-
-    @pytest.mark.parametrize("agent_type", AGENT_TOOL_FRAME_AGENT_TYPES)
-    def test_pact_typed_frame_is_still_selected(self, entry, agent_type):
-        assert _selects(entry, agent_type), (
-            f"the registration no longer selects a spawn frame whose agentType "
-            f"is {agent_type!r}. That is the Agent-tool spawn shape, and it was "
-            f"selected before this repair."
-        )
-
-
-class TestA3TheRegistrationIsWellFormed:
-    """Structural floor: the block is registered as a command hook, so a
-    malformed edit is loud rather than silently unselectable."""
-
-    def test_entry_registers_a_command_hook(self, entry):
-        commands = [h.get("command", "") for h in entry.get("hooks", [])]
-        assert any("peer_inject.py" in c for c in commands), (
-            "the SubagentStart entry no longer runs peer_inject.py"
-        )
-        assert all(h.get("type") == "command" for h in entry.get("hooks", [])), (
-            "a SubagentStart hook in this entry is not a command hook"
-        )

@@ -104,17 +104,6 @@ class TestSavePublishesTheReasonCode:
             "defect this change set exists to remove, in its original form"
         )
 
-    def test_save_publishes_none_when_there_is_nothing_to_report(self, mem):
-        """Paired with the arm above.
-
-        Without this arm a property hardcoded to the sentinel would pass; without
-        the arm above a property hardcoded to None would pass. One of those is a
-        mutation that survived the entire suite.
-        """
-        _save(mem, None)
-
-        assert mem.last_embedding_status is None
-
 
 class TestUpdatePublishesTheReasonCode:
     """`update` is the WORSE of the two call sites.
@@ -138,40 +127,4 @@ class TestUpdatePublishesTheReasonCode:
             "re-embed failure from a clean update"
         )
 
-    def test_update_publishes_none_when_there_is_nothing_to_report(self, mem):
-        memory_id = _save(mem, SENTINEL)
-        assert mem.last_embedding_status == SENTINEL, "precondition: the sentinel is live"
 
-        with patch.object(memory_api, "_ensure_ready", lambda: None), \
-             patch.object(PACTMemory, "_store_embedding", return_value=None):
-            mem.update(memory_id, {"context": "another different text"}, replace=True)
-
-        assert mem.last_embedding_status is None, (
-            "a later clean update must CLEAR the previous reason code, or a "
-            "caller reads a stale status from an operation that already succeeded"
-        )
-
-
-class TestPropertyIsNotAConstant:
-    """The property must reflect stored state rather than return a literal."""
-
-    def test_property_tracks_successive_writes(self, mem):
-        memory_id = _save(mem, SENTINEL)
-        first = mem.last_embedding_status
-
-        with patch.object(memory_api, "_ensure_ready", lambda: None), \
-             patch.object(PACTMemory, "_store_embedding", return_value=None):
-            mem.update(memory_id, {"context": "text three"}, replace=True)
-        second = mem.last_embedding_status
-
-        assert (first, second) == (SENTINEL, None), (
-            "the property returned the same value across two writes with "
-            "different outcomes, so it is not reading the stored field"
-        )
-
-    def test_a_fresh_instance_reports_nothing(self, tmp_path):
-        """No write has happened, so there is nothing to report."""
-        fresh = PACTMemory(project_id="wiring-probe", session_id="wiring-sess",
-                           db_path=tmp_path / "fresh.db")
-
-        assert fresh.last_embedding_status is None

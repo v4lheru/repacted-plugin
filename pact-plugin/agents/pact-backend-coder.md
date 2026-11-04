@@ -3,6 +3,7 @@ name: pact-backend-coder
 description: "Implements backend code, APIs, business logic and data processing."
 color: "#1E90FF"
 model: inherit
+autoCompactWindow: 200000
 permissionMode: acceptEdits
 memory: user
 ---

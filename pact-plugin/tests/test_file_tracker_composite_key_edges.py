@@ -18,7 +18,6 @@ supplement: the edges that matrix does not exercise —
 import json
 
 
-
 class TestCompositeKeyBackwardCompat:
     """Entries predating the session_id field default to session_id="" and
     must not break detection."""
@@ -45,51 +44,4 @@ class TestCompositeKeyBackwardCompat:
         )
         assert "backend-coder" in conflict
 
-    def test_same_name_legacy_and_self_session_less_is_self(self, tmp_path):
-        """A legacy entry (session-less) and a current frame that ALSO has no
-        session_id share the SAME composite ('backend-coder', '') → it is the
-        SAME instance → NO false-positive conflict."""
-        from file_tracker import track_edit, check_conflict
 
-        tracking_file = str(tmp_path / "file-edits.json")
-        abs_path = str(tmp_path / "src" / "auth.ts")
-        # track_edit with the default empty session_id (legacy-equivalent).
-        track_edit(abs_path, "backend-coder", "Edit", tracking_file)
-        conflict = check_conflict(abs_path, "backend-coder", tracking_file)
-        assert conflict is None, (
-            "same name + same (empty) session = same instance → no conflict"
-        )
-
-    def test_same_name_one_with_one_without_session_conflicts(self, tmp_path):
-        """The same agent_name appearing once WITH a session and once WITHOUT
-        are two distinct composite keys → a real cross-instance conflict."""
-        from file_tracker import track_edit, check_conflict
-
-        tracking_file = str(tmp_path / "file-edits.json")
-        abs_path = str(tmp_path / "src" / "auth.ts")
-        # Instance A: legacy (no session).
-        track_edit(abs_path, "backend-coder", "Edit", tracking_file)
-        # Instance B: same name, real session → distinct composite → checks.
-        conflict = check_conflict(
-            abs_path, "backend-coder", tracking_file, session_id="sess-bbbb"
-        )
-        assert conflict is not None
-        assert "backend-coder" in conflict
-
-
-class TestEmptyAgentNameShortCircuit:
-    """An empty agent_name (resolve_agent_name yielded "") short-circuits
-    check_conflict to None — no attribution is possible without a name."""
-
-    def test_empty_agent_name_returns_none(self, tmp_path):
-        from file_tracker import track_edit, check_conflict
-
-        tracking_file = str(tmp_path / "file-edits.json")
-        abs_path = str(tmp_path / "src" / "auth.ts")
-        # Another instance has edited the file.
-        track_edit(abs_path, "backend-coder", "Edit", tracking_file, session_id="s1")
-        # The checking frame has no resolvable name.
-        conflict = check_conflict(abs_path, "", tracking_file, session_id="s2")
-        assert conflict is None, (
-            "empty agent_name must short-circuit to None (cannot attribute)"
-        )

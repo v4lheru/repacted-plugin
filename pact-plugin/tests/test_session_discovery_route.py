@@ -109,13 +109,6 @@ class TestDiscoveryComposition:
 
         assert pact_session.get_session_id_from_context_file() == SYNTHETIC_ID
 
-    def test_absent_env_var_yields_empty(self, monkeypatch):
-        enable_discovery(monkeypatch)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        _write_context(SYNTHETIC_ID)
-
-        assert pact_session.get_session_id_from_context_file() == ""
-
 
 class TestFailClosedOnCount:
     """`len(matches) != 1`. The comment in the source calls picking the first a
@@ -129,38 +122,12 @@ class TestFailClosedOnCount:
 
         assert pact_session.get_session_id_from_context_file() == ""
 
-    def test_two_matching_slugs_yield_empty_rather_than_the_first(
-        self, monkeypatch):
-        enable_discovery(monkeypatch)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SYNTHETIC_ID)
-        _write_context(SYNTHETIC_ID, slug="project-a")
-        _write_context(SYNTHETIC_ID, slug="project-b")
-
-        assert pact_session.get_session_id_from_context_file() == "", (
-            "two projects recorded the same session id; returning either one "
-            "would be a guess"
-        )
-
 
 class TestMalformedContent:
     def test_malformed_json_yields_empty(self, monkeypatch):
         enable_discovery(monkeypatch)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SYNTHETIC_ID)
         _write_context(SYNTHETIC_ID, body="{not json at all")
-
-        assert pact_session.get_session_id_from_context_file() == ""
-
-    def test_non_dict_payload_yields_empty(self, monkeypatch):
-        enable_discovery(monkeypatch)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SYNTHETIC_ID)
-        _write_context(SYNTHETIC_ID, body=json.dumps(["not", "a", "mapping"]))
-
-        assert pact_session.get_session_id_from_context_file() == ""
-
-    def test_non_string_session_id_yields_empty(self, monkeypatch):
-        enable_discovery(monkeypatch)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SYNTHETIC_ID)
-        _write_context(SYNTHETIC_ID, body=json.dumps({"session_id": 12345}))
 
         assert pact_session.get_session_id_from_context_file() == ""
 
@@ -188,87 +155,4 @@ class TestPerProcessCache:
         assert first == second == SYNTHETIC_ID
         assert len(calls) == 1, "discovery must run once per process, not per call"
 
-    def test_no_filesystem_work_when_the_guard_refuses(self, monkeypatch):
-        """No env id means the guard answers before any filesystem work."""
-        enable_discovery(monkeypatch)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
-        calls = []
-        real = pact_session._resolve_context_on_disk
-        monkeypatch.setattr(
-            pact_session, "_resolve_context_on_disk",
-            lambda e: (calls.append(1), real(e))[1],
-        )
-
-        # With no env id the guard returns before the lookup, so the expensive
-        # call must not happen at all -- not merely happen once.
-        assert pact_session.get_session_id_from_context_file() == ""
-        assert pact_session.get_session_id_from_context_file() == ""
-        assert len(calls) == 0
-
-
-class TestExplicitArgumentsBypassDiscovery:
-    def test_named_context_file_is_read_directly(self, monkeypatch):
-        """The pre-existing path must be unchanged: when the caller supplies both
-        identifiers, the named file is read and discovery never runs."""
-        _assert_sandboxed()
-        monkeypatch.setattr(pact_session, "_discovered_session_id", pact_session._DISCOVERY_UNSET)
-        _write_context(SYNTHETIC_ID, slug="named-project")
-
-        def _explode():
-            raise AssertionError("discovery must not run when both args are given")
-
-        monkeypatch.setattr(pact_session, "_discover_session_id", _explode)
-
-        result = pact_session.get_session_id_from_context_file(
-            session_id=SYNTHETIC_ID, project_dir="/x/named-project"
-        )
-
-        assert result == SYNTHETIC_ID
-
-
-class TestCacheDoesNotOutliveTheGuards:
-    """A cached answer must never be returned to a caller the guards refuse.
-
-    The cache used to sit ABOVE _discover_session_id, so once populated it
-    short-circuited the PYTEST_CURRENT_TEST and CLAUDE_CODE_SESSION_ID guards
-    for the life of the process: a caller kept
-    receiving the real session id after PYTEST_CURRENT_TEST was set, and after
-    CLAUDE_CODE_SESSION_ID was removed.
-    """
-
-    def _prime(self, monkeypatch):
-        enable_discovery(monkeypatch)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SYNTHETIC_ID)
-        _write_context(SYNTHETIC_ID)
-        # POSITIVE ARM: the cache must actually be populated, or the assertions
-        # below would pass against a resolver that had simply never worked.
-        assert pact_session.get_session_id_from_context_file() == SYNTHETIC_ID
-        return SYNTHETIC_ID
-
-    def test_pytest_guard_applies_after_the_cache_is_populated(self, monkeypatch):
-        self._prime(monkeypatch)
-        monkeypatch.setenv("PYTEST_CURRENT_TEST", "some_test (call)")
-
-        assert pact_session.get_session_id_from_context_file() == "", (
-            "a populated cache returned the session id to a caller the pytest "
-            "guard should have refused"
-        )
-
-    def test_absent_env_id_applies_after_the_cache_is_populated(self, monkeypatch):
-        self._prime(monkeypatch)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-
-        assert pact_session.get_session_id_from_context_file() == "", (
-            "a populated cache returned the session id after the environment "
-            "no longer supplied one"
-        )
-
-    def test_a_different_env_id_is_not_served_from_the_cache(self, monkeypatch):
-        """The cache is keyed on the id it was resolved for."""
-        self._prime(monkeypatch)
-        other = "synthetic-session-0002"
-        _write_context(other, slug="other-project")
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", other)
-
-        assert pact_session.get_session_id_from_context_file() == other

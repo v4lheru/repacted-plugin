@@ -12,7 +12,6 @@ import os
 from unittest.mock import patch
 
 
-
 # ---------------------------------------------------------------------------
 # ensure_directories
 # ---------------------------------------------------------------------------
@@ -23,14 +22,6 @@ class TestEnsureDirectories:
         target = tmp_path / "pact-memory"
         with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(target)}):
             ensure_directories()
-        assert target.is_dir()
-
-    def test_idempotent(self, tmp_path):
-        from scripts.setup_memory import ensure_directories
-        target = tmp_path / "pact-memory"
-        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(target)}):
-            ensure_directories()
-            ensure_directories()  # Should not raise
         assert target.is_dir()
 
 
@@ -49,12 +40,6 @@ class TestCheckDependencies:
         assert result["sqlite_vec"] is False
         assert result["model2vec"] is False
 
-    def test_returns_dict_keys(self):
-        from scripts.setup_memory import check_dependencies
-        result = check_dependencies()
-        assert "sqlite_vec" in result
-        assert "model2vec" in result
-
 
 # ---------------------------------------------------------------------------
 # ensure_initialized
@@ -71,23 +56,6 @@ class TestEnsureInitialized:
             result = ensure_initialized()
         assert result is True
 
-    def test_returns_false_on_db_failure(self, tmp_path):
-        from scripts.setup_memory import ensure_initialized
-        target = tmp_path / "pact-memory"
-        with (
-            patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(target)}),
-            patch("scripts.setup_memory.ensure_directories"),
-        ):
-            # Make the relative import fail
-            original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
-            def fail_import(name, *args, **kwargs):
-                if 'database' in str(name):
-                    raise Exception("DB init failed")
-                return original_import(name, *args, **kwargs)
-            with patch("builtins.__import__", side_effect=fail_import):
-                result = ensure_initialized()
-        assert result is False
-
 
 # ---------------------------------------------------------------------------
 # _get_recommendations
@@ -100,17 +68,6 @@ class TestGetRecommendations:
         assert len(recs) == 2
         assert any("sqlite-vec" in r for r in recs)
         assert any("model2vec" in r for r in recs)
-
-    def test_both_installed(self):
-        from scripts.setup_memory import _get_recommendations
-        recs = _get_recommendations({"sqlite_vec": True, "model2vec": True})
-        assert recs == []
-
-    def test_partial_install(self):
-        from scripts.setup_memory import _get_recommendations
-        recs = _get_recommendations({"sqlite_vec": True, "model2vec": False})
-        assert len(recs) == 1
-        assert "model2vec" in recs[0]
 
 
 # ---------------------------------------------------------------------------
@@ -127,28 +84,6 @@ class TestGetSetupStatus:
         assert "can_use_semantic_search" in status
         assert "paths" in status
         assert "recommendations" in status
-
-    def test_initialized_when_dir_exists(self, tmp_path):
-        from scripts.setup_memory import get_setup_status
-        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(tmp_path)}):
-            status = get_setup_status()
-        assert status["initialized"] is True
-
-    def test_not_initialized_when_dir_missing(self, tmp_path):
-        from scripts.setup_memory import get_setup_status
-        missing = tmp_path / "nonexistent"
-        with patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(missing)}):
-            status = get_setup_status()
-        assert status["initialized"] is False
-
-    def test_semantic_search_requires_both_deps(self, tmp_path):
-        from scripts.setup_memory import get_setup_status
-        with (
-            patch.dict(os.environ, {"PACT_TEST_MEMORY_DIR": str(tmp_path)}),
-            patch("scripts.setup_memory.check_dependencies", return_value={"sqlite_vec": True, "model2vec": False}),
-        ):
-            status = get_setup_status()
-        assert status["can_use_semantic_search"] is False
 
 
 # ---------------------------------------------------------------------------

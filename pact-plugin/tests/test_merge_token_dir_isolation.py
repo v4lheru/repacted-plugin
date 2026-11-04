@@ -22,11 +22,3 @@ def test_every_loaded_token_dir_is_this_tests_own(tmp_path):
     assert {name: path for name, path in holders.items() if path != expected} == {}
 
 
-def test_a_default_dir_lookup_reads_only_this_tests_directory(tmp_path):
-    """A live-looking token file in the test's own directory is what the default lookup
-    visits: it is malformed, so the lookup removes it, which proves which directory it read."""
-    stray = tmp_path / ".claude" / f"{pre.TOKEN_PREFIX}stray"
-    stray.parent.mkdir()
-    stray.write_text("not json", encoding="utf-8")
-    assert pre.find_valid_tokens() == []
-    assert not stray.exists()

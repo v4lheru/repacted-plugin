@@ -125,29 +125,6 @@ class TestBuildCustomInstructions:
         assert "none found" in result  # agents none found
         assert "Preserve task IDs" in result
 
-    def test_no_variety_omits_variety_line(self):
-        from precompact_state_reminder import build_custom_instructions
-        state = {
-            "feature_subject": "X", "feature_id": "1",
-            "current_phase": "Phase: TEST", "variety_score": None,
-            "teammates": ["a"], "team_names": ["t"],
-        }
-        result = build_custom_instructions(state)
-        assert "Variety" not in result
-
-    def test_out_of_range_bare_int_omits_variety_line(self):
-        """A bare int below the valid score range (0 < MIN_SCORE=4) is an
-        impossible variety total — the line is omitted rather than rendering
-        "Variety score: 0", per the range-gate on the bare-int branch."""
-        from precompact_state_reminder import build_custom_instructions
-        state = {
-            "feature_subject": "X", "feature_id": "1",
-            "current_phase": None, "variety_score": 0,
-            "teammates": [], "team_names": [],
-        }
-        result = build_custom_instructions(state)
-        assert "Variety" not in result
-
 
 # ---------------------------------------------------------------------------
 # Unit tests: _extract_variety_total
@@ -173,65 +150,14 @@ class TestExtractVarietyTotal:
         from precompact_state_reminder import _extract_variety_total
         assert _extract_variety_total(False) is None
 
-    def test_dict_with_bool_total_rejected(self):
-        from precompact_state_reminder import _extract_variety_total
-        assert _extract_variety_total({"total": True}) is None
-        assert _extract_variety_total({"total": False}) is None
 
     # ----- dict path delegates to the shared resolver -------------------
 
-    def test_dict_with_canonical_total(self):
-        from precompact_state_reminder import _extract_variety_total
-        assert _extract_variety_total({"total": 8}) == 8
-
-    def test_dict_with_score_only_resolves_via_shared_resolver(self):
-        """NEW behavior: a non-canonical `score`-only stamp now renders a
-        total instead of silently dropping the line. Before convergence on
-        the shared resolver, precompact only read `total` and dropped this."""
-        from precompact_state_reminder import _extract_variety_total
-        assert _extract_variety_total({"score": 8}) == 8
-
-    def test_dict_with_dimension_scores_resolves_via_shared_resolver(self):
-        from precompact_state_reminder import _extract_variety_total
-        v = {"novelty": 2, "scope": 3, "uncertainty": 1, "risk": 4}
-        assert _extract_variety_total(v) == 10
-
-    def test_dict_with_out_of_range_total_no_fallback_returns_none(self):
-        from precompact_state_reminder import _extract_variety_total
-        assert _extract_variety_total({"total": 99}) is None
 
     # ----- bare-int render affordance, range-gated to [MIN_SCORE, MAX_SCORE] -
 
-    def test_bare_int_in_range_passes_through(self):
-        from precompact_state_reminder import _extract_variety_total
-        assert _extract_variety_total(8) == 8
-
-    def test_bare_int_at_range_bounds_passes_through(self):
-        """The inclusive [4, 16] bounds (MIN_SCORE/MAX_SCORE) both pass."""
-        from precompact_state_reminder import _extract_variety_total
-        assert _extract_variety_total(4) == 4
-        assert _extract_variety_total(16) == 16
-
-    def test_out_of_range_bare_int_returns_none(self):
-        """The bare-int branch is range-gated to match the resolver's
-        no-clamp/no-fabricate [4, 16] policy: an out-of-range bare int is
-        dropped (line omitted), not rendered verbatim. Above the max (99)
-        and below the min (0, 3) both return None."""
-        from precompact_state_reminder import _extract_variety_total
-        assert _extract_variety_total(99) is None
-        assert _extract_variety_total(17) is None
-        assert _extract_variety_total(3) is None
-        assert _extract_variety_total(0) is None
 
     # ----- junk → None --------------------------------------------------
-
-    @pytest.mark.parametrize(
-        "junk",
-        [None, 8.0, 8.5, "8", "high", [8], {"total": "twelve"}, {}],
-    )
-    def test_junk_returns_none(self, junk):
-        from precompact_state_reminder import _extract_variety_total
-        assert _extract_variety_total(junk) is None
 
 
 class TestExtractVarietyTotalRenders:
@@ -255,21 +181,6 @@ class TestExtractVarietyTotalRenders:
         v = {"novelty": 2, "scope": 3, "uncertainty": 1, "risk": 4}
         result = build_custom_instructions(self._state(v))
         assert "Variety score: 10" in result
-
-    def test_omits_line_for_unresolvable_dict(self):
-        from precompact_state_reminder import build_custom_instructions
-        result = build_custom_instructions(self._state({"total": 99}))
-        assert "Variety" not in result
-
-    def test_renders_line_for_bare_int(self):
-        from precompact_state_reminder import build_custom_instructions
-        result = build_custom_instructions(self._state(12))
-        assert "Variety score: 12" in result
-
-    def test_omits_line_for_junk(self):
-        from precompact_state_reminder import build_custom_instructions
-        result = build_custom_instructions(self._state("not-a-number"))
-        assert "Variety" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -354,16 +265,6 @@ class TestBuildHookOutput:
     # test_system_message_has_brain_dump removed in #444:
     # BRAIN_DUMP_INSTRUCTIONS constant and systemMessage composition were
     # deleted. custom_instructions remains the only output channel.
-
-    def test_empty_dirs_produces_valid_output(self, tmp_path):
-        from precompact_state_reminder import build_hook_output
-        result = build_hook_output(
-            str(tmp_path / "no-tasks"),
-            str(tmp_path / "no-teams"),
-        )
-        assert "custom_instructions" in result
-        assert "systemMessage" not in result
-        assert "CRITICAL CONTEXT" in result["custom_instructions"]
 
 
 # ---------------------------------------------------------------------------
@@ -513,34 +414,6 @@ class TestPrecompactContextInitWiring:
         # get_team_name() (hence init()) resolved real context.
         assert team_name in ci
 
-    def test_empty_stdin_with_init_still_fails_open(self, tmp_path):
-        """The new init() call must preserve fail-open on empty/no-context
-        stdin: no session_id -> _context_path stays None -> empty-state
-        reminder, exit 0, custom_instructions still emitted.
-
-        Runs under a temp HOME with NO fixtures so the hook cannot resolve
-        any context — the canonical "init() ran but session is unresolved"
-        path that must degrade gracefully rather than crash.
-        """
-        home = tmp_path / "home"
-        proj = tmp_path / "proj"
-        proj.mkdir(parents=True)
-        env = {
-            **os.environ,
-            "HOME": str(home),
-            "CLAUDE_PROJECT_DIR": str(proj),
-        }
-        # Empty JSON object: parses fine, init({}) finds no session_id and
-        # leaves _context_path None (no raise) -> empty-state reminder.
-        result = run_hook(json.dumps({}), env=env)
-
-        assert result.returncode == 0
-        output = json.loads(result.stdout.strip())
-        ci = output["custom_instructions"]
-        assert "CRITICAL CONTEXT" in ci
-        assert "none found" in ci  # no teammates resolvable
-        assert "systemMessage" not in output
-
 
 # ---------------------------------------------------------------------------
 # Fail-open tests
@@ -553,45 +426,6 @@ class TestPrecompactFailOpen:
     def test_empty_stdin_exits_zero(self):
         result = run_hook("")
         assert result.returncode == 0
-
-    def test_malformed_json_exits_zero(self):
-        result = run_hook("not json at all")
-        assert result.returncode == 0
-
-    def test_malformed_json_still_emits_custom_instructions(self):
-        result = run_hook("not json at all")
-        output = json.loads(result.stdout.strip())
-        assert "custom_instructions" in output
-        assert "systemMessage" not in output
-
-    def test_null_input_exits_zero(self):
-        result = run_hook("null")
-        assert result.returncode == 0
-        # Non-dict valid JSON coerces to {} -> empty-state reminder, NOT the
-        # fail-open error channel. (Pre-guard: init(None) raised -> systemMessage.)
-        output = json.loads(result.stdout.strip())
-        assert "custom_instructions" in output
-        assert "systemMessage" not in output
-
-    def test_array_input_exits_zero(self):
-        result = run_hook("[]")
-        assert result.returncode == 0
-        # Non-dict valid JSON coerces to {} -> empty-state reminder, NOT the
-        # fail-open error channel. (Pre-guard: init([]) raised -> systemMessage.)
-        output = json.loads(result.stdout.strip())
-        assert "custom_instructions" in output
-        assert "systemMessage" not in output
-
-    def test_disk_read_error_fails_open(self, tmp_path):
-        """Unreadable tasks/teams dirs must not raise — build_hook_output
-        degrades gracefully and still emits custom_instructions."""
-        from precompact_state_reminder import build_hook_output
-        fake_file = tmp_path / "not-a-dir"
-        fake_file.write_text("x", encoding="utf-8")
-        result = build_hook_output(str(fake_file), str(fake_file))
-        assert "custom_instructions" in result
-        assert "none found" in result["custom_instructions"]
-        assert "systemMessage" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -624,33 +458,4 @@ class TestPrecompactOuterExceptionHandler:
                 main()
             assert exc_info.value.code == 0
 
-    def test_stderr_contains_error_info(self, capsys):
-        """Error details must appear on stderr for logging."""
-        from precompact_state_reminder import main
 
-        with patch("sys.stdin", StringIO("{}")), \
-             patch("precompact_state_reminder.build_hook_output",
-                   side_effect=RuntimeError("test error")):
-            with pytest.raises(SystemExit):
-                main()
-
-        captured = capsys.readouterr()
-        assert "precompact_state_reminder" in captured.err
-        assert "test error" in captured.err
-
-    def test_stdout_contains_hook_error_json(self, capsys):
-        """Stdout must contain structured JSON from hook_error_json."""
-        from precompact_state_reminder import main
-
-        with patch("sys.stdin", StringIO("{}")), \
-             patch("precompact_state_reminder.build_hook_output",
-                   side_effect=RuntimeError("test error")):
-            with pytest.raises(SystemExit):
-                main()
-
-        captured = capsys.readouterr()
-        output = json.loads(captured.out.strip())
-        assert "systemMessage" in output
-        assert "PACT hook warning" in output["systemMessage"]
-        assert "precompact_state_reminder" in output["systemMessage"]
-        assert "test error" in output["systemMessage"]

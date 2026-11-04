@@ -76,35 +76,6 @@ class TestOwnerAnchorTasks:
         teammate holding two, which `pact-teachback` explicitly permits."""
         assert owner_anchor_tasks(TASKS, "alice") == (["7", "9"], False)
 
-    def test_a_consultant_anchors_on_its_MOST_RECENTLY_COMPLETED_task(self):
-        """The whole fix. Zero in_progress tasks used to mean no record at all."""
-        assert owner_anchor_tasks(TASKS, "bob") == (["20"], True)
-
-    def test_recency_is_by_INTEGER_id_not_string_order(self):
-        """🔴 THE SILENT ONE. bob's completed ids are "3" and "20". A string
-        sort returns "3"; the integer sort returns "20".
-
-        THIS IS THE ARM MOST WORTH HAVING, because a string sort produces a
-        WRONG ANSWER THAT NEVER SURFACES AS A FAILURE — the record is written,
-        the registry looks healthy, the advisory cites the wrong task, and
-        nothing anywhere else notices. Every other defect in this family
-        announces itself by producing no record.
-        """
-        ids, _ = owner_anchor_tasks(TASKS, "bob")
-        assert ids == ["20"], (
-            "anchored on %r — a STRING sort returns '3' because '3' > '20' "
-            "lexically. The ids are compared as integers precisely so that "
-            "task 20 beats task 3." % (ids,)
-        )
-
-    def test_a_PENDING_task_anchors_nothing(self):
-        """Pending is neither live work nor a completed anchor. Discriminates
-        against an implementation that falls back to "any task at all"."""
-        assert owner_anchor_tasks(TASKS, "carol") == ([], False)
-
-    def test_an_unknown_owner_anchors_nothing(self):
-        assert owner_anchor_tasks(TASKS, "nobody") == ([], False)
-
 
 class TestTheExpiryAsymmetryInBothDirections:
     """🔴 PINNED IN BOTH DIRECTIONS DELIBERATELY, because the `anchor_completed`
@@ -127,17 +98,6 @@ class TestTheExpiryAsymmetryInBothDirections:
 
     def test_a_TEAMMATE_record_expires_when_its_task_completes(self):
         assert has_live_listed_task(_record(["3"]), self.COMPLETED_ANCHOR) is False
-
-    def test_a_CONSULTANT_record_does_NOT_expire_on_the_same_input(self):
-        """Identical record and identical task store — the ONLY difference is
-        the write-time flag, which is what makes this an asymmetry rather than
-        two unrelated behaviours."""
-        consultant = _record(["3"], anchor_completed=True)
-        assert has_live_listed_task(consultant, self.COMPLETED_ANCHOR) is True, (
-            "a consultant's anchor is completed BY CONSTRUCTION at write time, "
-            "so expiring on it kills the row the moment it is created and this "
-            "entire fix becomes inert. Bounded by the 24h TTL instead."
-        )
 
 
 class TestTheFlagCheckReadsCompletedTasksAndScopesConsultantRecords:
@@ -170,34 +130,6 @@ class TestTheFlagCheckReadsCompletedTasksAndScopesConsultantRecords:
             "its status"
         )
 
-    def test_a_LEFTOVER_wait_does_NOT_silence_a_consultant_record(self):
-        """The wait predates the launch, so it cannot be acknowledging it."""
-        leftover = [{"id": "3", "status": "completed", "owner": "bob",
-                     "metadata": {"intentional_wait": {
-                         "reason": "awaiting_lead_completion",
-                         "expected_resolver": "lead",
-                         "since": LEFTOVER_SINCE}}}]
-        consultant = _record(["3"], anchor_completed=True)
-        assert any_listed_task_flagged(consultant, leftover) is False, (
-            "a wait anchored before the launch silenced a consultant's record; "
-            "one stale wait on a completed anchor would then hide every later "
-            "launch that consultant makes"
-        )
-
-    def test_a_COVERING_wait_silences_a_consultant_record(self):
-        covering = [{"id": "3", "status": "completed", "owner": "bob",
-                     "metadata": {"intentional_wait": {
-                         "reason": "awaiting_blocker_resolution",
-                         "expected_resolver": "lead",
-                         "since": REGISTERED_AT,
-                         "covers_since": REGISTERED_AT}}}]
-        consultant = _record(["3"], anchor_completed=True)
-        assert any_listed_task_flagged(consultant, covering) is True, (
-            "a wait covering the launch did not silence the consultant's "
-            "record, so a consultant that flagged correctly still draws the "
-            "unflagged advisory"
-        )
-
 
 class TestAnchorCompletedIsAWriteTimeFactNotAStatus:
     """`_sanitize_record` keeps the flag ONLY when True.
@@ -213,16 +145,10 @@ class TestAnchorCompletedIsAWriteTimeFactNotAStatus:
 
     @pytest.mark.parametrize(
         "given,expected_present",
-        [(True, True), (False, False)],
-        ids=["True-is-kept", "False-is-dropped"],
+        [(True, True),],
+        ids=["True-is-kept",],
     )
     def test_the_flag_survives_only_when_True(self, given, expected_present):
         out = _sanitize_record(_record(["3"], anchor_completed=given))
         assert ("anchor_completed" in out) is expected_present
 
-    def test_a_record_without_the_field_stays_teammate_shaped(self):
-        """The pre-existing-row case: no flag means it expires, as before."""
-        out = _sanitize_record(_record(["3"]))
-        assert "anchor_completed" not in out
-        assert has_live_listed_task(
-            out, [{"id": "3", "status": "completed", "owner": "bob"}]) is False

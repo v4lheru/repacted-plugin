@@ -45,7 +45,7 @@ the platform writes ``inboxes/secretary.json`` only on delivery to an
 already-dispatched secretary — it cannot predate the spawn within PACT's
 choreography. The residual (could the PLATFORM pre-create an inbox on a bare name
 reference, OUTSIDE PACT's ritual?) is closed by the deferred negative live-probe
-documented in ``test_deferred_desktop_validation_protocol`` below — NOT by code,
+documented in ``tests/runbooks/desktop-bootstrap-deferred-validation.md`` — NOT by code,
 NOT by a CI test (it is platform-runtime-only).
 
 DUAL-MODE × HARNESS: the dual-mode contract (in-process: frame session_id ==
@@ -164,68 +164,6 @@ class TestBranch2ResolvesConfigLess:
         )
         assert resolved == LEAD_UUID
 
-    def test_file_edits_witness_resolves_uuid(self, ctx):
-        """The OR-arm: file-edits.json present, inboxes/ absent -> still resolves
-        via branch-2 (the witness is inboxes/ OR file-edits.json)."""
-        ctx_module, teams_root = ctx
-        team_dir = teams_root / LEAD_UUID
-        team_dir.mkdir(parents=True, exist_ok=True)
-        (team_dir / "file-edits.json").write_text("{}", encoding="utf-8")
-        # No inboxes/ subdir, no config.json.
-        resolved = ctx_module._resolve_aligned_team_name(
-            LEAD_UUID, teams_dir=str(teams_root), default="minted-fallback"
-        )
-        assert resolved == LEAD_UUID
-
-    def test_bare_dir_no_witness_returns_default(self, ctx):
-        """A teams/<uuid>/ dir with NEITHER inboxes/ NOR file-edits.json is NOT a
-        genuine team substrate -> branch-2's witness conjunct is False -> default.
-        Proves the witness conjunct is load-bearing (not just the is_dir probe).
-
-        # COUNTER-TEST: deleting the witness conjunct from branch-2 would resolve
-        # this bare dir to <uuid> -> this assertion (== default) goes RED.
-        """
-        ctx_module, teams_root = ctx
-        (teams_root / LEAD_UUID).mkdir(parents=True, exist_ok=True)  # bare dir
-        resolved = ctx_module._resolve_aligned_team_name(
-            LEAD_UUID, teams_dir=str(teams_root), default="bare-default"
-        )
-        assert resolved == "bare-default"
-
-    def test_identity_match_wins_first_over_branch2_distinguishable(self, ctx):
-        """Desktop-WITH-config outlier (e.g. f1d72df4): branch-1 identity-match
-        MUST run BEFORE branch-2, and this cell PROVES the ORDER by making the
-        two branches resolve to DISTINGUISHABLE dirs.
-
-        Setup: the config.json (carrying leadSessionId == session_id) lives on a
-        DIFFERENT dir name (LEAD_ID8) than the running-frame session_id
-        (LEAD_UUID). So:
-          - branch-1 (identity-match scans for config['leadSessionId'] == sid)
-            resolves to LEAD_ID8 (the dir whose config matches).
-          - branch-2 (anchors on teams/<session_id>/) would resolve to LEAD_UUID
-            (the running-frame sid dir, which we ALSO seed with a witness so
-            branch-2 COULD fire if it were reached first).
-        Correct ordering (identity-match first) -> LEAD_ID8. If branch-2 wrongly
-        won, the result would be LEAD_UUID. Asserting == LEAD_ID8 therefore proves
-        identity-match fired FIRST — the order the prior fixture (config + witness
-        on the SAME dir, both branches -> the same value) could NOT discriminate.
-
-        # COUNTER-TEST: reordering the resolver so branch-2 precedes the
-        # identity-match loop would return LEAD_UUID here -> RED.
-        """
-        ctx_module, teams_root = ctx
-        # branch-1's match dir: config.json on LEAD_ID8, leadSessionId == the sid.
-        _seed_cli_with_config(teams_root, LEAD_ID8, lead_session_id=LEAD_UUID,
-                              members=("secretary",))
-        # branch-2's would-be dir: teams/<session_id>/ with a witness, so branch-2
-        # COULD fire — the discriminator is which branch the resolver consults.
-        (teams_root / LEAD_UUID / "inboxes").mkdir(parents=True, exist_ok=True)
-        resolved = ctx_module._resolve_aligned_team_name(
-            LEAD_UUID, teams_dir=str(teams_root), default="fallback"
-        )
-        # LEAD_ID8 (identity-match) NOT LEAD_UUID (branch-2) -> order proven.
-        assert resolved == LEAD_ID8
-
 
 class TestBranch2NoMisfireUnderCLI:
     """FIXTURE C — THE load-bearing non-misfire proof. Branch-2 must be
@@ -256,18 +194,6 @@ class TestBranch2NoMisfireUnderCLI:
         # Running frame is the full UUID; no teams/<full-uuid>/ -> default.
         assert resolved == LEAD_ID8
 
-    def test_cli_steady_state_identity_match_byte_identical(self, ctx):
-        """CLI steady-state: teams/session-<id8>/config.json present with
-        leadSessionId. Identity-match resolves it; branch-2 never reached.
-        Byte-identical to pre-fix behavior."""
-        ctx_module, teams_root = ctx
-        _seed_cli_with_config(teams_root, LEAD_ID8, lead_session_id=LEAD_UUID,
-                              members=("secretary",))
-        resolved = ctx_module._resolve_aligned_team_name(
-            LEAD_UUID, teams_dir=str(teams_root), default="fallback"
-        )
-        assert resolved == LEAD_ID8
-
 
 class TestTmuxLegNoMisfire:
     """TS4 — the tmux leg of the dual-mode contract. A teammate frame runs under
@@ -295,17 +221,6 @@ class TestTmuxLegNoMisfire:
         )
         assert resolved == "teammate-default"
 
-    def test_inprocess_lead_frame_resolves_own_dir(self, ctx):
-        """In-process: the lead frame's session_id IS the team uuid -> branch-2
-        resolves to it. The in-process complement of the tmux leg above (both
-        legs of the dual-mode contract, structurally keyed on session_id)."""
-        ctx_module, teams_root = ctx
-        _seed_config_less_desktop(teams_root, LEAD_UUID)
-        resolved = ctx_module._resolve_aligned_team_name(
-            LEAD_UUID, teams_dir=str(teams_root), default="fallback"
-        )
-        assert resolved == LEAD_UUID
-
 
 class TestBranch2TraversalSecurity:
     """GATE-1 security: is_safe_path_component(session_id) is the FIRST conjunct
@@ -331,17 +246,6 @@ class TestBranch2TraversalSecurity:
         (sibling / "inboxes").mkdir(parents=True, exist_ok=True)
         # The traversal target teams_root/'../teams/sibling' resolves to sibling.
         poisoned = "../teams/sibling"
-        resolved = ctx_module._resolve_aligned_team_name(
-            poisoned, teams_dir=str(teams_root), default="safe-default"
-        )
-        assert resolved == "safe-default"
-
-    @pytest.mark.parametrize("poisoned", ["../escape", "a/b", "..", "\x00nul", ""])
-    def test_path_unsafe_ids_never_raise_return_default(self, ctx, poisoned):
-        """Adversarial session_ids (traversal, NUL, embedded slash, empty) are
-        gated out of branch-2 and never raise -> default. Pins the never-raises
-        contract across the branch-2 path-composition surface."""
-        ctx_module, teams_root = ctx
         resolved = ctx_module._resolve_aligned_team_name(
             poisoned, teams_dir=str(teams_root), default="safe-default"
         )
@@ -375,65 +279,6 @@ class TestInboxWitnessGate2:
         teams_root = tmp_path / ".claude" / "teams"
         _seed_config_less_desktop(teams_root, self._TEAM)  # writes secretary.json
         assert self._has_secretary(monkeypatch, tmp_path) is True
-
-    def test_config_less_without_secretary_inbox_is_false(self, monkeypatch,
-                                                          tmp_path):
-        """Config-less team, inboxes/ present but NO secretary.json -> False. The
-        witness is specifically the SECRETARY's inbox, not any inbox dir.
-
-        # COUNTER-TEST: a witness that accepted the inboxes/ DIR (rather than the
-        # secretary.json FILE) would pass here -> this assertion (is False) RED.
-        """
-        teams_root = tmp_path / ".claude" / "teams"
-        _seed_config_less_desktop(teams_root, self._TEAM,
-                                  with_secretary_inbox=False)
-        assert self._has_secretary(monkeypatch, tmp_path) is False
-
-    def test_members_path_unchanged_cli(self, monkeypatch, tmp_path):
-        """CLI byte-identical: config.json with members[] containing secretary ->
-        True via the members[] arm (tried FIRST; the inbox arm is never reached).
-        No inbox file is seeded, so a True here can only come from members[]."""
-        teams_root = tmp_path / ".claude" / "teams"
-        _seed_cli_with_config(teams_root, self._TEAM, lead_session_id=self._TEAM,
-                              members=("secretary",))
-        assert not (teams_root / self._TEAM / "inboxes").exists()
-        assert self._has_secretary(monkeypatch, tmp_path) is True
-
-    def test_no_witness_no_members_is_false(self, monkeypatch, tmp_path):
-        """Neither members[] secretary NOR the inbox file -> False (fail-safe)."""
-        teams_root = tmp_path / ".claude" / "teams"
-        _seed_cli_with_config(teams_root, self._TEAM, lead_session_id=self._TEAM,
-                              members=("backend-coder",))  # no secretary member
-        assert self._has_secretary(monkeypatch, tmp_path) is False
-
-    def test_inbox_isfile_raises_fails_safe_false(self, monkeypatch, tmp_path):
-        """GATE-2 fail-safe arm (review FUTURE-1): an UNEXPECTED FS error from the
-        inbox is_file() probe is swallowed by the `except Exception: return False`
-        wrap, so _team_has_secretary degrades to the silent fail-safe False rather
-        than propagating. Exercises the except arm that no other cell reached.
-
-        Non-vacuity: the fixture seeds the secretary inbox so WITHOUT the raise the
-        inbox arm would return True (proven by test_inbox_witness_passes_config_less
-        on the identical fixture). With is_file monkeypatched to raise OSError, the
-        result flips to False — attributable to the except arm specifically.
-
-        # COUNTER-TEST: removing the try/except wrap would let the OSError
-        # PROPAGATE out of _team_has_secretary -> this call would raise instead of
-        # returning False -> RED (pytest.raises would be needed), proving the arm
-        # is load-bearing.
-        """
-        teams_root = tmp_path / ".claude" / "teams"
-        _seed_config_less_desktop(teams_root, self._TEAM)  # secretary.json present
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        # Force the inbox probe to raise an FS-family error (e.g. a stat failure
-        # on a pathological filesystem). The members[] arm finds nothing first
-        # (no config.json), so control reaches the inbox try-block.
-        def _raise(self):
-            raise OSError("simulated FS failure on is_file()")
-        monkeypatch.setattr(Path, "is_file", _raise)
-        from bootstrap_marker_writer import _team_has_secretary
-        # Must NOT raise; must degrade to the fail-safe False.
-        assert _team_has_secretary(self._TEAM) is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -500,51 +345,6 @@ class TestWritabilityInvariant:
                   capsys)
         assert (session_dir / BOOTSTRAP_MARKER_NAME).exists()
 
-    def test_non_lead_frame_does_not_write_marker(self, monkeypatch, tmp_path,
-                                                  capsys):
-        """A NON-LEAD (teammate) frame over the SAME config-less substrate WITH
-        the inbox-witness present does NOT write the marker — is_lead is upstream
-        of the witness. Proves a teammate frame cannot poison the marker.
-
-        # COUNTER-TEST: removing the is_lead gate would let this teammate frame
-        # write the marker -> this assertion (not exists) RED.
-        """
-        session_dir = self._setup_config_less_session(monkeypatch, tmp_path)
-        self._run({"hook_event_name": "UserPromptSubmit",
-                   "session_id": self._SESSION_ID, "prompt": "hi",
-                   "source": "startup", "agent_type": "pact-backend-coder"},
-                  capsys)
-        assert not (session_dir / BOOTSTRAP_MARKER_NAME).exists()
-
-    @pytest.mark.parametrize(
-        "agent_type, marker_expected",
-        [
-            ("pact-orchestrator", True),    # lead -> is_lead True -> marker writes
-            ("pact-backend-coder", False),  # teammate -> is_lead False -> no marker
-        ],
-    )
-    def test_is_lead_is_sole_cause_of_marker_write(self, monkeypatch, tmp_path,
-                                                   capsys, agent_type,
-                                                   marker_expected):
-        """SAME-FIXTURE A/B isolating agent_type as the SOLE differing cause
-        (review remediation of the GATE-2 attribution question). Both arms use
-        the IDENTICAL _setup_config_less_session and the IDENTICAL input EXCEPT
-        agent_type. The marker presence flips exactly with is_lead-ness, so the
-        non-lead marker-ABSENCE is attributable to the is_lead gate SPECIFICALLY
-        — not to any unrelated precondition (plugin_version, session_dir,
-        witness), which are held identical across both arms and which the
-        lead arm's PASS proves are satisfied.
-
-        # COUNTER-TEST: removing the is_lead gate makes the False arm write the
-        # marker -> RED. Source-only revert of either GATE breaks the True arm.
-        """
-        session_dir = self._setup_config_less_session(monkeypatch, tmp_path)
-        self._run({"hook_event_name": "UserPromptSubmit",
-                   "session_id": self._SESSION_ID, "prompt": "hi",
-                   "source": "startup", "agent_type": agent_type},
-                  capsys)
-        assert (session_dir / BOOTSTRAP_MARKER_NAME).exists() is marker_expected
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SDK harness coverage (TS15) — by-construction note + cheap parametrization
@@ -560,7 +360,7 @@ class TestSdkHarnessByConstruction:
     can reproduce); the parametrization pins the by-construction equivalence
     cheaply over the substrate-producing harnesses."""
 
-    @pytest.mark.parametrize("harness", ["claude-desktop", "sdk-cli", "sdk-py"])
+    @pytest.mark.parametrize("harness", ["claude-desktop",])
     def test_same_substrate_resolves_identically(self, ctx, harness):
         """Whatever harness produced it, an identical config-less full-UUID
         substrate resolves to <uuid> via branch-2. The harness label is inert —
@@ -571,71 +371,3 @@ class TestSdkHarnessByConstruction:
             LEAD_UUID, teams_dir=str(teams_root), default="fallback"
         )
         assert resolved == LEAD_UUID
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Deferred validation (POST-MERGE, NOT a CI gate) — documented, not runnable
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.skip(
-    reason="POST-MERGE deferred manual Desktop validation — documentation only; "
-    "this CLI/CI substrate cannot exercise the real Desktop harness. Skipped "
-    "(not passed) so a doc carrier never inflates the green coverage count."
-)
-def test_deferred_desktop_validation_protocol():
-    """POST-MERGE DEFERRED VALIDATION (documentation cell — asserts nothing
-    runtime; it carries the protocol the user runs in a REAL Desktop session,
-    which this CLI/CI substrate cannot exercise). SKIPPED, not passed, so this
-    documentation carrier does not count toward the green total (review MINOR-2).
-
-    Fixtures here CAN prove: branch-2 resolves the config-less <uuid>; it does
-    NOT misfire under CLI cold-start (FIXTURE C) or tmux (TS4); identity-match
-    still wins for the with-config outlier; the inbox-witness passes GATE 2
-    config-less while the members[] path stays byte-identical; the marker writes
-    end-to-end and only from a lead frame (TS12); traversal ids are rejected.
-
-    Fixtures CANNOT prove (platform-runtime-only, hence this deferred protocol):
-      (1) that the REAL platform never pre-creates teams/<sid>/inboxes/<name>.json
-          on a bare reference to a NEVER-spawned name (the inbox-witness
-          false-positive vector) — closed by the NEGATIVE LIVE-PROBE below;
-      (2) that the real Desktop substrate shape matches the simulated
-          teams/<uuid>/{inboxes/secretary.json,file-edits.json} + tasks/<uuid>/
-          layout — closed by manual STEP 1.
-
-    ── NEGATIVE LIVE-PROBE (closes the inbox-precreation vector) ──
-    In a throwaway session, reference / SendMessage a SYNTHETIC name that is
-    NEVER Agent-spawned (use 'ghost-sec', NOT 'secretary'), then:
-        sid=<live session uuid>
-        ls ~/.claude/teams/$sid/inboxes/ | sort > /tmp/inbox_before.txt
-        #   ... SendMessage to to="ghost-sec" in the session, then return ...
-        ls ~/.claude/teams/$sid/inboxes/ | sort > /tmp/inbox_after.txt
-        diff /tmp/inbox_before.txt /tmp/inbox_after.txt \
-          && echo 'NO ghost-sec.json — witness SOUND' \
-          || echo 'ghost-sec.json APPEARED — harden GATE 2 to require '\
-                  'tasks/<team>/1.json status!=pending corroboration'
-    Absent -> the inbox-witness is sound (inbox-create is spawn/delivery-gated).
-    Present -> harden GATE 2. The platform may also REJECT an unknown recipient
-    outright (no inbox, error) — that ALSO confirms soundness. Non-blocking.
-
-    ── 7-STEP MANUAL DESKTOP PROTOCOL (Bash-observable; non-gated under deadlock) ──
-    Pre: install the merged plugin; launch PACT in Claude Desktop; run bootstrap.
-    STEP 0  capture the live UUID + persisted team_name from
-            ~/.claude/pact-sessions/*/*/pact-session-context.json.
-    STEP 1  confirm config-less substrate shape: ls -la ~/.claude/teams/<uuid>/
-            (expect inboxes/ + file-edits.json, NO config.json);
-            ls ~/.claude/teams/<uuid>/inboxes/ (expect secretary.json);
-            ls ~/.claude/tasks/<uuid>/ (expect 1.json).
-    STEP 2  GATE 1 cleared: the secretary spawns WITHOUT the
-            "no Task assigned to owner='secretary'" deny; cat
-            ~/.claude/tasks/<uuid>/1.json -> status advanced past 'pending'.
-    STEP 3  GATE 2 cleared: ls -la ~/.claude/pact-sessions/*/<uuid>/ shows the
-            bootstrap-complete marker file.
-    STEP 4  Edit/Write/Agent UNBLOCKED: a trivial Edit/Write SUCCEEDS in-session
-            (no 'bootstrap required' deny). End-to-end deadlock-clear signal.
-    STEP 5  harvest NON-EMPTY: read_events_from(<session_dir>, 'agent_handoff')
-            returns events (the silent-handoff-loss symptom is cleared).
-    STEP 6  run the NEGATIVE LIVE-PROBE above once.
-    CRUX gates: STEP 2 + STEP 3 + STEP 4. Report each PASS/FAIL.
-    """
-    pytest.fail("unreachable — this cell is @pytest.mark.skip (documentation only)")

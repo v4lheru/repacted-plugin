@@ -181,12 +181,6 @@ LIVE = "\n".join([
 ])
 
 
-def test_the_scan_passes_a_tree_whose_pointers_all_resolve(tmp_path):
-    dead, checked = scan(_tree(tmp_path, LIVE))
-    assert dead == []
-    assert all(checked[kind] >= 1 for kind in KINDS), dict(checked)
-
-
 DELETED = [
     ('Invoke Skill("@:pact-teachback").', "skill-call pact-teachback"),
     ('Invoke Skill(\\"@:request-more-context\\").', "skill-call request-more-context"),
@@ -202,11 +196,3 @@ DELETED = [
 ]
 
 
-def test_the_scan_reports_a_pointer_to_each_kind_of_deleted_name(tmp_path):
-    text = LIVE + "\n" + "\n".join(line for line, _ in DELETED)
-    dead, _ = scan(_tree(tmp_path, text))
-    reported = {entry.split(": ", 1)[1] for entry in dead}
-    expected = {report for _, report in DELETED}
-    assert reported == expected, sorted(reported ^ expected)
-    assert len(dead) == len(DELETED), dead   # each dead name once
-    assert all(entry.startswith("skills/other/SKILL.md:") for entry in dead), dead

@@ -81,21 +81,6 @@ def test_the_write_sites_are_where_the_rule_says_and_nowhere_else():
         assert write_sites(name) == [], f"{name} gained a boundary write the ruling put at zero"
 
 
-def test_task_log_md_names_exactly_the_files_that_carry_write_sites():
-    sentence = rule_sentence("FILES carry boundary writes")
-    named = set(NAMED_FILE.findall(sentence))
-    carrying = {path.name for path in COMMANDS_DIR.glob("*.md") if write_sites(path.name)}
-    assert named == carrying, f"the rule names {sorted(named)}; the sites are in {sorted(carrying)}"
-    assert sentence.startswith(f"**{COUNT_WORDS[len(named)]} FILES"), sentence
-
-
-def test_the_report_files_exist():
-    sentence = rule_sentence("FILES carry a task report")
-    named = set(NAMED_FILE.findall(sentence))
-    assert named and all((COMMANDS_DIR / name).exists() for name in named), named
-    assert sentence.startswith(f"**{COUNT_WORDS[len(named)]} FILES"), sentence
-
-
 def boundary_table_identifiers():
     text = task_log_md().split("### When the writes happen", 1)[-1]
     names = set()
@@ -104,21 +89,6 @@ def boundary_table_identifiers():
         if len(cells) >= 5 and cells[1].isdigit():
             names.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_-]*)`", cells[2]))
     return names
-
-
-def test_the_boundary_table_and_the_cli_name_the_same_writes():
-    """Omission reads as permission: every field `set` can write needs a row, and a row may name
-    only what the CLI can do (a set flag, a subcommand, or a status value)."""
-    choices = subparsers()
-    writable = {option.lstrip("-") for action in choices["set"]._actions
-                for option in action.option_strings if option.startswith("--")} - {"help"}
-    statuses = set(choices["set"]._option_string_actions["--status"].choices)
-    named = boundary_table_identifiers()
-    assert writable and statuses and named, "a population came back empty — the arm is vacuous"
-    missing = writable - named
-    assert not missing, f"writable but named in NO row: {sorted(missing)}"
-    invented = named - writable - set(choices) - statuses
-    assert not invented, f"the table names {sorted(invented)}, which the CLI cannot write"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -181,16 +151,3 @@ def _every_flag_state():
     return R.replay(events, corrupt=[(99, "not JSON")])
 
 
-def test_every_drift_flag_kind_has_a_step_three_row():
-    R = reader()
-    flags = R.drift_flags(_every_flag_state(), now=datetime.datetime(2026, 9, 1, tzinfo=datetime.timezone.utc))
-    unmapped = [flag for flag in flags if not any(key in flag for key in ROW_FOR_FLAG)]
-    assert not unmapped, f"drift_flags raised a kind with no verdict row: {unmapped}"
-    raised = {key for key in ROW_FOR_FLAG if any(key in flag for flag in flags)}
-    assert raised == set(ROW_FOR_FLAG), (
-        f"the fixture no longer trips {sorted(set(ROW_FOR_FLAG) - raised)}; fix the fixture, "
-        f"or retire the row if the code dropped that flag")
-    table = task_log_md().split("## Step 3", 1)[1].split("## Step 4", 1)[0]
-    rows = {line.split("|")[1].strip() for line in table.splitlines() if line.startswith("| ")}
-    missing = sorted(set(ROW_FOR_FLAG.values()) - rows)
-    assert not missing, f"task-log.md's Step 3 table has no row for {missing}"

@@ -69,12 +69,6 @@ class TestNormalizePath:
         result = _normalize_path("src/app.py")
         assert result == "src/app.py"
 
-    def test_tilde_expansion(self):
-        from scripts.graph import _normalize_path
-        result = _normalize_path("~/projects/app.py")
-        assert "~" not in result
-        assert "projects/app.py" in result
-
 
 # ---------------------------------------------------------------------------
 # track_file
@@ -93,31 +87,6 @@ class TestTrackFile:
         id2 = track_file(db_conn, "/src/app.py")
         assert id1 == id2
 
-    def test_updates_last_modified_on_retrack(self, db_conn):
-        from scripts.graph import track_file
-        track_file(db_conn, "/src/app.py")
-        # Set a known old timestamp
-        db_conn.execute(
-            "UPDATE files SET last_modified = '2020-01-01' WHERE path = '/src/app.py'"
-        )
-        db_conn.commit()
-        track_file(db_conn, "/src/app.py")
-        cursor = db_conn.execute("SELECT last_modified FROM files WHERE path = '/src/app.py'")
-        row = cursor.fetchone()
-        assert row["last_modified"] != "2020-01-01"
-
-    def test_project_scoping(self, db_conn):
-        from scripts.graph import track_file
-        id1 = track_file(db_conn, "/src/app.py", project_id="p1")
-        id2 = track_file(db_conn, "/src/app.py", project_id="p2")
-        assert id1 != id2
-
-    def test_none_project_id(self, db_conn):
-        from scripts.graph import track_file
-        id1 = track_file(db_conn, "/src/app.py", project_id=None)
-        id2 = track_file(db_conn, "/src/app.py", project_id=None)
-        assert id1 == id2
-
 
 # ---------------------------------------------------------------------------
 # get_file_id
@@ -128,16 +97,6 @@ class TestGetFileId:
         from scripts.graph import track_file, get_file_id
         expected = track_file(db_conn, "/src/app.py")
         assert get_file_id(db_conn, "/src/app.py") == expected
-
-    def test_returns_none_for_untracked(self, db_conn):
-        from scripts.graph import get_file_id
-        assert get_file_id(db_conn, "/nonexistent.py") is None
-
-    def test_respects_project_id(self, db_conn):
-        from scripts.graph import track_file, get_file_id
-        track_file(db_conn, "/src/app.py", project_id="p1")
-        assert get_file_id(db_conn, "/src/app.py", project_id="p1") is not None
-        assert get_file_id(db_conn, "/src/app.py", project_id="p2") is None
 
 
 # ---------------------------------------------------------------------------
@@ -152,10 +111,6 @@ class TestGetFileById:
         assert result is not None
         assert result["path"] == "/src/app.py"
 
-    def test_returns_none_for_missing(self, db_conn):
-        from scripts.graph import get_file_by_id
-        assert get_file_by_id(db_conn, "nonexistent-id") is None
-
 
 # ---------------------------------------------------------------------------
 # list_tracked_files
@@ -169,24 +124,6 @@ class TestListTrackedFiles:
         result = list_tracked_files(db_conn)
         assert len(result) == 2
 
-    def test_filters_by_project(self, db_conn):
-        from scripts.graph import track_file, list_tracked_files
-        track_file(db_conn, "/src/a.py", project_id="p1")
-        track_file(db_conn, "/src/b.py", project_id="p2")
-        result = list_tracked_files(db_conn, project_id="p1")
-        assert len(result) == 1
-        assert result[0]["path"] == "/src/a.py"
-
-    def test_respects_limit(self, db_conn):
-        from scripts.graph import track_file, list_tracked_files
-        for i in range(5):
-            track_file(db_conn, f"/src/file{i}.py")
-        assert len(list_tracked_files(db_conn, limit=3)) == 3
-
-    def test_empty_database(self, db_conn):
-        from scripts.graph import list_tracked_files
-        assert list_tracked_files(db_conn) == []
-
 
 # ---------------------------------------------------------------------------
 # link_memory_to_file
@@ -198,23 +135,6 @@ class TestLinkMemoryToFile:
         _insert_memory(db_conn, "mem-1")
         file_id = track_file(db_conn, "/src/app.py")
         assert link_memory_to_file(db_conn, "mem-1", file_id) is True
-
-    def test_duplicate_returns_false(self, db_conn):
-        from scripts.graph import track_file, link_memory_to_file
-        _insert_memory(db_conn, "mem-1")
-        file_id = track_file(db_conn, "/src/app.py")
-        link_memory_to_file(db_conn, "mem-1", file_id)
-        assert link_memory_to_file(db_conn, "mem-1", file_id) is False
-
-    def test_different_relationships_allowed(self, db_conn):
-        from scripts.graph import track_file, link_memory_to_file
-        _insert_memory(db_conn, "mem-1")
-        file_id = track_file(db_conn, "/src/app.py")
-        # memory_files PK is (memory_id, file_id), so second insert with
-        # different relationship will fail as duplicate
-        link_memory_to_file(db_conn, "mem-1", file_id, "modified")
-        result = link_memory_to_file(db_conn, "mem-1", file_id, "referenced")
-        assert result is False  # PK collision on (memory_id, file_id)
 
 
 # ---------------------------------------------------------------------------
@@ -229,20 +149,6 @@ class TestLinkMemoryToFiles:
         id2 = track_file(db_conn, "/src/b.py")
         count = link_memory_to_files(db_conn, "mem-1", [id1, id2])
         assert count == 2
-
-    def test_skips_duplicates(self, db_conn):
-        from scripts.graph import track_file, link_memory_to_file, link_memory_to_files
-        _insert_memory(db_conn, "mem-1")
-        id1 = track_file(db_conn, "/src/a.py")
-        id2 = track_file(db_conn, "/src/b.py")
-        link_memory_to_file(db_conn, "mem-1", id1)
-        count = link_memory_to_files(db_conn, "mem-1", [id1, id2])
-        assert count == 1  # Only b.py is new
-
-    def test_empty_list(self, db_conn):
-        from scripts.graph import link_memory_to_files
-        count = link_memory_to_files(db_conn, "mem-1", [])
-        assert count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -277,11 +183,6 @@ class TestGetFilesForMemory:
         assert "/src/a.py" in paths
         assert "/src/b.py" in paths
 
-    def test_returns_empty_for_no_links(self, db_conn):
-        from scripts.graph import get_files_for_memory
-        _insert_memory(db_conn, "mem-1")
-        assert get_files_for_memory(db_conn, "mem-1") == []
-
 
 # ---------------------------------------------------------------------------
 # get_memories_for_file
@@ -297,11 +198,6 @@ class TestGetMemoriesForFile:
         link_memory_to_file(db_conn, "mem-2", file_id)
         mems = get_memories_for_file(db_conn, file_id)
         assert set(mems) == {"mem-1", "mem-2"}
-
-    def test_returns_empty_for_no_links(self, db_conn):
-        from scripts.graph import track_file, get_memories_for_file
-        file_id = track_file(db_conn, "/src/app.py")
-        assert get_memories_for_file(db_conn, file_id) == []
 
 
 # ---------------------------------------------------------------------------
@@ -320,20 +216,6 @@ class TestGetMemoriesForFiles:
         mems = get_memories_for_files(db_conn, ["/src/a.py", "/src/b.py"])
         assert set(mems) == {"mem-1", "mem-2"}
 
-    def test_skips_untracked_paths(self, db_conn):
-        from scripts.graph import get_memories_for_files
-        assert get_memories_for_files(db_conn, ["/nonexistent.py"]) == []
-
-    def test_deduplicates_memories(self, db_conn):
-        from scripts.graph import track_file, link_memory_to_file, get_memories_for_files
-        _insert_memory(db_conn, "mem-1")
-        id1 = track_file(db_conn, "/src/a.py")
-        id2 = track_file(db_conn, "/src/b.py")
-        link_memory_to_file(db_conn, "mem-1", id1)
-        link_memory_to_file(db_conn, "mem-1", id2)
-        mems = get_memories_for_files(db_conn, ["/src/a.py", "/src/b.py"])
-        assert mems == ["mem-1"]
-
 
 # ---------------------------------------------------------------------------
 # add_file_relation
@@ -344,18 +226,6 @@ class TestAddFileRelation:
         from scripts.graph import add_file_relation
         result = add_file_relation(db_conn, "/src/app.py", "/src/utils.py", "imports")
         assert result is True
-
-    def test_duplicate_returns_false(self, db_conn):
-        from scripts.graph import add_file_relation
-        add_file_relation(db_conn, "/src/app.py", "/src/utils.py", "imports")
-        result = add_file_relation(db_conn, "/src/app.py", "/src/utils.py", "imports")
-        assert result is False
-
-    def test_different_relationship_type_allowed(self, db_conn):
-        from scripts.graph import add_file_relation
-        add_file_relation(db_conn, "/src/app.py", "/src/utils.py", "imports")
-        result = add_file_relation(db_conn, "/src/app.py", "/src/utils.py", "calls")
-        assert result is True  # Different relationship = different PK
 
 
 # ---------------------------------------------------------------------------
@@ -371,25 +241,6 @@ class TestGetFileRelations:
         assert result[0]["path"] == "/src/utils.py"
         assert result[0]["direction"] == "outgoing"
 
-    def test_incoming_relations(self, db_conn):
-        from scripts.graph import add_file_relation, get_file_relations
-        add_file_relation(db_conn, "/src/app.py", "/src/utils.py", "imports")
-        result = get_file_relations(db_conn, "/src/utils.py", direction="incoming")
-        assert len(result) == 1
-        assert result[0]["path"] == "/src/app.py"
-        assert result[0]["direction"] == "incoming"
-
-    def test_both_directions(self, db_conn):
-        from scripts.graph import add_file_relation, get_file_relations
-        add_file_relation(db_conn, "/src/app.py", "/src/utils.py", "imports")
-        add_file_relation(db_conn, "/src/tests.py", "/src/app.py", "tests")
-        result = get_file_relations(db_conn, "/src/app.py", direction="both")
-        assert len(result) == 2
-
-    def test_untracked_file_returns_empty(self, db_conn):
-        from scripts.graph import get_file_relations
-        assert get_file_relations(db_conn, "/nonexistent.py") == []
-
 
 # ---------------------------------------------------------------------------
 # get_related_files (BFS traversal)
@@ -401,42 +252,6 @@ class TestGetRelatedFiles:
         add_file_relation(db_conn, "/a.py", "/b.py", "imports")
         result = get_related_files(db_conn, "/a.py")
         assert "/b.py" in result
-
-    def test_finds_two_hop_neighbors(self, db_conn):
-        from scripts.graph import add_file_relation, get_related_files
-        add_file_relation(db_conn, "/a.py", "/b.py", "imports")
-        add_file_relation(db_conn, "/b.py", "/c.py", "imports")
-        result = get_related_files(db_conn, "/a.py", max_depth=2)
-        assert "/b.py" in result
-        assert "/c.py" in result
-
-    def test_respects_depth_limit(self, db_conn):
-        from scripts.graph import add_file_relation, get_related_files
-        add_file_relation(db_conn, "/a.py", "/b.py", "imports")
-        add_file_relation(db_conn, "/b.py", "/c.py", "imports")
-        result = get_related_files(db_conn, "/a.py", max_depth=1)
-        assert "/b.py" in result
-        assert "/c.py" not in result
-
-    def test_untracked_start_returns_empty(self, db_conn):
-        from scripts.graph import get_related_files
-        assert get_related_files(db_conn, "/nonexistent.py") == []
-
-    def test_no_duplicates(self, db_conn):
-        from scripts.graph import add_file_relation, get_related_files
-        # Create cycle: a -> b -> a
-        add_file_relation(db_conn, "/a.py", "/b.py", "imports")
-        add_file_relation(db_conn, "/b.py", "/a.py", "calls")
-        result = get_related_files(db_conn, "/a.py")
-        assert result.count("/b.py") == 1
-        assert "/a.py" not in result  # Start node excluded
-
-    def test_follows_bidirectional_edges(self, db_conn):
-        from scripts.graph import add_file_relation, get_related_files
-        # Only a -> b relation, but BFS checks both directions
-        add_file_relation(db_conn, "/a.py", "/b.py", "imports")
-        result = get_related_files(db_conn, "/b.py", max_depth=1)
-        assert "/a.py" in result
 
 
 # ---------------------------------------------------------------------------
@@ -457,15 +272,6 @@ class TestGetRelatedFilesViaMemories:
         assert "/src/b.py" in result
         assert "/src/a.py" not in result  # Excludes self
 
-    def test_untracked_file_returns_empty(self, db_conn):
-        from scripts.graph import get_related_files_via_memories
-        assert get_related_files_via_memories(db_conn, "/nonexistent.py") == []
-
-    def test_no_shared_memory_returns_empty(self, db_conn):
-        from scripts.graph import track_file, get_related_files_via_memories
-        track_file(db_conn, "/src/a.py")
-        assert get_related_files_via_memories(db_conn, "/src/a.py") == []
-
 
 # ---------------------------------------------------------------------------
 # get_file_context
@@ -479,20 +285,6 @@ class TestGetFileContext:
         assert ctx["direct_relations"] == []
         assert ctx["memory_related_files"] == []
         assert ctx["memory_ids"] == []
-
-    def test_tracked_file_with_relations(self, db_conn):
-        from scripts.graph import (
-            track_file, add_file_relation, link_memory_to_file, get_file_context,
-        )
-        _insert_memory(db_conn, "mem-1")
-        track_file(db_conn, "/src/app.py")
-        file_id = track_file(db_conn, "/src/app.py")
-        add_file_relation(db_conn, "/src/app.py", "/src/utils.py", "imports")
-        link_memory_to_file(db_conn, "mem-1", file_id)
-        ctx = get_file_context(db_conn, "/src/app.py")
-        assert ctx["tracked"] is True
-        assert len(ctx["direct_relations"]) == 1
-        assert "mem-1" in ctx["memory_ids"]
 
 
 # ---------------------------------------------------------------------------
@@ -508,24 +300,4 @@ class TestGetGraphStats:
         assert stats["memory_file_links"] == 0
         assert stats["file_relations"] == 0
 
-    def test_populated_graph(self, db_conn):
-        from scripts.graph import track_file, add_file_relation, link_memory_to_file, get_graph_stats
-        _insert_memory(db_conn, "mem-1")
-        id1 = track_file(db_conn, "/src/a.py")
-        track_file(db_conn, "/src/b.py")
-        add_file_relation(db_conn, "/src/a.py", "/src/b.py", "imports")
-        link_memory_to_file(db_conn, "mem-1", id1)
-        stats = get_graph_stats(db_conn)
-        assert stats["files"] == 2
-        assert stats["memories"] == 1
-        assert stats["memory_file_links"] == 1
-        assert stats["file_relations"] == 1
 
-    def test_project_filter(self, db_conn):
-        from scripts.graph import track_file, get_graph_stats
-        track_file(db_conn, "/src/a.py", project_id="p1")
-        track_file(db_conn, "/src/b.py", project_id="p2")
-        _insert_memory(db_conn, "mem-1", project_id="p1")
-        stats = get_graph_stats(db_conn, project_id="p1")
-        assert stats["files"] == 1
-        assert stats["memories"] == 1

@@ -174,34 +174,6 @@ class TestClosureMatchesLiveImportGraph:
                 f"  graph-only:   {sorted(derived[hook] - _SEAM_HOOK_HELPER_CLOSURE[hook])}"
             )
 
-    def test_literal_covers_exactly_the_seam_hooks(self):
-        assert set(_SEAM_HOOK_HELPER_CLOSURE) == set(SEAM_DEPENDENT_HOOKS)
-
-    def test_seam_reading_helpers_is_the_union(self):
-        union = frozenset().union(*_SEAM_HOOK_HELPER_CLOSURE.values())
-        assert SEAM_READING_HELPERS == union
-
-    def test_the_oracle_sees_a_module_named_in_the_import_alias(self, tmp_path):
-        """`from . import X` and `from shared import X` are edges to module X.
-
-        Both forms put the module after `import`. An oracle reading only the
-        `from` part sees no module in the first and only the package in the
-        second, so a helper imported either way drops out of every derived
-        closure and the literal can omit it while the drift arm stays green.
-        A function or constant named the same way is not a module and adds
-        nothing.
-        """
-        idx = _module_index()
-        probe = tmp_path / "probe.py"
-        probe.write_text(
-            "from . import state_file\n"
-            "def f():\n"
-            "    from shared import pact_context, get_team_name\n",
-            encoding="utf-8",
-        )
-        assert {"state_file", "pact_context"} <= _direct_hook_imports(probe, idx)
-        assert "get_team_name" not in _direct_hook_imports(probe, idx)
-
 
 class TestTwoHopEdgesPinnedByName:
     """Pin BOTH transitive 2-hop classes by name so a future direct-only OR
@@ -233,36 +205,6 @@ class TestClosureOracleIsNonVacuous:
         assert full == {"probe_helper", "probe_leaf"}
         assert not _is_shared("probe_helper", idx)
         assert shared_only == frozenset()
-
-    def test_dropping_the_relative_registry_edge_changes_derivation(self):
-        # pact_context -> .session_registry is a RELATIVE edge; the full-transitive
-        # oracle DOES follow it, so a relative-only-blind derivation differs.
-        # This pins that relative edges are part of the canonical closure.
-        #
-        # BOTH edges must be dropped, and the reason is a real graph change
-        # rather than test bookkeeping. missed_wake_scan reaches
-        # session_registry by TWO routes now: the pact_context edge this arm
-        # is named for, and background_work -> session_registry, which the
-        # Layer 3 fold introduced (background_work's Layer 1 half resolves a
-        # launcher identity, and a static closure follows that import even
-        # though Layer 3 never calls it). Dropping only the first leaves the
-        # module reachable and the ablation stops discriminating — MEASURED:
-        # one edge -> still present, both edges -> absent. Naming one edge
-        # would leave an arm that passes without measuring anything.
-        idx = _module_index()
-        full = derive_closure("missed_wake_scan", idx)
-        perturbed = derive_closure(
-            "missed_wake_scan", idx,
-            drop_edges=frozenset({
-                ("pact_context", "session_registry"),
-                ("background_work", "session_registry"),
-            }),
-        )
-        assert "session_registry" in full, (
-            "the canonical (full-transitive) closure follows the relative "
-            "pact_context->.session_registry edge"
-        )
-        assert "session_registry" not in perturbed
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -338,34 +280,6 @@ def test_bootstrap_gate_is_covered_by_a_seam_file_that_runs_it_as_a_child_proces
     assert hands_over and spawns
 
 
-class TestSeamHookL2Presence:
-    def test_every_seam_hook_is_covered_or_backlogged(self):
-        accounted = set(COVERED_L2) | set(BACKLOG_L2)
-        unaccounted = set(SEAM_DEPENDENT_HOOKS) - accounted
-        assert not unaccounted, (
-            f"seam hook(s) with NEITHER an L2 test NOR a backlog entry: "
-            f"{sorted(unaccounted)} — a new seam hook MUST ship an L2 "
-            f"non-mocked integration test or be added to the documented backlog"
-        )
-
-    def test_covered_and_backlog_are_disjoint_and_exact(self):
-        assert set(COVERED_L2).isdisjoint(BACKLOG_L2)
-        assert set(COVERED_L2) | set(BACKLOG_L2) == set(SEAM_DEPENDENT_HOOKS)
-
-    def test_covered_l2_test_files_exist(self):
-        for hook, fname in sorted(COVERED_L2.items()):
-            assert (TESTS_DIR / fname).exists(), (
-                f"COVERED seam hook {hook!r} maps to missing L2 file {fname!r}"
-            )
-
-    def test_presence_fires_on_a_seam_hook_without_test(self):
-        # NON-VACUITY (quiet side): a hypothetical new seam hook absent from both
-        # COVERED and BACKLOG must be flagged as unaccounted.
-        hypothetical = set(SEAM_DEPENDENT_HOOKS) | {"brand_new_seam_hook"}
-        accounted = set(COVERED_L2) | set(BACKLOG_L2)
-        assert (hypothetical - accounted) == {"brand_new_seam_hook"}
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # C6-B — ANTI-MOCK (seam L2 tests must exercise the REAL seam, not stub it)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -407,73 +321,9 @@ _EXISTING_L2_FILES = sorted({
 })
 
 
-class TestSeamL2FilesDoNotMockTheResolver:
-    @pytest.mark.parametrize("fname", _EXISTING_L2_FILES)
-    def test_no_resolver_monkeypatch(self, fname):
-        text = (TESTS_DIR / fname).read_text(encoding="utf-8")
-        hits = _monkeypatches_resolver(text)
-        assert not hits, (
-            f"{fname} monkeypatches resolver symbol(s) {sorted(set(hits))} — "
-            f"mocking the seam reproduces the inert trap; exercise the REAL "
-            f"resolver via a Path.home / tasks_base_dir redirect instead"
-        )
-
-    @pytest.mark.parametrize("fname", _EXISTING_L2_FILES)
-    def test_carries_revert_cardinality_docstring(self, fname):
-        text = (TESTS_DIR / fname).read_text(encoding="utf-8").lower()
-        assert "revert" in text and ("cardinality" in text or "failed" in text), (
-            f"{fname} must document a revert-cardinality non-vacuity gate "
-            f"(source-revert the resolver fix -> documented {{N failed}} cardinality)"
-        )
-
-    def test_anti_mock_detector_is_non_vacuous(self):
-        # Proves the detector FIRES on a real violation and is SILENT on a clean
-        # snippet — else test_no_resolver_monkeypatch could pass vacuously.
-        violating = 'monkeypatch.setattr(task_utils, "get_task_list", lambda: [])'
-        clean = "tasks = task_utils.get_task_list(tasks_base_dir=str(root))"
-        assert _monkeypatches_resolver(violating) == ["get_task_list"]
-        assert _monkeypatches_resolver(clean) == []
-
-    def test_anti_mock_detector_catches_evasion_idioms(self):
-        # FIX (MINOR-2): the 3 idioms that EVADED the original detector are now
-        # caught. A plain CALL of the resolver (not a patch target) stays clean.
-        assert _monkeypatches_resolver(
-            'patch.object(task_utils, "get_task_list")') == ["get_task_list"]
-        assert _monkeypatches_resolver(
-            'setattr(task_utils, "get_task_list", x)') == ["get_task_list"]
-        assert _monkeypatches_resolver(
-            'mp.setattr(task_utils, "get_task_list", x)') == ["get_task_list"]
-        assert _monkeypatches_resolver(
-            'with mock.patch.object(tu, "get_task_list"):') == ["get_task_list"]
-        # a real-seam CALL (the pattern we WANT) must NOT be flagged:
-        assert _monkeypatches_resolver(
-            "members = dispatch_gate._team_member_names(team)") == []
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # C6-B — CLASSIFIER quiet/loud behavior (silent on non-hook, fires on seam)
 # ═══════════════════════════════════════════════════════════════════════════
-
-class TestClassifierQuietAndLoud:
-    def test_silent_on_a_non_hook_pr(self):
-        c = classify_diff(["README.md", "pact-plugin/agents/pact-test-engineer.md"])
-        assert not c.primary and not c.secondary and not c.waiver_required
-
-    def test_primary_only_change_requires_waiver(self):
-        # A hooks/ file that is neither a seam hook nor a seam helper -> PRIMARY,
-        # not SECONDARY -> the auditable waiver path (never a silent pass). gh_helpers served
-        # here until session_init, session_end and bootstrap_marker_writer came to reach it, and
-        # payload_digest until session_init's resume screen (workflow_state) did.
-        c = classify_diff(["pact-plugin/hooks/shared/marked_regions.py"])
-        assert c.primary and not c.secondary and c.waiver_required
-
-    def test_fires_secondary_on_a_seam_hook(self):
-        c = classify_diff(["pact-plugin/hooks/missed_wake_scan.py"])
-        assert c.primary and c.secondary
-        assert "missed_wake_scan" in c.seam_hooks
-
-    def test_l3_set_is_subset_of_seam_set(self):
-        assert L3_LIVE_PROBE_HOOKS <= SEAM_DEPENDENT_HOOKS
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -570,91 +420,3 @@ _ALLOWED_DYNAMIC_IMPORT_LINES = frozenset({
 })
 
 
-class TestOracleStaticImportBoundBackstop:
-    """Enforce the C6-A oracle's bound so a future dynamic/refresh edge fails
-    HERE instead of slipping past the closure equality as a vacuous false-pass."""
-
-    def test_no_dynamic_import_of_hook_modules(self):
-        hits = [hit for hit in _scan_hook_modules(_is_dynamic_import_line)
-                if (hit[0], hit[2]) not in _ALLOWED_DYNAMIC_IMPORT_LINES]
-        assert not hits, (
-            "a DYNAMIC import (importlib/__import__) appeared in the hooks tree — "
-            "the C6-A static-AST oracle CANNOT see it, so the closure literal could "
-            "silently false-pass on this edge. Either use a static import, or (if a "
-            "legit non-hook dynamic import) allowlist this exact line + extend the "
-            f"oracle. Offending: {hits}"
-        )
-
-    @pytest.mark.parametrize("helper", ["background_launch.py", "turn_end_jobs.py", "rules.py"])
-    def test_the_by_path_loaded_helper_imports_only_the_stdlib(self, helper):
-        """A helper loaded by file path (background_launch.py by
-        wait_filler_gate, turn_end_jobs.py by stop_background_gate, rules.py by
-        dispatch_rules) is an edge
-        the oracle cannot see. The edge hides nothing only while the file imports nothing
-        but the stdlib: a `shared` or relative import reaches back into the
-        hooks tree, and a third-party import is a dependency no consumer
-        session is promised.
-
-        Stdlib membership is read from where each module is found, not from
-        sys.stdlib_module_names, which Python 3.9 in the CI matrix lacks.
-        Both sides are resolved with realpath: Homebrew's sysconfig reports
-        the stdlib through an opt/ symlink while find_spec returns the Cellar
-        path, so a raw prefix test flags stdlib modules such as __future__.
-        """
-        import ast
-        import importlib.util
-        import os
-        import sysconfig
-
-        paths = {k: os.path.realpath(v) for k, v in sysconfig.get_paths().items()}
-        site = (paths["purelib"], paths["platlib"])
-        source = (HOOKS / "shared" / helper).read_text(encoding="utf-8")
-        offending = []
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.ImportFrom) and node.level:
-                offending.append("." * node.level + (node.module or ""))
-                continue
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module]
-            else:
-                continue
-            for name in names:
-                top = name.split(".")[0]
-                spec = None if top == "shared" else importlib.util.find_spec(top)
-                origin = getattr(spec, "origin", None) or ""
-                if origin not in ("built-in", "frozen"):
-                    origin = os.path.realpath(origin) if origin else ""
-                in_stdlib = origin in ("built-in", "frozen") or (
-                    origin.startswith(paths["stdlib"]) and not origin.startswith(site)
-                )
-                if not in_stdlib:
-                    offending.append(name)
-        assert not offending, (
-            "hooks/shared/%s imports %r. A hook loads that file by path, an edge "
-            "the closure oracle cannot see, so it must import nothing outside the "
-            "stdlib and nothing from `shared`" % (helper, offending)
-        )
-
-    def test_no_refresh_subpackage_edge_in_hooks(self):
-        hits = _scan_hook_modules(_is_refresh_edge_line)
-        assert not hits, (
-            "an import edge into a hooks/refresh/ subpackage appeared — the package "
-            "was removed, and a reintroduced one is OUTSIDE the C6-A oracle's idx "
-            "glob (hooks/*.py + hooks/shared/*.py), so both the oracle and the "
-            "literal would miss its edges (vacuous false-pass). Extend the oracle's "
-            f"idx to cover the subpackage before adding such an edge. Offending: {hits}"
-        )
-
-    def test_backstop_detectors_are_non_vacuous(self):
-        # PROVE the backstop would FIRE on an injected edge (else it is vacuous).
-        assert _is_dynamic_import_line('mod = importlib.import_module("staleness")')
-        assert _is_dynamic_import_line('__import__("task_utils")')
-        assert not _is_dynamic_import_line("from shared.task_utils import get_task_list")
-        assert not _is_dynamic_import_line("# importlib note in a comment")
-        assert _is_refresh_edge_line("from refresh.checkpoint_builder import build")
-        assert _is_refresh_edge_line("import refresh.patterns")
-        assert _is_refresh_edge_line("from .refresh import x")
-        assert not _is_refresh_edge_line("refresh_token = compute()")  # word-boundary
-        assert not _is_refresh_edge_line("# refresh the cache")

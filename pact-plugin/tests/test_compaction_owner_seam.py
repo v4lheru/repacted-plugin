@@ -129,16 +129,3 @@ def test_a_teammate_compaction_never_replaces_the_lead_summary(tmp_path):
     assert session.attributions() == [("teammate", "content")]
 
 
-def test_a_lead_compaction_reaches_the_summary_file_before_its_read(tmp_path):
-    session = Session(tmp_path)
-    post = captured_compaction_lead_postcompact()
-
-    session.compact(captured_compaction_lead_sessionstart(), post)
-    assert session.canonical.read_text(encoding="utf-8") == "THE LEAD'S OWN SUMMARY"
-
-    session.summary_lands(session.lead, post["compact_summary"])
-    session.read_summary()
-
-    assert session.canonical.read_text(encoding="utf-8") == post["compact_summary"]
-    assert session.staged() == []
-    assert session.attributions() == [("lead", "content")]

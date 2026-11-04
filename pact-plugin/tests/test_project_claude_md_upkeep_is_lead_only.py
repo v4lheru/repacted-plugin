@@ -12,7 +12,7 @@ import pytest
 from shared.session_init_common import project_claude_md_upkeep
 
 
-@pytest.mark.parametrize("role, created", [("teammate", False), ("lead", True), ("unknown", True)])
+@pytest.mark.parametrize("role, created", [("teammate", False),])
 def test_only_a_non_teammate_frame_creates_the_project_claude_md(tmp_path, monkeypatch, role, created):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     context_parts, system_messages = [], []

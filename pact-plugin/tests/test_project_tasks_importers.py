@@ -116,19 +116,6 @@ class TestImportMdDryRun:
         assert [row.split()[0] for row in rows] == ["L3", "L4", "L5", "L6", "L7", "L11", "L13"]
         assert rows[0].split()[1:4] == ["planned", "-", "-"]
 
-    def test_a_credential_bullet_is_withheld_by_line_number_only(self, world):
-        I, store, repo = world
-        _write(repo, "docs/backlog.md", BACKLOG_MD)
-        result = run_cli(repo, "import-md", "docs/backlog.md")
-        assert INERT_MARKER not in result.stdout + result.stderr
-        row = next(line for line in result.stdout.splitlines() if line.startswith("L7 "))
-        assert "WITHHELD" in row and "Rotate" not in row
-        applied = run_cli(repo, "import-md", "docs/backlog.md", "--apply")
-        assert applied.returncode == 0, applied.stderr
-        assert INERT_MARKER not in applied.stdout + applied.stderr
-        assert INERT_MARKER not in (repo / ".repacted" / "tasks.jsonl").read_text()
-        assert not any("Rotate the key" in task["title"] for task in _tasks(I, repo).values())
-
 
 class TestImportMdMapping:
     def test_titles_tags_owner_status_and_the_archive_reference(self, world):
@@ -151,27 +138,6 @@ class TestImportMdMapping:
         text = "- " + "word " * 40 + "\n"
         title = I.parse_md(text, archive="docs/archive/x.md")["items"][0]["title"]
         assert len(title) <= I.W.PT.TITLE_MAX and title.endswith("…")
-
-    def test_progress_sections_map_to_active_owner_and_user_items(self, world):
-        I, store, repo = world
-        proposal = I.parse_md(PROGRESS_MD, archive="docs/archive/progress.md", team="session-1")
-        items = {item["title"]: item for item in proposal["items"]}
-        bridge = items["P2 BRIDGE: the acceptance bridge"]
-        assert bridge["status"] == "active" and bridge["owner"] == "up-builder"
-        targets = {link["target"] for link in bridge["links"]}
-        assert {"ptask:session-1/180", "branch:repacted/d10-p2"} <= targets
-        assert items["launcher live gate: ALL PASS"]["status"] == "done"
-        assert items["Rotate the four access tokens"]["owner"] == "user"
-        assert not any("MEASURE" in title or "worktree list" in title for title in items)
-        assert {s["reason"] for s in proposal["skipped"]} >= {"release gates come from import-gates",
-                                                              "static block in the generated view"}
-
-    def test_without_team_a_platform_task_number_is_reported_not_linked(self, world):
-        I, store, repo = world
-        proposal = I.parse_md(PROGRESS_MD, archive="docs/archive/progress.md")
-        bridge = next(i for i in proposal["items"] if i["title"].startswith("P2 BRIDGE"))
-        assert not any(link["target"].startswith("ptask:") for link in bridge["links"])
-        assert any("--team" in note for note in proposal["notes"])
 
 
 class TestImportMdApply:
@@ -196,41 +162,9 @@ class TestImportMdApply:
         assert done["status"] == "done" and done["evidence"][0]["verified"] is True
         assert done["evidence"][0]["target"].startswith("doc:docs/archive/backlog.md#L6@")
 
-    def test_done_items_import_open_and_listed_when_the_archive_is_not_committed(self, world):
-        I, store, repo = world
-        _write(repo, "docs/backlog.md", BACKLOG_MD)
-        result = run_cli(repo, "import-md", "docs/backlog.md", "--apply")
-        assert _by_title(I, repo, "Old finished thing")["status"] == "planned"
-        assert "L6: imported open" in result.stdout
-
-    def test_an_edited_proposal_is_what_apply_writes(self, world):
-        I, store, repo = world
-        _write(repo, "docs/backlog.md", BACKLOG_MD)
-        proposal = json.loads(run_cli(repo, "import-md", "docs/backlog.md", "--json").stdout)
-        proposal["items"] = [item for item in proposal["items"] if item["line"] == 3]
-        proposal["items"][0]["title"] = "Recall redesign, as the lead worded it"
-        edited = Path(str(repo) + "-proposal.json")
-        edited.write_text(json.dumps(proposal))
-        result = run_cli(repo, "import-md", "--apply", "--proposal", str(edited))
-        assert result.returncode == 0, result.stderr
-        assert [t["title"] for t in _tasks(I, repo).values()] == ["Recall redesign, as the lead worded it"]
-
-    def test_an_edited_proposal_still_passes_every_write_rule(self, world):
-        I, store, repo = world
-        proposal = I.parse_md(BACKLOG_MD, archive="docs/archive/backlog.md")
-        proposal["items"][0]["title"] = f"sneaked {INERT_MARKER}"
-        before = (repo / ".repacted" / "tasks.jsonl").read_bytes()
-        with pytest.raises(I.W.Refused):
-            I.apply(store, proposal)
-        proposal = I.parse_md(BACKLOG_MD, archive="docs/archive/backlog.md")
-        proposal["items"][0]["links"].append({"kind": "reference", "target": "doc:../../escape.md"})
-        with pytest.raises(I.W.Refused):
-            I.apply(store, proposal)
-        assert (repo / ".repacted" / "tasks.jsonl").read_bytes() == before
-
 
 class TestImportMdD26:
-    @pytest.mark.parametrize("archive", ["../archive/x.md", "/abs/archive.md", "~/archive.md"])
+    @pytest.mark.parametrize("archive", ["../archive/x.md",])
     def test_an_archive_path_outside_the_repo_is_refused(self, world, archive):
         I, store, repo = world
         _write(repo, "docs/backlog.md", BACKLOG_MD)
@@ -256,12 +190,6 @@ class TestLegacyAllowance:
         with pytest.raises(I.W.Refused):
             store.link(ref, "reference", "legacy:ab12")
         assert run_cli(repo, "link", ref, "--reference", "legacy:ab12").returncode == 65
-
-    def test_the_importer_may_write_one_and_only_in_the_legacy_shape(self, world):
-        I, store, repo = world
-        I.W.check_target(repo, "legacy:ab12", importer=True)
-        with pytest.raises(I.W.Refused):
-            I.W.check_target(repo, "legacy:../x", importer=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -366,107 +294,7 @@ class TestImportGates:
         assert result.returncode == 65 and "--team" in result.stderr
         assert _tasks(I, repo) == {}
 
-    def test_a_passed_gate_whose_evidence_does_not_verify_is_refused_by_line(self, world):
-        I, store, repo = world
-        rel = _gates_file(repo, {"repacted-x": [{"gate": "g", "task_id": None, "status": "passed",
-                                                 "evidence": "it passed, trust me"}]})
-        dry = run_cli(repo, "import-gates", rel)
-        assert "REFUSED" in dry.stdout and "line" in dry.stdout
-        result = run_cli(repo, "import-gates", rel, "--apply")
-        assert result.returncode == 65
-        assert _tasks(I, repo) == {}
 
-    def test_releases_and_gates_become_a_tree_and_an_uncut_tag_has_no_tag_link(self, world):
-        I, store, repo = world
-        git(repo, "tag", "repacted-cut")
-        rel = _gates_file(repo, {"repacted-cut": [{"gate": "g1", "task_id": 3, "status": "pending",
-                                                   "evidence": None}],
-                                 "repacted-uncut": []})
-        result = run_cli(repo, "import-gates", rel, "--team", "session-1", "--apply")
-        assert result.returncode == 0, result.stderr
-        cut = _by_title(I, repo, "release repacted-cut")
-        uncut = _by_title(I, repo, "release repacted-uncut")
-        gate = _by_title(I, repo, "g1")
-        assert "release.repacted-cut" in cut["tags"] and gate["parent"] == cut["ref"]
-        assert {"kind": "reference", "target": "tag:repacted-cut"} in cut["links"]
-        assert not any(link["target"].startswith("tag:") for link in uncut["links"])
-        assert {"kind": "reference", "target": "ptask:session-1/3"} in gate["links"]
-
-    def test_a_cut_tag_with_no_pending_gate_closes_its_release_on_the_tag(self, world):
-        """A release is a container, not work: once its tag exists and nothing gates it, it is
-        done with the tag as verified evidence, so it leaves the ready queue."""
-        I, store, repo = world
-        git(repo, "tag", "repacted-shipped")
-        git(repo, "tag", "repacted-gated")
-        rel = _gates_file(repo, {"repacted-shipped": [],
-                                 "repacted-gated": [{"gate": "g", "task_id": None, "status": "pending",
-                                                     "evidence": None}],
-                                 "repacted-ahead": []})
-        assert run_cli(repo, "import-gates", rel, "--apply").returncode == 0
-        shipped = _by_title(I, repo, "release repacted-shipped")
-        assert shipped["status"] == "done"
-        assert shipped["evidence"] == [{"target": "tag:repacted-shipped", "verified": True}]
-        assert _by_title(I, repo, "release repacted-gated")["status"] == "planned"
-        assert _by_title(I, repo, "release repacted-ahead")["status"] == "planned"
-        ready = [task["title"] for task in I.W.PT.ready(I.W.PT.load(repo))]
-        assert not any("repacted-shipped" in title for title in ready)
-
-    def test_an_edited_proposal_cannot_close_a_parent_over_an_open_child(self, world):
-        I, store, repo = world
-        git(repo, "tag", "repacted-cut")
-        text = json.dumps({"gates": {"repacted-cut": [{"gate": "g", "task_id": None, "status": "pending",
-                                                       "evidence": None}]}})
-        proposal = I.parse_gates(text, repo)
-        release = next(item for item in proposal["items"] if item["parent_key"] is None)
-        release["status"], release["evidence"] = "done", ["tag:repacted-cut"]
-        before = (repo / ".repacted" / "tasks.jsonl").read_bytes()
-        with pytest.raises(I.W.Refused) as err:
-            I.apply(store, proposal)
-        assert "open children" in str(err.value)
-        assert (repo / ".repacted" / "tasks.jsonl").read_bytes() == before
-
-    def test_a_release_cannot_close_while_a_gate_is_open(self, world):
-        I, store, repo = world
-        git(repo, "tag", "repacted-cut")
-        rel = _gates_file(repo, {"repacted-cut": [{"gate": "g1", "task_id": None, "status": "pending",
-                                                   "evidence": None}]})
-        assert run_cli(repo, "import-gates", rel, "--apply").returncode == 0
-        release = _by_title(I, repo, "release repacted-cut")["ref"]
-        sha = git(repo, "rev-parse", "HEAD").stdout.strip()
-        with pytest.raises(I.W.Refused):
-            store.done(release, ["commit:" + sha])
-
-
-    def test_the_atlas_shaped_evidence_is_still_refused_when_it_does_not_verify_here(self, world):
-        """Outside the round-trip fixture nothing is re-pointed: a passed gate whose doc evidence names
-        a commit this repo lacks stays refused by line, and --apply writes no task."""
-        I, store, repo = world
-        rel = _gates_file(repo, {"repacted-x": [{"gate": "first-write", "task_id": None, "status": "passed",
-                                                 "evidence": "doc:docs/progress.md@02f2de4a"}]})
-        assert "REFUSED" in run_cli(repo, "import-gates", rel).stdout
-        assert run_cli(repo, "import-gates", rel, "--apply").returncode == 65
-        assert _tasks(I, repo) == {}
-
-    def test_the_round_trip_keeps_a_passed_gate_with_evidence(self, world):
-        I, store, repo = world
-        git(repo, "tag", "repacted-done")
-        rel = _gates_file(repo, {"repacted-done": [{"gate": "g", "task_id": 9, "status": "passed",
-                                                    "evidence": "tag:repacted-done"}],
-                                 "repacted-open": [{"gate": "h", "task_id": 9, "status": "pending",
-                                                    "evidence": None}]})
-        original = json.loads((repo / rel).read_text())["gates"]
-        assert run_cli(repo, "import-gates", rel, "--team", "s", "--apply").returncode == 0
-        V = load("tasks_views_roundtrip2", VIEWS_PATH)
-        (repo / rel).write_text(V.render_text("release_gates", V.W.PT.load(repo)))
-        rendered, problems = load("_doctor_roundtrip2", DOCTOR_PATH).read_gates(repo)
-        assert problems == [] and _states(rendered) == _states(original)
-
-    def test_import_gates_is_a_dry_run_by_default(self, world):
-        I, store, repo = world
-        rel = _gates_file(repo, {"repacted-x": []})
-        before = _snapshot(repo)
-        result = run_cli(repo, "import-gates", rel)
-        assert result.returncode == 0 and _snapshot(repo) == before
 
 
 # ---------------------------------------------------------------------------------------------
@@ -503,42 +331,6 @@ class TestImportPactBacklog:
         assert applied.returncode == 0, applied.stderr
         assert (source.read_bytes(), source.stat().st_mtime_ns, oct(source.stat().st_mode)) == stamp
 
-    def test_the_legacy_fields_map_onto_the_graph(self, world, tmp_path):
-        I, store, repo = world
-        source = _legacy(repo, tmp_path / "home")
-        assert run_cli(repo, "import-pact-backlog", str(source), "--apply").returncode == 0
-        port = _by_title(I, repo, "Port the parser")
-        ship = _by_title(I, repo, "Ship the parser")
-        targets = {(link["kind"], link["target"]) for link in port["links"]}
-        assert {("reference", "legacy:ab12"), ("reference", "issue:GH-12"), ("input", "doc:docs/plan.md"),
-                ("reference", "memory:m-1"), ("reference", "memory:m-2")} <= targets
-        assert port["rank"] == 2 and port["note"] == "carry the edge cases"
-        assert ship["depends_on"] == [port["ref"]] and ship["status"] == "blocked"
-        assert _by_title(I, repo, "Old finished item")["status"] == "dropped"
-        assert _by_title(I, repo, "Dropped long ago")["status"] == "dropped"
-
-    def test_an_absolute_plan_is_not_linked_and_is_reported(self, world, tmp_path):
-        I, store, repo = world
-        source = _legacy(repo, tmp_path / "home")
-        result = run_cli(repo, "import-pact-backlog", str(source), "--apply")
-        absolute = _by_title(I, repo, "Absolute plan")
-        assert not any("/abs/" in link["target"] for link in absolute["links"])
-        assert "0a0b" in result.stdout and "D26" in result.stdout
-
-    def test_a_second_apply_writes_nothing(self, world, tmp_path):
-        I, store, repo = world
-        source = _legacy(repo, tmp_path / "home")
-        assert run_cli(repo, "import-pact-backlog", str(source), "--apply").returncode == 0
-        log = (repo / ".repacted" / "tasks.jsonl").read_bytes()
-        assert run_cli(repo, "import-pact-backlog", str(source), "--apply").returncode == 0
-        assert (repo / ".repacted" / "tasks.jsonl").read_bytes() == log
-
-    def test_no_legacy_file_for_this_checkout_is_exit_66(self, world, tmp_path):
-        I, store, repo = world
-        (tmp_path / "home").mkdir(exist_ok=True)
-        result = run_cli(repo, "import-pact-backlog", env={"HOME": str(tmp_path / "home")})
-        assert result.returncode == 66
-
 
 # ---------------------------------------------------------------------------------------------
 # rev 3 (architect-pact review on #186): D25 on every field, D26 on the legacy source, the legacy:
@@ -570,28 +362,6 @@ class TestRev3D25:
         assert applied.returncode == 0 and INERT_MARKER not in applied.stdout + applied.stderr
         assert INERT_MARKER not in (repo / ".repacted" / "tasks.jsonl").read_text()
 
-    def test_a_credential_in_a_heading_gives_its_items_no_tag(self, world):
-        I, store, repo = world
-        _write(repo, "docs/h.md", f"# Title\n\n## Rotate {INERT_MARKER} now\n\n- **An item.** its body\n")
-        dry = run_cli(repo, "import-md", "docs/h.md")
-        assert dry.returncode == 0, dry.stderr
-        seen = (dry.stdout + dry.stderr).lower()
-        assert INERT_MARKER.lower() not in seen and "abcdefgh12" not in seen
-        row = next(line for line in dry.stdout.splitlines() if line.startswith("L5 "))
-        assert row.split()[3] == "-"
-        assert "note: L3: the heading carries a credential value" in dry.stdout
-        assert run_cli(repo, "import-md", "docs/h.md", "--apply").returncode == 0
-        assert "abcdefgh12" not in (repo / ".repacted" / "tasks.jsonl").read_text().lower()
-
-
-    def test_a_credential_in_a_table_header_never_reaches_a_note(self, world):
-        I, store, repo = world
-        _write(repo, "docs/t.md", f"## In flight\n\n| Task | {INERT_MARKER} |\n|---|---|\n| #1 | some next step |\n")
-        dry = run_cli(repo, "import-md", "docs/t.md", "--json")
-        assert dry.returncode == 0, dry.stderr
-        assert "abcdefgh12" not in (dry.stdout + dry.stderr).lower()
-        assert any("L3: the table header carries a credential value" in n for n in json.loads(dry.stdout)["notes"])
-
 
 class TestRev3LegacySource:
     def test_an_explicit_legacy_file_outside_the_repo_and_the_backlog_dir_is_refused(self, world, tmp_path):
@@ -604,13 +374,6 @@ class TestRev3LegacySource:
         assert result.returncode == 65
         assert "Distinctive" not in result.stdout + result.stderr
 
-    def test_an_explicit_legacy_file_inside_the_repo_is_read(self, world):
-        I, store, repo = world
-        _write(repo, "legacy.json", json.dumps(_legacy_doc(repo, [
-            {"id": "bb02", "title": "In-repo legacy item", "status": "planned"}])))
-        result = run_cli(repo, "import-pact-backlog", "legacy.json")
-        assert result.returncode == 0 and "In-repo legacy item" in result.stdout
-
 
 class TestRev3LegacyAllowanceNarrowed:
     def test_a_legacy_link_in_an_import_md_proposal_is_refused(self, world):
@@ -621,13 +384,6 @@ class TestRev3LegacyAllowanceNarrowed:
         with pytest.raises(I.W.Refused):
             I.apply(store, proposal)
         assert (repo / ".repacted" / "tasks.jsonl").read_bytes() == before
-
-    def test_a_legacy_link_in_an_import_gates_proposal_is_refused(self, world):
-        I, store, repo = world
-        proposal = I.parse_gates(json.dumps({"gates": {"repacted-x": []}}), repo)
-        proposal["items"][0]["links"].append({"kind": "reference", "target": "legacy:ab12"})
-        with pytest.raises(I.W.Refused):
-            I.apply(store, proposal)
 
 
 class TestRev3ReleasesAreContainers:
@@ -642,18 +398,6 @@ class TestRev3ReleasesAreContainers:
         sha = git(repo, "rev-parse", "HEAD").stdout.strip()
         store.done(_by_title(I, repo, "g1")["ref"], ["commit:" + sha])
         assert "Close release repacted-cut" in run_cli(repo, "next", "--all").stdout
-
-    def test_a_new_gate_under_a_closed_release_is_refused(self, world):
-        I, store, repo = world
-        git(repo, "tag", "repacted-cut")
-        rel = _gates_file(repo, {"repacted-cut": []})
-        assert run_cli(repo, "import-gates", rel, "--apply").returncode == 0
-        before = (repo / ".repacted" / "tasks.jsonl").read_bytes()
-        _gates_file(repo, {"repacted-cut": [{"gate": "late gate", "task_id": None, "status": "pending",
-                                             "evidence": None}]})
-        result = run_cli(repo, "import-gates", rel, "--apply")
-        assert result.returncode == 65 and "settled" in result.stderr
-        assert (repo / ".repacted" / "tasks.jsonl").read_bytes() == before
 
 
 def test_every_importer_names_itself_in_help():

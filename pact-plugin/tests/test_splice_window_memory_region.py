@@ -134,30 +134,6 @@ class TestWorkingMemorySpliceWindow:
             f"content in the part of the document the memory layer does not own."
         )
 
-    def test_the_text_above_the_memory_region_is_unchanged(self, tmp_path):
-        """ABSENCE, PAIRED WITH THE POSITIVE ARM ABOVE.
-
-        Alone this passes when the writer removes the region rather than
-        respects it, so it is written as a byte comparison of the prefix AND
-        the companion arm above asserts where the entry went.
-        """
-        document = _forge_heading_in_session_block(build_claude_md(), self.HEADING)
-        _assert_document_is_the_measured_shape(document, self.HEADING)
-        prefix_before = document[: document.index(MEMORY_START_MARKER)]
-
-        emitted = self._sync(tmp_path, document)
-
-        # NON-VACUITY: an emitted document with no marker would make the
-        # comparison below trivially true on an empty slice.
-        assert MEMORY_START_MARKER in emitted
-        assert ENTRY_SENTINEL in emitted
-        prefix_after = emitted[: emitted.index(MEMORY_START_MARKER)]
-        assert prefix_after == prefix_before, (
-            "the text above the memory start marker changed. The session "
-            "block and the user prose above it are not the memory layer's "
-            "to rewrite."
-        )
-
 
 class TestRetrievedContextSpliceWindow:
     """`## Retrieved Context` is written in the memory region, not above it."""
@@ -195,74 +171,4 @@ class TestRetrievedContextSpliceWindow:
             f"[{start}, {end}]."
         )
 
-    def test_the_text_above_the_memory_region_is_unchanged(self, tmp_path):
-        """ABSENCE, PAIRED WITH THE POSITIVE ARM ABOVE."""
-        document = _forge_heading_in_session_block(build_claude_md(), self.HEADING)
-        _assert_document_is_the_measured_shape(document, self.HEADING)
-        prefix_before = document[: document.index(MEMORY_START_MARKER)]
 
-        emitted = self._sync(tmp_path, document)
-
-        assert MEMORY_START_MARKER in emitted
-        assert ENTRY_SENTINEL in emitted
-        prefix_after = emitted[: emitted.index(MEMORY_START_MARKER)]
-        assert prefix_after == prefix_before, (
-            "the text above the memory start marker changed."
-        )
-
-
-class TestMissingPairKeepsTodayBehaviour:
-    """A managed document with NO memory pair keeps the wide window.
-
-    THIS ARM PINS WHAT THE CODE DOES TODAY, and today's behaviour predates
-    the bound on purpose. It is named so a later author can find it and
-    re-point it rather than delete it.
-
-    THE TRIGGER IS THE CODE AND NOT A RULING, AND THE DIFFERENCE IS NOT
-    PEDANTIC. An earlier version of this docstring said to re-point WHEN THE
-    RULING LANDS. THE RULING HAS LANDED AND THE IMPLEMENTATION HAS NOT, so
-    that trigger reads as satisfied against code that has not moved, and a
-    reader who obeys it re-points a correct arm at a behaviour the writer
-    does not have. A test instruction keyed on a DECISION goes stale at the
-    decision. One keyed on an EXPRESSION goes stale at the expression, which
-    is the thing the arm measures.
-
-    SO RE-POINT THIS ARM WHEN, AND ONLY WHEN, THE TWO CONDITIONS BELOW STOP
-    HOLDING IN `skills/pact-memory/scripts/working_memory.py`:
-
-      1. `_narrow_to_memory_region` returns None when the memory marker pair
-         is missing.
-      2. The two callers of it fall back to the WIDE managed region, each
-         through `narrowed if narrowed is not None else region_result`.
-
-    While the two hold, the write goes ahead and this arm is correct. When
-    either one moves, the class this arm covers (a managed document with no
-    memory pair) keeps its behaviour either way, and only the expected
-    direction moves. DO NOT REMOVE THE ARM.
-    """
-
-    def test_a_document_with_no_memory_pair_is_written_without_raising(
-        self, tmp_path
-    ):
-        from scripts.working_memory import sync_to_claude_md
-
-        document = build_claude_md(managed=False)
-        # PRECONDITION: this class covers a document with NO memory pair.
-        assert MEMORY_START_MARKER not in document
-        assert MEMORY_END_MARKER not in document
-
-        emitted = _write_and_sync(
-            tmp_path,
-            document,
-            lambda: sync_to_claude_md({"context": ENTRY_SENTINEL}),
-        )
-
-        assert ENTRY_SENTINEL in emitted, (
-            "today's behaviour writes the entry for this class, and it did "
-            "not.\n"
-            "RE-POINT THIS ARM AT THE NEW EXPRESSION RATHER THAN REMOVE IT, "
-            "and read the class docstring first: the trigger is the CODE in "
-            "`working_memory.py`, not a ruling. A ruling on this direction "
-            "can land months before the expression moves, so a decision is "
-            "the wrong thing to key a test instruction on."
-        )

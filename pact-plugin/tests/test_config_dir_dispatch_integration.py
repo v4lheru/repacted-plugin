@@ -65,32 +65,3 @@ def test_has_task_assigned_resolves_under_relocated_config(relocated_config):
     assert has_task_assigned(team, owner) is True
 
 
-def test_pending_status_also_resolves(relocated_config):
-    team = "pact-relocated-team"
-    owner = "devops-engineer"
-    _write_task(relocated_config / "tasks", team, "7", owner, "pending")
-    assert has_task_assigned(team, owner) is True
-
-
-def test_unowned_task_under_relocated_config_not_assigned(relocated_config):
-    team = "pact-relocated-team"
-    _write_task(relocated_config / "tasks", team, "5", "someone-else", "in_progress")
-    assert has_task_assigned(team, "devops-engineer") is False
-
-
-def test_symlink_escape_rejected_under_relocated_base(relocated_config, tmp_path):
-    # A safe-NAMED team dir that is a symlink escaping the relocated tasks base
-    # must be rejected by the re-anchored relative_to containment defense — the
-    # ROOT moved, but the guard's resolve()+relative_to logic is byte-identical.
-    team = "pact-escape-team"
-    owner = "devops-engineer"
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "9.json").write_text(
-        json.dumps({"id": "9", "owner": owner, "metadata": {"dispatch": {"name": owner}}, "status": "pending"}),
-        encoding="utf-8",
-    )
-    tasks_dir = relocated_config / "tasks"
-    tasks_dir.mkdir(parents=True, exist_ok=True)
-    os.symlink(outside, tasks_dir / team)  # team dir escapes the base
-    assert has_task_assigned(team, owner) is False

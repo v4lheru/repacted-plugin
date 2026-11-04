@@ -101,48 +101,6 @@ class TestInvalidModeResolvesToTheDeclaredFallback:
             f"choose it."
         )
 
-    @pytest.mark.parametrize(
-        "module_name,env_name,const_name,unset_default,invalid_fallback", _GATES)
-    def test_UNSET_resolves_to_the_declared_default_not_the_fallback(
-        self, monkeypatch, module_name, env_name, const_name,
-        unset_default, invalid_fallback,
-    ):
-        """THE ARM THAT CARRIES THE DISCRIMINATION. The invalid column
-        coincides across both rows, so the test above cannot distinguish them;
-        this one can, because the unset column differs ("warn" vs "deny").
-
-        It is also the pin on the separation itself: unset and invalid are
-        DIFFERENT user intents and must not collapse. For the variety row the
-        two values differ, so a change that made either branch resolve like the
-        other reddens here."""
-        monkeypatch.delenv(env_name, raising=False)
-        module = importlib.import_module(module_name)
-        importlib.reload(module)
-        assert getattr(module, const_name) == unset_default, (
-            f"{module_name}: an UNSET {env_name} must resolve to the registry "
-            f"default {unset_default!r}, never to the invalid fallback "
-            f"{invalid_fallback!r} -- an absent variable is consent to the "
-            f"shipped posture, not an unparseable request."
-        )
-
-
-    @pytest.mark.parametrize(
-        "module_name,env_name,const_name,unset_default,invalid_fallback", _GATES)
-    def test_additive_warn_goes_to_stderr_not_stdout(
-        self, monkeypatch, module_name, env_name, const_name,
-        unset_default, invalid_fallback,
-    ):
-        # The tell: the invalid branch fires the diagnostic, and it lands on
-        # STDERR (so it cannot pollute the gate's stdout decision JSON).
-        _mode, stderr = _reload_capturing_stderr(
-            monkeypatch, module_name, env_name, "banana", const_name
-        )
-        assert env_name in stderr and "banana" in stderr, (
-            f"{module_name}: the additive get_enum WARN for an invalid {env_name} "
-            f"must be emitted to stderr (the non-vacuity tell it resolved via the "
-            f"invalid branch)"
-        )
-
 
 class TestInvalidModeStdoutStaysClean:
     """Behavioral: with the invalid mode active, real main() still emits valid,

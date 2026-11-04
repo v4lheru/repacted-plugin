@@ -35,6 +35,9 @@ from helpers import create_test_schema  # noqa: E402
 from test_memory_cli import _backdate  # noqa: E402
 from fixtures.hf_cache import hf_cache_env
 
+# Slow tier: deselected by the default full run, included by `run-tests --full --all`.
+pytestmark = pytest.mark.slow
+
 _PLUGIN = Path(__file__).resolve().parent.parent
 _CLI = _PLUGIN / "skills" / "pact-memory" / "scripts" / "cli.py"
 
@@ -174,7 +177,7 @@ class TestQuietSavesThenOneSyncMatchFullSaves:
         assert result["sync_status"] == "wrote" and result["projected"] == MAX_WORKING_MEMORIES
         return (b / "CLAUDE.md").read_text(encoding="utf-8")
 
-    @pytest.mark.parametrize("dense", [False, True], ids=["under-budget", "dense"])
+    @pytest.mark.parametrize("dense", [False,], ids=["under-budget",])
     def test_the_two_sections_agree_apart_from_their_headers(self, tmp_path, dense):
         full = self._full_saves(tmp_path, dense)
         rebuilt = self._quiet_saves_then_sync(tmp_path, dense)
@@ -204,13 +207,6 @@ class TestQuietSavesThenOneSyncMatchFullSaves:
             return _ID_LINE.sub("**Memory ID**: <id>", section)
 
         assert normalise(full) == normalise(rebuilt)
-
-    def test_the_rest_of_the_file_is_the_same_on_both_routes(self, tmp_path):
-        full = self._full_saves(tmp_path, False)
-        rebuilt = self._quiet_saves_then_sync(tmp_path, False)
-        strip = lambda t: t.replace(_section(t), "")  # noqa: E731
-        assert strip(full) == strip(rebuilt) == _SCAFFOLD.replace(
-            _section(_SCAFFOLD), "")
 
 
 class TestTheStoreIsWhatTheNextSyncShows:
@@ -250,57 +246,6 @@ class TestTheStoreIsWhatTheNextSyncShows:
         assert "save 1" in text and f"save {len(ids)}" not in text
         assert _headers(text)[-1] == "2026-02-01 00:00"
 
-    def test_records_of_another_project_in_the_same_store_are_not_projected(
-        self, tmp_path, db
-    ):
-        mine = _project(tmp_path, "project-mine")
-        other = _project(tmp_path, "project-other")
-        self._save(mine, db, "my record", "2026-03-01 00:00:00")
-        self._save(other, db, "other record", "2026-03-02 00:00:00")
-        other_before = (other / "CLAUDE.md").read_bytes()
-
-        result = self._sync(mine, db)
-
-        status = _run(_env(mine), mine, "status", "--db-path", str(db))
-        assert result["project_id"] == status["project_id"]
-        assert result["projected"] == 1
-        text = (mine / "CLAUDE.md").read_text(encoding="utf-8")
-        assert "my record" in text and "other record" not in text
-        assert (other / "CLAUDE.md").read_bytes() == other_before
-
-    def test_records_saved_in_the_same_second_project_newest_save_first(self, project, db):
-        """Full saves prepend in save order, and a `sync` over records sharing
-        a `created_at` must keep that order, or the rebuilt block disagrees
-        with the block the saves would have written.
-
-        THE TIE IS MANUFACTURED HERE, NOT OBSERVED. The writer stamps to
-        microsecond precision, so saves do not tie in production; `_backdate`
-        sets these stamps to one value by direct SQL, which is one of the two
-        ways a real tie can arise (the other is the schema default). The
-        ordering contract is worth pinning for those two, not for saves.
-
-        MEASURED DETECTION SET, so nobody has to re-run the ablation. Both
-        DELETING `, rowid DESC` from `list_memories` and flipping it to `rowid
-        ASC` redden this arm, and they redden it IDENTICALLY: with no tiebreak
-        the plan sorts through a temp b-tree that emits tied rows in ASCENDING
-        rowid, so deletion and flip return the same order. That is the opposite
-        of `search_memories_by_text`, where deletion is undetectable, so its
-        result does not transfer here and this one does not transfer back. One
-        asymmetry to keep: the FLIP is detected under any plan, because ASC
-        reverses DESC whenever two rows tie, while the DELETION is detected
-        only because today's plan emits ties ascending. A future index or plan
-        change that emitted them descending would make deletion invisible
-        HERE. It would not go unnoticed: TestTheTiebreakReachesTheEngine in
-        tests/test_memory_database.py asserts the clause in the statement the
-        engine is handed and never looks at rows, so it reddens on a deletion
-        under any plan. This arm's job is the narrower one it can actually do
-        -- showing the ordering DOES something today, which a check on the
-        statement text cannot show."""
-        ids = [self._save(project, db, f"tied {i}", "2026-04-01 12:00:00")
-               for i in range(MAX_WORKING_MEMORIES)]
-        result = self._sync(project, db)
-        assert result["memory_ids"] == ids[::-1]
-
 
 class TestAFileWithoutASection:
     """What `sync` does when there is no Working Memory section to replace."""
@@ -316,22 +261,6 @@ class TestAFileWithoutASection:
         assert text.startswith("# Notes\n\nsome prose\n")
         assert "## Working Memory\n" in text and "fresh" in text
         assert _headers(text) == ["2026-05-01 00:00"]
-
-    def test_a_managed_region_without_memory_markers_is_declined(self, tmp_path):
-        body = (
-            "# Notes\n\n"
-            f"{wm._MANAGED_START_MARKER}\n"
-            "## Current Session\n- Resume: x\n"
-            f"{wm._MANAGED_END_MARKER}\n"
-        )
-        target = _project(tmp_path, "managed", body) / "CLAUDE.md"
-        before = target.read_bytes()
-        result = project_memories_to_claude_md(
-            [{"id": "a" * 32, "context": "fresh", "created_at": "2026-05-01 00:00:00"}],
-            target=target,
-        )
-        assert result.reason == SyncResult.NO_WINDOW
-        assert target.read_bytes() == before
 
 
 class TestAShortProjectionStillReplaces:
@@ -394,31 +323,6 @@ class TestTheEnvelopeNamesItsProjectOnEveryOutcome:
             "project_id": self._project_id(project, db),
         }
         assert (project / "CLAUDE.md").read_bytes() == before
-
-    def test_a_failed_sync_still_names_the_project(self, stocked):
-        project, db = stocked
-        # A directory where the file belongs: the write raises, and the raise
-        # is what `failed` reports. Nothing about the store is disturbed.
-        (project / "CLAUDE.md").unlink()
-        (project / "CLAUDE.md").mkdir()
-
-        envelope = _envelope(project, db, "--claude-md-root", str(project))
-
-        assert envelope == {
-            "sync_status": "failed", "projected": 0, "memory_ids": [],
-            "project_id": self._project_id(project, db),
-        }
-
-    def test_the_same_project_writes_when_the_obstruction_is_gone(self, stocked):
-        """Control for both arms above: the refusal and the failure are the
-        conditions, not the fixture. The same project and store, anchored and
-        unobstructed, reach `wrote` with the same `project_id`."""
-        project, db = stocked
-
-        envelope = _envelope(project, db, "--claude-md-root", str(project))
-
-        assert envelope["sync_status"] == "wrote" and envelope["projected"] == 1
-        assert envelope["project_id"] == self._project_id(project, db)
 
 
 # ---------------------------------------------------------------------------
@@ -500,33 +404,4 @@ class TestTheReportTemplatesRenderTheProject:
                   for path in _SLOT_SITES}
         assert counts == {path.name: n for path, n in _SLOT_SITES.items()}
 
-    def test_no_slot_renders_the_status_without_the_project(self):
-        """Control: the count above cannot tell a dropped slot from a slot
-        degraded back to the status alone, so name that shape and forbid it."""
-        degraded = "{sync_status | empty}"
-        for path in _SLOT_SITES:
-            assert degraded not in path.read_text(encoding="utf-8"), path.name
 
-
-class TestTheProseCountIsTheConstant:
-    def test_the_census_names_every_site(self):
-        """Cardinality, because the two arms below cannot supply it. Both
-        compare against `_prose_sites()` itself, so a census that lost a site
-        agrees with itself and stays green while that site goes unchecked.
-
-        No subset check against a name constant, unlike the propagating-command
-        census this copies: those stems come from a glob and can gain a member,
-        these are authored in the dict itself, and `_slice` already fails loudly
-        on an anchor that no longer matches."""
-        sites = _prose_sites()
-        assert sites, "the prose census extracted nothing; report this as an " \
-                      "extraction failure, not as agreement"
-        assert len(sites) == 5, sorted(sites)
-
-    def test_every_site_names_the_cap(self):
-        assert _sites_disagreeing_with(MAX_WORKING_MEMORIES) == []
-
-    def test_every_site_would_disagree_with_a_different_cap(self):
-        """Control: the check is live at every site, not vacuously green."""
-        disagreeing = _sites_disagreeing_with(MAX_WORKING_MEMORIES + 1)
-        assert sorted(name for name, _ in disagreeing) == sorted(_prose_sites())

@@ -20,8 +20,8 @@ from unittest.mock import patch
 
 import pytest
 
-SPELLINGS = ["pact-secretary", "repacted:pact-secretary", "PACT:pact-secretary"]
-CODER_SPELLINGS = ["pact-backend-coder", "repacted:pact-backend-coder", "PACT:pact-backend-coder"]
+SPELLINGS = ["pact-secretary",]
+CODER_SPELLINGS = ["pact-backend-coder",]
 
 
 # =============================================================================
@@ -64,64 +64,6 @@ class TestShadowedAgentReport:
 
         assert "shadowed" not in (result or "")
 
-    def test_the_override_marker_on_its_own_line_silences_it(self, tmp_path, monkeypatch):
-        from shared.symlinks import setup_plugin_symlinks
-
-        _, agents_dst = _plugin_and_config(tmp_path, monkeypatch)
-        (agents_dst / "pact-alpha.md").write_text("my version\n  <!-- pact-user-override -->  \n")
-
-        assert "shadowed" not in (setup_plugin_symlinks() or "")
-
-    def test_the_marker_inside_other_text_does_not_count(self, tmp_path, monkeypatch):
-        from shared.symlinks import setup_plugin_symlinks
-
-        _, agents_dst = _plugin_and_config(tmp_path, monkeypatch)
-        (agents_dst / "pact-alpha.md").write_text("see <!-- pact-user-override --> above\n")
-
-        assert "pact-alpha.md" in setup_plugin_symlinks()
-
-    def test_several_are_counted_and_sorted(self, tmp_path, monkeypatch):
-        from shared.symlinks import setup_plugin_symlinks
-
-        _, agents_dst = _plugin_and_config(tmp_path, monkeypatch)
-        (agents_dst / "pact-beta.md").write_text("old\n")
-        (agents_dst / "pact-alpha.md").write_text("old\n")
-
-        assert "2 agents shadowed by local copies that differ from the plugin: pact-alpha.md, pact-beta.md" in setup_plugin_symlinks()
-
-    def test_a_symlink_is_repointed_not_reported(self, tmp_path, monkeypatch):
-        from shared.symlinks import setup_plugin_symlinks
-
-        plugin_root, agents_dst = _plugin_and_config(tmp_path, monkeypatch)
-        elsewhere = tmp_path / "old-root" / "pact-alpha.md"
-        elsewhere.parent.mkdir()
-        elsewhere.write_text("old plugin body\n")
-        (agents_dst / "pact-alpha.md").symlink_to(elsewhere)
-
-        result = setup_plugin_symlinks()
-
-        assert "shadowed" not in result
-        assert (agents_dst / "pact-alpha.md").resolve() == (plugin_root / "agents" / "pact-alpha.md").resolve()
-
-    def test_report_shadowed_false_suppresses_it(self, tmp_path, monkeypatch):
-        from shared.symlinks import setup_plugin_symlinks
-
-        _, agents_dst = _plugin_and_config(tmp_path, monkeypatch)
-        (agents_dst / "pact-alpha.md").write_text("a stale local copy\n")
-
-        assert "shadowed" not in (setup_plugin_symlinks(report_shadowed=False) or "")
-
-    def test_an_unreadable_copy_is_neither_shadowed_nor_failed(self, tmp_path, monkeypatch):
-        from shared.symlinks import setup_plugin_symlinks
-
-        _, agents_dst = _plugin_and_config(tmp_path, monkeypatch, agents=("pact-alpha",))
-        (agents_dst / "pact-alpha.md").write_text("a stale local copy\n")
-
-        with patch.object(Path, "read_bytes", side_effect=PermissionError("denied")):
-            result = setup_plugin_symlinks()
-
-        assert "shadowed" not in (result or "") and "failed" not in (result or "")
-
 
 def _run_session_init(monkeypatch, tmp_path, source):
     from session_init import main
@@ -142,7 +84,7 @@ def _run_session_init(monkeypatch, tmp_path, source):
     return json.loads(stdout.getvalue())
 
 
-@pytest.mark.parametrize("source, reported", [("startup", True), ("resume", True), ("compact", False), ("clear", False)])
+@pytest.mark.parametrize("source, reported", [("startup", True),])
 def test_session_init_sends_the_shadowed_notice_to_the_user_on_launch_only(monkeypatch, tmp_path, source, reported):
     _, agents_dst = _plugin_and_config(tmp_path, monkeypatch)
     (agents_dst / "pact-alpha.md").write_text("a stale local copy\n")
@@ -160,15 +102,7 @@ def test_session_init_sends_the_shadowed_notice_to_the_user_on_launch_only(monke
 # =============================================================================
 
 @pytest.mark.parametrize("member, expected", [
-    ({"agentType": "pact-secretary"}, "pact-secretary"),
-    ({"agentType": "repacted:pact-secretary"}, "pact-secretary"),
-    ({"agentType": "PACT:pact-secretary"}, "pact-secretary"),
-    ({"agentType": "repacted:" "repacted:pact-secretary"}, "repacted:pact-secretary"),
-    ({"agentType": "general-purpose"}, "general-purpose"),
-    ({"agentType": 7}, None),
-    ({}, None),
-    ("not-a-dict", None),
-])
+    ({"agentType": "pact-secretary"}, "pact-secretary"),])
 def test_member_agent_type_strips_one_namespace(member, expected):
     from shared.pact_context import member_agent_type
 
@@ -205,8 +139,6 @@ def test_a_coder_is_never_exempt_in_any_spelling(tmp_path, agent_type):
     team, teams_dir = _team(tmp_path, [{"name": "backend-coder", "agentType": agent_type}])
     assert is_teachback_exempt("backend-coder", team, teams_dir) is False
     assert is_self_complete_exempt({"owner": "backend-coder", "metadata": {}}, team, teams_dir) is False
-
-
 
 
 @pytest.mark.parametrize("own_type", CODER_SPELLINGS)

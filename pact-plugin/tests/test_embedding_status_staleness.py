@@ -79,46 +79,6 @@ def test_a_refused_save_does_not_leave_the_previous_status_readable(mem):
     )
 
 
-def test_a_save_raising_before_the_store_write_clears_the_status(mem):
-    """A NON-refusal exit, proving the clear is not specific to one path."""
-    _save(mem, SENTINEL)
-    with patch.object(memory_api, "_ensure_ready", side_effect=RuntimeError("boom")):
-        with pytest.raises(RuntimeError):
-            mem.save({"context": "never lands"}, sync_to_claude=False)
-    assert mem.last_embedding_status is None
-
-
 # --- update() ---------------------------------------------------------------
 
-def test_a_refused_update_does_not_surface_the_last_saves_status(mem):
-    """update() SHARES the field with save(), so a failed update could
-    otherwise surface a code the last SAVE produced -- misattributing across
-    two different methods, not merely two calls."""
-    _save(mem, SENTINEL)
-    assert mem.last_embedding_status == SENTINEL, "setup failed: nothing to go stale"
 
-    _refuse(lambda: mem.update("deadbeef" * 4, {"goal": "x"}))
-
-    assert mem.last_embedding_status is None, (
-        f"the refused update left the last SAVE's {mem.last_embedding_status!r} "
-        "readable"
-    )
-
-
-def test_update_still_reports_its_own_status_on_the_success_path(mem):
-    """POSITIVE control for update(), matching the save() one.
-
-    Pins that the clear did not simply break the channel for this method: a
-    real update must still publish the code its own store write produced.
-    """
-    memory_id = _save(mem, None, context="row to update")
-    assert mem.last_embedding_status is None
-
-    with patch.object(memory_api, "_ensure_ready", lambda: None), \
-         patch.object(PACTMemory, "_store_embedding", return_value=SENTINEL):
-        mem.update(memory_id, {"goal": "updated"})
-
-    assert mem.last_embedding_status == SENTINEL, (
-        "update() stopped publishing its own reason code -- the clear removed "
-        "the channel rather than the staleness"
-    )

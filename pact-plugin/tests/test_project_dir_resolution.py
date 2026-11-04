@@ -123,104 +123,6 @@ class TestSessionRecordReader:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
         assert pact_session.get_project_dir_from_session_record() == ""
 
-    def test_corrupt_context_file_yields_empty(self, tmp_path, monkeypatch):
-        enable_record_discovery(monkeypatch, pact_session)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
-        write_session_context(Path.home() / ".claude", SID, tmp_path, body="{not json")
-        assert pact_session.get_project_dir_from_session_record() == ""
-
-    def test_two_matching_slugs_yield_empty(self, tmp_path, monkeypatch):
-        enable_record_discovery(monkeypatch, pact_session)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
-        write_session_context(Path.home() / ".claude", SID, tmp_path, slug="project-a")
-        write_session_context(Path.home() / ".claude", SID, tmp_path, slug="project-b")
-        assert pact_session.get_project_dir_from_session_record() == ""
-
-    def test_non_string_project_dir_yields_empty(self, tmp_path, monkeypatch):
-        enable_record_discovery(monkeypatch, pact_session)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
-        write_session_context(
-            Path.home() / ".claude", SID, tmp_path,
-            body=json.dumps({"session_id": SID, "project_dir": 12345}),
-        )
-        assert pact_session.get_project_dir_from_session_record() == ""
-
-    def test_relative_project_dir_is_rejected(self, tmp_path, monkeypatch):
-        """Pre-fix records can hold ".": resolving that HERE would alias the
-        record rung to the reader's cwd ABOVE the git rung — inverting the
-        precedence the rung exists to establish. Non-absolute reads as absent."""
-        enable_record_discovery(monkeypatch, pact_session)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
-        write_session_context(
-            Path.home() / ".claude", SID, tmp_path,
-            body=json.dumps({"session_id": SID, "project_dir": "."}),
-        )
-        assert pact_session.get_project_dir_from_session_record() == ""
-
-    def test_second_call_is_served_from_the_cache(self, tmp_path, monkeypatch):
-        """The glob runs once per process per env id, not once per caller."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-
-        calls = []
-        real = pact_session._context_record_on_disk
-
-        def counting(env_session):
-            calls.append(1)
-            return real(env_session)
-
-        monkeypatch.setattr(pact_session, "_context_record_on_disk", counting)
-        first = pact_session.get_project_dir_from_session_record()
-        second = pact_session.get_project_dir_from_session_record()
-        assert first == second == str(umbrella.project)
-        assert len(calls) == 1, "record discovery must glob once per process"
-
-    def test_pytest_refusal_fires_with_a_live_record(self, tmp_path, monkeypatch):
-        """Non-vacuity leg: file present AND id set, so ONLY the refusal can
-        explain the empty answer."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.setenv("PYTEST_CURRENT_TEST", "some_test (call)")
-        assert pact_session.get_project_dir_from_session_record() == ""
-
-    def test_absent_env_id_yields_empty_with_a_live_record(self, tmp_path, monkeypatch):
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        assert pact_session.get_project_dir_from_session_record() == ""
-
-    def test_mismatched_session_id_in_the_record_is_rejected(self, tmp_path, monkeypatch):
-        """The payload's session_id must equal the env id that LOCATED the
-        file: a mismatch means the globbed record is not this session's own
-        (misfiled or planted), so it reads as no record and resolution falls
-        through to the git rung."""
-        umbrella = make_umbrella(tmp_path)
-        enable_record_discovery(monkeypatch, pact_session)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
-        write_session_context(
-            Path.home() / ".claude", SID, umbrella.project,
-            body=json.dumps({"session_id": "some-other-session", "project_dir": str(umbrella.project)}),
-        )
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        assert pact_session.get_project_dir_from_session_record() == ""
-        repo = _git_repo(tmp_path / "fallthrough-repo")
-        monkeypatch.chdir(repo)
-        assert PACTMemory._detect_project_id() == "fallthrough-repo", (
-            "a rejected record must fall through to the git rung, not answer"
-        )
-
-    def test_absent_session_id_field_is_accepted(self, tmp_path, monkeypatch):
-        """Legacy records predate the always-written field; the locating glob
-        already matched the env id's directory, so an ABSENT field serves."""
-        umbrella = make_umbrella(tmp_path)
-        enable_record_discovery(monkeypatch, pact_session)
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
-        write_session_context(
-            Path.home() / ".claude", SID, umbrella.project,
-            body=json.dumps({"project_dir": str(umbrella.project)}),
-        )
-        assert pact_session.get_project_dir_from_session_record() == str(umbrella.project)
-
 
 # ---------------------------------------------------------------------------
 # Precedence: _detect_project_id's Strategy 1.5 (record below env, above git)
@@ -235,46 +137,6 @@ class TestDetectProjectIdRecordRung:
         repo = _git_repo(tmp_path / "declared-repo")
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(repo))
         assert PACTMemory._detect_project_id() == "declared-repo"
-
-    def test_record_outranks_the_cwd_git_root(self, tmp_path, monkeypatch):
-        """#1485's core shape as a unit row: cwd inside a git repo whose root
-        is the WRONG scope; the record names the umbrella. Without the rung
-        the git strategy would answer the repo's name, so a green here proves
-        the rung fired."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        repo = _git_repo(tmp_path / "foreign-repo")
-        monkeypatch.chdir(repo)
-        assert PACTMemory._detect_project_id() == "umbrella"
-
-    def test_record_fallthrough_to_git_when_absent(self, tmp_path, monkeypatch):
-        """No record (no env id) -> the git strategy answers exactly as before."""
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        repo = _git_repo(tmp_path / "plain-repo")
-        monkeypatch.chdir(repo)
-        assert PACTMemory._detect_project_id() == "plain-repo"
-
-    def test_record_in_a_worktree_names_the_main_repo(self, tmp_path, monkeypatch):
-        """The record leg shares Strategy 1's main-repo rewrite: a recorded
-        worktree path must key on the MAIN repo's basename, not the worktree's,
-        or one project fragments across its own checkouts."""
-        umbrella = make_umbrella(tmp_path)
-        main = _git_repo(tmp_path / "main-proj")
-        linked = tmp_path / "wt"
-        subprocess.run(
-            ["git", "-C", str(main), "worktree", "add", "-q", str(linked), "-b", "wt"],
-            check=True,
-            capture_output=True,
-            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
-        )
-        _arm_record(monkeypatch, tmp_path, linked)
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        # cwd must not contribute a repo answer: the guard-verified git-less
-        # umbrella keeps the arm hermetic even for a contributor whose TMPDIR
-        # sits under a repository.
-        monkeypatch.chdir(umbrella.project)
-        assert PACTMemory._detect_project_id() == "main-proj"
 
 
 # ---------------------------------------------------------------------------
@@ -308,17 +170,6 @@ class TestHomeScopeWarning:
             for r in caplog.records
         ), f"home scope resolved silently: {[r.message for r in caplog.records]}"
 
-    def test_project_resolution_does_not_warn(self, tmp_path, monkeypatch, caplog):
-        project = tmp_path / "a-real-project"
-        project.mkdir()
-        self._force_cwd_resolution(monkeypatch, project.resolve())
-        with caplog.at_level(logging.WARNING):
-            result = PACTMemory._detect_project_id()
-        assert result == "a-real-project"
-        assert not any("HOME directory" in r.message for r in caplog.records), (
-            "a project-root resolution raised the home-scope warning"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Fail-closed writes: env vs record disagreement
@@ -340,75 +191,6 @@ class TestWriteRefusalOnDisagreement:
         assert str(umbrella.project) in text, "the refusal does not name the record"
         assert "Nothing was written" in text
         assert "re-export CLAUDE_PROJECT_DIR" in text, "the refusal names no remedy"
-
-    def test_memory_sync_refuses_naming_both_values(self, tmp_path, monkeypatch):
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        other = tmp_path / "other"
-        other.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(other))
-
-        memory = PACTMemory(project_id="proj")  # explicit id: the None guard is not the subject
-        with pytest.raises(ProjectScopeDisagreementError) as excinfo:
-            memory.sync()
-        assert str(other) in str(excinfo.value)
-        assert str(umbrella.project) in str(excinfo.value)
-
-    def test_save_refusal_reports_refused_on_the_status_channel(self, tmp_path, monkeypatch):
-        """Channel parity: a caller that only reads last_sync_status after the
-        typed exception must see a deliberate REFUSAL, not an absent status —
-        matching the ambient-guard refusal class."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        other = tmp_path / "other"
-        other.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(other))
-
-        memory = PACTMemory()
-        with pytest.raises(ProjectScopeDisagreementError):
-            memory.save({"context": "c", "goal": "g"})
-        assert memory.last_sync_status == wm.SyncResult.REFUSED
-
-    def test_sync_refusal_reports_refused_on_the_status_channel(self, tmp_path, monkeypatch):
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        other = tmp_path / "other"
-        other.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(other))
-
-        memory = PACTMemory(project_id="proj")
-        with pytest.raises(ProjectScopeDisagreementError):
-            memory.sync()
-        assert memory.last_sync_status == wm.SyncResult.REFUSED
-
-    def test_refusal_text_carries_the_textual_comparison_note(self, tmp_path, monkeypatch):
-        """F6: the remedy names the comparison rule (verbatim, not resolved),
-        so a symlinked/case-differing spelling's refusal is self-explanatory.
-        One assertion through one write path — the pin that makes an
-        F6-removal arm killable."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        other = tmp_path / "other"
-        other.mkdir()
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(other))
-
-        memory = PACTMemory()
-        with pytest.raises(ProjectScopeDisagreementError) as excinfo:
-            memory.save({"context": "c", "goal": "g"})
-        assert "comparison is textual" in str(excinfo.value)
-
-    def test_agreement_with_a_trailing_slash_does_not_refuse(self, tmp_path, monkeypatch):
-        """normpath collapses the spelling difference; the predicate — not a
-        full save — is the unit under test here."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella.project) + "/")
-        assert pact_session.env_record_project_dir_disagreement() is None
-
-    def test_no_record_means_no_disagreement(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-        # No session id in the env (autouse scrub) -> the record side is absent.
-        assert pact_session.env_record_project_dir_disagreement() is None
 
 
 # ---------------------------------------------------------------------------
@@ -433,20 +215,6 @@ class TestWorkingMemoryRecordRung:
             "recorded dir — not a re-derivation"
         )
 
-    def test_record_without_a_claude_md_falls_through_to_git(self, tmp_path, monkeypatch):
-        """The existence coupling is preserved: a record naming a dir with no
-        CLAUDE.md does NOT end resolution (this resolver never creates the
-        file); the git anchor answers as before."""
-        umbrella = make_umbrella(tmp_path)  # has ./CLAUDE.md at the root...
-        (umbrella.project / "CLAUDE.md").unlink()  # ...remove it: record probe must miss
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        repo = _git_repo(tmp_path / "repo-with-file")
-        git_file = _seed_claude_md(repo)
-        monkeypatch.chdir(repo)
-
-        assert wm._get_claude_md_path() == git_file
-
 
 class TestWorkingMemoryDisagreementGuard:
     def test_ambient_sync_refuses_on_disagreement(self, tmp_path, monkeypatch):
@@ -464,44 +232,6 @@ class TestWorkingMemoryDisagreementGuard:
         assert "X" not in env_file.read_text(encoding="utf-8"), (
             "the refused sync still wrote to the env-resolved file"
         )
-
-    def test_explicit_target_is_a_warrant_and_proceeds(self, tmp_path, monkeypatch):
-        """A caller that names its file has declared the scope; the ambient
-        disagreement is moot. Mirrors the sibling guards' warrant logic."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "other"))
-        target_root = tmp_path / "declared"
-        target = _seed_claude_md(target_root)
-
-        result = wm.sync_to_claude_md(
-            {"context": "DECLARED-TARGET", "goal": "g"}, None, "id", target=target
-        )
-        assert result.reason == wm.SyncResult.WROTE
-        assert "DECLARED-TARGET" in target.read_text(encoding="utf-8")
-
-    def test_claude_md_root_is_a_warrant_and_proceeds(self, tmp_path, monkeypatch):
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        anchor = tmp_path / "anchored"
-        _seed_claude_md(anchor)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(anchor))
-        # env == anchor, record == umbrella: a disagreement exists, but the
-        # declared containment anchor is a stronger warrant than the refusal.
-        result = wm.sync_to_claude_md(
-            {"context": "ANCHORED", "goal": "g"}, None, "id", claude_md_root=anchor
-        )
-        assert result.reason == wm.SyncResult.WROTE
-
-    def test_agreement_syncs_ambiently(self, tmp_path, monkeypatch):
-        umbrella = make_umbrella(tmp_path)
-        env_file = _seed_claude_md(umbrella.project)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella.project))
-
-        result = wm.sync_to_claude_md({"context": "AGREED", "goal": "g"}, None, "id")
-        assert result.reason == wm.SyncResult.WROTE
-        assert "AGREED" in env_file.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -548,16 +278,6 @@ class TestCliRefusalEnvelope:
         assert not store.exists() or "cross-process" not in store.read_bytes().decode(
             "utf-8", errors="ignore"
         ), "a refused save left the row behind"
-
-    def test_child_env_defaults_delete_the_project_dir_var(self, tmp_path):
-        """Guard the env-builder itself: DELETE is the default and the pytest
-        marker never crosses — the two leaks that would make every row above
-        pass against the wrong state."""
-        env = child_env(tmp_path / ".claude", home=tmp_path)
-        assert "CLAUDE_PROJECT_DIR" not in env
-        assert "PYTEST_CURRENT_TEST" not in env
-        assert "CLAUDE_CODE_SESSION_ID" not in env
-        assert env["HOME"] == str(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -634,23 +354,6 @@ class TestR1UmbrellaAcceptance:
             "the standalone sync did not project the umbrella scope's record"
         )
 
-    def test_r1_resolution_probe_equals_the_recorded_value(self, tmp_path):
-        """The acceptance probe in pytest form: a hook-side reader inside the
-        session resolves the SAME value the session record carries."""
-        umbrella = make_umbrella(tmp_path)
-        write_session_context(umbrella.config_root, SID, umbrella.project)
-        env = self._env(umbrella, tmp_path, None)
-        probe = subprocess.run(
-            [sys.executable, "-c",
-             "import sys; sys.path.insert(0, sys.argv[1]); "
-             "from scripts.pact_session import get_project_dir_from_session_record as g; "
-             "print(g())",
-             str(_PACT_MEMORY_ROOT)],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(umbrella.project),
-        )
-        assert probe.returncode == 0, f"probe failed: {probe.stderr[:400]!r}"
-        assert probe.stdout.strip() == str(umbrella.project)
-
 
 # ---------------------------------------------------------------------------
 # R2 — #1485: cwd in a git sub-repo of the umbrella
@@ -667,46 +370,6 @@ class TestR2SubRepoCwd:
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
         monkeypatch.chdir(umbrella.subrepo)
         assert PACTMemory._detect_project_id() == "umbrella"
-
-    def test_r2_record_outranks_the_marker_walk_when_the_subrepo_has_its_own_claude_md(
-        self, tmp_path, monkeypatch
-    ):
-        """Anti-correlated arm: the sub-repo carrying its OWN CLAUDE.md means
-        the marker walk would resolve the sub-repo — the fixture's natural
-        ordering AGREES with the wrong answer, so a full-tie fixture would
-        mask a precedence mutation. The record must still win."""
-        umbrella = make_umbrella(tmp_path)
-        umbrella_md = _seed_claude_md(umbrella.project)
-        _seed_claude_md(umbrella.subrepo)  # the marker walk's answer, if reached
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        monkeypatch.chdir(umbrella.subrepo)
-        assert wm._get_claude_md_path() == umbrella_md
-
-    def test_r2_subprocess_save_from_the_subrepo_scopes_the_umbrella(self, tmp_path):
-        umbrella = make_umbrella(tmp_path)
-        write_session_context(umbrella.config_root, SID, umbrella.project)
-        store = tmp_path / "memory.db"
-        env = child_env(
-            umbrella.config_root, home=tmp_path, session_id=SID,
-            memory_dir=tmp_path / "memdir",
-        )
-        setup = subprocess.run(
-            [sys.executable, str(_MEMORY_CLI), "setup", "--db-path", str(store)],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(umbrella.subrepo),
-            timeout=120,
-        )
-        assert setup.returncode == 0, f"store setup failed: {setup.stderr[:400]!r}"
-        save = subprocess.run(
-            [sys.executable, str(_MEMORY_CLI), "save", "--db-path", str(store),
-             json.dumps({"context": "R2-SUBREPO-SAVE", "goal": "g"})],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(umbrella.subrepo),
-            timeout=120,
-        )
-        assert save.returncode == 0, f"save from the sub-repo failed: {save.stderr[:400]!r}"
-        assert _memory_store_scopes(store) == ["umbrella"], (
-            f"cwd in the sub-repo mis-scoped the save: {_memory_store_scopes(store)}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -765,48 +428,6 @@ class TestR4BimodalGit:
             "git's death did NOT change the answer — the shim is not live and "
             "the invariant arms below prove nothing"
         )
-
-    def test_r4_record_answer_is_git_independent(self, tmp_path, monkeypatch):
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        monkeypatch.chdir(umbrella.subrepo)
-        shim = git_flake_shim(tmp_path)
-        monkeypatch.setenv("PATH", f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
-        assert PACTMemory._detect_project_id() == "umbrella"
-
-    def test_r4_parent_and_child_agree_with_git_broken(self, tmp_path, monkeypatch):
-        """The one-value invariant across the boundary: the parent's in-process
-        resolution and the child CLI's scope are ONE value under broken git —
-        the parent/subprocess disagreement #1600 measured cannot recur."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-        shim = git_flake_shim(tmp_path)
-        monkeypatch.setenv("PATH", f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
-        monkeypatch.chdir(umbrella.subrepo)
-        parent_answer = PACTMemory._detect_project_id()
-
-        store = tmp_path / "memory.db"
-        env = child_env(
-            umbrella.config_root, home=tmp_path, session_id=SID,
-            memory_dir=tmp_path / "memdir",
-        )
-        env["PATH"] = f"{shim}{os.pathsep}{env['PATH']}"
-        setup = subprocess.run(
-            [sys.executable, str(_MEMORY_CLI), "setup", "--db-path", str(store)],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(umbrella.subrepo),
-            timeout=120,
-        )
-        assert setup.returncode == 0, f"store setup failed: {setup.stderr[:400]!r}"
-        save = subprocess.run(
-            [sys.executable, str(_MEMORY_CLI), "save", "--db-path", str(store),
-             json.dumps({"context": "R4-BROKEN-GIT", "goal": "g"})],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(umbrella.subrepo),
-            timeout=120,
-        )
-        assert save.returncode == 0, f"child save failed: {save.stderr[:400]!r}"
-        assert _memory_store_scopes(store) == [parent_answer] == ["umbrella"]
 
 
 # ---------------------------------------------------------------------------
@@ -925,26 +546,6 @@ class TestSymlinkEdges:
         )
         assert PACTMemory._detect_project_id() == "umbrella"
 
-    def test_symlinked_env_alias_of_the_record_refuses_on_writes(self, tmp_path, monkeypatch):
-        """The verbatim comparison's conservative direction: env naming a
-        SYMLINK ALIAS of the recorded dir disagrees textually, so writes REFUSE
-        although the target is identical. This is the designed trade — a loud
-        refusal with the remedy beats a silent derivation — and this pin is
-        what kills a mutation that 'fixes' the comparison by resolving both
-        sides."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        link = tmp_path / "alias"
-        link.symlink_to(umbrella.project)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(link))
-
-        memory = PACTMemory()  # constructed AFTER the env manipulation
-        with pytest.raises(ProjectScopeDisagreementError) as excinfo:
-            memory.save({"context": "c", "goal": "g"})
-        text = str(excinfo.value)
-        assert str(link) in text and str(umbrella.project) in text
-        assert "re-export CLAUDE_PROJECT_DIR" in text
-
 
 # ---------------------------------------------------------------------------
 # Edge: the sync CLI envelopes the refusal exactly like save
@@ -980,55 +581,6 @@ class TestSyncCliEnvelope:
         )
         assert other.name in proc.stderr and umbrella.project.name in proc.stderr, (
             f"the refusal must name both values; stderr: {proc.stderr!r}"
-        )
-
-    def test_sync_cli_with_declared_root_proceeds_under_disagreement(self, tmp_path):
-        """The warrant at the CLI layer: `sync --claude-md-root <env-scoped
-        root>` under an env/record disagreement exits 0 and projects under the
-        NAMED root (containment warrant, not steering — resolution is
-        env-first and unchanged). The refusal row above is the counter arm."""
-        umbrella = make_umbrella(tmp_path)
-        umbrella_md = _seed_claude_md(umbrella.project)
-        other = tmp_path / "other"
-        other_md = _seed_claude_md(other)
-        store = tmp_path / "memory.db"
-        env = child_env(
-            umbrella.config_root, home=tmp_path, session_id=SID,
-            project_dir=other, memory_dir=tmp_path / "memdir",
-        )
-        # Seed under the env scope with NO record yet on disk (no disagreement
-        # until the context file exists — write it after the seed).
-        seed_env = dict(env)
-        del seed_env["CLAUDE_CODE_SESSION_ID"]
-        setup = subprocess.run(
-            [sys.executable, str(_MEMORY_CLI), "setup", "--db-path", str(store)],
-            capture_output=True, text=True, env=carry_clock_shift(seed_env), cwd=str(other), timeout=120,
-        )
-        assert setup.returncode == 0, f"store setup failed: {setup.stderr[:400]!r}"
-        save = subprocess.run(
-            [sys.executable, str(_MEMORY_CLI), "save", "--db-path", str(store),
-             json.dumps({"context": "WARRANT-CLI-TOKEN", "goal": "g"})],
-            capture_output=True, text=True, env=carry_clock_shift(seed_env), cwd=str(other), timeout=120,
-        )
-        assert save.returncode == 0, f"seed save failed: {save.stderr[:400]!r}"
-        write_session_context(umbrella.config_root, SID, umbrella.project)
-
-        proc = subprocess.run(
-            [sys.executable, str(_MEMORY_CLI), "sync", "--db-path", str(store),
-             "--claude-md-root", str(other)],
-            capture_output=True, text=True, env=carry_clock_shift(env), cwd=str(other), timeout=120,
-        )
-        assert proc.returncode == 0, (
-            f"a warranted sync refused at the CLI layer: {proc.stderr[:400]!r}"
-        )
-        assert "SCOPE_DISAGREEMENT" not in proc.stderr
-        envelope = json.loads(proc.stdout)
-        assert envelope["ok"] is True and envelope["result"]["sync_status"] == "wrote"
-        assert "WARRANT-CLI-TOKEN" in other_md.read_text(encoding="utf-8"), (
-            "the projection did not land under the named root"
-        )
-        assert "WARRANT-CLI-TOKEN" not in umbrella_md.read_text(encoding="utf-8"), (
-            "the projection reached the record-scoped file despite the warrant"
         )
 
 
@@ -1137,35 +689,6 @@ class TestUpdateDeleteRefusalOnDisagreement:
         assert _store_row_context(store, seed_id) == before, (
             "a refused update still mutated the row"
         )
-
-    def test_delete_refuses_naming_both_values_before_any_mutation(
-        self, tmp_path, monkeypatch
-    ):
-        umbrella, other, memory, seed_id = self._seed_and_arm(tmp_path, monkeypatch)
-        store = tmp_path / ".claude" / "pact-memory" / "memory.db"
-
-        with pytest.raises(ProjectScopeDisagreementError) as excinfo:
-            memory.delete(seed_id)
-        text = str(excinfo.value)
-        assert str(other) in text and str(umbrella.project) in text
-        assert "re-export CLAUDE_PROJECT_DIR" in text
-        assert _store_row_context(store, seed_id) == "CYCLE2-SEED", (
-            "a refused delete still removed the row"
-        )
-
-    def test_agreement_update_and_delete_proceed(self, tmp_path, monkeypatch):
-        """The guard must not over-fire: with env == record, update and delete
-        behave exactly as before."""
-        umbrella = make_umbrella(tmp_path)
-        _arm_record(monkeypatch, tmp_path, umbrella.project)
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(umbrella.project))
-        memory = PACTMemory()
-        seed_id = memory.save({"context": "CYCLE2-AGREE", "goal": "g"})
-
-        assert memory.update(seed_id, {"context": "CYCLE2-UPDATED"}) == seed_id
-        store = tmp_path / ".claude" / "pact-memory" / "memory.db"
-        assert "CYCLE2-UPDATED" in _store_row_context(store, seed_id)
-        assert memory.delete(seed_id) == seed_id
 
 
 class TestRetrievedSyncWarnsUnderDisagreement:

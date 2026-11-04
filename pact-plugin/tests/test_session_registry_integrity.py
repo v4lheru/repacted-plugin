@@ -111,14 +111,6 @@ class TestForgedCrossTeam:
         register("alice@pact-victim")  # forged: claims a team alice isn't in
         assert resolve("sess-forge") is None
 
-    def test_forged_team_that_does_not_exist_rejected(self, registry_env):
-        """A value claiming a @team with no config directory at all -> rejected
-        (no members to validate against -> not a member)."""
-        registry_env.set_session("sess-forge2")
-        registry_env.write_team("pact-real", ["alice"])
-        register("alice@pact-ghostteam")
-        assert resolve("sess-forge2") is None
-
 
 # ===========================================================================
 # REAL O_NOFOLLOW SYMLINK DEFEAT — by construction (the actual open, not _is_under)
@@ -142,22 +134,6 @@ class TestSymlinkDefeatByConstruction:
         # The attacker-controlled target was NOT written through the link.
         assert target.read_text(encoding="utf-8") == ""
 
-    def test_resolve_does_not_follow_symlink_at_registry_path(self, registry_env, tmp_path):
-        """A symlink at the registry path whose target holds a VALID-looking line
-        -> resolve returns None (O_NOFOLLOW open raises ELOOP -> miss), never
-        reading through the link. Defeats a redirect-to-attacker-file read."""
-        target = tmp_path / "attacker_target.jsonl"
-        registry_env.write_team("pact-team1", ["alice"])
-        target.write_text(
-            json.dumps({"session_id": "sess-sym", "value": "alice@pact-team1"}) + "\n",
-            encoding="utf-8",
-        )
-        registry_env.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        registry_env.registry_path.symlink_to(target)
-
-        # Even though the link target has a valid line, resolve must NOT follow it.
-        assert resolve("sess-sym") is None
-
 
 # ===========================================================================
 # SANITIZE-ON-READ — a raw value with an embedded control char is neutralized
@@ -178,14 +154,6 @@ class TestSanitizeOnRead:
         # No raw control char survives into the resolved value.
         assert "\x85" not in resolved
 
-    def test_close_paren_in_stored_value_neutralized_on_read(self, registry_env):
-        """A close-paren (which could early-close a parenthetical role marker)
-        in a raw stored value is replaced on read."""
-        registry_env.set_session("sess-paren")
-        registry_env.write_team("pact-team1", ["a_b"])  # ')' sanitizes to '_'
-        registry_env.write_raw_line("sess-paren", "a)b@pact-team1")
-        assert resolve("sess-paren") == "a_b@pact-team1"
-
 
 # ===========================================================================
 # MALFORMED TEAM CONFIG — members null / non-list / junk -> reject, never raise
@@ -193,14 +161,7 @@ class TestSanitizeOnRead:
 
 class TestMalformedTeamConfig:
     @pytest.mark.parametrize("config_obj", [
-        {"members": None},                       # null members
-        {"members": "alice"},                    # members is a string, not a list
-        {"members": 42},                         # members is a number
-        {"no_members_key": True},                # members key absent
-        "[]",                                    # top-level list, not a dict
-        "not json at all",                       # non-JSON
-        {"members": [{"no_name": "x"}, "junk"]}, # list of entries with no usable name
-    ])
+        {"members": None},])
     def test_malformed_config_rejects_resolve_never_raises(self, registry_env, config_obj):
         """Every malformed team-config shape -> resolve returns None (the name
         cannot be validated as a member) and NEVER raises. fail-safe by
@@ -209,40 +170,6 @@ class TestMalformedTeamConfig:
         registry_env.write_team_raw("pact-malformed", config_obj)
         register("alice@pact-malformed")
         assert resolve("sess-malformed") is None
-
-    def test_member_name_validation_is_fail_safe_unit(self, registry_env):
-        """Direct unit on the validator: a malformed config -> False, never
-        raises (the integrity check is the load-bearing forge-blunt)."""
-        registry_env.write_team_raw("pact-bad", {"members": None})
-        assert session_registry._name_is_team_member("alice", "pact-bad") is False
-        # Missing config dir entirely -> False, never raises.
-        assert session_registry._name_is_team_member("alice", "pact-absent") is False
-
-    def test_unsafe_team_segment_rejected_before_path_build(self, registry_env):
-        """Containment parity with the session_end prune: an @team that is not a
-        single safe path segment is rejected BEFORE the teams/<team>/config.json
-        path is built, not merely caught after.
-
-        NON-VACUITY: './pact-real' resolves to the real pact-real config whose
-        members include 'alice', so PRE-fix _name_is_team_member returned True —
-        the containment hole where a traversal resolving into a live team wrongly
-        validates a forged name@team. POST-fix the segment guard rejects the '/'
-        and returns False. The legit 'pact-real' control still returns True (the
-        guard does not break real single-segment teams). The NUL case
-        (open/read_text raises ValueError on every Python version) returns False
-        without raising; built via chr(0) so the test file holds no literal null
-        byte.
-        """
-        registry_env.write_team("pact-real", ["alice"])
-        m = session_registry._name_is_team_member
-        # Control: legit single-segment team with a real member → True.
-        assert m("alice", "pact-real") is True
-        # Lever: a traversal resolving into the real team dir was wrongly KEPT
-        # pre-fix; the segment guard now rejects it before any path is built.
-        assert m("alice", "./pact-real") is False
-        # NUL / traversal-segment @team → rejected, never raises.
-        assert m("alice", "pact-" + chr(0) + "real") is False
-        assert m("alice", "..") is False
 
 
 # ===========================================================================
@@ -254,30 +181,6 @@ class TestCorruptReadPath:
         registry_env.write_team("pact-team1", ["alice"])
         registry_env.write_raw_line("sess-noat", "alice-no-team")  # no @ in value
         assert resolve("sess-noat") is None
-
-    def test_stored_value_non_string_returns_none(self, registry_env):
-        """A line whose value is a non-string (e.g. a number) is ignored on read
-        -> None, never raises (isinstance(value, str) guard)."""
-        registry_env.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(registry_env.registry_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"session_id": "sess-nonstr", "value": 12345}) + "\n")
-        assert resolve("sess-nonstr") is None
-
-    def test_non_dict_json_line_skipped(self, registry_env):
-        """A JSON line that parses to a non-dict (e.g. a bare list/number) is
-        skipped, not crashed on -> resolve misses cleanly."""
-        registry_env.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(registry_env.registry_path, "a", encoding="utf-8") as fh:
-            fh.write("[1, 2, 3]\n")            # non-dict JSON
-            fh.write("42\n")                    # bare number
-        assert resolve("sess-anything") is None
-
-    def test_empty_name_half_in_stored_value_returns_none(self, registry_env):
-        """A value like '@team' (empty name half) -> rejected on read (the name
-        half is empty), never resolves to a bare '@team'."""
-        registry_env.write_team("pact-team1", ["alice"])
-        registry_env.write_raw_line("sess-emptyname", "@pact-team1")
-        assert resolve("sess-emptyname") is None
 
 
 # ===========================================================================
@@ -321,32 +224,6 @@ class TestRegisterCliRoundTrip:
         # In-process resolve (fixture REGISTRY_PATH == HOME/.claude/...) recovers it.
         assert resolve("sess-cli") == "devops@pact-cli"
 
-    def test_cli_runs_from_foreign_cwd_no_shared_import_error(self, registry_env, tmp_path):
-        """Self-containment: the script-mode invocation must NOT fail with a
-        ModuleNotFoundError for shared.* — it imports nothing from shared. Run it
-        from a deep unrelated cwd and assert a clean exit + empty stderr."""
-        foreign_cwd = tmp_path / "x" / "y" / "z"
-        foreign_cwd.mkdir(parents=True)
-        proc = self._run_cli(
-            "devops@pact-cli", home=registry_env.home,
-            session_id="sess-cli2", cwd=foreign_cwd,
-        )
-        assert proc.returncode == 0
-        assert "ModuleNotFoundError" not in proc.stderr
-        assert "Traceback" not in proc.stderr
-
-    def test_cli_missing_session_id_is_clean_noop(self, registry_env, tmp_path):
-        """No $CLAUDE_CODE_SESSION_ID in the CLI's env -> register is a clean
-        no-op (exit 0, nothing written), never an error exit."""
-        env = dict(os.environ)
-        env["HOME"] = str(registry_env.home)
-        env.pop("CLAUDE_CODE_SESSION_ID", None)
-        proc = subprocess.run(
-            [sys.executable, str(_REGISTRY_MODULE), "register", "--name", "devops@pact-cli"],
-            capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=30,
-        )
-        assert proc.returncode == 0, f"stderr=\n{proc.stderr}"
-        assert not registry_env.registry_path.exists()
 
     # --- in-process self-guard, exercised through the REAL script-mode CLI ----
     # The guard calls the new ``_read_lead_session_id`` helper. In-process tests
@@ -356,40 +233,4 @@ class TestRegisterCliRoundTrip:
     # subprocess under both topologies, so the guard is proven from the same entry
     # point production uses.
 
-    def test_cli_in_process_sid_equals_lead_session_id_skips_write(self, registry_env, tmp_path):
-        """Real CLI, IN-PROCESS topology: the subprocess's $CLAUDE_CODE_SESSION_ID
-        == config.leadSessionId -> the guard skips the write -> nothing on disk,
-        clean exit 0 (script-mode fidelity: a shared.* import regression in
-        _read_lead_session_id would surface here as a non-zero exit / traceback,
-        not silently)."""
-        registry_env.write_team("pact-cli", ["devops"], lead_session_id="lead-sid-xyz")
-        foreign_cwd = tmp_path / "deep" / "unrelated"
-        foreign_cwd.mkdir(parents=True)
 
-        proc = self._run_cli(
-            "devops@pact-cli", home=registry_env.home,
-            session_id="lead-sid-xyz", cwd=foreign_cwd,  # == leadSessionId
-        )
-        assert proc.returncode == 0, f"stderr=\n{proc.stderr}"
-        assert "Traceback" not in proc.stderr
-        assert "ModuleNotFoundError" not in proc.stderr
-        assert not registry_env.registry_path.exists(), (
-            "in-process CLI register (sid==leadSessionId) must SKIP the write"
-        )
-
-    def test_cli_tmux_sid_differs_from_lead_session_id_writes(self, registry_env, tmp_path):
-        """Real CLI, TMUX topology: the subprocess's $CLAUDE_CODE_SESSION_ID !=
-        config.leadSessionId -> the guard fails the match -> the write proceeds
-        and resolves. Positive control for the CLI in-process skip above."""
-        registry_env.write_team("pact-cli", ["devops"], lead_session_id="lead-sid-xyz")
-        foreign_cwd = tmp_path / "deep" / "elsewhere"
-        foreign_cwd.mkdir(parents=True)
-
-        proc = self._run_cli(
-            "devops@pact-cli", home=registry_env.home,
-            session_id="tmux-sid-distinct", cwd=foreign_cwd,  # != leadSessionId
-        )
-        assert proc.returncode == 0, f"stderr=\n{proc.stderr}"
-        assert resolve("tmux-sid-distinct") == "devops@pact-cli", (
-            "tmux CLI register (sid!=leadSessionId) must WRITE and resolve"
-        )

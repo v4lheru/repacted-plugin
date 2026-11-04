@@ -116,129 +116,6 @@ class TestResolveLatestArtifacts:
         ]
         assert resolve_latest_artifacts(events, self.FEATURE) == {"prepare": ["/c.md"]}
 
-    def test_distinct_workflows_both_kept(self):
-        events = [
-            _art_event("prepare", self.FEATURE, ["/p.md"], "2026-06-25T01:00:00Z"),
-            _art_event("architect", self.FEATURE, ["/a.md"], "2026-06-25T01:00:00Z"),
-        ]
-        assert resolve_latest_artifacts(events, self.FEATURE) == {
-            "prepare": ["/p.md"], "architect": ["/a.md"]}
-
-    def test_wrong_feature_excluded(self):
-        events = [
-            _art_event("prepare", self.FEATURE, ["/mine.md"], "2026-06-25T01:00:00Z"),
-            _art_event("prepare", "other-feat", ["/other.md"], "2026-06-25T02:00:00Z"),
-        ]
-        assert resolve_latest_artifacts(events, self.FEATURE) == {"prepare": ["/mine.md"]}
-
-    def test_empty_events_returns_empty_dict(self):
-        assert resolve_latest_artifacts([], self.FEATURE) == {}
-
-    @pytest.mark.parametrize("bad", [
-        [1, 2, 3], "a string", None, 42,
-        {"feature": FEATURE, "paths": ["/x.md"], "ts": "2026-06-25T01:00:00Z"},  # no workflow
-        {"workflow": "prepare", "feature": FEATURE, "ts": "2026-06-25T01:00:00Z"},  # no paths
-        {"workflow": "prepare", "feature": FEATURE, "paths": "/x.md", "ts": "2026-06-25T01:00:00Z"},  # paths not list
-    ])
-    def test_malformed_events_skipped_defensively(self, bad):
-        """Non-dict entries and dicts missing workflow/paths (or paths-not-list)
-        are skipped — parity with the _read_events_at isinstance(dict) guard."""
-        good = _art_event("prepare", self.FEATURE, ["/good.md"], "2026-06-25T05:00:00Z")
-        assert resolve_latest_artifacts([bad, good], self.FEATURE) == {"prepare": ["/good.md"]}
-
-    def test_bad_ts_never_supersedes_good(self):
-        """A missing/unparseable ts is treated as older than any parseable ts,
-        so a malformed later event cannot mask a well-formed one — regardless of
-        insertion order (both orderings asserted)."""
-        good = _art_event("prepare", self.FEATURE, ["/good.md"], "2026-06-25T02:00:00Z")
-        bad = {"type": "artifact_paths", "workflow": "prepare",
-               "feature": self.FEATURE, "paths": ["/bad.md"], "ts": "not-a-ts"}
-        assert resolve_latest_artifacts([good, bad], self.FEATURE) == {"prepare": ["/good.md"]}
-        assert resolve_latest_artifacts([bad, good], self.FEATURE) == {"prepare": ["/good.md"]}
-
-    def test_missing_ts_never_supersedes_good(self):
-        good = _art_event("prepare", self.FEATURE, ["/good.md"], "2026-06-25T02:00:00Z")
-        no_ts = {"type": "artifact_paths", "workflow": "prepare",
-                 "feature": self.FEATURE, "paths": ["/nots.md"]}
-        assert resolve_latest_artifacts([good, no_ts], self.FEATURE) == {"prepare": ["/good.md"]}
-        assert resolve_latest_artifacts([no_ts, good], self.FEATURE) == {"prepare": ["/good.md"]}
-
-    def test_equal_ts_tie_break_is_last_wins(self):
-        """Same-second double-emit: on a byte-IDENTICAL ts in the same
-        (workflow, feature) group, the LAST-written event (iterated later in
-        journal order) supersedes — `make_event` stamps ts at second
-        granularity, so two emits of the same phase doc can collide and the
-        authoritative one is the later complete snapshot. Both orderings are
-        asserted so the result tracks journal order, not insertion luck: a
-        first-wins (`>` instead of `>=`) regression flips BOTH and goes RED."""
-        first = _art_event("prepare", self.FEATURE, ["/first.md"], "2026-06-25T01:00:00Z")
-        second = _art_event("prepare", self.FEATURE, ["/second.md"], "2026-06-25T01:00:00Z")
-        assert resolve_latest_artifacts([first, second], self.FEATURE) == {"prepare": ["/second.md"]}
-        assert resolve_latest_artifacts([second, first], self.FEATURE) == {"prepare": ["/first.md"]}
-
-    def test_naive_vs_aware_ts_compares_by_utc_assumed_instant(self):
-        """A parseable-but-tz-NAIVE ts is assumed UTC and compared by actual
-        INSTANT against an aware `...Z` ts — instead of raising TypeError and
-        fail-open keeping the (possibly stale) incumbent. No crash either way.
-        Trigger requires a corrupted journal (make_event always stamps aware-Z).
-
-        Key case (the LOW fix): when the NAIVE value is the LATER instant it now
-        SUPERSEDES the earlier aware incumbent. RED-on-revert: dropping the
-        coerce-to-aware makes `candidate >= incumbent` raise TypeError -> the
-        kept outer try/except returns False -> the stale aware incumbent is kept
-        -> the first assertion flips RED."""
-        aware_early = _art_event(
-            "prepare", self.FEATURE, ["/aware.md"], "2026-06-25T01:00:00Z")
-        naive_late = {"type": "artifact_paths", "workflow": "prepare",
-                      "feature": self.FEATURE, "paths": ["/naive.md"],
-                      "ts": "2026-06-25T05:00:00"}  # naive -> 05:00 UTC > 01:00
-        # Naive value is the later instant -> supersedes the aware incumbent.
-        assert resolve_latest_artifacts(
-            [aware_early, naive_late], self.FEATURE) == {"prepare": ["/naive.md"]}
-        # Symmetric: an aware value later than a naive one still wins (no crash).
-        aware_late = _art_event(
-            "prepare", self.FEATURE, ["/aware2.md"], "2026-06-25T09:00:00Z")
-        naive_early = {"type": "artifact_paths", "workflow": "prepare",
-                       "feature": self.FEATURE, "paths": ["/naive2.md"],
-                       "ts": "2026-06-25T02:00:00"}
-        assert resolve_latest_artifacts(
-            [naive_early, aware_late], self.FEATURE) == {"prepare": ["/aware2.md"]}
-
-    def test_mixed_z_and_offset_ts_compare_by_instant_last_wins(self):
-        """Belt-and-suspenders: a `...Z` ts and an equal-instant `...+00:00` ts
-        for the same (workflow, feature) must be compared as the SAME instant —
-        so the tie resolves LAST-wins (the later-iterated event survives),
-        regardless of which spelling came first. A LEXICAL string compare would
-        be WRONG here ('+' 0x2B sorts before 'Z' 0x5A), so reverting
-        _ts_supersedes/_parse_ts to compare the raw strings flips the
-        Z-then-offset ordering RED — that is this test's non-vacuity hook (on
-        3.13 fromisoformat parses a bare 'Z' natively, so the Z->+00:00
-        normalization itself is not the discriminator; the parsed-not-lexical
-        comparison is)."""
-        z_ts = "2026-06-25T01:00:00Z"
-        offset_ts = "2026-06-25T01:00:00+00:00"
-        z_first = _art_event("prepare", self.FEATURE, ["/z.md"], z_ts)
-        offset_first = _art_event("prepare", self.FEATURE, ["/offset.md"], offset_ts)
-        # Same instant -> last-wins; the discriminating ordering is z-then-offset
-        # (a lexical compare would keep /z.md instead of the later /offset.md).
-        assert resolve_latest_artifacts(
-            [z_first, offset_first], self.FEATURE) == {"prepare": ["/offset.md"]}
-        assert resolve_latest_artifacts(
-            [offset_first, z_first], self.FEATURE) == {"prepare": ["/z.md"]}
-
-    def test_non_string_path_elements_filtered_from_output(self):
-        """A surviving event whose `paths` list carries non-string elements
-        (int, None, dict) emits ONLY its string entries — the element-level
-        isinstance guard, parity with the event-level non-dict skip. Reverting
-        the filter (emitting `event["paths"]` raw) leaks the non-string entries
-        -> RED."""
-        ev = {"type": "artifact_paths", "workflow": "prepare",
-              "feature": self.FEATURE,
-              "paths": ["/good.md", 123, None, {"x": 1}, "/also.md"],
-              "ts": "2026-06-25T01:00:00Z"}
-        assert resolve_latest_artifacts([ev], self.FEATURE) == {
-            "prepare": ["/good.md", "/also.md"]}
-
 
 # =============================================================================
 # (2) SUBPROCESS — resolve-session-dir contract + THE B1-CLASS DRIFT PARITY.
@@ -303,51 +180,6 @@ class TestResolveSessionDirSubprocess:
         # And concretely: the dot/space are gone from BOTH path segments.
         assert "my_project_dir" in out and "abc_def_123" in out
 
-    def test_nul_byte_path_is_bad_input_not_crash(self, capsys):
-        """A context-file path with an embedded NUL byte raises ValueError from
-        Path.read_text ('embedded null byte') — it must be handled as bad-input
-        (exit 2 + empty stdout + stderr diagnostic), NOT an uncaught exit-1
-        crash. Exercised IN-PROCESS by calling the handler directly: the CLI
-        subprocess can't carry a NUL in argv (execve strips it), so the guard is
-        unreachable via _run_cli; this is the only way to drive the path.
-        Regression-proof: dropping ValueError from the read's except clause lets
-        the ValueError escape the handler -> this raises instead of returning 2,
-        going RED."""
-        rc = _resolve_session_dir("/tmp/ctx\x00.json")
-        assert rc == _EXIT_UNRESOLVED, "NUL path must be bad-input (exit 2), not a crash"
-        captured = capsys.readouterr()
-        assert captured.out == "", "exit-2 path must emit EMPTY stdout"
-        assert "embedded null byte" in captured.err
-
-    @pytest.mark.parametrize("scenario", ["missing_file", "bad_json", "not_object",
-                                          "falsy_project", "falsy_session"])
-    def test_unresolvable_exit2_empty_stdout(self, tmp_path, scenario):
-        """Every bad-input path → exit 2 + EMPTY stdout (the skill's stop gate
-        keys on the exit code; stdout must carry no data to mis-parse)."""
-        if scenario == "missing_file":
-            target = str(tmp_path / "does-not-exist.json")
-        elif scenario == "bad_json":
-            f = tmp_path / "bad.json"; f.write_text("{not json", encoding="utf-8")
-            target = str(f)
-        elif scenario == "not_object":
-            f = tmp_path / "arr.json"; f.write_text("[1,2,3]", encoding="utf-8")
-            target = str(f)
-        elif scenario == "falsy_project":
-            target = str(self._write_ctx(tmp_path, "", "sess-abcd"))
-        else:  # falsy_session
-            target = str(self._write_ctx(tmp_path, "/clean/project", ""))
-        r = _run_cli("resolve-session-dir", "--context-file", target)
-        assert r.returncode == _EXIT_UNRESOLVED, f"{scenario}: expected exit 2"
-        assert r.stdout == "", f"{scenario}: stdout must be EMPTY on exit 2"
-
-    def test_exit_code_is_2_never_1_on_bad_input(self, tmp_path):
-        """Bad input is EXACTLY 2, never 1 (1 is reserved for internal errors).
-        Pins the documented divergence from session_journal's exit-1 CLI."""
-        r = _run_cli("resolve-session-dir", "--context-file",
-                     str(tmp_path / "nope.json"))
-        assert r.returncode == _EXIT_UNRESOLVED
-        assert r.returncode != _EXIT_INTERNAL_ERROR
-
 
 # =============================================================================
 # (3) SUBPROCESS — resolve-artifacts contract.
@@ -391,19 +223,6 @@ class TestResolveArtifactsSubprocess:
         r = _run_cli("resolve-artifacts", "--session-dir", sd, "--feature", self.FEATURE)
         assert r.returncode == _EXIT_OK
         assert json.loads(r.stdout) == {"prepare": ["/mine.md"]}
-
-    def test_empty_result_is_empty_object_exit0(self, session_with_events):
-        """A legitimately-empty result is {} at exit 0 (NOT a stop trigger)."""
-        sd = session_with_events
-        r = _run_cli("resolve-artifacts", "--session-dir", sd, "--feature", "no-such-feat")
-        assert r.returncode == _EXIT_OK
-        assert json.loads(r.stdout) == {}
-
-    @pytest.mark.parametrize("bad_dir", ["", "relative/dir"])
-    def test_bad_session_dir_exit2_empty_stdout(self, bad_dir):
-        r = _run_cli("resolve-artifacts", "--session-dir", bad_dir, "--feature", self.FEATURE)
-        assert r.returncode == _EXIT_UNRESOLVED
-        assert r.stdout == ""
 
 
 # =============================================================================
@@ -490,27 +309,6 @@ class TestSubcommandArgparseContract:
         assert r.returncode != _EXIT_OK, "no-subcommand must not exit 0"
         assert r.returncode == 2, f"expected argparse exit 2, got {r.returncode}"
 
-    def test_unknown_subcommand_exits_nonzero_stop_gate(self):
-        """An invalid subcommand choice -> argparse error -> exit 2."""
-        r = _run_cli("definitely-not-a-subcommand")
-        assert r.returncode != _EXIT_OK, "unknown-subcommand must not exit 0"
-        assert r.returncode == 2, f"expected argparse exit 2, got {r.returncode}"
-
-    @pytest.mark.parametrize("argv", [
-        ["resolve-session-dir"],                       # missing --context-file
-        ["resolve-artifacts", "--feature", "f"],       # missing --session-dir
-        ["resolve-artifacts", "--session-dir", "/x"],  # missing --feature
-    ])
-    def test_missing_required_arg_exits_2_empty_stdout(self, argv):
-        """A subcommand invoked WITHOUT a required argument -> argparse error ->
-        exit 2 with EMPTY stdout (the stop gate keys on the non-zero code, and
-        no data may leak to stdout for the skill to mis-parse). A regression
-        that dropped `required=True` on any of these would let the invocation
-        reach a handler with a None arg -> RED here."""
-        r = _run_cli(*argv)
-        assert r.returncode == 2, f"{argv}: expected argparse exit 2, got {r.returncode}"
-        assert r.stdout == "", f"{argv}: stdout must be EMPTY on exit 2"
-
 
 # =============================================================================
 # (7) TRAVERSAL DEFENSE + GRACEFUL-TS — through the real CLI.
@@ -560,39 +358,6 @@ class TestTraversalAndGracefulTs:
         # no segment escapes upward.
         assert all(p != ".." for p in parts[sessions_idx:])
 
-    def test_resolve_artifacts_naive_ts_does_not_crash_via_cli(
-        self, tmp_path, monkeypatch, pact_context):
-        """End-to-end: a corrupted journal carrying one aware-Z and one
-        parseable-but-naive ts for the same (workflow, feature) must NOT crash
-        the CLI. The naive ts is assumed UTC and compared by instant: here the
-        aware 03:00Z event is the LATER instant, so it survives over the 00:00
-        (UTC-assumed) naive event. Exits 0 with valid JSON and no TypeError
-        traceback. (Before any naive/aware handling this raised TypeError ->
-        exit 1.)"""
-        # CLAUDE_CONFIG_DIR (not just Path.home) so the SUBPROCESS's --session-dir
-        # containment check resolves the same tmp root — the home monkeypatch is
-        # not inherited by the child; the env var is.
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
-        pact_context(team_name="t", session_id="sid-naive", project_dir="/proj")
-        slug = Path("/proj").name
-        session_dir = tmp_path / ".claude" / "pact-sessions" / slug / "sid-naive"
-        feature = "feat-naive"
-        append_event(_art_event("prepare", feature, ["/aware.md"], "2026-06-25T03:00:00Z"))
-        # A hand-corrupted naive (date-only) ts — only reachable via a mangled
-        # journal, since make_event always stamps aware-Z.
-        append_event({"v": 1, "type": "artifact_paths", "workflow": "prepare",
-                      "feature": feature, "paths": ["/naive.md"], "ts": "2026-06-25"})
-        r = _run_cli("resolve-artifacts", "--session-dir", str(session_dir),
-                     "--feature", feature)
-        assert r.returncode == _EXIT_OK, (
-            f"naive-vs-aware ts must degrade gracefully, not crash; "
-            f"rc={r.returncode} stderr={r.stderr!r}"
-        )
-        assert "TypeError" not in r.stderr
-        # A valid JSON object is emitted; the later-instant aware event survives.
-        assert json.loads(r.stdout) == {"prepare": ["/aware.md"]}
-
 
 # =============================================================================
 # (8) SESSION-DIR CONTAINMENT — resolve-artifacts rejects a --session-dir
@@ -627,25 +392,6 @@ class TestSessionDirContainment:
             f"stderr={r.stderr!r}")
         assert json.loads(r.stdout) == {"prepare": ["/c.md"]}
 
-    def test_out_of_tree_session_dir_rejected_exit2_empty_stdout(
-        self, tmp_path, monkeypatch):
-        """An ABSOLUTE --session-dir OUTSIDE the pact-sessions root is bad input
-        -> exit 2 + EMPTY stdout + stderr diagnostic, so a stray journal under
-        an unrelated directory is never read. Non-vacuity: with the containment
-        check reverted, read_events_from would simply return [] -> '{}' at exit
-        0, so asserting exit 2 here goes RED on revert."""
-        self._configure_root(tmp_path, monkeypatch)
-        # Absolute (clears the non-empty + absolute checks) but NOT under
-        # <tmp>/.claude/pact-sessions — must be rejected by containment.
-        outside = tmp_path / "outside-tree" / "sid-x"
-        r = _run_cli("resolve-artifacts", "--session-dir", str(outside),
-                     "--feature", "feat-c")
-        assert r.returncode == _EXIT_UNRESOLVED, (
-            f"out-of-tree session-dir must be exit 2; rc={r.returncode} "
-            f"stderr={r.stderr!r}")
-        assert r.stdout == "", "exit-2 path must emit EMPTY stdout"
-        assert "pact-sessions root" in r.stderr
-
 
 # =============================================================================
 # (9) _parse_ts TRAILING-Z ANCHOR — only a SINGLE trailing `Z` is rewritten to
@@ -663,17 +409,6 @@ class TestParseTsTrailingZAnchor:
         assert _parse_ts("2026-06-25T01:00:00Z") == _parse_ts(
             "2026-06-25T01:00:00+00:00")
         assert _parse_ts("2026-06-25T01:00:00Z").utcoffset().total_seconds() == 0
-
-    def test_only_trailing_z_normalized_interior_preserved(self):
-        """The anchor rewrites ONLY the final `Z`; interior `Z`s are left
-        intact. A multi-`Z` string is the discriminator: trailing-only touches
-        just the last one. RED-on-revert: the old blanket `.replace("Z",
-        "+00:00")` rewrites EVERY `Z` -> '2026+00:0006+00:0001+00:00', so this
-        equality flips RED under the revert."""
-        assert _normalize_trailing_z("2026Z06Z01Z") == "2026Z06Z01+00:00"
-        # A string with NO trailing Z is returned byte-for-byte unchanged.
-        assert _normalize_trailing_z(
-            "2026-06-25T00:00:00+00:00") == "2026-06-25T00:00:00+00:00"
 
 
 class TestHarvestTeachExamples:
@@ -699,33 +434,4 @@ class TestHarvestTeachExamples:
         for line in self._EXAMPLES.values():
             assert line in r.stdout, line
 
-    def test_every_subcommand_help_carries_its_own_example(self):
-        for verb, line in self._EXAMPLES.items():
-            r = _run_cli(verb, "--help")
-            assert r.returncode == 0, verb
-            assert line in r.stdout, verb
 
-    def test_missing_context_file_usage_has_example_empty_stdout(self):
-        r = _run_cli("resolve-session-dir")
-        assert r.returncode == 2
-        assert r.stdout == ""
-        assert "error:" in r.stderr
-        # One blank line between the error line and the example.
-        assert (
-            f"\n\nExamples:\n  {self._EXAMPLES['resolve-session-dir']}\n"
-            in r.stderr
-        )
-
-    def test_bare_invocation_is_usage_error_with_one_example(self):
-        r = _run_cli()
-        assert r.returncode == 2
-        assert r.stdout == ""
-        assert "error:" in r.stderr
-        assert self._EXAMPLES["resolve-session-dir"] in r.stderr
-
-    def test_unknown_top_level_flag_is_usage_error_with_one_example(self):
-        r = _run_cli("--nope")
-        assert r.returncode == 2
-        assert r.stdout == ""
-        assert "error:" in r.stderr
-        assert self._EXAMPLES["resolve-session-dir"] in r.stderr

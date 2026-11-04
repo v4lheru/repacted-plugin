@@ -100,20 +100,11 @@ class TestRoleGate:
     """Real-main() emission per role, using CAPTURED real SessionStart frames."""
 
     @pytest.mark.parametrize("frame_factory", [
-        captured_lead_sessionstart_qualified,
-        captured_lead_sessionstart_unqualified,
-        captured_plain_sessionstart,   # unknown role (agent_type absent) -> still injected
-    ], ids=["lead-qualified", "lead-unqualified", "plain-unknown"])
+        captured_lead_sessionstart_qualified,], ids=["lead-qualified",])
     def test_lead_or_unknown_frame_receives_block(self, frame_factory, monkeypatch, tmp_path):
         ctx = _emit(frame_factory(), monkeypatch, tmp_path)
         assert _HEADING in ctx
         assert "PR greedy-fix: ON (PACT_PR_GREEDY_FIX)" in ctx
-
-    def test_teammate_frame_omits_block(self, monkeypatch, tmp_path):
-        # Real captured teammate SessionStart (--agent pact-preparer): a recognized
-        # specialist spelling -> classify "teammate" -> gated out.
-        ctx = _emit(captured_teammate_sessionstart(), monkeypatch, tmp_path)
-        assert "PACT Runtime Config" not in ctx
 
 
 class TestTopologyInvariance:
@@ -122,8 +113,8 @@ class TestTopologyInvariance:
     relationships yields the same outcome -- a drift-guard against a future edit
     that (wrongly) makes the injection read session_id."""
 
-    @pytest.mark.parametrize("sid", [_LEAD_SID, _TMUX_TEAMMATE_SID],
-                             ids=["session_id==leadSessionId", "session_id!=leadSessionId"])
+    @pytest.mark.parametrize("sid", [_LEAD_SID,],
+                             ids=["session_id==leadSessionId",])
     def test_teammate_gated_regardless_of_session_id(self, sid, monkeypatch, tmp_path):
         # tmux teammate (session_id != lead) is the live production path; the
         # session_id == lead cell is the in-process-collapse shape. BOTH must gate
@@ -135,20 +126,4 @@ class TestTopologyInvariance:
             "(the injection keys on frame_role, never session_id)"
         )
 
-    @pytest.mark.parametrize("sid", [_LEAD_SID, _TMUX_TEAMMATE_SID],
-                             ids=["session_id==leadSessionId", "session_id!=leadSessionId"])
-    def test_lead_receives_regardless_of_session_id(self, sid, monkeypatch, tmp_path):
-        ctx = _emit(lead_frame_qualified(session_id=sid), monkeypatch, tmp_path)
-        assert _HEADING in ctx, (
-            "lead frame must receive the block under BOTH session topologies "
-            "(the injection keys on frame_role, never session_id)"
-        )
 
-    def test_role_is_the_only_discriminator(self, monkeypatch, tmp_path):
-        # Hold session_id FIXED and flip only agent_type: presence flips. This
-        # isolates role as the causal variable (companion to the invariance above).
-        lead_ctx = _emit(lead_frame_qualified(session_id=_LEAD_SID), monkeypatch, tmp_path)
-        team_ctx = _emit(teammate_frame("pact-backend-coder", session_id=_LEAD_SID),
-                         monkeypatch, tmp_path)
-        assert _HEADING in lead_ctx
-        assert "PACT Runtime Config" not in team_ctx

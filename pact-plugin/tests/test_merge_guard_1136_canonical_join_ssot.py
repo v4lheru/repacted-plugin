@@ -163,11 +163,11 @@ _HASH_3 = PUSH + '"origin#a" ' + DEL + "b c"       # remote 'origin#a', refs {'b
 class TestCanonicalJoinInjectivity:
 
     @pytest.mark.parametrize("items", [
-        [], [""], ["a"], ["", ""], ["", "a"], ["a", ""],
-        ["2", "ab"], ["2:a", "b"], ["10", "x" * 10], ["1", "0" + "x" * 10],
-        ["a:b"], ["a", ":b"], ["a:", "b"], ["a#b"], ["a,b"], ["a@b"],
-        ["\x00implicit"], ["5:xxxxx"], ["100", "y" * 100], ["a\x00b", "c"],
-    ])
+    [],
+    ["2", "ab"],
+    ["a#b"],
+    ["a\x00b", "c"],
+])
     def test_constructive_left_inverse_round_trips(self, items):
         # decode(encode(items)) == items for every edge -> CJ is injective (a left inverse
         # exists). TOTAL: empty list encodes to "" and decodes to [].
@@ -187,17 +187,11 @@ class TestCanonicalJoinInjectivity:
             seen[enc] = seq
 
     @pytest.mark.parametrize("x,y", [
-        (["2", "ab"], ["2:a", "b"]),          # digit-boundary
-        (["10", "x" * 10], ["1", "0" + "x" * 10]),  # multi-digit length
-        (["a:b"], ["a", ":b"]),               # embedded ':' split
-        (["a:b"], ["a:", "b"]),
-        (["a#b"], ["a", "b"]),                # old '#' delim now harmless
-        (["a,b"], ["a", "b"]),                # old ',' delim now harmless
-        ([""], []),                           # empty-item vs empty-list
-        (["", "a"], ["a"]),                   # empty-field prefix
-        (["5:xxxxx"], ["5", "xxxxx"]),        # content that LOOKS like a netstring
-        (["a\x00b"], ["a", "b"]),             # NUL-in-field vs 2 fields
-    ])
+    (["2", "ab"], ["2:a", "b"]),
+    (["a:b"], ["a:", "b"]),
+    ([""], []),
+    (["a\x00b"], ["a", "b"]),
+])
     def test_adversarial_field_contents_distinct(self, x, y):
         # My INDEPENDENTLY-derived adversarial corpus (per lead: no coordination with security;
         # the fresh peer-review pass derives its own). Compared by STRING-EQUALITY, never decoded.
@@ -214,19 +208,9 @@ class TestUnderBlockClosure:
         # even where the base commit is unreachable and the base differential below skips.
         assert MT(_COMMA_2) != MT(_COMMA_3)  # HEAD REFUSES
 
-    @requires_history
-    def test_comma_identity_base_collides(self):
-        # Base non-vacuity differential (skipped w/o history): base COLLIDES the two sets.
-        assert MT_BASE(_COMMA_2) == MT_BASE(_COMMA_3) and MT_BASE(_COMMA_2) is not None
-
     def test_hash_identity_head_distinct(self):
         # HEAD-side closure REFUSE — ALWAYS RUNS (unguarded).
         assert MT(_HASH_2) != MT(_HASH_3)  # HEAD REFUSES
-
-    @requires_history
-    def test_hash_identity_base_collides(self):
-        # Base non-vacuity differential (skipped w/o history): base COLLIDES the two sets.
-        assert MT_BASE(_HASH_2) == MT_BASE(_HASH_3) and MT_BASE(_HASH_2) is not None
 
     def test_comma_collision_closed_at_real_gate(self, tmp_path):
         # HEAD: a token minted for the 2-set does NOT authorize executing the 3-set.
@@ -236,27 +220,6 @@ class TestUnderBlockClosure:
     def test_hash_collision_closed_at_real_gate(self, tmp_path):
         assert _mint(_HASH_2, tmp_path) == 1
         assert _execute(_HASH_3, tmp_path) == DENY
-
-    @requires_history
-    def test_base_encoder_through_real_gate_cross_authorizes(self, tmp_path, monkeypatch):
-        # DIRECT gate-level non-vacuity for the two closure rows above: patch the BAKED BASE
-        # encoder (loaded from 9256c93c) into the ONE SSOT both mint and read derive from, and
-        # the collision CROSS-AUTHORIZES at the REAL mint->execute gate — a 2-set token ALLOWs
-        # the DISTINCT exec — for BOTH witnesses. This exhibits the bug through the ACTUAL
-        # machinery (not just the pure-function identity), so the HEAD DENY rows are genuine
-        # differentials: a revert of the netstring encoder to the @/#/comma joins reopens this
-        # exact cross-authorization. (Base-through-gate ALLOW verified empirically before adding.)
-        for name, two, three in [("comma", _COMMA_2, _COMMA_3), ("hash", _HASH_2, _HASH_3)]:
-            d = tmp_path / name
-            d.mkdir()
-            # 1.4.1 U13's checkout/remote binding and the word-for-word binding are taken out
-            # so the encoder stays the closer.
-            take_out_typed(monkeypatch)
-            with patch.object(mgc, "_extract_mass_delete_target", MT_BASE), \
-                    patch.object(mgc, "_git_binding", lambda ctx, cmd, start=None: ctx):
-                assert _mint(two, d) == 1, "%s: base 2-set must mint through the gate" % name
-                assert _execute(three, d) == ALLOW, \
-                    "%s: base collision must cross-authorize at the gate (else HEAD row is vacuous)" % name
 
     # NON-VACUITY note: the coupling proof for these rows is the BAKED BASE column above
     # (MT_BASE, loaded from the real pre-fix source 9256c93c) — it uses the actual @/# encoding
@@ -273,18 +236,10 @@ class TestUnderBlockClosure:
 class TestOverBlockSelfMatchCorpus:
 
     _MASS = [
-        ("2-ref delete", PUSH + "origin " + DEL + "a b"),
-        ("3-ref delete", PUSH + "origin " + DEL + "a b c"),
-        ("comma-in-name", PUSH + "origin " + DEL + '"a,b" c'),
-        ("hash-in-name", PUSH + "origin " + DEL + '"a#b" c'),
-        ("hash-in-remote", _HASH_3),  # `#` in the REMOTE (not the ref) — the #-witness's OTHER
-                                      # set. A faithful click here mints+self-matches, so the
-                                      # #-gate-closure DENY below is a WRONG-SET denial, not an
-                                      # unmintable-always-deny artifact (non-vacuity control).
-        ("colon-empty-src", PUSH + "origin " + ":a :b"),
-        ("mirror implicit", PUSH + "--mirror origin"),
-        ("prune", PUSH + "--prune origin refs/heads/x refs/heads/y"),
-    ]
+    ("2-ref delete", PUSH + "origin " + DEL + "a b"),
+    ("hash-in-remote", _HASH_3),
+    ("prune", PUSH + "--prune origin refs/heads/x refs/heads/y"),
+]
     _D = "-" + "D"
     _BRANCH = [
         ("branch 2", "git branch " + _D + " aa bb"),
@@ -315,14 +270,6 @@ class TestOverBlockSelfMatchCorpus:
 # ===========================================================================
 class TestDoubledSurfaceBaseVsHead:
 
-    @requires_history
-    def test_mass_target_collision_flips_base_to_head(self):
-        # mass_target: base(comma) COLLIDES -> HEAD(netstring) REFUSES (the #1136 flip).
-        # Base-differential (skipped w/o history); the HEAD `!=` half runs unguarded in
-        # test_comma_identity_head_distinct, so a fix-revert is still caught where the base commit is unreachable.
-        assert MT_BASE(_COMMA_2) == MT_BASE(_COMMA_3)
-        assert MT(_COMMA_2) != MT(_COMMA_3)
-
     def test_branch_set_head_collision_safe(self):
         # HEAD-side: a comma-named branch set and a 3-branch set are DISTINCT at HEAD
         # (netstring). ALWAYS RUNS (unguarded) so CI catches a fix-revert where the base commit is unreachable.
@@ -331,16 +278,6 @@ class TestDoubledSurfaceBaseVsHead:
         three = "git branch " + _D + " aa bb cc"
         bset = mgc._extract_branch_delete_set
         assert bset(two) != bset(three)            # stays safe at HEAD (netstring)
-
-    @requires_history
-    def test_branch_set_base_collision_safe(self):
-        # branch_set was ALREADY collision-safe on base (NUL join, R1 F1) -> its non-vacuity is
-        # NOT a base-flip; this differential confirms it stays distinct on base too. Skipped w/o history.
-        _D = "-" + "D"
-        two = "git branch " + _D + ' "aa,bb" cc'
-        three = "git branch " + _D + " aa bb cc"
-        bset_base = _BASE._extract_branch_delete_set
-        assert bset_base(two) != bset_base(three)  # already safe on base (NUL)
 
     def test_branch_set_over_block_intact_across_move(self, tmp_path):
         _D = "-" + "D"

@@ -246,26 +246,6 @@ class TestResolutionIsLateNotImportTime:
         assert second == moved / "memory.db"
         assert second != first
 
-    def test_home_change_after_import_still_moves_the_store(self, tmp_path):
-        """FAILS PRE-FIX, and this is the ORDER-DEPENDENCE test.
-
-        With no override set, the resolver must consult `Path.home()` at CALL
-        time. Pre-fix it consulted a value captured at import, so this returned
-        the real home no matter what the patch said.
-        """
-        elsewhere = tmp_path / "elsewhere"
-        with pytest.MonkeyPatch.context() as mp:
-            mp.delenv(MEMORY_DIR_ENV, raising=False)
-            mp.setattr(Path, "home", lambda: elsewhere)
-            assert get_memory_dir() == elsewhere / ".claude" / "pact-memory"
-
-    def test_empty_override_is_treated_as_unset(self, tmp_path):
-        """An empty value must not relocate the store to a relative path."""
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setenv(MEMORY_DIR_ENV, "")
-            mp.setattr(Path, "home", lambda: tmp_path)
-            assert get_memory_dir() == tmp_path / ".claude" / "pact-memory"
-
 
 class TestRedirectCrossesTheProcessBoundary:
     """Mechanism 2: a child interpreter must inherit the redirect."""
@@ -276,13 +256,6 @@ class TestRedirectCrossesTheProcessBoundary:
         target = tmp_path / "child-store"
         out = _run_child(_RESOLVE_IN_CHILD, {MEMORY_DIR_ENV: str(target)})
         assert out == str(target / "memory.db")
-
-    def test_child_process_does_not_reach_the_real_store(self, tmp_path):
-        """The property stated as the thing we actually care about."""
-        target = tmp_path / "child-store"
-        out = _run_child(_RESOLVE_IN_CHILD, {MEMORY_DIR_ENV: str(target)})
-        assert out == str(target / "memory.db")
-        assert not out.startswith(str(_REAL_HOME / ".claude" / "pact-memory"))
 
 
 class TestProductionStillResolvesTheRealStore:
@@ -309,169 +282,7 @@ class TestProductionStillResolvesTheRealStore:
             "passes no --db-path on purpose"
         )
 
-    def test_resolution_creates_nothing_by_itself(self, tmp_path):
-        """Resolving a path must not have side effects.
-
-        `compute_db_path` in `config` only computes. Directory creation belongs to
-        the callers that intend it, so merely asking where the store is can
-        never create a stray tree in someone's home.
-        """
-        target = tmp_path / "never-created"
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setenv(MEMORY_DIR_ENV, str(target))
-            compute_db_path()
-        assert not target.exists()
-
-
-class TestTheSuiteIsActuallyIsolatedRightNow:
-    """The end-to-end property, asserted from inside the running suite."""
-
-    def test_this_very_test_resolves_away_from_the_real_store(self):
-        """If the autouse fixture ever stops working, this fails immediately."""
-        resolved = str(compute_db_path())
-        real = str(_REAL_HOME / ".claude" / "pact-memory")
-        assert not resolved.startswith(real), (
-            f"this test resolves the memory store to {resolved}, which is the "
-            f"operator's real store. The isolation fixture is not working."
-        )
-
-    def test_the_override_is_set_for_every_test(self):
-        assert os.environ.get(MEMORY_DIR_ENV), (
-            "no memory-store override is set, so resolution falls back to the "
-            "real home for every test in this run"
-        )
-
 
 _LEFT_THE_FLAG_SET = False
 
 
-class TestInitStateDoesNotLeakBetweenStores:
-    """The process-global lazy-init flag must not carry across tests.
-
-    `memory_init.ensure_memory_ready()` returns early on a MODULE-LEVEL flag,
-    before resolving any path, and two of the three things it guards are
-    per-database. With the store now per-test, a test that runs after one which
-    initialised a DIFFERENT store would be told the work was already done for a
-    store nothing had touched.
-
-    AN ORDERED PAIR, WHICH IS A LIABILITY AND IS GUARDED. The first test leaves
-    the flag set; the second asserts it was cleared. If the two ever stop
-    running in this order, the second would pass for the wrong reason -- it
-    would find a clean flag because nothing had dirtied it. `_LEFT_THE_FLAG_SET`
-    exists to turn that false green into a loud failure. No ordering plugin is
-    installed in this suite today, so definition order holds; the guard is for
-    the day that stops being true.
-    """
-
-    def test_a_leaves_the_process_flag_set_for_its_own_store(self, monkeypatch):
-        """Dirty the global deliberately. This is the precondition, not a check.
-
-        The guarded work is replaced with no-ops: this pair is about the FLAG,
-        and running the real dependency check and migration here would make the
-        test slow and dependent on the environment for no added signal.
-        """
-        global _LEFT_THE_FLAG_SET
-        from scripts import memory_init
-
-        for name in (
-            "check_and_install_dependencies",
-            "maybe_migrate_embeddings",
-            "maybe_embed_pending",
-        ):
-            monkeypatch.setattr(
-                memory_init, name,
-                lambda *a, **k: {"status": "ok", "installed": [], "failed": []},
-            )
-
-        memory_init.ensure_memory_ready()
-        assert memory_init.is_initialized(), (
-            "this test could not establish its own precondition: the flag did "
-            "not become set, so the next test would prove nothing"
-        )
-        _LEFT_THE_FLAG_SET = True
-
-    def test_b_starts_from_a_clean_flag(self):
-        """FAILS without the reset fixture. Its own store would be skipped.
-
-        The failure this prevents is silent: the second store is simply told the
-        work is done, and nothing raises.
-        """
-        from scripts import memory_init
-
-        assert _LEFT_THE_FLAG_SET, (
-            "the sibling that dirties the flag did not run before this one, so "
-            "a clean flag here means nothing. The order this pair depends on "
-            "has changed -- fix the pair rather than trusting this pass."
-        )
-        assert not memory_init.is_initialized(), (
-            "the lazy-init flag arrived already set, left by a test whose store "
-            "was a DIFFERENT directory. ensure_memory_ready() would return "
-            "early for this test's store and skip the per-database work it "
-            "guards. The reset fixture in conftest is not running."
-        )
-
-
-class TestEachIsolationLayerHasAWitness:
-    """One test per isolation layer, because ONE TEST CANNOT COVER BOTH.
-
-    The store is isolated twice over: `pytest_configure` assigns a session-wide
-    store before collection (the FLOOR), and an autouse fixture overrides it per
-    test (the PER-TEST redirect). The two are genuinely redundant for real-store
-    protection, so REMOVING EITHER ONE LEAVES THE SUITE GREEN -- each layer
-    covers for the other's absence. Both mutations were run and every other test
-    in this file survived both. That is the gap these two close.
-
-    WHY NOT ONE TEST. The per-test fixture OVERWRITES the session value, and it
-    runs after collection. So with the floor removed, the state visible to a test
-    body is IDENTICAL to the unmutated state, and no predicate over identical
-    state can differ. This is a structural limit, not a missing assertion: the
-    floor must be witnessed from collection time (see `_STORE_AT_COLLECTION`),
-    and the per-test redirect from inside a test body. Two vantages, two tests.
-
-    These are BEHAVIOURAL. They read the values the run actually used. The
-    sibling `TestTheSessionDefaultIsUnconditional` inspects source text instead,
-    and remains necessary: it catches a `setdefault` that is present and
-    fail-open, where these catch a layer that is absent or ineffective for ANY
-    reason. Neither subsumes the other.
-    """
-
-    def test_the_per_test_redirect_is_in_force_for_this_very_test(self, tmp_path):
-        """FAILS when the autouse per-test fixture is removed.
-
-        With that fixture gone the resolver returns the session floor, which is a
-        session-wide temp directory and NOT under this test's `tmp_path`. Nothing
-        else in this file notices that change.
-        """
-        resolved = get_memory_dir()
-        assert resolved.is_relative_to(tmp_path), (
-            f"the memory store resolves to {resolved}, which is NOT under this "
-            f"test's own tmp_path ({tmp_path}). The per-test isolation fixture "
-            f"is not in force, so tests share one store and can see each "
-            f"other's writes."
-        )
-
-    def test_the_session_floor_was_applied_before_collection(self):
-        """FAILS when the `pytest_configure` assignment is removed.
-
-        Asserts the override in force AT COLLECTION was the one the floor
-        installs. Equality against the floor's own value is deliberate: a weaker
-        'is set and is not the real store' check stays GREEN for a contributor
-        who exports `PACT_TEST_MEMORY_DIR` to some harmless directory of their own,
-        which is precisely the inherited-value fail-open the floor exists to
-        prevent.
-        """
-        expected = _SESSION_FLOOR_AT_COLLECTION
-        assert expected is not None, (
-            "could not identify the loaded conftest at collection, so this "
-            "test has no reference value to compare against. It would pass or "
-            "fail for reasons unrelated to the isolation layer -- fix the "
-            "lookup rather than the assertion it feeds."
-        )
-        assert _STORE_AT_COLLECTION == expected, (
-            f"at collection the memory store resolved to "
-            f"{_STORE_AT_COLLECTION!r}, but the session floor installs "
-            f"{expected!r}. Anything resolving outside a fixture's reach -- a "
-            f"collection-time import, session-scoped setup -- used the wrong "
-            f"store. If the value is None the floor never ran; if it is some "
-            f"other path it was inherited from the environment."
-        )

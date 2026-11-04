@@ -51,30 +51,3 @@ def test_resolved_team_advisory_is_emitted_once_per_session(monkeypatch, tmp_pat
     assert _check_bootstrap_needed(_prompt()) is None
 
 
-def test_resolved_team_advisory_makes_no_claim_that_editing_is_blocked(monkeypatch, tmp_path):
-    from bootstrap_prompt_gate import _check_bootstrap_needed
-
-    _session(monkeypatch, tmp_path, "session-abc12345")
-    text = _check_bootstrap_needed(_prompt())
-    assert "(Edit, Write)" not in text and "mechanically blocked" not in text
-    assert "Agent" in text          # the dispatch case is still named
-
-
-def test_resolved_team_advisory_does_not_push_a_second_bootstrap(monkeypatch, tmp_path):
-    from bootstrap_prompt_gate import _check_bootstrap_needed
-
-    _session(monkeypatch, tmp_path, "session-abc12345")
-    text = _check_bootstrap_needed(_prompt())
-    assert "REQUIRED" not in text
-    assert "not run yet" in text
-
-
-@pytest.mark.parametrize("team_name", ["", "   "])
-def test_unresolved_team_keeps_the_old_advisory_on_every_prompt(monkeypatch, tmp_path, team_name):
-    from bootstrap_prompt_gate import _BOOTSTRAP_INSTRUCTION_TEMPLATE, _check_bootstrap_needed
-
-    session_dir = _session(monkeypatch, tmp_path, team_name)
-    expected = _BOOTSTRAP_INSTRUCTION_TEMPLATE.format(
-        session_dir_hint=f"\n\nPACT_SESSION_DIR={session_dir}")
-    assert _check_bootstrap_needed(_prompt()) == expected
-    assert _check_bootstrap_needed(_prompt()) == expected

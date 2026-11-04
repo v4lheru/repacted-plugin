@@ -3,8 +3,9 @@ Location: pact-plugin/hooks/shared/unattended.py
 Summary: Unattended mode. The switch (a flag file in the session directory, else the
          REPACT_UNATTENDED environment variable) and the classifier that sorts the
          questions of one AskUserQuestion call into always-ask and default.
-Used by: hooks/unattended_gate.py, hooks/session_init.py, bin/repact-unattended; controls_on by
-hooks/write_checks.py, shared/task_log/bridge.py and shared/task_log/close_gate.py.
+Used by: hooks/unattended_gate.py, hooks/session_init.py, hooks/owner_prompt.py,
+bin/repact-unattended; controls_on by hooks/write_checks.py, shared/task_log/bridge.py and
+shared/task_log/close_gate.py.
 
 Standard library only and no import from the `shared` package. It writes no journal
 row and reaches nothing outside the session directory: the callers journal.
@@ -18,8 +19,9 @@ THE CONTROLS (controls_on) read the other way round, and they are STICKY:
 once a session was unattended (the flag turned on, or the session started with
 REPACT_UNATTENDED on) a marker file (STICKY_NAME) stays in its session directory, and
 while it is there the controls read ON whatever the environment or the flag say, also
-when the flag is missing or rewritten. Only the owner's `repact-unattended off` at their
-own terminal clears it (shared/owner_terminal.py); a new session starts fresh.
+when the flag is missing or rewritten. Only the owner clears it: a prompt they type in the
+session (hooks/owner_prompt.py), or, for scripts, `repact-unattended off` at their own
+terminal (shared/owner_terminal.py); a new session starts fresh.
 
 THE CLASSIFIER. It is lexical and it defaults only what it can show to be local and
 reversible. A question is `default` only when ALL of this holds: its fields have the
@@ -55,6 +57,11 @@ from typing import Any, Mapping, NamedTuple
 ENV_NAME = "REPACT_UNATTENDED"
 FLAG_NAME = "unattended.json"
 STICKY_NAME = "unattended.sticky.json"
+LAUNCH_NAME = "unattended.launch.json"
+SCHEDULED_NAME = "unattended.scheduled.json"
+SCHEDULED_MAX = 200           # scheduled prompts kept, newest last
+SCHEDULED_TEXT_MAX = 4000     # characters kept of one; a prompt holding them is refused
+SCHEDULED_FILE_MAX = 1 << 20
 GATE_NAME = "unattended_gate"
 
 CLASS_ALWAYS_ASK = "always_ask"
@@ -341,19 +348,20 @@ def mark_sticky(session_dir: str, at: str, cause: str) -> bool:
 
 
 def clear_sticky(session_dir: str) -> None:
-    """Remove the sticky marker: the owner's `repact-unattended off` only. Raises OSError."""
+    """Remove the sticky marker: the owner's `repact-unattended off` or typed prompt only.
+    Raises OSError."""
     try:
         os.unlink(sticky_path(session_dir))
     except FileNotFoundError:
         pass
 
 
-def write_flag(session_dir: str, on: bool, at: str) -> str:
+def write_flag(session_dir: str, on: bool, at: str, by: str = "command") -> str:
     """Write the flag atomically (0o600) and return its path; turning it on also leaves the
     sticky marker. Turning it off leaves the marker (clear_sticky is the owner's). Raises OSError."""
     if not os.path.isdir(session_dir):
         raise NotADirectoryError(session_dir)
-    body = json.dumps({"v": 1, "unattended": bool(on), "at": at, "by": "command"}) + "\n"
+    body = json.dumps({"v": 1, "unattended": bool(on), "at": at, "by": str(by)[:20]}) + "\n"
     fd, temp = tempfile.mkstemp(prefix=".unattended-", dir=session_dir)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -368,6 +376,100 @@ def write_flag(session_dir: str, on: bool, at: str) -> str:
     if on:
         mark_sticky(session_dir, at, "flag")
     return flag_path(session_dir)
+
+
+# --- the owner's prompt (hooks/owner_prompt.py) ------------------------------
+# Two files the owner-prompt check reads to refuse a prompt the owner did not type:
+# the launch marker (a start or resume left it; the first prompt after it takes it) and
+# the text of every prompt the model scheduled (ScheduleWakeup, CronCreate), which the
+# host later submits as plain text, word for word.
+
+def launch_path(session_dir: str) -> str:
+    return os.path.join(session_dir, LAUNCH_NAME)
+
+
+def mark_launch(session_dir: str, at: str) -> bool:
+    """Leave the launch marker (0o600); True when it is there afterwards. Never raises."""
+    if not session_dir or not os.path.isdir(session_dir):
+        return False
+    try:
+        fd = os.open(launch_path(session_dir), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"v": 1, "at": at}) + "\n")
+    except OSError:
+        return os.path.lexists(launch_path(session_dir))
+    return True
+
+
+def take_launch(session_dir: str) -> bool:
+    """Remove the launch marker; True when one was there, or when it cannot be removed (an
+    entry that cannot be judged counts as there). Never raises."""
+    try:
+        os.unlink(launch_path(session_dir))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, TypeError):
+        return True
+    return True
+
+
+def scheduled_path(session_dir: str) -> str:
+    return os.path.join(session_dir, SCHEDULED_NAME)
+
+
+def prompt_text(text: str) -> str:
+    """The form two prompts are compared in: normalise(), whitespace runs as one space."""
+    return " ".join(normalise(text).split())
+
+
+def record_scheduled(session_dir: str, prompt: str) -> bool:
+    """Append one scheduled prompt (its prompt_text, at most SCHEDULED_TEXT_MAX characters)
+    to the session's list, keeping the newest SCHEDULED_MAX. True when it is recorded. Never
+    raises."""
+    text = prompt_text(prompt)[:SCHEDULED_TEXT_MAX] if isinstance(prompt, str) else ""
+    if not text:
+        return True
+    try:
+        known = scheduled_prompts(session_dir)
+        if known is None:
+            return False    # a list that cannot be read stays as it is: it keeps refusing
+        if text in known:
+            return True
+        body = json.dumps({"v": 1, "prompts": (known + [text])[-SCHEDULED_MAX:]}) + "\n"
+        fd, temp = tempfile.mkstemp(prefix=".unattended-scheduled-", dir=session_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(body)
+            os.replace(temp, scheduled_path(session_dir))
+        except BaseException:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+            raise
+    except Exception:  # noqa: BLE001 - the caller decides what an unrecorded prompt means
+        return False
+    return True
+
+
+def scheduled_prompts(session_dir: str) -> list[str] | None:
+    """The recorded scheduled prompts ([] when none were), or None when the list exists and
+    cannot be read or parsed. Never raises."""
+    try:
+        with open(scheduled_path(session_dir), "rb") as handle:
+            raw = handle.read(SCHEDULED_FILE_MAX + 1)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, TypeError):
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8")) if len(raw) <= SCHEDULED_FILE_MAX else None
+    except (ValueError, RecursionError):
+        return None
+    prompts = data.get("prompts") if isinstance(data, dict) else None
+    if not isinstance(prompts, list) or not all(isinstance(item, str) for item in prompts):
+        return None
+    return prompts
 
 
 # --- the classifier ---------------------------------------------------------
@@ -655,7 +757,9 @@ def session_rules(cause: str) -> str:
         "merge, force-push, branch delete, deploy, n8n DELETE or transfer, and PR close): never "
         "choose and never act; a Telegram reply is not "
         "an approval. Record it with `repact-unattended halt`, send one telegram_notify with the "
-        "resume path, stop that feature and continue other work. A DEFAULT is never permission "
+        "resume path, stop that feature and continue other work. The owner's next message typed "
+        "in this session turns the mode off; then ask the parked questions. "
+        "A DEFAULT is never permission "
         "for an outward act; never reword a question to change its verdict. "
         "Details: reference/unattended-runs.md."
     )
@@ -686,8 +790,10 @@ def refusal_text(verdicts: list[Verdict], command: str, session_arg: str) -> str
                 "other work."
             )
     lines.append(
-        "Resume path for a halt: the owner runs the `off` verb at the terminal, then you ask "
-        "again. A Telegram reply is never an approval. Do not reword a question to change its "
+        "Resume path for a halt: the owner's next message typed in this session turns the mode "
+        "off, then you ask again; you cannot turn it off yourself. A Telegram reply is never an "
+        "approval. Do not reword a "
+        "question to change its "
         "verdict. A teammate sends its question to the team-lead instead."
     )
     return "\n".join(lines)

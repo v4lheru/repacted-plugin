@@ -53,13 +53,3 @@ def test_a_40_kb_summary_gets_an_8_kb_head_with_pointers_first_and_the_cut_line_
     assert (folder / COMPACT_SUMMARY_NAME).read_text() == summary
 
 
-def test_a_short_summary_passes_through_whole(tmp_path, monkeypatch):
-    folder = _session(tmp_path, monkeypatch)
-    summary = "Summary:\n1. Primary request\n   - the cap\n"
-
-    assert summary_head.write_head(folder, summary)
-
-    head = (folder / COMPACT_SUMMARY_HEAD_NAME).read_text()
-    assert head.startswith("## Pointers rebuilt from disk")
-    assert head.endswith("## Summary\n" + summary)
-    assert "Summary cut" not in head

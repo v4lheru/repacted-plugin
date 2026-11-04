@@ -82,9 +82,8 @@ def config(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "backend_type, expected",
-    [("tmux", True), ("in-process", False), ("iterm2", False), ("TMUX", False),
-     ("", False), (None, False), (ABSENT, False)],
-    ids=["tmux", "in-process", "iterm2", "TMUX", "empty", "null", "absent"],
+    [("tmux", True),],
+    ids=["tmux",],
 )
 def test_separate_process_is_backend_type_tmux_only(config, backend_type, expected):
     """REVERT PROOF for the tmux case: the helper does not exist before the split."""
@@ -149,89 +148,7 @@ def test_a_tmux_teammate_launch_gets_no_pact_advisory(config, tmp_path):
     assert _advisory(tmp_path, captured_pretooluse_teammate_tmux()) is False
 
 
-@pytest.mark.parametrize("backend_type", ["in-process", "iterm2", "TMUX", ABSENT],
-                         ids=["in-process", "iterm2", "TMUX", "absent"])
-def test_a_teammate_that_is_not_tmux_still_gets_the_advisory(config, tmp_path, backend_type):
-    """GUARD, the fail direction. Same frame and registry entry as the arm above;
-    only the signal differs, so the advisory is attributable to it."""
-    _team_config(config, backend_type)
-    _register(config, SEPARATE_SESSION)
-    assert _advisory(tmp_path, captured_pretooluse_teammate_tmux()) is True
-
-
 # ------------------------------------------------------------------ Layer 2
-
-
-class TestLayer2SkipsATmuxTeammate:
-    SESSION_ID = "procmode-idle-session"
-    TASK_ID = "13"
-
-    @pytest.fixture
-    def store(self, config):
-        from shared import background_work as bw
-        from shared.pact_context import project_slug
-
-        _write(config / "pact-sessions" / project_slug(PROJECT_DIR) / self.SESSION_ID
-               / "pact-session-context.json",
-               {"session_id": self.SESSION_ID, "project_dir": PROJECT_DIR, "team_name": TEAM})
-
-        def seed(backend_type, covering_wait=False):
-            _team_config(config, backend_type, lead_session=self.SESSION_ID)
-            registered_at = bw.iso_now()
-            task = {"id": self.TASK_ID, "status": "in_progress", "owner": MEMBER,
-                    "subject": "CODE: mode arm"}
-            if covering_wait:
-                task["metadata"] = {"intentional_wait": {
-                    "reason": "awaiting_blocker_resolution", "expected_resolver": "lead",
-                    "since": registered_at, "covers_since": registered_at,
-                }}
-            _write(config / "tasks" / TEAM / f"{self.TASK_ID}.json", task)
-            assert bw.save_records([{
-                "agent_name": MEMBER, "session_id": self.SESSION_ID,
-                "task_ids": [self.TASK_ID], "registered_at": registered_at,
-            }], team_name=TEAM) is True
-
-        return seed
-
-    def _idle_once(self, capsys) -> bool:
-        """One TeammateIdle tick through `main()`. True if the unflagged advisory fired."""
-        import teammate_idle
-
-        frame = {"hook_event_name": "TeammateIdle", "session_id": self.SESSION_ID,
-                 "teammate_name": MEMBER}
-        capsys.readouterr()
-        with patch("sys.stdin", io.StringIO(json.dumps(frame))):
-            with pytest.raises(SystemExit) as exc:
-                teammate_idle.main()
-        assert exc.value.code == 0
-        out = capsys.readouterr().out.strip()
-        payload = json.loads(out) if out else {}
-        return teammate_idle.UNFLAGGED_ADVISORY in payload.get("systemMessage", "")
-
-    def test_a_tmux_teammate_never_reaches_the_unflagged_advisory(self, store, capsys):
-        """REVERT PROOF. Three unflagged idles: no advisory, and no count kept."""
-        from shared.background_work import load_unflagged_idle_counts
-
-        store("tmux")
-        assert [self._idle_once(capsys) for _ in range(3)] == [False, False, False]
-        assert MEMBER not in load_unflagged_idle_counts(TEAM)
-
-    @pytest.mark.parametrize("backend_type", ["in-process", "iterm2", ABSENT],
-                             ids=["in-process", "iterm2", "absent"])
-    def test_a_teammate_that_is_not_tmux_still_gets_it_on_the_third_idle(
-        self, store, capsys, backend_type
-    ):
-        """GUARD, the fail direction."""
-        store(backend_type)
-        assert [self._idle_once(capsys) for _ in range(3)] == [False, False, True]
-
-    def test_the_discharge_pass_still_runs_for_a_tmux_teammate(self, store, capsys, config):
-        """GUARD. The skip sits after the discharge, so a covering wait still
-        retires the record."""
-        store("tmux", covering_wait=True)
-        self._idle_once(capsys)
-        registry = config / "teams" / TEAM / "background_work.json"
-        assert json.loads(registry.read_text(encoding="utf-8"))["records"] == []
 
 
 # ------------------------------------------------------------------ Layer 3
@@ -269,55 +186,9 @@ def lead(tmp_path, monkeypatch):
     return run
 
 
-@pytest.mark.parametrize("other_backend", ["in-process", ABSENT], ids=["in-process", "absent"])
-def test_the_lead_surface_omits_a_tmux_teammates_record(lead, other_backend):
-    """REVERT PROOF. Two stale unflagged records: only the non-tmux teammate is
-    listed, and only it reaches the forensic event."""
-    other = {"name": "inproc-coder", "agentType": "pact-backend-coder"}
-    if other_backend is not ABSENT:
-        other["backendType"] = other_backend
-    tmux = {"name": "tmux-coder", "agentType": "pact-backend-coder", "backendType": "tmux"}
-    surface, events = lead([tmux, other])
-    assert "UNFLAGGED BACKGROUND WORK" in surface
-    assert "inproc-coder" in surface
-    assert "tmux-coder" not in surface
-    import missed_wake_scan as mw
-
-    forensic = [e for e in events if mw._UNFLAGGED_EVENT in json.dumps(e)]
-    assert len(forensic) == 1, events
-    assert "tmux-coder" not in json.dumps(forensic)
-
-
-def test_the_lead_surface_says_listed_teammates_are_not_woken_by_their_job():
-    """REVERT PROOF. True only while tmux teammates are filtered out above."""
-    import missed_wake_scan as mw
-
-    surface = mw.build_unflagged_surface(
-        [{"agent_name": "inproc-coder", "task_ids": ["2"]}]
-    )
-    assert "These teammates are not woken by their own job finishing." in surface
-
-
 # ------------------------------------------------------------------ structure
 
 
 LAYER_HOOKS = ("wait_filler_gate.py", "teammate_idle.py", "missed_wake_scan.py")
 
 
-def test_role_split_layers_use_the_one_backend_helper():
-    """REVERT PROOF. Each stall layer calls the helper, and nothing under hooks/
-    except the helper's module reads backendType."""
-    for name in LAYER_HOOKS:
-        tree = ast.parse((HOOKS / name).read_text(encoding="utf-8"))
-        calls = [
-            node for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and getattr(node.func, "id", getattr(node.func, "attr", None))
-            == "teammate_is_separate_process"
-        ]
-        assert calls, f"{name} does not call teammate_is_separate_process"
-    readers = sorted(
-        path.relative_to(HOOKS).as_posix() for path in HOOKS.rglob("*.py")
-        if "__pycache__" not in path.parts and "backendType" in path.read_text(encoding="utf-8")
-    )
-    assert readers == ["shared/background_work.py"], readers

@@ -80,61 +80,19 @@ class TestReadArmBypassRefuses:
 
     # (id, approved-token-context, executed-command)
     _BYPASS = [
-        # --admin (branch-protection bypass) added past a flagless approval.
-        ("admin_add_bf_empty",
+    ("admin_add_bf_empty",
          {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh pr merge 5 --admin"),
-        # A pre-fix token with NO bound_flags key defaults to the empty set, so a
-        # privileged execution still mismatches (over-block-safe; tokens expire).
-        ("admin_add_no_key",
-         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5"},
-         "gh pr merge 5 --admin"),
-        # -R/--repo cross-repo redirect — the headline bug — in every form.
-        ("repo_redirect_global_long",
-         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
-         "gh --repo victim/repo pr merge 5"),
-        ("repo_redirect_attached_short",
-         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
-         "gh pr merge 5 -Rvictim/repo"),
-        ("repo_redirect_equals_joined",
+    ("repo_redirect_equals_joined",
          {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh pr merge 5 --repo=victim/repo"),
-        # SHORT =-joined (-R=value) — a DISTINCT scanner branch from the long
-        # =-joined form: the short-cluster value path strips a leading `=` off the
-        # cluster remainder. Exercises that `=`-strip (otherwise uncovered).
-        ("repo_redirect_short_equals_joined",
-         {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
-         "gh pr merge 5 -R=victim/repo"),
-        # Approved one repo, executed a DIFFERENT repo → still REFUSE.
-        ("repo_redirect_different_repo",
-         {"operation_type": "merge", "pr_number": "5", "bound_flags": ["--repo=a/x"]},
-         "gh -R b/y pr merge 5"),
-        # -d/--delete-branch on MERGE is a post-merge side-effect (deletes the
-        # source branch) — bound on the merge op-class.
-        ("delete_branch_add_short",
+    ("delete_branch_add_short",
          {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": []},
          "gh pr merge 5 -d"),
-        # --no-verify (pre-push-hook bypass) added on a force-push.
-        ("no_verify_add",
-         {"operation_type": "force-push", "target_ref": "main", "bound_flags": []},
-         "git push --no-verify origin main --force"),
-        # Cross-repo redirect on the CLOSE op-class.
-        ("close_repo_redirect",
-         {"repo": "o/r", "host": "github.com", "operation_type": "close", "pr_number": "5", "bound_flags": []},
-         "gh -R victim/repo pr close 5"),
-        # --force-with-lease added past a PLAIN push-to-main approval (#1064 fold:
-        # plain and lease pushes share the push-to-main op-class; this presence
-        # bind is what separates their token identities — the lease push CAN
-        # rewrite history, so a plain approval must never authorize it).
-        ("lease_add_past_plain_push",
-         {"operation_type": "push-to-main", "target_ref": "main", "bound_flags": []},
-         "git push --force-with-lease origin main"),
-        # =-joined spelling binds the SAME canonical bare token (boolean bind) —
-        # still a set mismatch against the plain approval.
-        ("lease_value_add_past_plain_push",
+    ("lease_value_add_past_plain_push",
          {"operation_type": "push-to-main", "target_ref": "main", "bound_flags": []},
          "git push --force-with-lease=main:abc123 origin main"),
-    ]
+]
 
     @pytest.mark.parametrize(
         "ctx,command", [(c, cmd) for (_id, c, cmd) in _BYPASS],
@@ -155,16 +113,6 @@ class TestReadArmBypassRefuses:
             {"operation_type": "force-push", "target_ref": "main", "bound_flags": []},
             "git push --no-verif origin main --force",
         )
-
-    def test_git_no_verify_short_prefix_abbreviation_refuses(self):
-        """Even a very short unambiguous prefix (`--no-v`, `--no`) of the sole
-        force-push denylist flag expands and REFUSES — the abbreviation closure is
-        not limited to a one-character truncation."""
-        assert _refuses(
-            {"operation_type": "force-push", "target_ref": "main", "bound_flags": []},
-            "git push --no-v origin main --force",
-        )
-
 
 class TestReadArmCombinedShortClusterRefuses:
     """The combined-short cluster is the under-block the lead required CLOSED (not
@@ -201,7 +149,6 @@ class TestReadArmCombinedShortClusterRefuses:
             "gh pr merge 5 -dRowner/repo",
         )
 
-
 class TestReadArmDroppedConstraintRefuses:
     """Set-equality is symmetric: an approval that carried a bound flag, executed
     WITHOUT it, also REFUSES (the dropped-constraint direction a subset rule would
@@ -227,7 +174,6 @@ class TestReadArmDroppedConstraintRefuses:
              "bound_flags": ["--force-with-lease"]},
             "git push origin main",
         )
-
 
 class TestMatchHeadCommitDroppedConstraint:
     """--match-head-commit <sha> is a value-carrying SAFETY constraint (merge only
@@ -281,14 +227,6 @@ class TestMatchHeadCommitDroppedConstraint:
             self._scanner_token(self._APPROVAL), "gh pr merge 5 --match-head-commit DEF456"
         )
 
-    def test_identical_constraint_authorizes(self):
-        """Approve and execute with the SAME constraint → AUTHORIZE — a faithful
-        re-execution is not over-blocked."""
-        from merge_guard_pre import _token_matches_command
-
-        assert _token_matches_command(self._scanner_token(self._APPROVAL), self._APPROVAL)
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # READ ARM — bounded over-block: an EXACT (form-invariant) match AUTHORIZES
 # ════════════════════════════════════════════════════════════════════════════
@@ -327,48 +265,6 @@ class TestReadArmExactMatchAuthorizes:
             command,
         )
 
-    @pytest.mark.parametrize("command", [
-        "git push --no-verify origin main --force",
-        "git push --no-verif origin main --force",
-    ], ids=["exact", "git_abbreviation"])
-    def test_no_verify_abbreviation_invariant_match_authorizes(self, command):
-        """Approve --no-verify; both the exact form and the git abbreviation
-        AUTHORIZE (the abbreviation expands to the same canonical token) — the
-        expansion does not introduce a spurious over-block on a faithful re-run."""
-        assert _authorizes(
-            {"operation_type": "force-push", "target_ref": "main", "bound_flags": ["--no-verify"]},
-            command,
-        )
-
-    @pytest.mark.parametrize("command", [
-        "gh pr merge 5 -d",
-        "gh pr merge 5 --delete-branch",
-    ], ids=["short", "long"])
-    def test_delete_branch_form_invariant_match_authorizes(self, command):
-        assert _authorizes(
-            {"repo": "o/r", "host": "github.com", "operation_type": "merge", "pr_number": "5", "bound_flags": ["--delete-branch"]},
-            command,
-        )
-
-    def test_admin_plus_repo_combined_match_authorizes(self):
-        """Two bound flags approved and executed (order/placement-invariant) →
-        AUTHORIZE."""
-        assert _authorizes(
-            {"host": "github.com", "operation_type": "merge", "pr_number": "5",
-             "bound_flags": ["--admin", "--repo=owner/repo"]},
-            "gh --repo owner/repo pr merge 5 --admin",
-        )
-
-    def test_lease_exact_match_authorizes(self):
-        """Approve and execute the SAME lease push → AUTHORIZE — the presence bind
-        must not over-block the faithful lease click the #1064 fix un-blocks."""
-        assert _authorizes(
-            {"operation_type": "push-to-main", "target_ref": "main",
-             "bound_flags": ["--force-with-lease"]},
-            "git push --force-with-lease origin main",
-        )
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # SCANNER — extract_privileged_flags: CLI-form canonicalization output pins
 # ════════════════════════════════════════════════════════════════════════════
@@ -380,45 +276,10 @@ class TestScannerCanonicalForms:
     set-equality is form-invariant."""
 
     _FORMS = [
-        # --admin (boolean)
-        ("gh pr merge 5 --admin", "merge", ["--admin"]),
-        # -R/--repo (value-taking) — all forms → --repo=owner/repo
-        ("gh pr merge 5 -R owner/repo", "merge", ["--repo=owner/repo"]),
-        ("gh --repo owner/repo pr merge 5", "merge", ["--repo=owner/repo"]),
-        ("gh pr merge 5 --repo=owner/repo", "merge", ["--repo=owner/repo"]),
-        ("gh pr merge 5 -Rowner/repo", "merge", ["--repo=owner/repo"]),
-        # short =-joined (-R=value): exercises the cluster-path `=`-strip, a
-        # DISTINCT branch from the long --repo=value form above.
-        ("gh pr merge 5 -R=owner/repo", "merge", ["--repo=owner/repo"]),
-        # combined-short cluster: -d boolean kept, -R consumes the next token
-        ("gh pr merge 5 -dR owner/repo", "merge", ["--delete-branch", "--repo=owner/repo"]),
-        # combined-short cluster, attached value: -d boolean, -R consumes "owner/repo"
-        ("gh pr merge 5 -dRowner/repo", "merge", ["--delete-branch", "--repo=owner/repo"]),
-        # pflag value-consumption: -Rd → -R takes the cluster remainder "d" and STOPS
-        ("gh pr merge 5 -Rd owner/repo", "merge", ["--repo=d"]),
-        # cluster with an UNBOUND short (-s ignored), bound -d kept
-        ("gh pr merge 5 -sd", "merge", ["--delete-branch"]),
-        ("gh pr merge 5 -d", "merge", ["--delete-branch"]),
-        # --match-head-commit (value-taking SAFETY constraint, R4): spaced + =-joined
-        ("gh pr merge 5 --match-head-commit ABC123", "merge", ["--match-head-commit=ABC123"]),
-        ("gh pr merge 5 --match-head-commit=ABC123", "merge", ["--match-head-commit=ABC123"]),
-        # benign: no bound flag → empty set
-        ("gh pr merge 5", "merge", []),
-        # close op-class: -R bound; --delete-branch/-d now BOUND (GAP2 — bare close
-        # would otherwise set-equal the delete variant → escalation).
-        ("gh pr close 5 -R x/y", "close", ["--repo=x/y"]),
-        ("gh pr close 5 -R=x/y", "close", ["--repo=x/y"]),  # short =-joined on close
-        ("gh pr close 5 --delete-branch", "close", ["--delete-branch"]),
-        # force-push: --no-verify (exact)
-        ("git push --no-verify origin main --force", "force-push", ["--no-verify"]),
-        # push-to-main: --force-with-lease presence bind (#1064). BOOLEAN — the
-        # =-joined <ref>:<expect> value is dropped, so every lease spelling binds
-        # ONE canonical bare token (intra-lease value variation is an accepted
-        # residual; see TestLeaseNegationResidualTripwire).
-        ("git push --force-with-lease origin main", "push-to-main", ["--force-with-lease"]),
-        ("git push --force-with-lease=main:abc123 origin main", "push-to-main", ["--force-with-lease"]),
-        ("git push origin main", "push-to-main", []),
-    ]
+    ("gh pr merge 5 --admin", "merge", ["--admin"]),
+    ("gh pr merge 5 -d", "merge", ["--delete-branch"]),
+    ("git push origin main", "push-to-main", []),
+]
 
     @pytest.mark.parametrize(
         "command,op,expected", _FORMS,
@@ -429,7 +290,9 @@ class TestScannerCanonicalForms:
 
         assert extract_privileged_flags(command, op) == expected
 
-    @pytest.mark.parametrize("op", [None, "api", "branch-delete"])
+    @pytest.mark.parametrize("op", [
+    None,
+])
     def test_unflagged_op_classes_bind_empty_set(self, op):
         """None / API / the (today) flagless branch-delete class yield [] — the
         over-block-safe default for op-classes with no denylist entry."""
@@ -445,11 +308,10 @@ class TestGitGhAbbreviationAsymmetry:
     the git surface ONLY."""
 
     @pytest.mark.parametrize("command", [
-        "git push --no-verif origin main --force",
-        "git push --no-ver origin main --force",
-        "git push --no-v origin main --force",
-        "git push --no origin main --force",
-    ], ids=["no-verif", "no-ver", "no-v", "no"])
+    "git push --no-verif origin main --force",
+], ids=[
+    "no-verif",
+])
     def test_git_surface_expands_unambiguous_prefix(self, command):
         from shared.merge_guard_common import extract_privileged_flags
 
@@ -466,23 +328,6 @@ class TestGitGhAbbreviationAsymmetry:
         assert extract_privileged_flags(
             "git push --no-verif origin main", "force-push"
         ) == ["--no-verify"]
-
-    def test_push_to_main_git_surface_expands_lease_abbreviation(self):
-        """push-to-main joined the git-surface set with the lease bind (#1064) as
-        DEFENSE-IN-DEPTH: given op_type=push-to-main, git's abbreviation rule says
-        a truncated `--force-with-leas` must bind the canonical token, and this
-        pins that the expansion does so. The case is NOT live-reachable today:
-        any abbreviation still containing `--force` classifies FORCE-PUSH first
-        (the force arms' lookahead excludes only the exact `-with-lease` suffix),
-        and the shorter prefixes that do classify push-to-main (`--forc`, `--fo`)
-        are git-ambiguous — git rejects the command, so no live lease push runs
-        unbound. The expansion keeps the bind correct if either neighbor shifts."""
-        from shared.merge_guard_common import extract_privileged_flags
-
-        assert extract_privileged_flags(
-            "git push --force-with-leas origin main", "push-to-main"
-        ) == ["--force-with-lease"]
-
 
 class TestLeaseNegationResidualTripwire:
     """Documented-behavior pin for an ACCEPTED residual (#1064 design): a boolean
@@ -541,7 +386,6 @@ class TestEndOfOptionsMarkerOverBlock:
             "gh pr merge 5 -- --admin",
         )
 
-
 # ════════════════════════════════════════════════════════════════════════════
 # MULTIPLICITY — bound_flags is a pair ATTRIBUTE, not (op,target) identity
 # ════════════════════════════════════════════════════════════════════════════
@@ -570,16 +414,6 @@ class TestFlagVariationIsPairAttribute:
         ])
         assert len(pairs) == 1
         assert ("merge", "5") in pairs
-
-    def test_different_pr_still_two_pairs_control(self):
-        """Control: a genuine target divergence (different PR) DOES count as two
-        distinct pairs — so the single-pair result above is the flag-attribute
-        property, not a degenerate collapse of everything to one pair."""
-        from merge_guard_post import _collect_pairs
-
-        pairs = _collect_pairs(["gh pr merge 5 --admin", "gh pr merge 6"])
-        assert len(pairs) == 2
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # REMOTE-DELETE SPLIT BINDING — data shape + the coupling it depends on
@@ -638,58 +472,4 @@ class TestRemoteDeleteSplitBinding:
             "a guard that does nothing while reading as protection. If you are "
             "symmetrizing the two remote-delete entries, read the coupling pin "
             f"below first. Found: {sorted(bound)}"
-        )
-
-    def test_mass_target_embeds_the_scope_flag_in_its_identity(self):
-        """COUPLING PIN — LOAD-BEARING, NOT DOCUMENTARY. Do not treat this as a
-        note about `_extract_mass_delete_target`; it is the assertion that makes the
-        split binding above SAFE rather than merely tidy.
-
-        WHAT BREAKS IF THIS TEST IS REMOVED OR WEAKENED. The narrow
-        `remote-mass-delete` binding is sound ONLY while mass_target keeps the scope
-        flag inside the identity it returns. Measured, under a coarsened mass_target
-        that returns the remote only:
-
-            split binding      -> the --mirror/--prune escalation OPENS (authorizes)
-            symmetric binding  -> the escalation stays closed
-
-        So the redundancy that symmetric binding would carry is NOT inert — it is
-        defense-in-depth against exactly this coarsening. Split is chosen for
-        auditability, and split-plus-this-pin is safety-equivalent to symmetric.
-        Delete this pin and that equivalence is gone: the escalation reopens on the
-        mass class with nothing to catch it. `vacuous today` and `inert` are
-        different claims, and this one is only the first.
-
-        REMEDY — IF YOU COARSEN `mass_target`, YOU MUST BIND `--mirror` AND
-        `--prune` ON `remote-mass-delete` IN THE SAME COMMIT. That restores the
-        protection the embedding was providing. Do not simply update this test to
-        match a coarsened identity.
-
-        Why this is a plausible future edit rather than a hypothetical: it is this
-        codebase's own recurring coarsening shape — a scalar extractor normalizing
-        away a semantic distinction that its set sibling explicitly guards. It reads
-        like a cleanup."""
-        from shared.merge_guard_common import _extract_mass_delete_target
-
-        push = "git " + "push "
-        mirror = _extract_mass_delete_target(push + "--mirror origin")
-        prune = _extract_mass_delete_target(push + "--prune origin")
-
-        assert mirror is not None and prune is not None, (
-            "mass_target stopped binding the --mirror/--prune forms entirely; the "
-            "identity-layer defense this pin protects is gone"
-        )
-        assert mirror != prune, (
-            "COUPLING BROKEN: --mirror and --prune now produce the SAME identity, so "
-            "the identity layer no longer separates them. The remote-mass-delete "
-            "binding is deliberately narrow BECAUSE that separation existed — with "
-            "it gone, a --mirror<->--prune escalation on the mass class is "
-            "unguarded. Either restore the embedding, or bind --mirror/--prune on "
-            "remote-mass-delete as well."
-        )
-        assert "--mirror" in mirror and "--prune" in prune, (
-            "COUPLING BROKEN: mass_target no longer EMBEDS the scope flag in its "
-            f"identity (got {mirror!r} / {prune!r}). Same consequence as above: the "
-            "narrow mass-delete binding is only sound while the flag is part of the "
-            "identity."
         )

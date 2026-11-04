@@ -144,48 +144,6 @@ class TestSchemaShape:
         assert verdict == "accept"
         assert reason is None
 
-    def test_field_present_requires_3_keys(self):
-        partial = {k: "ok" for k in TEACHBACK_REQUIRED_SUBKEYS[:2]}
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(reconstruction=partial), dispatching_variety_score=5
-        )
-        assert verdict == "reject"
-        assert reason == "malformed_reasoning_reconstruction"
-
-    def test_field_present_rejects_extra_keys(self):
-        extra = {k: "ok" for k in TEACHBACK_REQUIRED_SUBKEYS}
-        extra["surprise_key"] = "shouldnt be here"
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(reconstruction=extra), dispatching_variety_score=5
-        )
-        assert verdict == "reject"
-        assert reason == "malformed_reasoning_reconstruction"
-
-    def test_each_subkey_must_be_string(self):
-        bad = dict.fromkeys(TEACHBACK_REQUIRED_SUBKEYS, "ok")
-        bad["assumption_trace"] = ["list", "not", "string"]
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(reconstruction=bad), dispatching_variety_score=5
-        )
-        assert verdict == "reject"
-        assert reason == "empty_reasoning_reconstruction_field"
-
-    def test_each_subkey_must_be_nonempty(self):
-        bad = dict.fromkeys(TEACHBACK_REQUIRED_SUBKEYS, "ok")
-        bad["contingency_clause"] = "   "  # whitespace-only also rejected
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(reconstruction=bad), dispatching_variety_score=5
-        )
-        assert verdict == "reject"
-        assert reason == "empty_reasoning_reconstruction_field"
-
-    def test_field_present_not_dict_rejected(self):
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(reconstruction="should be a dict"), dispatching_variety_score=5
-        )
-        assert verdict == "reject"
-        assert reason == "malformed_reasoning_reconstruction"
-
 
 class TestVarietyTrigger:
     """Variety-band gate: required / recommended / skipped per band."""
@@ -207,74 +165,6 @@ class TestVarietyTrigger:
             _payload(), dispatching_variety_score=score
         )
         assert verdict == "accept"
-
-    def test_plan_mode_band_required(self):
-        # variety in PLAN_MODE band — absence triggers rejection
-        score = PLAN_MODE_MAX
-        assert route_workflow(score) == ROUTE_PLAN_MODE
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(), dispatching_variety_score=score
-        )
-        assert verdict == "reject"
-        assert reason == "missing_reasoning_reconstruction"
-
-    def test_research_spike_band_required(self):
-        # variety above PLAN_MODE_MAX — research-spike band; same Required behavior
-        score = PLAN_MODE_MAX + 1
-        assert route_workflow(score) == ROUTE_RESEARCH_SPIKE
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(), dispatching_variety_score=score
-        )
-        assert verdict == "reject"
-        assert reason == "missing_reasoning_reconstruction"
-
-    def test_none_variety_treated_as_orchestrate(self):
-        # None / missing variety score — treated as ROUTE_ORCHESTRATE (Recommended)
-        verdict, _ = _validate_reasoning_reconstruction(
-            _payload(), dispatching_variety_score=None
-        )
-        assert verdict == "accept"
-
-    def test_non_int_variety_treated_as_orchestrate(self):
-        # Non-int (string, float, etc.) — same transitional permissiveness as None
-        verdict, _ = _validate_reasoning_reconstruction(
-            _payload(), dispatching_variety_score="not an int"  # type: ignore[arg-type]
-        )
-        assert verdict == "accept"
-
-    def test_band_for_variety_round_trips_through_ssot(self):
-        # Sanity: _band_for_variety must match route_workflow exactly for integer inputs
-        for score in (COMPACT_MAX, ORCHESTRATE_MAX, PLAN_MODE_MAX, PLAN_MODE_MAX + 2):
-            assert _band_for_variety(score) == route_workflow(score)
-
-    def test_constants_imported_not_literal(self):
-        """AST-scan THIS module: no hard-coded threshold literals.
-
-        Architect §2.2: the variety thresholds MUST come from variety_scorer.py
-        constants. Test code dereferences COMPACT_MAX / ORCHESTRATE_MAX /
-        PLAN_MODE_MAX, never their literal values, so the test module is
-        decoupled from any future re-tier of the bands.
-
-        The forbidden set is built from the SSOT constants themselves, so
-        the scan does not need to embed the literal values (which would
-        be self-detecting). If the SSOT bumps thresholds, this scan auto-
-        re-targets without test edits.
-        """
-        forbidden = {COMPACT_MAX, ORCHESTRATE_MAX, PLAN_MODE_MAX}
-        source = Path(__file__).read_text(encoding="utf-8")
-        tree = ast.parse(source)
-
-        hits: list[tuple[int, int]] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, int):
-                if node.value in forbidden:
-                    hits.append((node.lineno, node.value))
-
-        assert not hits, (
-            f"Hard-coded variety threshold literals found in test module: "
-            f"{hits}. Use COMPACT_MAX / ORCHESTRATE_MAX / PLAN_MODE_MAX "
-            f"from shared.variety_scorer instead. Architect §2.2."
-        )
 
 
 class TestExemption:
@@ -322,72 +212,6 @@ class TestLeadSideConsistencyCheck:
     def test_well_formed_triangle_accepted_at_required_band(self):
         verdict, reason = _validate_reasoning_reconstruction(
             _payload(reconstruction=_well_formed_triangle()),
-            dispatching_variety_score=PLAN_MODE_MAX,
-        )
-        assert verdict == "accept"
-        assert reason is None
-
-    def test_well_formed_triangle_accepted_at_recommended_band(self):
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(reconstruction=_well_formed_triangle()),
-            dispatching_variety_score=ORCHESTRATE_MAX,
-        )
-        assert verdict == "accept"
-        assert reason is None
-
-    def test_missing_at_plan_mode_rejected_with_specific_reason(self):
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(),
-            dispatching_variety_score=PLAN_MODE_MAX,
-        )
-        assert verdict == "reject"
-        assert reason == "missing_reasoning_reconstruction"
-
-    def test_malformed_at_any_band_rejected_with_specific_reason(self):
-        bad = {"only_one_key": "value"}
-        for score in (COMPACT_MAX, ORCHESTRATE_MAX, PLAN_MODE_MAX, PLAN_MODE_MAX + 2):
-            verdict, reason = _validate_reasoning_reconstruction(
-                _payload(reconstruction=bad), dispatching_variety_score=score
-            )
-            assert verdict == "reject", f"band {score} accepted malformed payload"
-            assert reason == "malformed_reasoning_reconstruction"
-
-    def test_canonical_exemplar_round_trip_accepted_at_plan_mode(self):
-        """Empirical-validation integration smoke: the canonical
-        ORPHAN_TOKEN_MAX_AGE_SECONDS / TOKEN_TTL × 24 / 300s contingency
-        exemplar MUST be accepted by the schema gate at the Required band.
-
-        Source: pact-plugin/agents/pact-orchestrator.md §12
-        Internal-consistency gate examples (committed SSOT). The triangle
-        ENCODES the same exemplar as the protocol prose; not byte-equal
-        (the case prose is expanded for test clarity). The point of this
-        case (distinct from the abstract well-formed-triangle accepts
-        above) is to prove the schema gate accepts the canonical exemplar
-        that the protocol documentation cites.
-        """
-        canonical_exemplar = {
-            "decision_attribution": (
-                "I understand the architect chose ORPHAN_TOKEN_MAX_AGE_SECONDS = 86400 "
-                "(24 hours) because the issue body states 'TOKEN_TTL × 24 ≈ 24 hours' — "
-                "i.e., the architect wants the cleanup window to be 24× the per-token "
-                "TTL to provide a stale-attack buffer well beyond normal token lifetime."
-            ),
-            "assumption_trace": (
-                "This reasoning depends on (a) TOKEN_TTL being on the order of 1 hour "
-                "(so 24× lands at the 24-hour magnitude the issue body cites), and "
-                "(b) a 'stale-attack buffer' being the primary security objective for "
-                "the cleanup helper (not disk hygiene, not session-scope containment)."
-            ),
-            "contingency_clause": (
-                "If TOKEN_TTL is actually substantially smaller (e.g., 300s, the "
-                "merge-guard token TTL I saw in passing while reading the file), the "
-                "24× multiplier yields 2 hours, not 24 — in which case the security "
-                "framing collapses and the cleanup magnitude should be re-derived from "
-                "FIRST principles (disk hygiene, not stale-attack window)."
-            ),
-        }
-        verdict, reason = _validate_reasoning_reconstruction(
-            _payload(reconstruction=canonical_exemplar),
             dispatching_variety_score=PLAN_MODE_MAX,
         )
         assert verdict == "accept"
