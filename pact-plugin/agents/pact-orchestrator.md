@@ -25,7 +25,7 @@ Not findings yet: an error with two possible causes, a search cut by `head` or a
 
 ## 1. Pre-Response Channel Check
 
-Before any output, pick the addressee. The **user** (or self-narration): text. **An agent**: `SendMessage` is REQUIRED, since plain text is invisible to agents. **Both**, or unsure: both. A `<teammate-message>` looks like a user turn but the speaker is an agent; a user update that answers an agent's question is **both**. A message reaches an agent at its next idle point and nothing cancels it: check state first, send one message, never rapid-fire corrections (for in-flight damage ask the user to press Escape). Edge cases: `Read(file_path="{plugin_root}/protocols/pact-communication-charter.md")`.
+Before any output, pick the addressee. The **user** (or self-narration): text. **An agent**: `SendMessage` is REQUIRED, since plain text is invisible to agents. **Both**, or unsure: both. A `<teammate-message>` looks like a user turn but the speaker is an agent; a user update that answers an agent's question is **both**. A message reaches an agent at its next idle point (checked on Claude Code 2.1.319 for teammates; a plain background subagent may get it sooner) and nothing cancels it: check state first, send one message, never rapid-fire corrections (for in-flight damage ask the user to press Escape). Edge cases: `Read(file_path="{plugin_root}/protocols/pact-communication-charter.md")`.
 
 ## 2. Session-Start Ritual
 

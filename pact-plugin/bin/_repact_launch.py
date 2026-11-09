@@ -31,6 +31,8 @@ shared/ only.
       is not excluded. Without any core, line 3 is empty, one warning
       is printed and the session loads the global file as before. Line 4 names the lock file
       bin/repact writes its pid to for the session (<config>/repacted-alternate.lock).
+      In both modes, a launch with REPACT_UNATTENDED on also prints the claude.ai sign-in
+      warning of bin/_auth_expiry.py on stderr when the sign-in ends within 48 h.
   python3 _repact_launch.py core-status --root <plugin root>
       one `core:` line for `repact --repact-status`.
 
@@ -252,8 +254,34 @@ def running_claude_warning(detect=_memdir.running_claude_pids) -> Optional[str]:
             f"(pid {', '.join(map(str, pids))}); proceeding. Never run pact beside repact.")
 
 
+UNATTENDED_ENV = "REPACT_UNATTENDED"
+UNATTENDED_ON = frozenset({"1", "true", "yes", "on"})   # shared/unattended.py's reading
+
+
+def unattended_launch(env) -> bool:
+    """True when this launch starts the session in unattended mode (REPACT_UNATTENDED on)."""
+    value = env.get(UNATTENDED_ENV)
+    return isinstance(value, str) and value.strip().casefold() in UNATTENDED_ON
+
+
+def expiry_warnings(env, expiry=None) -> List[str]:
+    """The sign-in expiry warning of an unattended launch (CC-17), or none. Never raises.
+    bin/_auth_expiry.py is imported only here, so a launch that is not unattended needs it not."""
+    if not unattended_launch(env):
+        return []
+    if expiry is None:
+        try:
+            import _auth_expiry
+        except ImportError:
+            return []
+        expiry = _auth_expiry.warning
+    line = expiry(env=env)
+    return [f"repact: {line}"] if line else []
+
+
 def preflight(root: Path, env: Optional[dict] = None, project_dir: Optional[Path] = None,
-              detect=_memdir.running_claude_pids, force: bool = False) -> Tuple[int, List[str], List[str]]:
+              detect=_memdir.running_claude_pids, force: bool = False,
+              expiry=None) -> Tuple[int, List[str], List[str]]:
     """(exit code, stdout lines, stderr lines)."""
     env = os.environ if env is None else env
     try:
@@ -262,7 +290,7 @@ def preflight(root: Path, env: Optional[dict] = None, project_dir: Optional[Path
         return EXIT_REFUSED, [], [f"repact: REFUSED: {exc}"]
     mode = launch_mode(config_root)
     if mode == "installed":
-        return EXIT_OK, [mode], []
+        return EXIT_OK, [mode], expiry_warnings(env, expiry)
     managed = managed_legacy_enablement(env)
     if managed:
         where = ", ".join(sorted({str(source) for source, _ in managed}))
@@ -290,6 +318,7 @@ def preflight(root: Path, env: Optional[dict] = None, project_dir: Optional[Path
     settings = disable_settings_json(config_root, project_dir or Path.cwd(),
                                      global_memory_excludes(config_root) if replaces else None,
                                      served)
+    warnings += expiry_warnings(env, expiry)
     return EXIT_OK, [mode, settings, str(served) if served else "", str(config_root / LOCK_NAME)], warnings
 
 

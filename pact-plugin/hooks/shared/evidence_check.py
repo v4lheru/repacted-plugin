@@ -14,7 +14,10 @@ Summary: The slim evidence check `repact accept` runs on a dispatched task: is t
            red_first         fix and feature only: a failing run, before the first passing run
                              on the current tree or on that tree with the fix reverted, naming
                              a test file that passing run covers (a dotnet --filter names the
-                             .cs files declaring its class; worker and build flags never narrow)
+                             .cs files declaring its class, a cargo filter names itself; worker,
+                             reporter and build flags never narrow; node setup flags such as
+                             --import must match the red's; paths compare relative to the git
+                             root, so a run from a sub-directory names the same file)
            needs_human       no tree id (not git, git failed, over content_tree.CHANGED_MAX
                              changed files), no dispatch time, or a config change with no run
          A run is a ledger row with a tree id (tcount stamps it before the run), counted, exit
@@ -282,14 +285,260 @@ def _js_words(words: list) -> list:
     return kept
 
 
+# `node --test`: `--test` itself and the flags below set how a run reports, how many files run at
+# once or how long it may take, never which tests run, and are set aside. A setup flag (a module
+# loaded first, an export condition, an experimental loader switch) changes how files load: a
+# green covers a red only with the same setup flags as the red. Any other flag
+# (--test-name-pattern, --test-only, --test-shard, an unknown one) narrows.
+_NODE_ALIAS = {"-r": "--require", "-C": "--conditions"}
+_NODE_SETUP = ("--import", "--require", "--loader", "--experimental-loader", "--conditions")
+_NODE_LOADS = ("--import", "--require", "--loader", "--experimental-loader")   # run in command order
+_NODE_SETUP_SWITCH = re.compile(r"--(?:no-)?experimental-(?!test-coverage\Z)[a-z][a-z-]*\Z")
+_NODE_VALUE = _NODE_SETUP + ("--test-concurrency", "--test-reporter", "--test-reporter-destination",
+                             "--test-timeout", "--test-name-pattern", "--test-skip-pattern", "--test-shard",
+                             "--test-isolation")
+_NODE_RESOURCE = re.compile(r"--(?:test-force-exit|no-warnings|enable-source-maps|trace-warnings|expose-gc"
+                            r"|experimental-test-coverage|test-concurrency=\d+|test-timeout=\d+"
+                            r"|test-isolation=(?:process|none)|max-old-space-size=\d+"
+                            r"|test-reporter=(?:spec|tap|dot|junit|lcov)|test-reporter-destination=[^=]+)\Z")
+
+
+def _node_words(words: list) -> list:
+    """A `node --test` command with its resource flags dropped and every value flag written as one
+    `--name=value` word (`-r x` and `-C x` as --require and --conditions), so a value is never read
+    as a target. A value flag with no value, or one whose value starts with `-`, is kept as it is
+    and narrows."""
+    kept, rest = [words[0]], iter(words[1:])
+    for word in rest:
+        if word == "--":
+            kept += [word, *rest]
+            break
+        name, eq, value = word.partition("=") if word.startswith("--") else (word, "", "")
+        name = _NODE_ALIAS.get(name, name)
+        if name in _NODE_VALUE and not eq:
+            value = next(rest, None)
+            if value is None or value.startswith("-"):
+                kept += [word] + ([value] if value is not None else [])
+                continue
+            word = f"{name}={value}"
+        elif eq:
+            word = f"{name}={value}"
+        if not _NODE_RESOURCE.match(word):
+            kept.append(word)
+    return kept
+
+
+def _setup_option(option: tuple) -> bool:
+    return option[0] in _NODE_SETUP or bool(_NODE_SETUP_SWITCH.match(option[0]))
+
+
 def _picked(run: dict) -> Optional[tuple]:
-    """acceptance.selection of the run's command with resource flags set aside (vitest, jest)."""
+    """acceptance.selection of the run's command with resource flags set aside (vitest, jest,
+    node --test)."""
     words = AC.test_words(_command(run))
     if words is None:
         return None
-    if detect_runner(shlex.join(words)) in _JS_RUNNERS:
+    runner = detect_runner(shlex.join(words))
+    if runner in _JS_RUNNERS:
         return AC.selection(shlex.join(_js_words(words)))
+    if runner == "node":                 # `--test` stays in the words, so the runner is still read
+        picked = AC.selection(shlex.join(_node_words(words)))
+        return picked and (picked[0], [option for option in picked[1] if option != ("--test", "")], picked[2])
     return AC.selection(_command(run))
+
+
+def _setup(run: Optional[dict]) -> Optional[list]:
+    """The setup options (node --test) a run carries, in command order (a loader or --import
+    runs in that order), or None with no run given."""
+    if run is None:
+        return None
+    picked, words = _picked(run), AC.test_words(_command(run))
+    if not picked or picked[0] != "node" or not words:
+        return []
+    found = []
+    for word in _node_words(words)[1:]:
+        if word == "--":
+            break
+        name, _, value = word.partition("=") if word.startswith("--") else (word, "", "")
+        if word.startswith("-") and _setup_option((name, value)):
+            found.append((name, value))
+    return found
+
+
+# `cargo test [options] [FILTER] [-- libtest options and filters]`. A filter selects every test
+# whose path contains it (`--exact`: equals it). Resource options are set aside; a scope option
+# (package, target kind, features, profile, manifest) must match; anything else narrows.
+_CARGO_VALUE = ("-p", "--package", "--test", "--bench", "--example", "--bin", "-F", "--features",
+                "--manifest-path", "-j", "--jobs", "--target", "--target-dir", "--profile", "--color",
+                "--message-format", "--exclude", "-Z", "--config")
+_CARGO_RESOURCE = ("-j", "--jobs", "--target-dir", "--color", "--message-format", "-q", "--quiet", "-v", "-vv",
+                   "--verbose", "--offline", "--locked", "--frozen", "--no-fail-fast", "--timings")
+# A plain `cargo test` runs these kinds' tests (lib, bins, integration tests, doc tests), never a
+# bench's or an example's, so only a red in these kinds is covered by a green with no kind option.
+_CARGO_DEFAULT_KINDS = ("--lib", "--bins", "--bin", "--tests", "--test", "--doc")
+_CARGO_KINDS = ("--lib", "--bins", "--bin", "--tests", "--test", "--examples", "--example", "--benches",
+                "--bench", "--doc", "--all-targets")
+_CARGO_SCOPE = _CARGO_KINDS + ("-p", "--package", "--workspace", "--all", "--exclude", "-F", "--features",
+                               "--all-features", "--no-default-features", "--manifest-path", "--release",
+                               "--profile", "--target")
+_LIBTEST_VALUE = ("--test-threads", "--color", "--format", "--skip", "-Z", "--logfile", "--shuffle-seed")
+# Libtest options whose selection is known; a run narrowed by these is covered by one with the same.
+_LIBTEST_SELECT = ("--ignored", "--include-ignored", "--skip", "--exclude-should-panic")
+_LIBTEST_RESOURCE = ("--test-threads", "--nocapture", "--show-output", "--color", "--format", "-q", "--quiet",
+                     "--logfile", "--shuffle", "--shuffle-seed")
+
+
+class CargoTarget(tuple):
+    """A cargo red's test: (repo-relative directory, scope options, filter, exact, the red's own
+    narrowing options, its git root)."""
+    __slots__ = ()
+
+    def __new__(cls, place, scope, name, exact, narrowing=(), top=None):
+        return tuple.__new__(cls, (place, scope, name, exact, tuple(narrowing), top))
+
+    place = property(lambda self: self[0])
+    scope = property(lambda self: self[1])
+    name = property(lambda self: self[2])
+    exact = property(lambda self: self[3])
+    narrowing = property(lambda self: self[4])
+    top = property(lambda self: self[5])
+
+    def __str__(self) -> str:
+        return f"cargo test {self.name}" + (" --exact" if self.exact else "")
+
+
+def _cargo_options(rest, value_options: tuple, keep: list, filters: list) -> bool:
+    """Read options into keep [(name, value)] and positional words into filters; True when a
+    word cannot be read (a value option with no value, or one whose value starts with `-`)."""
+    for word in rest:
+        name, eq, value = word.partition("=") if word.startswith("--") else (word, "", "")
+        if name in value_options and not eq:
+            value = next(rest, None)
+            if value is None or value.startswith("-"):
+                return True
+        if word.startswith("-"):
+            keep.append((name, value))
+        else:
+            filters.append(word)
+    return False
+
+
+def _cargo(run: dict, cache: dict) -> Optional[dict]:
+    """A `cargo test` run read as {top, place, scope, filters, exact, narrowing, unread}, or None
+    when it is not one (nextest, another subcommand) or ran outside a git repository. `place` is
+    the run's directory relative to its repository `top`; `narrowing` holds, sorted, every option
+    other than a resource or scope one, which may select other tests (--skip, --ignored,
+    --include-ignored, an unknown flag); `unread` is True when a word cannot be read."""
+    words = AC.test_words(_command(run))
+    where = _where(run)
+    if not words or where is None or os.path.basename(words[0]) != "cargo" or words[1:2] != ["test"]:
+        return None
+    top = _top(where, cache)
+    if top is None:
+        return None
+    head, tail = words[2:], []
+    if "--" in head:
+        head, tail = head[:head.index("--")], head[head.index("--") + 1:]
+    options, filters, libtest = [], [], []
+    unread = _cargo_options(iter(head), _CARGO_VALUE, options, filters)
+    unread = _cargo_options(iter(tail), _LIBTEST_VALUE, libtest, filters) or unread
+    scope = sorted(option for option in options if option[0] in _CARGO_SCOPE)
+    exact = any(name == "--exact" for name, _ in libtest)
+    narrowing = [("cargo",) + option for option in options if option[0] not in _CARGO_SCOPE + _CARGO_RESOURCE]
+    narrowing += [("libtest",) + option for option in libtest
+                  if option[0] not in _LIBTEST_RESOURCE + ("--exact",)]
+    return {"top": top, "place": _norm(os.path.relpath(where, top)), "scope": tuple(scope),
+            "filters": filters, "exact": exact, "narrowing": tuple(sorted(narrowing)), "unread": unread}
+
+
+def _covers_cargo(run: dict, red: CargoTarget, cache: dict) -> bool:
+    """A passing cargo run covers a cargo red: fully read, the red's own narrowing options and no
+    other (none when the red has none: --ignored or --include-ignored select other tests than a
+    plain run), and those only libtest selection options whose meaning is known, the same directory of the same repository, the red's scope (or the same scope less its target-kind options when they are all
+    kinds a plain `cargo test` runs, which runs more), and no filter or a filter that selects at
+    least the red's tests: a plain filter g when g is part of the red's filter, an --exact one
+    only the same --exact filter."""
+    reading = _cargo(run, cache)
+    if reading is None or reading["unread"] or reading["narrowing"] != red.narrowing:
+        return False
+    if any(option[0] != "libtest" or option[1] not in _LIBTEST_SELECT for option in red.narrowing):
+        return False
+    if reading["top"] != red.top or reading["place"] != red.place:
+        return False
+    kinds = [option[0] for option in red.scope if option[0] in _CARGO_KINDS]
+    wider = tuple(option for option in red.scope if option[0] not in _CARGO_KINDS)
+    if reading["scope"] != red.scope and not (reading["scope"] == wider
+                                              and all(kind in _CARGO_DEFAULT_KINDS for kind in kinds)):
+        return False
+    if not reading["filters"]:
+        return not reading["exact"]
+    if reading["exact"]:
+        return red.exact and red.name in reading["filters"]
+    return any(name in red.name for name in reading["filters"])
+
+
+def _top(where: Optional[str], cache: dict) -> Optional[str]:
+    """The real path of the git root holding `where`, cached in `cache`."""
+    key = ("top", where)
+    if key not in cache:
+        top = ct.work_root(where) if where else None
+        cache[key] = os.path.realpath(top) if top else None
+    return cache[key]
+
+
+def _repo_rel(where: Optional[str], path: str, cache: dict) -> Optional[str]:
+    """`path` (relative to the directory `where`, or absolute) relative to the git root holding
+    `where`, or None when there is none or the path lies outside it."""
+    top = _top(where, cache)
+    if top is None:
+        return None
+    full = os.path.realpath(os.path.join(where, os.path.expanduser(path)))
+    if not _inside(full, top):
+        return None
+    return _norm(os.path.relpath(full, top))
+
+
+_GLOB = re.compile(r"[*?\[\]{}]")
+
+
+def _glob_segment(segment: str) -> str:
+    """One glob segment as a regex: any run of `*` matches within the segment (so `**` inside a
+    segment is `*`), `?` one character; a wildcard never matches a leading dot."""
+    parts = [part for part in re.split(r"(\*+|\?)", segment) if part]
+    body = "".join("[^/]*" if part.startswith("*") else "[^/]" if part == "?" else re.escape(part)
+                   for part in parts)
+    return ("(?!\\.)" if parts and parts[0][0] in "*?" else "") + body
+
+
+def _glob_match(pattern: str, path: str) -> bool:
+    """`path` matches the glob `pattern`: `*` and `?` within one path segment, a whole `**`
+    segment any number of whole segments (none starting with a dot). A pattern with a class or a
+    brace list matches nothing."""
+    if any(mark in pattern for mark in "[]{}") or _GLOB.search(path):
+        return False
+    segments = pattern.split("/")
+    regex = ""
+    for index, segment in enumerate(segments):
+        last = index == len(segments) - 1
+        if segment == "**":
+            regex += "(?:(?!\\.)[^/]+/)*(?!\\.)[^/]+" if last else "(?:(?!\\.)[^/]+/)*"
+        else:
+            regex += _glob_segment(segment) + ("" if last else "/")
+    return re.fullmatch(regex, path) is not None
+
+
+# `node --test` with no target runs the files matching these patterns under its directory
+# (node 24: .ts, .mts and .cts too, as type stripping is on), never under node_modules.
+_NODE_DEFAULT_FILE = re.compile(r"(?:[^/]*[.\-_]test|test-[^/]*|test)\.[cm]?[jt]s")
+
+
+def _node_default(path: str) -> bool:
+    """`path` (relative to the run's directory) is a file a bare `node --test` runs."""
+    parts = path.split("/")
+    if path.startswith("../") or any(part.startswith(".") or part == "node_modules" for part in parts):
+        return False
+    return bool(_NODE_DEFAULT_FILE.fullmatch(parts[-1])) or (
+        "test" in parts[:-1] and bool(re.fullmatch(r"[^/]*\.[cm]?[jt]s", parts[-1])))
 
 
 def _dotnet(run: dict) -> Optional[dict]:
@@ -427,17 +676,19 @@ def red_targets(run: dict, cache: Optional[dict] = None) -> list:
     """What a red run names: for `dotnet test`, a Target per .cs file its --filter maps to (no
     filter names nothing: the whole project is no test file, and a narrowed run names nothing:
     what else selected its tests is not read); otherwise test_files with node ids."""
+    cache = {} if cache is None else cache
     reading = _dotnet(run)
     if reading is not None:
-        return [] if reading["narrowed"] else _dotnet_targets(reading, {} if cache is None else cache)
+        return [] if reading["narrowed"] else _dotnet_targets(reading, cache)
     words = AC.test_words(_command(run))
-    if words and detect_runner(shlex.join(words)) == "dotnet":
+    runner = detect_runner(shlex.join(words)) if words else None
+    if runner == "dotnet":
         return []                       # a vstest run of a built assembly names no .cs file
+    if runner == "cargo":               # a cargo red names its filters; nextest, no filter or an unread word: nothing
+        cargo = _cargo(run, cache)
+        return [CargoTarget(cargo["place"], cargo["scope"], name, cargo["exact"], cargo["narrowing"], cargo["top"])
+                for name in cargo["filters"]] if cargo and not cargo["unread"] else []
     return test_files(run, nodes=True)
-
-
-def _same_file(word: str, file: str) -> bool:
-    return word == file or word.endswith("/" + file) or file.endswith("/" + word)
 
 
 def _selects_at_least(green: Target, red: Target) -> bool:
@@ -474,34 +725,66 @@ def _covers_dotnet(run: dict, red: Target, cache: dict) -> bool:
     return False
 
 
-def covers(run: dict, red, root: str, cache: Optional[dict] = None) -> bool:
-    """The passing run ran the red target `red` (a file, a file::node id, or a dotnet Target)
-    and selects nothing narrower: no option such as -k, -m or --deselect (resource flags such
-    as --maxWorkers are set aside). A run that names the file, or a directory above it, covers
-    it only with no ::node id among its targets; a node id covers only the same node id. No
-    target at all covers it only when the run's directory is the worktree root `root` (the
-    whole suite)."""
+def _options_allowed(options: list, setup: Optional[list], own: list) -> bool:
+    """A green's options narrow nothing: none at all, or only node setup options (`own`, in
+    command order), the same ones as the red's (`setup`), the modules it loads (--import,
+    --require, a loader) in the same order; with no red to compare (`setup` None), any setup
+    options."""
+    if not options:
+        return not setup
+    if setup is None:
+        return all(_setup_option(option) for option in options)
+    loads = [option for option in own if option[0] in _NODE_LOADS]
+    return list(options) == sorted(setup) and loads == [option for option in setup if option[0] in _NODE_LOADS]
+
+
+def covers(run: dict, red, root: str, cache: Optional[dict] = None, red_run: Optional[dict] = None) -> bool:
+    """The passing run ran the red target `red` (a file, a file::node id, a dotnet Target or a
+    CargoTarget) and selects nothing narrower: no option such as -k, -m or --deselect (resource
+    flags such as --maxWorkers or --test-concurrency are set aside; node setup flags such as
+    --import must equal the red run's). A path target is read against the directory of
+    `red_run` (the worktree root `root` when none is given) and each of the green's against the
+    green's own directory, both relative to their git root, so a run from a sub-directory and
+    one from the root name the same file. A run that names the file, a directory above it or a
+    glob matching it covers it only with no ::node id among its targets; a node id covers only
+    the same node id. No target at all covers it only when the run's directory is `root` (the
+    whole suite; for `node --test`, only a red file matching node's default patterns). The red
+    and the green must share a git root (a nested repository or submodule is another one)."""
+    cache = {} if cache is None else cache
     if isinstance(red, Target):
-        return _covers_dotnet(run, red, {} if cache is None else cache)
+        return _covers_dotnet(run, red, cache)
+    if isinstance(red, CargoTarget):
+        return _covers_cargo(run, red, cache)
     picked = _picked(run)
-    if picked is None or picked[1]:
+    if picked is None or picked[0] == "cargo" or not _options_allowed(picked[1], _setup(red_run), _setup(run)):
         return False
+    red_picked = _picked(red_run) if red_run is not None else None
+    if red_picked is not None and red_picked[0] != picked[0]:
+        return False                    # another runner selects files by its own rules
     file, _, node = red.partition("::")
     whole = not any("::" in target for target in picked[2])
     targets = test_files(run, nodes=True)
-    if not targets:
-        return _where(run) == root
     where = _where(run)
+    red_where = _where(red_run) if red_run is not None else root
+    if not targets:
+        if where != root or picked[0] != "node":
+            return where == root
+        full = os.path.realpath(os.path.join(red_where, os.path.expanduser(file))) if red_where else None
+        return full is not None and _node_default(_norm(os.path.relpath(full, where)))
+    wanted = _repo_rel(red_where, file, cache)
+    if wanted is None or _top(red_where, cache) != _top(where, cache):
+        return False
     for target in targets:
         path, _, its_node = target.partition("::")
+        named = _repo_rel(where, path, cache)
+        if named is None:
+            continue
         if its_node:
-            if node == its_node and _same_file(path, file):
+            if node == its_node and named == wanted:
                 return True
         elif not whole:
             continue
-        elif _same_file(path, file) or (file + "/").startswith(path + "/"):
-            return True
-        elif where and os.path.isabs(path) and os.path.join(where, file).startswith(path + "/"):
+        elif named in (wanted, ".") or (wanted + "/").startswith(named + "/") or _glob_match(named, wanted):
             return True
     return False
 
@@ -550,7 +833,7 @@ def _red_first(verdict: Verdict, kind: str, ours: list, on_now: list, root: str,
         else:
             continue
         for target in red_targets(red, cache):
-            if any(covers(green, target, root, cache) for green in on_now):
+            if any(covers(green, target, root, cache, red_run=red) for green in on_now):
                 verdict.status("red_first", "pass", f"red run recorded for {target} {how}")
                 return
     verdict.refuse("red_first", RED_FIRST, f"a {kind} task needs a failing tcount run since dispatch, "

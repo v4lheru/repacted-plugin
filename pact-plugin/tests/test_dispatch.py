@@ -68,6 +68,7 @@ REGISTRATIONS_BEFORE = [
     ('SessionEnd', None, 'hooks/session_ledger.py', False),
     ('SessionEnd', None, 'hooks/distill_enqueue.py', False),  # registered after the dispatcher
     ('TeammateIdle', None, 'hooks/teammate_idle.py', False),
+    ('PermissionRequest', None, 'hooks/unattended_prompt_gate.py', False),  # registered after the dispatcher
     ('PostToolUse', 'Edit|Write|Bash', 'hooks/track_files.py', False),
     ('PostToolUse', 'AskUserQuestion|Bash', 'hooks/merge_guard_post.py', False),
     ('PostToolUse', 'TaskCreate|TaskUpdate', 'hooks/task_store_probe.py', False),  # registered after the dispatcher

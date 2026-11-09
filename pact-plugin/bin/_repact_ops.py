@@ -350,7 +350,25 @@ def _work(args: argparse.Namespace) -> int:
     words = ["/repacted:autopilot"] + [f"{name} {value:g}" if isinstance(value, float) else f"{name} {value}"
                                        for name, value in flags if value is not None]
     words += ["--pr"] if args.pr else []
+    _expiry_note()
     return _launch([" ".join(words)], args.force, {"REPACT_EXECUTION": "subagents"})
+
+
+def _expiry_note(env=None, expiry=None) -> None:
+    """`repact work --unattended`: one stderr line when the claude.ai sign-in ends within 48 h
+    (bin/_auth_expiry.py, fail soft). With REPACT_UNATTENDED on, the launcher's preflight
+    gives that line itself, so it is not given twice."""
+    env = os.environ if env is None else env
+    bin_dir = str(Path(__file__).resolve().parent)
+    if bin_dir not in sys.path:
+        sys.path.insert(0, bin_dir)
+    import _auth_expiry
+    import _repact_launch
+    if _repact_launch.unattended_launch(env):
+        return
+    line = (expiry or _auth_expiry.warning)(env=env)
+    if line:
+        print(f"repact work: {line}", file=sys.stderr)
 
 
 def _launch(claude_args: list, force: bool = False, extra_env: dict = None) -> int:

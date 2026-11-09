@@ -16,7 +16,7 @@ claim between agents, reversing yourself, or writing anything that tells another
 9. Quote the state your instruction assumes ("master at <sha>, both carriers read 1.6.1"); specificity is what lets the holder of a newer state catch you.
 10. Re-verify the premise of a conditional instruction at the moment you write it, especially a fact about your own recent action ("it is unpushed").
 11. Before telling an agent where to find something, open it and confirm the thing is there; prefer "find every carrier holding X" to "read it from X", and never pair a pointer with "this is the only copy".
-12. Before reversing a ruling, or conceding a pushback, re-read the current artifact: the design may already answer the objection. Over-conceding and over-defending are the same failure.
+12. Before reversing a ruling, or conceding a pushback, re-read the current artifact (the section the objection names; a re-read returns the whole file since Claude Code 2.1.317): the design may already answer the objection. Over-conceding and over-defending are the same failure.
 13. Write the tense you have earned: "I asked X to move it" until you have seen it on disk. A request and its completion are plausible neighbours, and the gap is the unverified step. Never send a message that reports a mutation (a commit, a push, a write) in the same tool batch as the mutation: read its result first.
 14. A claim about agent A written only into agent B's task is checked by nobody; tell the affected party directly. A carrier selects its readers.
 15. Match the check to the risk: staged, unstaged and untracked are three states, and a clean index says nothing about unstaged edits. A safety assurance needs a timestamp.

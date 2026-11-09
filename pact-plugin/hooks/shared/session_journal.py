@@ -2,13 +2,14 @@
 
 File: ~/.claude/pact-sessions/{slug}/{session_id}/session-journal.jsonl (0o600, dir 0o700).
 CLI: python3 session_journal.py write|read|read-last (used by commands and hooks).
-Writes take an flock around an O_APPEND short-write loop; no fsync (best effort).
+Writes take an flock around an O_APPEND short-write loop; no fsync (best effort). A row
+always starts on its own line, even after a fragment a killed writer left.
 
 Map, in file order: schema tables (_REQUIRED_FIELDS_BY_TYPE, _OPTIONAL_FIELDS_BY_TYPE),
 make_event, _validate_event_schema, repeats_latest_event, append_event,
 append_event_checked, read_events, latest_variety_by_task, resolve_latest_artifacts,
 _ts_supersedes, resolve_arc_start, read_last_event / read_last_event_from,
-_read_last_event_at, path helpers, _atomic_write, _build_cli, main. The read side
+_read_last_event_at, path helpers, _ends_mid_line, _atomic_write, _build_cli, main. The read side
 (read_events_from, _read_events_at, _parse_ts, _ts_ge, _journal_path_from) lives in
 journal_reader.py and is bound here under these names.
 
@@ -924,16 +925,26 @@ def _validate_cli_session_dir(session_dir: str) -> int:
     return 0
 
 
+def _ends_mid_line(fd: int) -> bool:
+    """True when the file's last byte is not a newline (an empty file is not mid-line)."""
+    if os.lseek(fd, 0, os.SEEK_END) == 0:
+        return False
+    os.lseek(fd, -1, os.SEEK_END)
+    return os.read(fd, 1) != b"\n"
+
+
 def _atomic_write(path: Path, data: bytes) -> bool:
     """Append *data* to *path* under an exclusive flock; True on success.
 
     The lock keeps writes larger than PIPE_BUF from interleaving; the loop retries
-    short writes. No fsync, on purpose (hot path); see the doc file.
+    short writes. A file that ends mid-line (a writer killed or a disk filled inside a
+    row) gets a newline first, so this row never joins the fragment and is lost with it;
+    the readers skip the fragment. No fsync, on purpose (hot path); see the doc file.
     """
     try:
         fd = os.open(
             str(path),
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+            os.O_RDWR | os.O_APPEND | os.O_CREAT,
             0o600,
         )
     except OSError:
@@ -944,6 +955,8 @@ def _atomic_write(path: Path, data: bytes) -> bool:
         except OSError:
             return False
         try:
+            if _ends_mid_line(fd):
+                data = b"\n" + data
             view = memoryview(data)
             total = 0
             while total < len(view):

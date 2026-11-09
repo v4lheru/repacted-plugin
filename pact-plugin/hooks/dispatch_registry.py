@@ -198,6 +198,8 @@ REGISTRY: dict[str, tuple[Check, ...]] = {
     "SessionEnd": (_hook("session_ledger"),
                    Check(name="distill_enqueue", native="distill_enqueue:dispatch_check")),
     "TeammateIdle": (_teams_hook("teammate_idle"),),
+    # Runs only when a call would wait on a permission prompt; denies it while unattended.
+    "PermissionRequest": (_hook("unattended_prompt_gate", journals_refusals=True),),
     "PostToolUse": (
         _hook("track_files", "Edit|Write|Bash"),
         _hook("merge_guard_post", "AskUserQuestion|Bash"),

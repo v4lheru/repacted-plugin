@@ -125,6 +125,31 @@ class TestBuildCustomInstructions:
         assert "none found" in result  # agents none found
         assert "Preserve task IDs" in result
 
+    def test_busy_session_stays_under_precompact_cap(self):
+        """Claude Code cuts PreCompact output at 10,000 characters (CC-4).
+
+        A pathological busy session (60 teammates at the 200-char name cap,
+        some non-ASCII so JSON escaping inflates them, and a 4,000-char
+        feature subject) must still encode under the cap, with every
+        essential line present and the agent overflow counted, not dropped.
+        """
+        from precompact_state_reminder import build_custom_instructions
+        teammates = [f"coder-{i}-" + ("é" if i % 3 else "n") * 190 for i in range(60)]
+        state = {
+            "feature_subject": "Busy feature " + "x" * 4000, "feature_id": "1",
+            "current_phase": "CODE", "variety_score": 16,
+            "teammates": teammates, "team_names": ["session-busy"],
+        }
+        result = build_custom_instructions(state)
+        assert len(json.dumps({"custom_instructions": result})) < 10_000
+        assert "task #1" in result
+        assert "Current phase: CODE" in result
+        assert "Variety score: 16" in result
+        assert "Team name: session-busy" in result
+        assert result.rstrip().endswith("Preserve task IDs and agent names exactly.")
+        assert teammates[0] in result
+        assert "more, see repact inspect" in result
+
 
 # ---------------------------------------------------------------------------
 # Unit tests: _extract_variety_total

@@ -41,7 +41,7 @@ echo "TIMED OUT after 30 minutes — still pending:"; printf '%s\n' "$OUT"; exit
 | Anything else (the default) | Spawn fresh, with a brief linking the prior HANDOFF |
 | Reviewer found issues, now needs a fixer | The code's author if it is still running, else a fresh coder; never a reviewer, with one reviewer or several (it verifies the fix) |
 
-A fresh agent per task is the default (LEAN-DEFAULTS: most spend is agents re-reading large contexts on every tool call); reuse an idle teammate only when its context is small AND the domain is the same (send the delta). Stop each agent once its task is accepted. The cap on agents at once and the reviewer default are in the persona's §11 Lean defaults.
+A fresh agent per task is the default (LEAN-DEFAULTS: most spend is agents re-reading large contexts on every tool call); reuse an idle teammate only when its context is small AND the domain is the same (send the delta). Stop each agent once its task is accepted. A fresh lead between features (`/clear`) no longer stops the running commands of background agents (fixed in Claude Code 2.1.319); on older versions, let them finish first. The cap on agents at once and the reviewer default are in the persona's §11 Lean defaults.
 
 **First-spawn verification (HARD-RULE)**: read this on a spawn that fails or a teammate missing task tools, before any re-spawn. Lacking `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet` yourself means the host withholds them: tell the user (README "If specialist agents will not spawn"); don't re-spawn. A teammate missing `TaskList`, `TaskUpdate` or `SendMessage` means a malformed spawn (`Task(...)` instead of `Agent(...)`, or no `name=`/`team_name=`): HARD STOP, fix, re-spawn; never "make do".
 
@@ -102,6 +102,7 @@ The rules below govern how messages delivered via this tool actually behave.
 - No cancellation primitive exists — a follow-up message cannot supersede a queued earlier one.
 - The only mid-turn interrupt mechanism is user-side (Escape). Agent-to-agent `SendMessage` has no equivalent.
 - `SendMessage` requires a specific `to=` recipient name. There is no broadcast addressing mode; reaching multiple teammates means iterating and sending one message per recipient (see [Stopping every teammate](stop-signals.md#stopping-every-teammate)).
+- Checked on Claude Code 2.1.319 for Agent Teams teammates: unchanged. A plain background subagent may get a message earlier (2.1.317), with its running command moved to the background, and has a command moved to the background after 3 minutes (2.1.318). If a command is moved, wait for its completion notice, and never submit a HANDOFF before the `tcount` run ends.
 
 The lead's check before sending is in the persona §1; the teammate's is in `skills/teammate/references/teammate-messaging.md`.
 
@@ -109,3 +110,4 @@ The lead's check before sending is in the persona §1; the teammate's is in `ski
 - A stop is an `amend_<n>` (kind `halt`): a busy teammate gets it after its next tool call.
 - To stop in-flight teammate work at once, the user interrupts by hand.
 - The lead's duty to "surface immediately" means at the lead's next idle, not at an arbitrary moment.
+- Checked on Claude Code 2.1.319 for Agent Teams teammates: unchanged. A plain background subagent may get a stop earlier (2.1.317); its running command keeps going in the background, so check that the command ended before trusting its result.

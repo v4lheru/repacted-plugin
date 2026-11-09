@@ -20,6 +20,13 @@ Reads task files and team config to build a concrete state snapshot:
 
 Emits: custom_instructions (injected into compaction model to guide preservation)
 
+Size cap: Claude Code (2.1.314+) cuts PreCompact output at 10,000 characters.
+Realistic sessions render well under 2,000, but the feature subject and the
+teammate list are unbounded in count, so the output is budgeted to
+_OUTPUT_BUDGET encoded characters: the subject is truncated, and the agents
+line, the only list, takes what the fixed lines leave and ends with an
+"and N more" count. Every other line always survives.
+
 This is a non-blocking reminder (always exits 0), not a gate.
 
 Input: JSON from stdin (PreCompact event data)
@@ -42,6 +49,43 @@ from shared.variety_scorer import MAX_SCORE, MIN_SCORE
 # ---------------------------------------------------------------------------
 # Output builders
 # ---------------------------------------------------------------------------
+
+# Claude Code cuts PreCompact output at 10,000 characters; stay well below it,
+# measured as the JSON-encoded text the hook prints (non-ASCII escapes to
+# \uXXXX, so a character count of the raw string would undercount).
+_OUTPUT_BUDGET = 9_000
+_SUBJECT_MAX_CHARS = 500
+
+
+def _encoded_len(text: str) -> int:
+    """Length of `text` once json.dumps has escaped it (quotes excluded)."""
+    return len(json.dumps(text)) - 2
+
+
+def _agents_line(teammates: list[str], budget: int) -> str:
+    """
+    Render the active-agents line within `budget` encoded characters.
+
+    Names are listed in file order until the next one would overflow; the
+    rest are counted in an "and N more, see repact inspect" tail, so the
+    compaction model still learns how many agents exist.
+    """
+    if not teammates:
+        return "- Active agents: none found"
+    full = f"- Active agents: {', '.join(teammates)}"
+    if _encoded_len(full) <= budget:
+        return full
+    shown: list[str] = []
+    for i, name in enumerate(teammates):
+        rest = len(teammates) - i - 1
+        tail = f", and {rest} more, see repact inspect" if rest else ""
+        candidate = f"- Active agents: {', '.join(shown + [name])}{tail}"
+        if _encoded_len(candidate) > budget:
+            break
+        shown.append(name)
+    hidden = len(teammates) - len(shown)
+    listed = ", ".join(shown) + ", and " if shown else ""
+    return f"- Active agents: {listed}{hidden} more, see repact inspect"
 
 
 def _extract_variety_total(variety: Any) -> int | None:
@@ -87,6 +131,8 @@ def build_custom_instructions(state: dict) -> str:
     feature = state.get("feature_subject")
     feature_id = state.get("feature_id")
     if feature:
+        if len(feature) > _SUBJECT_MAX_CHARS:
+            feature = feature[:_SUBJECT_MAX_CHARS] + "..."
         id_str = f" (task #{feature_id})" if feature_id else ""
         lines.append(f"- Feature: {feature}{id_str}")
 
@@ -96,11 +142,7 @@ def build_custom_instructions(state: dict) -> str:
     else:
         lines.append("- Current phase: unknown")
 
-    teammates = state.get("teammates", [])
-    if teammates:
-        lines.append(f"- Active agents: {', '.join(teammates)}")
-    else:
-        lines.append("- Active agents: none found")
+    agents_at = len(lines)
 
     variety_total = _extract_variety_total(state.get("variety_score"))
     if variety_total is not None:
@@ -111,6 +153,13 @@ def build_custom_instructions(state: dict) -> str:
         lines.append(f"- Team name: {', '.join(team_names)}")
 
     lines.append("Preserve task IDs and agent names exactly.")
+
+    # The agents line is the only list; it gets what the fixed lines leave
+    # (each newline separator encodes as two characters, "\n").
+    fixed = sum(_encoded_len(line) for line in lines) + 2 * len(lines)
+    lines.insert(
+        agents_at, _agents_line(state.get("teammates", []), _OUTPUT_BUDGET - fixed)
+    )
 
     return "\n".join(lines)
 

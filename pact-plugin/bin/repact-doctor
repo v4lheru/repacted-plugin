@@ -34,8 +34,9 @@ Checks, one line each (GREEN, AMBER, RED, or SKIP when it cannot run here):
  12 team policy      the work tree's .repacted/policy.json: what it tightens and, AMBER, what in
                      it was ignored (a value that would loosen, a malformed or untrusted file)
 
-Then two notes that are never a check state: `execution:` (subagents or teams, and why) and the
-host line against reference/compat.json (an untested host is a note).
+Then three notes that are never a check state: `execution:` (subagents or teams, and why), the
+host line against reference/compat.json (an untested host is a note) and `prompts:` (whether the
+user settings deny tool permission prompts; an info suggestion when they do not).
 
   repact-doctor --clear task-store
                      remove this session's task-store HALT marker (hooks/task_store_probe.py
@@ -125,6 +126,7 @@ def main(argv: list[str]) -> int:
         print("\n".join(_doctor.render_report(results)))
         print(_doctor_host.mode_line(ctx))
         print(_doctor_host.compat_line(ctx))
+        print(_doctor_host.prompts_line(ctx))
         print(f"cache: {cache_file}")
     states = {r.state for r in results}
     return EXIT_RED if "red" in states else EXIT_AMBER if "amber" in states else EXIT_OK

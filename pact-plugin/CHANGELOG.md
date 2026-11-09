@@ -2,6 +2,21 @@
 
 Release notes for rePACTed, newest first. Entries start at the first public release.
 
+`Unreleased` lists what has changed on the main line since the last release and becomes the next version's notes. Each entry says what changed in behaviour and, where it matters, the files involved. An entry marked **Fork action** needs a step from anyone running a clone with local changes (a setting, a migration, a file that moved).
+
+## 2.2.0 (2026-11-09)
+
+Unattended mode denies permission prompts instead of waiting on them, warns before your sign-in runs out, and the red-first check reads `node --test` and `cargo test`. Forks with their own `hooks/hooks.json` must merge in the new hook. Known limits in the release notes.
+
+- While unattended mode is on, a tool call that would wait on a permission prompt is denied at once, so the agent takes another route instead of stalling until someone comes back (`hooks/unattended_prompt_gate.py`). Turning unattended mode on applies it without a restart; with the mode off nothing changes. Claude Code's own `permissions.denyInsteadOfPrompting` setting is not used, because it also takes away the agent's questions to you; `repact doctor` mentions it as an option only. **Fork action:** if your clone has its own `hooks/hooks.json`, merge in the new `PermissionRequest` entry.
+- Turning unattended mode on, or launching an unattended run, warns when your claude.ai sign-in ends within 48 hours.
+- The hooks that run after each tool call can be cut off mid-write without leaving a broken file (Claude Code 2.1.319 gives them 10 seconds after an interrupt). This covers the merge-approval token and the session journal.
+- The state reminder written before a compaction stays under Claude Code's 10,000-character limit, with the most important lines first, so the cut never drops them.
+- Agents are told to re-read only the part of a file they need: since Claude Code 2.1.317 every re-read returns the whole file. Rules on message delivery and long commands note what was checked on 2.1.319, and `/clear` is now safe while background agents are still working.
+- A call denied instead of prompted shows up as a tool error; agents are told not to retry it but to take another route.
+- The red-first check reads `node --test` and `cargo test` runs: setup and resource flags, bare runs and globs as node reads them, cargo test filters, sub-directory paths, and bench and example targets. A red run is covered only by a green from the same runner, git root, load order and cargo narrowing.
+- A `produced` path that holds spaces stays one path when a HANDOFF is submitted (`repact submit`).
+
 ## 2.1.3 (2026-11-03)
 
 The shell guards also check Monitor commands, each specialist gets its own compaction cap, the lead no longer asks you to compact, a message you type ends unattended mode, and the red-first check reads .NET tests. Known limits in the release notes.

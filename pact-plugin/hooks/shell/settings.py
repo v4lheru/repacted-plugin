@@ -277,7 +277,7 @@ def _what(path: str, cwd: str, places: dict) -> str | None:
             return "a Claude Code settings file"
         if parent == places["config"] and name.startswith("settings") and name.endswith(".json"):
             return "a Claude Code settings file"
-        if parent == places["config"] and name.startswith(APPROVAL_PREFIX):
+        if parent == places["config"] and _names_approval(name):
             return APPROVALS
         if _within(candidate, places["projects"]) and (name.endswith(".jsonl")
                                                        or not _in_memory(candidate, places)):
@@ -464,6 +464,12 @@ def _pieces(word: str) -> list[str]:
     return [piece for piece in [word] + _PIECE_SPLIT.split(word) + glued if piece]
 
 
+def _names_approval(name: str) -> bool:
+    """A token name, or the hidden temp the mint hard-links into place (.merge-authorized-*):
+    until the mint drops it, the temp is the live token's inode, so a write to it is one."""
+    return name.lstrip(".").startswith(APPROVAL_PREFIX)
+
+
 def _unknown_tail(piece: str) -> str | None:
     """A name built from a variable the hook cannot spell, whose own tail is protected."""
     if "$" not in piece:
@@ -476,7 +482,7 @@ def _unknown_tail(piece: str) -> str | None:
         return TASK_FILES
     if lowered.endswith(_TASK_LOG_DIR) or _TASK_LOG_DIR + "/" in lowered:
         return TASK_LOG
-    if tail.startswith(APPROVAL_PREFIX):
+    if _names_approval(tail):
         return APPROVALS
     if (tail.startswith("settings") and tail.endswith(".json")) or tail == "hooks.json" \
             or "/.claude-plugin" in lowered or "/plugins/cache" in lowered \

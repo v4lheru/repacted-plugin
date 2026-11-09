@@ -16,6 +16,7 @@ it drops both. This is the entry file for VD-B1 (B1.1–B1.3). Three splits hold
 
 ## Canonical rules
 - **B1.1** Treat every observation of mutable state, including your own, as a snapshot: carry its as-of and scope when you restate it, and re-read at the moment of acting or asserting.
+  - Since Claude Code 2.1.317 a re-read of a file returns the whole file, not an "unchanged" stub. Re-read the region you act on (offset/limit, or grep for the anchor); re-read whole only a small file or one that is itself the shared state.
   - Re-list before claiming something is ABSENT and before recording a dependent conclusion into memory or a deliverable. Stakeholder folders fill asynchronously, with no notification either way.
   - Before comparing two sources, establish which is NEWER. The freshest-looking artefact (a live query) can be the stalest (a row written months ago); the feeling tracks when YOU touched it.
   - A transient marker (a label present only while paused) sampled at the phase where it is absent looks permanent. Select the driving STATE beside the marker, or sample at two phases.

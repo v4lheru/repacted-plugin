@@ -173,11 +173,22 @@ KNOWN_LIMIT_MAX_CHARS = 200
 LIMITS_LINK = re.compile(r"docs/architecture/([\w./-]+\.md)#limits")
 
 
-def current_release_known_limits(text: str) -> list[str]:
-    """The bullets of the first `Known limits` block after the first release heading."""
-    first = text.index("\n## ")
-    start = text.index("Known limits", first)
-    end = text.index("\n## ", start)
-    return [line for line in text[start:end].splitlines() if line.startswith("- ")]
+def current_release_known_limits(text: str) -> list[str] | None:
+    """The bullets of the `Known limits` block of the newest release section (`## Unreleased` is
+    not a release); None when that section has no such block (its limits are in the release notes)."""
+    section = next(part for part in re.split(r"\n(?=## )", text)[1:]
+                   if not part.startswith("## Unreleased"))
+    block = re.search(r"^Known limits.*?\n(?=^(?!- )\S|\Z)", section, re.M | re.S)
+    if block is None:
+        return None
+    return [line for line in block.group(0).splitlines() if line.startswith("- ")]
+
+
+def test_known_limits_parser_skips_unreleased_and_prose():
+    text = ("# Changelog\n\n## Unreleased\n\n- a change. Known limits: one.\n\n"
+            "## 2.0.0 (2026-01-01)\n\nIntro; known limits in the notes.\n\n- a change\n")
+    assert current_release_known_limits(text) is None
+    text += "\nKnown limits (one line each):\n\n- a limit\n"
+    assert current_release_known_limits(text) == ["- a limit"]
 
 

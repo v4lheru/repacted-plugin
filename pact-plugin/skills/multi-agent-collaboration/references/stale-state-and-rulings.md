@@ -30,13 +30,13 @@ another agent also writes.
 22. Comment on your own invariant, never on the current state of a file you do not own; the other side will change it and your sentence goes false.
 23. Before concluding a peer ignored your request, read their artifact's rationale (headers, docblocks, commit body); the argument may beat yours.
 24. Put findings in task metadata and send a one-line ping; less in flight means fewer crossed messages. Drain the inbox right before composing.
-25. Before writing into a store you do not own, re-read the target in the same sequence as the write; if the content is already there, do not write.
+25. Before writing into a store you do not own, re-read the target in the same sequence as the write (the region you write into, unless the file is small: a re-read returns the whole file since Claude Code 2.1.317); if the content is already there, do not write.
 26. `SendMessage` success means the inbox, not the reader: after three unacknowledged sends, switch carriers and put the answer itself in a durable artifact.
 
 ## Detail
 
 **Fail-if-moved primitives.** `Edit` against on-disk content (a stale-anchor failure means the file
-moved: re-read and re-anchor), `git rm` rather than `rm`, `mv -n`, an if-match header, a version
+moved: re-read the anchor's region and re-anchor), `git rm` rather than `rm`, `mv -n`, an if-match header, a version
 column. For a full-object PUT (an n8n workflow, a document), fetch immediately before each write,
 never reuse a snapshot across two edits (you are the other writer), and declare the post-state
 (node count, route tally) before writing so you can assert it after; absence in a PUT body is an

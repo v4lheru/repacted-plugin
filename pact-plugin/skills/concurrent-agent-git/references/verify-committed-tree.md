@@ -21,7 +21,7 @@ green gate.
 13. Run mutation experiments in `git archive` snapshots of a NAMED commit, and re-run every finding against current HEAD before reporting; a peer may have fixed it meanwhile.
 14. A peer's unresolved imports name the modules they are about to write; read them to catch two modules for one concept before either side commits.
 15. On resuming a task in a shared tree, check `git status` for untracked specs and `git diff` the source for leftover sabotage before writing anything.
-16. When your Edit fails with "string not found" on a file you own, a peer edited it: re-read, bind to shipped behaviour, re-run the full suite, and ask them to route changes through you.
+16. When your Edit fails with "string not found" on a file you own, a peer edited it: re-read (the changed region, found by `git diff` or a grep for the anchor; a re-read returns the whole file since Claude Code 2.1.317), bind to shipped behaviour, re-run the full suite, and ask them to route changes through you.
 17. Read the SKIPS in a clean-tree run as well as the failures; a suite that no-ops without a missing fixture is reporting on its own guards.
 18. Make an oracle-dependent test fail rather than skip when a required flag is set (`ORACLE_REQUIRED=1` plus a path override), and have CI supply both.
 19. A guard must tell absence (skip loudly) from breakage (fail); "nothing to check yet" is not "discovery is broken".

@@ -159,14 +159,47 @@ def teachback(ctx: records.Context, task_id: str, given) -> Result:
 
 # -- the HANDOFF ------------------------------------------------------------------------------
 
-def _path_word(item: str):
-    match = re.match(r"\s*(\S+)", item)
-    if not match:
-        return None
-    word = _TAIL.sub("", match.group(1).rstrip(":,;").strip("`'\""))
+_QUOTED = re.compile(r"\s*([`'\"])([^`'\"\n]+)\1")
+SPACED_WORDS_MAX = 32      # whitespace positions tried per item for a path that holds spaces
+
+
+def _clean(raw: str) -> str:
+    return _TAIL.sub("", raw.rstrip(":,;").strip("`'\""))
+
+
+def _spaced_path(item: str, root: str, given: str):
+    """(raw, word) for an item whose path holds spaces: the longest run of its words that is
+    an existing path (absolute, or relative to the worktree), or an absolute path under the
+    worktree as written in the dispatch record up to the first space after it; else None."""
+    stripped = item.lstrip()
+    ends = [match.start() for match in re.finditer(r"\s", stripped)][:SPACED_WORDS_MAX]
+    for end in reversed(ends + [len(stripped)]):
+        raw = stripped[:end]
+        word = _clean(raw)
+        if " " in word.strip() and os.path.lexists(os.path.join(root, os.path.expanduser(word))):
+            return raw, word
+    for prefix in dict.fromkeys((given.rstrip("/") + "/", root.rstrip("/") + "/")):
+        if " " in prefix and stripped.startswith(prefix):
+            rest = re.match(r"\S*", stripped[len(prefix):]).group(0)
+            return prefix + rest, _clean(prefix + rest)
+    return None
+
+
+def _path_word(item: str, root: str = "/", given: str = ""):
+    """(raw, word): the path a produced item starts with, as written and cleaned of quotes, a
+    trailing `:line` and punctuation, or None when it starts with no path. A quoted path, or one
+    whose words hold spaces (_spaced_path), is kept whole."""
+    quoted = _QUOTED.match(item)
+    found = (quoted.group(0).lstrip(), _clean(quoted.group(2))) if quoted else _spaced_path(item, root, given)
+    if found is None:
+        match = re.match(r"\s*(\S+)", item)
+        if not match:
+            return None
+        found = match.group(1), _clean(match.group(1))
+    raw, word = found
     if not word or "://" in word or not ("/" in word or PurePosixPath(word).suffix):
         return None
-    return match.group(1), word
+    return raw, word
 
 
 def _inside(path: str, root: str) -> bool:
@@ -184,7 +217,7 @@ def repair_produced(produced, worktree: str) -> tuple:
         return produced, ["handoff.produced must be a non-empty list of strings, one per file"]
     root, out, problems = os.path.realpath(worktree), [], []
     for index, item in enumerate(items):
-        found = _path_word(item)
+        found = _path_word(item, root, worktree)
         if found is None:
             out.append(item)
             continue

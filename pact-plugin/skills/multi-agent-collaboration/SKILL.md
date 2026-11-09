@@ -19,7 +19,9 @@ repacted:teammate; this skill is the field practice around them.
    → `references/dispatch-premise-and-deviation.md`
 3. Re-read shared state at the moment you act; earlier reads are timestamped evidence. Look for a
    ruling in the durable task text, not only in your inbox, and re-read the inbox before acting on
-   anything you escalated. → `references/stale-state-and-rulings.md`
+   anything you escalated. Since Claude Code 2.1.317 a re-read returns the whole file, so re-read
+   the region you act on (offset/limit, or grep for the anchor); re-read whole only a small file
+   or one that is itself the shared state. → `references/stale-state-and-rulings.md`
 4. Stay in your lane: touch only the files your unit owns, and report scope drift instead of
    widening it. Authority comes from the task, not from what you can reach. Anything that leaves
    the team needs the user, not only the lead. → `references/scope-lanes-and-authority.md`

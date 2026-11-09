@@ -1,5 +1,5 @@
-"""The two host lines repact-doctor prints after its checks: the execution mode and the
-tested-host compat line.
+"""The three host lines repact-doctor prints after its checks: the execution mode, the
+tested-host compat line and the permission-prompt note.
 
 Location: pact-plugin/bin/_doctor_host.py. Used by bin/repact-doctor (report only:
 these lines are notes, never a check state, so they never reach the cache or the exit code).
@@ -14,6 +14,14 @@ root's settings.json (the environment wins, as in a session): REPACT_EXECUTION, 
 policy, then the default; teams also needs CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS. Either mode is
 valid, not a fault.
 The host version is `claude --version`; a missing or silent binary prints `host unknown`.
+
+  prompts: wait for you outside unattended runs (info: ...)   the user settings do not set it
+  prompts: denied instead of waiting (permissions.denyInsteadOfPrompting in user settings)
+
+The prompt note is information, never a check state: SessionStart's doctor line prints only
+non-green checks from the cache, so it never appears there. Unattended runs need no setting
+(hooks/unattended_prompt_gate.py denies prompts while the mode is ON); the note offers the
+Claude Code setting as a manual opt-in for the user's own sessions and states its cost.
 """
 from __future__ import annotations
 
@@ -111,3 +119,22 @@ def compat_line(ctx, compat_path: Path = COMPAT) -> str:
     os_name = _os_name()
     return (f"{host}; python {py} ({'below the ' if below else ''}min {python_min}); "
             f"os {os_name}: {'tested' if os_name in os_tested else 'untested'}")
+
+
+DENY_KEY = "denyInsteadOfPrompting"
+
+
+def prompts_line(ctx) -> str:
+    """Whether the user settings deny tool permission prompts instead of waiting on them."""
+    try:
+        settings = json.loads((ctx.config_root / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        settings = None
+    permissions = settings.get("permissions") if isinstance(settings, dict) else None
+    if isinstance(permissions, dict) and permissions.get(DENY_KEY) is True:
+        return (f"prompts: denied instead of waiting (permissions.{DENY_KEY} in user settings; "
+                "AskUserQuestion and plan mode are withdrawn in every session)")
+    return (f"prompts: wait for you outside unattended runs (info: permissions.{DENY_KEY}: true "
+            "in user settings denies them at once instead, but Claude Code then withdraws "
+            "AskUserQuestion and plan mode in every session, and a prompt you would approve, "
+            "such as a first gh push, fails instead of asking)")

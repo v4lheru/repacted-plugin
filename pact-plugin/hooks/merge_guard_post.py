@@ -13,13 +13,15 @@ Map: _emit_load_failure_alert, is_merge_question, _selected_option_text, _target
 _extraction_surface, _collect_pairs, MintResult, _strip_command_wrapper,
 _leg_bounded_flag_scan_surface, _has_options, _clicked_options, _mint_context_from_bundle,
 _mint_contexts_from_bundle, _mint_context_from_texts, _all_ascii, _bundle_has_command,
-_no_mint_advisory, write_token, _same_command_binding, _retire_token_for_command, main.
+_no_mint_advisory, write_token, _create_in_place, _drop_temp,
+_same_command_binding, _retire_token_for_command, main.
 Rationale and accepted residuals: the design notes
 """
 
 from __future__ import annotations
 
 # ─── stdlib first (used by _emit_load_failure_alert BEFORE wrapped imports) ─
+import errno
 import glob
 import json
 import os
@@ -554,29 +556,70 @@ def write_token(context: dict, token_dir: Path | None = None) -> str | None:
     # may hold the plain name), so a taken name moves on to the next suffix.
     names = [f"merge-authorized-{timestamp}"] + [
         f"merge-authorized-{timestamp}-{n}" for n in range(1, _MAX_NAME_TRIES)]
-    for name in names:
-        token_path = token_dir / name
-        if os.path.lexists(str(token_path) + ".consumed"):
-            continue
-        try:
-            # Write with secure permissions using os.open for atomic creation
-            fd = os.open(str(token_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            continue
-        except OSError:
-            return None
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(token_data, f, indent=2)
-        except Exception:
-            # fd is already closed by fdopen on failure, but file may exist
+    # The whole token goes to a hidden temp name first and is hard-linked into place, which
+    # fails when the name is taken (O_EXCL's no-clobber). A writer killed mid-write (the host's
+    # 10 s cap on an interrupted call's PostToolUse) leaves only the temp, which no token glob
+    # matches, never a half-written token under a live name.
+    temp = token_dir / f".{TOKEN_PREFIX}{os.getpid()}.{os.urandom(4).hex()}.tmp"
+    try:
+        fd = os.open(str(temp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(token_data, f, indent=2)
+    except Exception:
+        _drop_temp(temp)
+        return None
+    try:
+        for name in names:
+            token_path = token_dir / name
+            if os.path.lexists(str(token_path) + ".consumed"):
+                continue
             try:
-                token_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return None
-        return str(token_path)
-    return None
+                os.link(temp, token_path, follow_symlinks=False)
+            except FileExistsError:
+                continue
+            except OSError as error:
+                if error.errno not in _NO_HARD_LINKS:
+                    return None
+                try:
+                    return _create_in_place(token_path, token_data)
+                except FileExistsError:
+                    continue
+            return str(token_path)
+        return None
+    finally:
+        _drop_temp(temp)
+
+
+# os.link errors that mean "this filesystem has no hard links": the mint then creates the
+# token under its final name directly (O_EXCL), as it did before the temp, so an approved
+# command still gets its token; a kill mid-write can leave a partial token there, which the
+# read side removes as malformed (no approval, fail-closed).
+_NO_HARD_LINKS = frozenset({errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV})
+
+
+def _create_in_place(token_path: Path, token_data: dict) -> str | None:
+    """Create the token at token_path (O_EXCL, 0o600); its path, or None when the write
+    fails. Raises FileExistsError when the name is taken, so the caller tries the next."""
+    try:
+        fd = os.open(str(token_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(token_data, f, indent=2)
+    except Exception:
+        _drop_temp(token_path)
+        return None
+    return str(token_path)
+
+
+def _drop_temp(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _same_command_binding(ctx: dict, cmd_binding: dict) -> bool:

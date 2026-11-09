@@ -15,6 +15,7 @@ In Teams mode, after each `repact submit` you send the team-lead one line, SET t
 5. CLEAR on the turn the wait resolves: `TaskUpdate(taskId, metadata={"intentional_wait": null})`.
 6. Stay in the turn: run `repact-wait <id> --until completed,rejection,amend` in the FOREGROUND (Bash timeout 600000). HANDOFF accepted: run plain `repact-wait <task id>` (no `--until`) once more; the lead stops you.
 7. After a turn end the lead's `SendMessage` wakes you; never poll `TaskList` or make filler calls (`true`, `sleep`). Run long commands in the foreground, never `run_in_background`: a turn end over a background job is refused unless a wait names the job (`covers_since`).
+8. Items 6 and 7 were checked on Claude Code 2.1.319 for Agent Teams teammates: unchanged. A plain background subagent may get messages earlier (2.1.317) and have a command moved to the background after 3 minutes (2.1.318). If a command is moved, wait for its completion notice, and never submit a HANDOFF before the `tcount` run ends.
 
 ## Idle Discipline
 

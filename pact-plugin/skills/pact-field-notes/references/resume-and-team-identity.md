@@ -17,13 +17,13 @@ Marks ("re-probe", "practice", "until Mn"): defined once, in [SKILL.md](../SKILL
 5. Branch 1 (no team config claims this session): back up the context file, set its `team_name` to the live team; leave `session_id` and the journal dir alone. (verified 2026-09-26, PACT 4.8.1; until M3)
 6. Branch 2 (a stale team config's leadSessionId equals this session): the resolver's identity match overrides the edit; apply the branch 2 fix below. (verified 2026-09-26, PACT 4.8.1; until M3)
 7. Root cause: the branch-3 resume census returns nothing unless exactly one candidate exists, so any second live session blocks realignment (the backlog: the upstream census fix, picked at M3). (verified 2026-09-26, PACT 4.8.1; until M3)
-8. The copy of CLAUDE.md in your system prompt predates `session_init`'s rewrite; re-read the file from disk before quoting it. (observed 2026-08-26, PACT 4.6.44; re-probe)
+8. The copy of CLAUDE.md in your system prompt predates `session_init`'s rewrite; re-read from disk the section you quote (grep for its heading) before quoting it. (observed 2026-08-26, PACT 4.6.44; re-probe)
 9. A fresh block mtime does not make every field right: `session_init` can write a stale team name into a freshly written block. Test the name, not the timestamp. (observed 2026-09-02, PACT 4.6.54; until M3)
 10. Before blaming a stale snapshot, `stat` the file: mtime later than the other reader's read means a write-after-read race, not a stale copy. (observed 2026-09-09, PACT 4.7.x; practice)
 11. A git worktree carries its own copy of a TRACKED CLAUDE.md, frozen at its commit; `session_init` rewrites only the copy under the session's project dir, so read the file on the believer's cwd. An untracked CLAUDE.md is not in a worktree at all. (verified 2026-10-02, git 2.54.0, Claude Code 2.1.288, repacted 1.3.7, by probe and code read; re-probe)
 12. The session dir is named after the RESUMED session id, so it never matches the team name; that mismatch is normal. (observed 2026-10-02 in a teammate spawn, Claude Code 2.1.288, repacted 1.3.7; re-probe)
 13. Spawn results echo `name@team`; read the first one, it reveals the real team. A wrong team in a spawn prompt still routes, but the teammate mis-reports itself. (observed 2026-09-04, PACT 4.7.x; re-probe)
-14. An empty task store after a resume is a routing symptom: list `tasks/` by mtime and grep your task id across every team dir before reporting loss. (observed 2026-07-21, PACT 4.6.x; until M3)
+14. An empty task store after a resume is a routing symptom: list `tasks/` by mtime and grep your task id across every team dir before reporting loss. An empty task list right after `--resume`, `/clear` or a crash was also a Claude Code bug, fixed in 2.1.311. (observed 2026-07-21, PACT 4.6.x; until M3)
 
 ## The runbook
 
