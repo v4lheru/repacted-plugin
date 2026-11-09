@@ -5,7 +5,7 @@ Summary: DATA ONLY: the env guard's program classes (readers, printers, egress, 
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: RULES, RULE_MARKS, rule_of, _ALLOW_OUTPUT, SUGGESTION, DUMP_MESSAGE, PARSE_MESSAGE, UNREADABLE_MESSAGE, GREP_EXCLUSION, GREP_HINT, READERS, OPERAND_READERS, SILENT_STDIN, PRINTERS, EGRESS_PROGRAMS, LOADERS, FIND_ACTIONS, GIT_SAFE, GIT_PATCH_OPTIONS, _GIT_VALUE_OPTIONS, NAME_CONSUMERS, _DUMP_RUNNERS, GREP_PROGRAMS, RG_PROGRAMS, _GREP_VALUE_OPTIONS, _RG_VALUE_OPTIONS, _FILTER_OPTIONS, WALK_LIMIT, WALK_SKIP_DIRS.
+Map: RULES, RULE_MARKS, rule_of, _ALLOW_OUTPUT, SUGGESTION, DUMP_MESSAGE, PARSE_MESSAGE, UNSCANNED_MESSAGE, UNREADABLE_MESSAGE, GREP_EXCLUSION, GREP_HINT, READERS, OPERAND_READERS, SILENT_STDIN, PRINTERS, EGRESS_PROGRAMS, LOADERS, FIND_ACTIONS, GIT_SAFE, GIT_PATCH_OPTIONS, _GIT_VALUE_OPTIONS, NAME_CONSUMERS, _DUMP_RUNNERS, GREP_PROGRAMS, RG_PROGRAMS, _GREP_VALUE_OPTIONS, _RG_VALUE_OPTIONS, _FILTER_OPTIONS, WALK_LIMIT, WALK_SKIP_DIRS.
 """
 
 from __future__ import annotations
@@ -25,6 +25,11 @@ DUMP_MESSAGE = ("Blocked: this prints every environment variable, which can incl
                 "credentials; print the one variable you need by name, or " + SUGGESTION + ".")
 PARSE_MESSAGE = ("Blocked: this command mentions a .env-class name and could not be parsed "
                  "to check it; " + SUGGESTION + ".")
+# A Monitor refusal Bash would not give (env_guard.decide); it carries env.read.loaded's mark.
+UNSCANNED_MESSAGE = ("Blocked: this would print a value the same command loaded from a "
+                     ".env-class file through env-get, and Monitor output is not scanned for "
+                     "secrets (Bash output is); run the command with Bash, or keep the value "
+                     "out of what the command prints.")
 # Not tied to a mention of the class: text this guard cannot read may name a protected
 # file in a way it cannot see either (a variable, a glob, a link).
 UNREADABLE_MESSAGE = ("Blocked: this command holds {what}, which this check cannot be sure it "

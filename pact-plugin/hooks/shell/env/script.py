@@ -98,7 +98,8 @@ class _State:
     """What one Bash command has done so far: values it loaded from a protected file
     (sourced, or read into named variables), and, shared with every state forked from it,
     the substitutions and heredoc bodies taken out of its text and the verdicts already
-    reached on them."""
+    reached on them. `unscanned` (inherited by forks): the output reaches the transcript
+    with no output scan (Monitor), so the keys env-get hands a command count as loaded."""
     def __init__(self, parent: "_State | None" = None):
         self.subs: dict[str, str] = parent.subs if parent else {}
         self.pulled: dict[str, str] = parent.pulled if parent else {}
@@ -107,9 +108,11 @@ class _State:
         # How the script being judged spells its variables inside a bare heredoc body.
         self.spell = parent.spell if parent else (lambda body: body)
         self.env_get_written = parent.env_get_written if parent else False
+        self.unscanned = parent.unscanned if parent else False
         self.captured = False
         self.sourced = False                            # loaded keys unknown: any $VARIABLE
         self.loaded: set[str] = set()
+        self.handed: set[str] = set()                   # of loaded: env-get's keys (unscanned)
         self.loaded_from = ""                           # the file named in the deny
         self.loop_read = False
         self.traced = False                             # set -x / -v: a load prints its lines

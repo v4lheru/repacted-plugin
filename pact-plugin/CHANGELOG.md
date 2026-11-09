@@ -4,6 +4,10 @@ Release notes for rePACTed, newest first. Entries start at the first public rele
 
 `Unreleased` lists what has changed on the main line since the last release and becomes the next version's notes. Each entry says what changed in behaviour and, where it matters, the files involved. An entry marked **Fork action** needs a step from anyone running a clone with local changes (a setting, a migration, a file that moved).
 
+## Unreleased
+
+- A Monitor command may no longer print a value that `env-get` hands it, such as `env-get .env KEY -- printenv KEY` or `env-get .env KEY -- sh -c 'echo $KEY'`. Bash output is scanned for secrets and redacted before the agent sees it. Monitor output is not: it arrives as notifications, and no hook can rewrite them (checked on Claude Code 2.1.317 and 2.1.321). So the env guard now counts the keys `env-get` hands its command as loaded values under Monitor, as it does after `source .env` (`hooks/env_guard.py`, `hooks/shell/env/`). Forms that keep the value out of the output still pass: `${#KEY}`, a `curl` that sends the key in a header (the `-H @<(env-get ...)` form included), and a script `env-get` runs. Bash verdicts do not change. Known limit: a program the guard cannot read, such as a script `env-get` runs, can still print a value under Monitor.
+
 ## 2.2.0 (2026-11-09)
 
 Unattended mode denies permission prompts instead of waiting on them, warns before your sign-in runs out, and the red-first check reads `node --test` and `cargo test`. Forks with their own `hooks/hooks.json` must merge in the new hook. Known limits in the release notes.

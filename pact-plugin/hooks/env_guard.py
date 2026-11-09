@@ -6,7 +6,7 @@ Summary: The env guard's ENTRY (PreToolUse on Bash: grep_output, decide, main, _
          suite import from here is re-exported below. The re-exports retire next
          release with the importers re-pointed in the same commit.
 Used by: hooks.json (the Bash PreToolUse chain), the test suite.
-Map: grep_output, decide, main, _emit.
+Map: grep_output, decide, _shell_verdict, main, _emit.
 
 Keep .env-class file contents out of the transcript (PreToolUse Read|NotebookRead|Grep|Bash).
 
@@ -14,11 +14,12 @@ Class: .env, .env.*, *.env, .envrc, .netrc, by written name and resolved path; t
 (.example, .sample, .template, .dist) pass unless linked to a protected file. Read and
 NotebookRead deny a protected file; Grep denies a protected target and otherwise appends
 exclusion globs (updatedInput). Bash denies only printing, dumping the environment, sending,
-staging or copying a protected file; env-get and data mentions pass. Bash is read through
-shell_words.read_script and judged in every directory it may run in. Fail-closed on what
-cannot be read; it sees the call, never the output, so it cannot scrub output. Deny:
-envelope on stdout, reason on stderr, exit 2; rewrite: updatedInput, exit 0; allow:
-{"suppressOutput": true}, exit 0.
+staging or copying a protected file; env-get and data mentions pass (under Monitor, whose
+output no scan sees, a command env-get runs that prints a value it hands is refused). Bash
+is read through shell_words.read_script and judged in every directory it may run in.
+Fail-closed on what cannot be read; it sees the call, never the output, so it cannot scrub
+output. Deny: envelope on stdout, reason on stderr, exit 2; rewrite: updatedInput, exit 0;
+allow: {"suppressOutput": true}, exit 0.
 Map, in file order: protected names and globs; Bash word checks and Grep filters; which
 commands print a protected file (readers, heredocs); where a command runs (_Directory,
 variables, stdin, judge, bash_verdict); git egress (D29); dispatch (grep_output, main).
@@ -32,10 +33,10 @@ import sys
 from shell.env import git_egress as _git_egress
 from shell.env.git_egress import (Notice)
 from shell.env.names import (mentions_class, path_is_protected)
-from shell.env.programs import (GREP_EXCLUSION, GREP_HINT, PARSE_MESSAGE, _ALLOW_OUTPUT)
+from shell.env.programs import (GREP_EXCLUSION, GREP_HINT, PARSE_MESSAGE, UNSCANNED_MESSAGE, _ALLOW_OUTPUT)
 from shell.env.script_verdict import (bash_verdict)
 from shell.opaque import (opaque_reason, resolved_command)
-from shell.tools import SHELL_TOOLS, shell_command
+from shell.tools import MONITOR_TOOL, SHELL_TOOLS, shell_command
 from shell.env.search import (_deny, _named_message)
 from shell.env.programs import (  # noqa: F401  # re-export: façade
     DUMP_MESSAGE,
@@ -350,10 +351,11 @@ def decide(payload: dict) -> dict | None:
         return grep_output(tool_input, cwd)
     if tool in SHELL_TOOLS or shell_command(payload) is not None:
         command = tool_input.get("command")
+        unscanned = tool == MONITOR_TOOL          # its output reaches no output scan
         # Judged as typed first, so a refusal the command earns as written keeps its own
         # rule; then words no check can read refuse, for every Bash guard (shell/opaque.py);
         # then the command is judged with what it fixes itself spelled out.
-        reason = bash_verdict(command, cwd) if isinstance(command, str) else None
+        reason = _shell_verdict(command, cwd, unscanned) if isinstance(command, str) else None
         if reason and not isinstance(reason, Notice):
             return _deny(reason)
         hidden = opaque_reason(command) if isinstance(command, str) else None
@@ -361,7 +363,7 @@ def decide(payload: dict) -> dict | None:
             return _deny(hidden)
         resolved = resolved_command(command) if isinstance(command, str) else command
         if resolved != command and (not reason or isinstance(reason, Notice)):
-            reason = bash_verdict(resolved, cwd) or reason
+            reason = _shell_verdict(resolved, cwd, unscanned) or reason
         if reason and not isinstance(reason, Notice):
             return _deny(reason)
         import settings_guard   # loaded here, so the entry's own imports stay stdlib
@@ -376,6 +378,17 @@ def decide(payload: dict) -> dict | None:
                                            "additionalContext": str(reason)}}
         return None
     return None
+
+
+def _shell_verdict(command: str, cwd: str, unscanned: bool) -> str | None:
+    """bash_verdict, with `unscanned` for a Monitor command: output_secret_scan never sees
+    Monitor output, so a value env-get hands a command that prints it is refused there. A
+    refusal Bash gives too keeps Bash's reason; one only Monitor gives says why."""
+    reason = bash_verdict(command, cwd, unscanned=unscanned)
+    if not unscanned or not reason or isinstance(reason, Notice):
+        return reason
+    scanned = bash_verdict(command, cwd)
+    return scanned if scanned and not isinstance(scanned, Notice) else UNSCANNED_MESSAGE
 
 
 def main() -> int:

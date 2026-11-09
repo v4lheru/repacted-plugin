@@ -5,7 +5,7 @@ Summary: command_verdict: the per-command walk (printing words, env-get, printed
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: _printing_words, _is_env_get, _PRINTF_SPEC, _ESCAPES, _unescape, _printed_text, _sub_paths, _sub_verdict, _sub_reads, _sub_names, _load, _uses_loaded, _ENV_READ, _prints_loaded, _inner_script, _SSH_VALUE_OPTIONS, _group_words, _trace_switch, _LOADED, _COMPUTED, _echoes_request, _glued_unknown, _AWK, _AWK_VALUE_OPTIONS, _AWK_GLUED_OPTION, _awk_program_word, command_verdict, _program, _STDIN_ACTORS, _PAGERS, _DATA_CONSUMERS, _TEXT_COMMANDS, _NAMES_FROM_STDIN, _GIT_NAMES_FROM_STDIN, _BODY_WORD, _BODY_WORDS_READ, _COMPOUND_END, _STDIN_AS_FILE, _reads_script_from_stdin, _script_on_stdin, _stdin_role, _body_names, _body_as_script, _heredoc_verdict, _json_actor.
+Map: _printing_words, _is_env_get, _PRINTF_SPEC, _ESCAPES, _unescape, _printed_text, _sub_paths, _sub_verdict, _sub_reads, _sub_names, _load, _uses_loaded, _ENV_READ, _prints_loaded, _inner_script, _SSH_VALUE_OPTIONS, _group_words, _trace_switch, _LOADED, _COMPUTED, _echoes_request, _glued_unknown, _AWK, _AWK_VALUE_OPTIONS, _AWK_GLUED_OPTION, _awk_program_word, command_verdict, _hand_keys, _program, _STDIN_ACTORS, _PAGERS, _DATA_CONSUMERS, _TEXT_COMMANDS, _NAMES_FROM_STDIN, _GIT_NAMES_FROM_STDIN, _BODY_WORD, _BODY_WORDS_READ, _COMPOUND_END, _STDIN_AS_FILE, _reads_script_from_stdin, _script_on_stdin, _stdin_role, _body_names, _body_as_script, _heredoc_verdict, _json_actor.
 """
 
 from __future__ import annotations
@@ -117,20 +117,28 @@ def _decoded_text(steps: list[_Step], index: int, state: _State) -> str:
         return ""
 
 
-def _sub_verdict(key: str, cwd: str | None, captured: bool, state: _State) -> str | None:
+def _sub_verdict(key: str, cwd: str | None, captured: bool, state: _State,
+                 unscanned: bool | None = None) -> str | None:
     """The verdict on one substitution run in one directory, reached once however many
-    words carry it: judged again at every level, a nest of them took 2^depth steps."""
-    slot = (key, cwd, captured)
+    words carry it: judged again at every level, a nest of them took 2^depth steps.
+    `unscanned` overrides the flag the fork inherits (None keeps it)."""
+    unscanned = state.unscanned if unscanned is None else unscanned
+    slot = (key, cwd, captured, unscanned)
     if key not in state.subs:                           # typed text that looks like a key
         return None
     if slot not in state.verdicts:
-        state.verdicts[slot] = _upper().judge(state.subs[key], cwd, _State(state), captured=captured)
+        fork = _State(state)
+        fork.unscanned = unscanned
+        if unscanned and state.handed:              # sh -c 'echo "$(printenv KEY)"'
+            _hand_keys(state.loaded_from, ",".join(state.handed), fork)
+        state.verdicts[slot] = _upper().judge(state.subs[key], cwd, fork, captured=captured)
     return state.verdicts[slot]
 
 
-def _sub_reads(words: list[str], state: _State, cwd: str | None) -> bool:
+def _sub_reads(words: list[str], state: _State, cwd: str | None,
+               unscanned: bool | None = None) -> bool:
     """True when a substitution these words carry reads a protected file's contents."""
-    return any(_sub_verdict(key, cwd, False, state)
+    return any(_sub_verdict(key, cwd, False, state, unscanned)
                for word in words for key in _SUB_KEY.findall(word))
 
 
@@ -376,8 +384,11 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
     elif program == "env-get" and not _is_env_get(command[0], state):
         program = "./env-get"                           # a file of that name: any program
     if program == "env-get":
-        return (command_verdict(args[args.index("--") + 1:], [], cwd, state)
-                if "--" in args else None)
+        if "--" not in args:
+            return None
+        if state.unscanned and args.index("--") == 2:
+            _hand_keys(args[0], args[1], state)
+        return command_verdict(args[args.index("--") + 1:], [], cwd, state)
     if program == "ssh":
         sent = [path for path in stdin if token_protected(path, cwd)]
         if sent:                                        # ssh host 'cat > x' < .env
@@ -403,8 +414,12 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
     assigns = program in ("local", "declare", "typeset", "readonly")
     carried = [word for word in args + list(strings) if _SUB_MARK in word
                and not (assigns and "=" in word and word.split("=", 1)[0].isidentifier())]
+    # A client sends what a substitution prints where it belongs (curl -H "..$(env-get ..)"),
+    # so there an env-get value is judged as under Bash, unless the client echoes its request.
+    sent = program in EGRESS_PROGRAMS and not _echoes_request(program, args)
     if program not in SILENT_STDIN and carried and (
-            program in EGRESS_PROGRAMS or not state.captured) and _sub_reads(carried, state, cwd):
+            program in EGRESS_PROGRAMS or not state.captured) and _sub_reads(
+            carried, state, cwd, False if sent else None):
         found = _sub_paths(carried, state, cwd)
         return _named_message(found[0] if found else "a .env-class file")
     if reader and not state.captured and _sub_paths(args, state, cwd, shown=True):
@@ -507,6 +522,20 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
     else:
         allowed = not (reader or program == named[0].rsplit("/", 1)[-1])
     return None if allowed else _named_message(named[0])
+
+
+def _hand_keys(path: str, keys: str, state: _State) -> None:
+    """`env-get FILE KEY[,KEY..] -- cmd` whose output no scan sees (state.unscanned): the
+    keys count as loaded from FILE, so printenv KEY, echo $KEY or curl -v -H "..$KEY" in cmd
+    is refused and ${#KEY} or a plain send passes. As after `source`, they stay loaded for
+    the rest of the command, so a heredoc or here-string fed to cmd is read with them; a
+    later `echo $KEY` of the shell's own KEY is refused too (Monitor only, and rare). Unlike
+    a sourced key, a handed one also reaches the substitutions judged inside (_sub_verdict),
+    except one a sending client carries."""
+    named = {key.strip() for key in keys.split(",") if key.strip()}
+    state.handed |= named
+    state.loaded |= named
+    state.loaded_from = state.loaded_from or path
 
 
 def _program(words: list[str]) -> str:

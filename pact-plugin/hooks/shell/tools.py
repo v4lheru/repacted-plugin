@@ -14,7 +14,10 @@ returned nothing for any tool but "Bash" let a Monitor command through unjudged.
 Deliberately not here: wait_filler_gate and background_test_gate judge how a Bash call
 waits (sleep fillers, harness-background test runs); a Monitor command is the sanctioned
 long-running watch and its poll loop sleeps by design. The PostToolUse checks see Bash
-output; Monitor's output arrives as notifications, not a tool result.
+output; Monitor's output arrives as notifications, not a tool result, so no output scan
+redacts it. env_guard covers that for env-get: under Monitor the keys it hands a command
+count as loaded, and a command that prints one is refused. An opaque program env-get runs
+(a watcher script) can still print a value, and nothing redacts it there.
 
 Standard library only, imports nothing: it is loaded before every Bash call.
 """
