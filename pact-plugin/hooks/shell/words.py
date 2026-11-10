@@ -9,6 +9,8 @@ Summary: The shell-command tokenizer shared by the Bash PreToolUse guards: split
          leg_token_spans() are the merge guard's lenient scanners, moved here verbatim:
          an open quote fails TOWARD UNMASKED and the output keeps the input's length,
          where token_spans() abstains (None); the strip carriers depend on that.
+         quoted_matches() and without_quotes() serve env_guard's Monitor send pass
+         (which placeholders stand quoted; a trace scan with the quotes deleted).
 Used by: hooks/shell_words.py (the façade the guards still import: process_table_guard.py,
          egress_guard.py, egress_uploads.py, docker_lock_gate.py, background_test_gate.py,
          merge_guard_pre.py, git_commit_check.py), and directly by hooks/shell/merge/* and
@@ -927,6 +929,48 @@ def mask_quotes(command: str) -> str:
     for i, j in quote_spans(command):
         out[i:j] = " " * (j - i)
     return "".join(out)
+
+
+def quoted_matches(text: str, pattern) -> list[tuple[str, bool]]:
+    """(match, inside quotes) for each match of `pattern` (a compiled regular expression;
+    this module imports nothing) that stands outside single quotes in `text`, in order:
+    True inside "..", False where the shell splits what it stands for into words. The walk
+    follows '..', $'..' (where a backslash escapes), ".." and backslash escapes; it is for
+    text read_script has read (no comment or heredoc body left). env_guard's Monitor send
+    pass asks it which substitution placeholders stand quoted."""
+    found, quote, index, dollar = [], "", 0, False
+    while index < len(text):
+        char, after_dollar, dollar = text[index], dollar, False
+        if quote in ("'", "$'"):
+            if char == "\\" and quote == "$'":
+                index += 1
+            elif char == "'":
+                quote = ""
+        elif char == "\\":
+            index += 1
+        elif char == '"':
+            quote = "" if quote else '"'
+        elif char == "'" and not quote:
+            quote = "$'" if after_dollar else "'"
+        elif char == "$":
+            dollar = not quote
+        else:
+            match = pattern.match(text, index)
+            if match:
+                found.append((match.group(), bool(quote)))
+                index += len(match.group())
+                continue
+        index += 1
+    return found
+
+
+_QUOTES_OUT = str.maketrans("", "", "'\"\\")
+
+
+def without_quotes(text: str) -> str:
+    """`text` with every quote and backslash deleted (trap 'set -x' DEBUG reads as
+    trap set -x DEBUG), for a scan that may read more than the shell runs, never less."""
+    return text.translate(_QUOTES_OUT)
 
 
 def normalize_line_continuations(command: str) -> str:
