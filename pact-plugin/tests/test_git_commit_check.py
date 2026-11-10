@@ -762,6 +762,149 @@ class TestStagingInTheSameCommand:
         code, err = _commit_in(staging_repo, command, capsys)
         assert code == 2 and "aws-key" in err, (command, err)
 
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("wrap", [
+        "script -c 'X=1; {}' /dev/null",
+        "script -c '{}' /dev/null",
+        "script -qc 'X=1; {}' /dev/null",
+        "bash -c 'X=1; {}' sh",
+        "bash -c '{}' sh a",
+        "fish --command 'X=1; {}'",
+        "flock -nc 'X=1; {}' /tmp/l",
+        "eval 'X=1; {}'",
+        "script -qc'X=1; {}' /dev/null",                       # the script glued to -qc
+        "watch echo 'x; {}'",                                   # watch joins: sh -c 'echo x; S'
+    ])
+    def test_a_commit_in_a_script_with_words_after_it_is_denied(self, staging_repo, wrap, tool,
+                                                                capsys):
+        """`script -c 'S' /dev/null`: the script was read only as the command's one word, so a
+        trailing operand (the typescript file, a shell's $0) left its commit unread."""
+        name = "." + "env" + ".local"
+        (staging_repo / name).write_text("demo\n")
+        command = wrap.format(f"git add {name} && git -c a=b commit -m x")
+        code, err = _run_main({"tool_name": tool, "tool_input": {"command": command},
+                               "cwd": str(staging_repo)}, capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
+    @pytest.mark.parametrize("wrap", ["bash -c '{}' sh", "bash -c 'X=1; {}' sh a",
+                                      "script -c '{}' /dev/null", "script -qc 'X=1; {}' /dev/null",
+                                      "watch echo 'x; {}'", "eval 'X=1; {}'"])
+    def test_a_clean_commit_in_a_script_with_words_after_it_is_read_once(self, staging_repo, wrap,
+                                                                        capsys):
+        """resolved_command already adds a shell's script with words after it as its own line;
+        reading the word too would count its one commit twice."""
+        code, err = _commit_in(staging_repo, wrap.format("git add clean.py && git commit -m x"),
+                               capsys)
+        assert code == 0, (wrap, err)
+
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("wrap", [
+        "fish -C true -c 'X=1; {}'",                            # fish runs every -C and -c
+        "fish -c true -c '{}'",
+        "fish -c 'echo hi' -c 'X=1; {}'",
+        "fish -c '{}' -C true",
+        "watch nice 'X=1; {}'",                                 # a runner word after watch
+        "watch env X=1 '{}'",
+        "watch sudo -u root 'X=1; {}'",
+        "eval nice 'X=1; {}'",
+    ])
+    def test_a_commit_in_any_script_fish_or_watch_runs_is_denied(self, staging_repo, wrap, tool,
+                                                                capsys):
+        """Only fish's first script was read, and a runner word after watch made its script
+        look like an assignment, so the commit after the staging went unread."""
+        name = "." + "env" + ".local"
+        (staging_repo / name).write_text("demo\n")
+        command = wrap.format(f"git add {name} && git -c a=b commit -m x")
+        code, err = _run_main({"tool_name": tool, "tool_input": {"command": command},
+                               "cwd": str(staging_repo)}, capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("wrap", [
+        "watch '{}'", "watch -n 5 '{}'", "flock /tmp/l -c '{}'", "script -c '{}' /dev/null",
+        "watch nice '{}'", "fish --command '{}'", "fish -C true -c '{}'",
+        "bash -c '{}'",                                         # control: denied before the fix
+    ])
+    def test_a_commit_through_a_variable_in_a_handed_script_is_denied(self, staging_repo, wrap,
+                                                                     tool, capsys):
+        """Only a shell's -c script was spelled for the guards, so `$G` set to git inside the
+        script watch, flock -c or script -c runs hid its commit."""
+        name = "." + "env" + ".local"
+        (staging_repo / name).write_text("demo\n")
+        command = wrap.format(f"G=git; $G add {name} && $G -c a=b commit -m x")
+        code, err = _run_main({"tool_name": tool, "tool_input": {"command": command},
+                               "cwd": str(staging_repo)}, capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
+    @pytest.mark.parametrize("wrap", ["fish -C true -c '{}'", "fish -c true -c 'X=1; {}' a",
+                                      "fish -c '{}' a", "watch nice 'X=1; {}'",
+                                      "watch env X=1 '{}'", "watch -n 5 '{}'",
+                                      "flock /tmp/l -c '{}'"])
+    @pytest.mark.parametrize("inner", ["git add clean.py && git commit -m x",
+                                       "G=git; $G add clean.py && $G commit -m x"])
+    def test_a_clean_commit_in_a_fish_or_watch_script_is_read_once(self, staging_repo, wrap,
+                                                                  inner, capsys):
+        code, err = _commit_in(staging_repo, wrap.format(inner), capsys)
+        assert code == 0, (wrap, inner, err)
+
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("wrap", [
+        "bash -o pipefail -c '{}'",
+        "bash -O extglob -c 'X=1; {}'",
+        "sh -o errexit -c '{}'",
+        "bash -c -o pipefail '{}'",
+        "bash +o posix -c '{}'",
+        "sh +x -c 'X=1; {}'",
+        "bash -eo pipefail -c '{}'",
+        "bash -oc pipefail '{}'",
+        "zsh -o pipefail -c '{}'",
+        "ksh -o c '{}'",
+        "/bin/bash -o pipefail -c '{}' sh",
+        "bash --rcfile /dev/null -c '{}'",
+        "fish -o /tmp/log -c '{}'",
+        "ksh -o -c '{}' a0",                                    # ksh's -o takes no -c
+        "ksh -xo -c '{}' a0",
+        "ksh +o -c '{}' a0",
+        "ksh -o +c '{}' a0",
+        "ksh -T '' -c '{}' a0",                                 # -T takes '' whatever it holds
+        "zsh --emulate foo -c '{}' a0",                         # --emulate takes foo
+        "bash -e -c '{}'",                                      # control: denied before the fix
+    ])
+    def test_a_commit_behind_a_shells_options_is_denied(self, staging_repo, wrap, tool, capsys):
+        """The walk stopped at the value of a shell's -o / -O and at its + options, so the
+        staging and commit in the -c script after them went unread."""
+        name = "." + "env" + ".local"
+        (staging_repo / name).write_text("demo\n")
+        command = wrap.format(f"git add {name} && git -c a=b commit -m x")
+        code, err = _run_main({"tool_name": tool, "tool_input": {"command": command},
+                               "cwd": str(staging_repo)}, capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
+    @pytest.mark.parametrize("wrap", ["bash -o pipefail -c '{}'", "sh +x -c 'X=1; {}'",
+                                      "bash -oc pipefail '{}' sh", "bash -o pipefail script.sh",
+                                      "ksh -o -c '{}' a0", "zsh --emulate sh -c '{}' a0"])
+    def test_a_clean_commit_behind_a_shells_options_is_read_once(self, staging_repo, wrap,
+                                                               capsys):
+        code, err = _commit_in(staging_repo, wrap.format("git add clean.py && git commit -m x"),
+                               capsys)
+        assert code == 0, (wrap, err)
+
+    @pytest.mark.parametrize("wrap", [
+        "{}",
+        "bash -c '{}'",
+        "bash -c 'X=1; {}'",
+        "bash -c 'X=1 {}'",
+        "sudo sh -ec 'X=1;{}'",
+    ])
+    def test_an_env_file_staged_inside_a_shell_script_is_denied(self, staging_repo, wrap, capsys):
+        """`bash -c 'X=1; ...'`: the script was read as the assignment X, so its staging and
+        commit went unread."""
+        name = "." + "env" + ".local"                  # not matched by the repo's ignore line
+        (staging_repo / name).write_text("demo\n")
+        code, err = _commit_in(staging_repo, wrap.format(f"git add {name} && git commit -m x"),
+                               capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
     def test_update_stages_a_key_added_to_a_tracked_file(self, staging_repo, capsys):
         with open(staging_repo / "tracked.py", "a") as handle:
             handle.write(_KEY_LINE)

@@ -123,9 +123,137 @@ def test_commit_through_a_substituted_program_is_refused(world):
 
 
 # ── .env reads ──────────────────────────────────────────────────────────────
+def test_a_read_printed_by_a_shells_script_into_sh_is_refused(world):
+    """The script word of `bash -c '...; /bin/echo'` was read as echo printing literal text."""
+    read = "cat " + "." + "env"
+    _refused(world, f"bash -c 'X=1; echo {read}; /bin/echo' | sh", "secrets")
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c 'X=1; echo ls; /bin/echo' | sh",
+    "bash -c 'echo ls; /bin/echo' | sh",
+    "bash -c '1; echo ls; /usr/bin/printf x' | bash",
+    "bash -c 'X=1; echo ls; /usr/bin/head' | sh",
+    "bash -c 'X=1; echo ls; /bin/cat' | sh",
+    "bash -c 'X=1; echo ls; /usr/bin/curl' | sh",
+    "dash -c 'X=1; echo ls; /bin/base64' | sh",
+    "flock /tmp/l -c 'X=1; echo ls; /bin/echo' | sh",
+    "watch -t 'X=1; echo ls; /bin/echo' | sh",
+    "script -qc 'X=1; echo ls; /bin/echo' /dev/null | sh",
+    "sh <(bash -c 'X=1; echo ls; /bin/echo')",
+])
+def test_a_script_word_is_never_read_as_the_program_that_prints(command):
+    from shell.opaque import opaque_reason
+    reason = opaque_reason(command)
+    assert reason and "builds at run time" in reason, (command, reason)
+
+
+@pytest.mark.parametrize("command", ["echo ls | sh", "bash -c 'echo ls' > out.txt",
+                                     "bash -c 'X=1; ls' | wc -l"])
+def test_a_literal_script_or_a_script_not_fed_to_a_shell_passes(command):
+    from shell.opaque import opaque_reason
+    assert opaque_reason(command) is None
+
+
+# Only a shell's -c script was read for text built at run time: the script watch, flock -c,
+# script -c or fish's -C / --command hands to a shell, and fish's second script, were not.
+_DECODED = f"echo {_b64('cat ' + '.' + 'env')} | base64 -d | sh"
+
+
+@pytest.mark.parametrize("command", [form.replace("D", _DECODED) for form in (
+    "watch 'X=1; D'", "watch 'D'", "watch -n 5 'D'", "watch nice 'X=1; D'",
+    "flock /tmp/l -c 'X=1; D'", "flock -nc 'D' /tmp/l", "script -c 'X=1; D' /dev/null",
+    "script -qc 'D' /dev/null", "fish --command 'D'", "fish -C 'D'", "fish -C true -c 'X=1; D'",
+    "fish -c true -c 'D'",
+    "bash -c 'X=1; D'",                                     # control: refused before the fix
+)])
+def test_text_decoded_into_a_shell_inside_a_handed_script_is_refused(command):
+    from shell.opaque import opaque_reason
+    reason = opaque_reason(command)
+    assert reason and "decodes text" in reason, (command, reason)
+
+
+@pytest.mark.parametrize("command", [form.replace("D", _DECODED) for form in (
+    "bash -o pipefail -c 'D'", "bash -O extglob -c 'X=1; D'", "sh -o errexit -c 'D'",
+    "bash -c -o pipefail 'D'", "bash +o posix -c 'D'", "sh +x -c 'D'",
+    "bash -eo pipefail -c 'D'", "bash -oc pipefail 'D'", "bash +c 'D'", "dash +c 'D'",
+    "zsh -o pipefail -c 'D'", "ksh -o c 'D'", "/bin/bash -o pipefail -c 'D'",
+    "bash --rcfile /dev/null -c 'D'", "fish -o /tmp/log -c 'D'",
+    "ksh -o -c 'D'", "ksh -xo -c 'D'", "ksh +o -c 'D'", "ksh -o +c 'D'",   # -o takes no -c
+    "ksh -T '' -c 'D'", "zsh --emulate foo -c 'D'",
+    "bash -e -c 'D'",                                       # control: refused before the fix
+)])
+def test_text_decoded_into_a_shell_behind_a_shells_options_is_refused(command):
+    """The walk stopped at the value of a shell's -o / -O and at its + options, and only a
+    cluster that starts with "-" counted as -c, so the script after them went unread."""
+    from shell.opaque import opaque_reason
+    reason = opaque_reason(command)
+    assert reason and "decodes text" in reason, (command, reason)
+
+
+@pytest.mark.parametrize("shell", ["ksh -o -s a0", "ksh -xo -s a0", "ksh +o -s a0",
+                                   "bash -s a0"])                     # control
+def test_text_decoded_into_ksh_reading_stdin_after_a_bare_o_is_refused(shell):
+    """ksh's -o takes no value from -s, so ksh reads its script from stdin; the walk took -s
+    for -o's value and the decoded text it ran went unread."""
+    from shell.opaque import opaque_reason
+    command = _DECODED.replace("| sh", "| " + shell)
+    reason = opaque_reason(command)
+    assert reason and "decodes text" in reason, (command, reason)
+
+
+@pytest.mark.parametrize("command", ["bash -o pipefail -c 'echo ls | sh'",
+                                     "sh +x -c 'X=1; echo bHM= | base64 -d'",
+                                     "bash -o pipefail script.sh", "bash +x script.sh"])
+def test_a_shells_options_before_a_script_that_builds_nothing_pass(command):
+    from shell.opaque import opaque_reason
+    assert opaque_reason(command) is None
+
+
+@pytest.mark.parametrize("command", ["watch 'echo ls | sh'", "flock /tmp/l -c 'echo ls | sh'",
+                                     "watch 'X=1; echo bHM= | base64 -d'", "watch echo \"it's\"",
+                                     "fish -C 'set x 1' -c 'echo $x'", "watch nice ls"])
+def test_a_handed_script_that_builds_nothing_for_a_shell_passes(command):
+    from shell.opaque import opaque_reason
+    assert opaque_reason(command) is None
+
+
+def test_an_unreadable_watch_line_keeps_the_rest_of_the_command_read():
+    """watch's joined line can hold a quote the inner shell never closes; reading it must not
+    drop the verdict the rest of the command earns."""
+    from shell.opaque import opaque_reason
+    assert opaque_reason(f"{_DECODED}; watch echo \"it's\"")
 
 
 # ── the lead's operations in a coder frame ──────────────────────────────────
+_ACCEPT = "rep" + "act accept 5"
+
+
+@pytest.mark.parametrize("command", [form.replace("A", _ACCEPT) for form in (
+    "watch 'R=rep\"\"act; $R accept 5'",
+    "watch nice 'R=rep\"\"act; $R accept 5'",
+    "flock /tmp/l -c 'R=rep\"\"act; $R accept 5'",
+    "script -c 'R=rep\"\"act; $R accept 5' /dev/null",
+    "fish -C true -c 'A'",
+    "fish -c true -c 'A'",
+    "fish --init-command 'echo hi' --command 'A'",
+    # controls: refused before the fix and still
+    "bash -c 'R=rep\"\"act; $R accept 5'",
+    "fish -c 'A'",
+)])
+def test_a_lead_op_in_a_handed_script_is_refused_in_a_coder_frame(world, command):
+    assert "ops_frame_guard" in _refused(world, command, "clean", coder=True), command
+    import ops_frame_guard
+
+    class _Coder:
+        name, is_lead = "coder-1", False
+
+        def runs_lead_ops(self):
+            return False
+    for tool in ("Bash", "Monitor"):
+        reason = ops_frame_guard.decide({"tool_name": tool, "tool_input": {"command": command}},
+                                        _Coder())
+        assert reason and reason.endswith("[rule: ops_frame_guard.lead_only]"), (tool, command)
 
 
 # ── honest forms that must stay allowed ────────────────────────────────────────────────
