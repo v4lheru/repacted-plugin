@@ -8,6 +8,7 @@ Release notes for rePACTed, newest first. Entries start at the first public rele
 
 - The shell guards read the script a runner hands to a shell even when it starts with an assignment or a number. `bash -c 'X=1; cat .env'` and `bash -c 'X=$(cat .env); echo "$X"'` were allowed under Bash and Monitor, because the script was taken for a leading assignment and skipped. The guards also read the scripts that `watch` (also behind another runner, as in `watch nice '...'`), `eval`, `flock -c`, `script -c` (and `script -qc`) and fish (every `-c`, `-C` and `--command`, with `$argv`) hand over, and no longer take a whole script for a program name. The .env, settings, commit and process-listing checks all judge these scripts (`hooks/shell/words.py`, with its callers in `hooks/shell/`, `hooks/process_table_guard.py` and `hooks/git_commit_check.py`).
 - A runner given by its absolute path is read as that runner: `/bin/sh -c 'cat .env'`, `/usr/bin/env cat .env` and `/usr/bin/sudo env` were allowed under Bash and Monitor, while `sh -c`, `env` and `sudo` were refused (`hooks/shell/words.py`, `hooks/shell/env/search.py`).
+- The shell guards read a shell's options with their values, and its `+` options, before the script: `bash -o pipefail -c 'cat .env'`, `bash -O extglob -c '...'`, `sh +x -c '...'`, `bash --rcfile FILE -c '...'` and the zsh, dash, ksh and fish equivalents were allowed under Bash and Monitor, because the option's value was taken for the command (`hooks/shell/words.py`, `hooks/shell/opaque.py`).
 
 ## 2.2.0 (2026-11-09)
 
