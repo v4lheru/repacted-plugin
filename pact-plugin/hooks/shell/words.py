@@ -554,6 +554,9 @@ def runner_prefix(words: list[str], keep: frozenset = frozenset()
     i, runner, operands, seen, script = 0, "", 0, [], False
     while i < len(words):
         word = words[i]
+        # /bin/sh, /usr/bin/env: a runner given by its absolute path; /bin/if is no keyword
+        tail = word.rsplit("/", 1)[-1]
+        base = tail if word[:1] == "/" and tail not in SHELL_KEYWORDS else word
         if script and any(char in SEGMENT_CUTS or char.isspace() for char in word):
             break                                       # even `-n; cat f` after `bash -c --`
         if runner and word.startswith("-"):
@@ -567,10 +570,10 @@ def runner_prefix(words: list[str], keep: frozenset = frozenset()
         elif operands:                                  # flock's lock file, even one named sh
             operands -= 1
             i += 1
-        elif word in PREFIX_WORDS and word not in keep:
-            runner, operands = word, RUNNER_OPERANDS.get(word, 0)
-            script = word == "watch"                    # watch runs its line through sh -c
-            seen.append((word, "", None))
+        elif base in PREFIX_WORDS and base not in keep:
+            runner, operands = base, RUNNER_OPERANDS.get(base, 0)
+            script = base == "watch"                    # watch runs its line through sh -c
+            seen.append((base, "", None))
             i += 1
         elif "=" in word and word.split("=", 1)[0].isidentifier():
             i += 1

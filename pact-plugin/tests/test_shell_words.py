@@ -325,3 +325,61 @@ def test_no_word_segments_returns_holds_a_cut_character():
     assert found and not [word for word in found
                           if any(c in shell_words.SEGMENT_CUTS or c.isspace() for c in word)]
     assert set("|;&()`{}<>'\"\\") == shell_words.SEGMENT_CUTS
+
+
+# ── a runner given by its absolute path ───────────────────────────────────────────────────
+# The walk matched a runner word exactly, so /bin/sh, /usr/bin/env and /usr/bin/sudo were read
+# as the command and the script or command behind them was never judged. A word that starts
+# with "/" is read by its last component; a keyword is not (/bin/if is a program).
+PATH_RUNNERS = [
+    (["/bin/sh", "-c", "X=1 cat f"], ["X=1 cat f"]),                # quote-aware: the script
+    (["/bin/bash", "-c", S], [S]),
+    (["/bin/bash", "-c", "cat f"], ["cat f"]),
+    (["/bin/sh", "-c", "cat", "f"], ["cat", "f"]),                  # segments() form
+    (["/bin/sh", "-c", "X=1", "cat", "f"], ["cat", "f"]),
+    (["/usr/bin/env", "cat", "f"], ["cat", "f"]),
+    (["/usr/bin/env", "X=1", "cat", "f"], ["cat", "f"]),             # with an assignment
+    (["/usr/bin/env", "-i", "cat", "f"], ["cat", "f"]),              # with options
+    (["/usr/bin/env", "-u", "HOME", "-C", "sub", "cat", "f"], ["cat", "f"]),
+    (["/usr/bin/env", "bash", "-c", "cat f"], ["cat f"]),
+    (["/usr/bin/env", "/bin/bash", "-c", S], [S]),
+    (["/usr/bin/sudo", "cat", "f"], ["cat", "f"]),
+    (["/usr/bin/sudo", "-u", "root", "cat", "f"], ["cat", "f"]),     # sudo's option table
+    (["sudo", "/usr/bin/env", "-i", "/bin/sh", "-c", S], [S]),
+    (["/usr/bin/xargs", "-I", "R", "cat", "R"], ["cat", "R"]),
+    (["/usr/bin/timeout", "5", "/bin/sh", "-c", S], [S]),
+    (["/usr/bin/flock", "/tmp/l", "-c", S], [S]),                    # its operand, then -c
+    (["/usr/bin/watch", S], [S]),                                    # watch runs its line
+    (["/usr/bin/nohup", "/usr/bin/sudo", "/bin/sh", "-c", "cat", "f"], ["cat", "f"]),
+]
+
+
+@pytest.mark.parametrize("words, command", PATH_RUNNERS,
+                         ids=[" ".join(w)[:40] for w, _ in PATH_RUNNERS])
+def test_a_runner_given_by_its_absolute_path_is_that_runner(words, command):
+    assert shell_words.strip_prefix(words) == command
+
+
+def test_a_runner_given_by_path_is_named_by_its_base_name():
+    assert shell_words.runner_prefix(["/usr/bin/sudo", "-u", "root", "/bin/bash", "-c", S]) == (
+        5, [("sudo", "", None), ("sudo", "-u", "root"), ("bash", "", None), ("bash", "-c", None)])
+
+
+@pytest.mark.parametrize("shell", ["bash", "/bin/bash"])
+def test_a_kept_runner_given_by_path_is_returned_as_the_command(shell):
+    keep = frozenset({"bash"})
+    assert shell_words.runner_prefix([shell, "-c", S], keep) == (0, [])
+    assert shell_words.runner_prefix(["/usr/bin/env", shell, "-c", S], keep) == (
+        1, [("env", "", None)])
+
+
+@pytest.mark.parametrize("words", [
+    ["./sh", "-c", S],                                  # a relative path stays the command
+    ["sh/x", "-c", S],
+    ["/opt/tool", "cat", "f"],
+    ["/bin/if", "cat", "f"],                            # a keyword is matched exactly
+    ["/", "cat", "f"],
+    ["/bin/", "cat", "f"],
+])
+def test_a_word_that_names_no_runner_by_path_stays_the_command(words):
+    assert shell_words.strip_prefix(words) == words

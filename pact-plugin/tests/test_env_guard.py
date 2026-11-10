@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 import env_guard as guard
+from shell.words import strip_prefix
 
 HOOK = Path(__file__).resolve().parent.parent / "hooks" / "env_guard.py"
 MARKER = "inert-marker-5e1d"
@@ -168,7 +169,49 @@ def test_a_runners_script_that_reads_nothing_protected_is_allowed(tree, command,
     assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
 
 
-ENVGET = "/srv/My Projects/pact-plugin/bin/env-get"
+# ── NAMED behind a runner given by its absolute path ──────────────────────────────────
+# A runner word was matched exactly, so /bin/sh -c, /usr/bin/env and /usr/bin/sudo hid the
+# read behind them under both tools.
+PATH_RUNNER_DENY = [form.replace("R", READ_ENV) for form in (
+    "/bin/bash -c 'R'",
+    "/bin/sh -c 'X=1; R'",
+    "/usr/bin/env bash -c 'R'",
+    "/usr/bin/env R",
+    "/usr/bin/sudo R",
+    "/usr/bin/sudo -u root R",
+    "/usr/bin/env -i /bin/sh -c 'R'",
+    "/usr/bin/timeout 5 /bin/bash -c 'X=1; R'",
+    "/usr/bin/nohup /usr/bin/sudo R",
+    # control: denied before the fix and still
+    "bash -c 'R'",
+)]
+PATH_RUNNER_ALLOW = [
+    "/bin/bash -c 'X=1; echo hi'",
+    "/usr/bin/env cat notes.txt",
+    "/usr/bin/sudo -u root ls",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", PATH_RUNNER_DENY)
+def test_a_read_behind_a_runner_given_by_path_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", PATH_RUNNER_ALLOW)
+def test_a_runner_given_by_path_that_reads_nothing_protected_is_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+def test_env_gets_consumer_given_by_path_hands_over_its_script():
+    """env-get FILE K -- /bin/sh -c 'echo "$K"': the consumer is read through strip_prefix, so
+    the path form must reach the same script as `sh -c` does."""
+    script = 'echo "$K"'
+    assert strip_prefix(["/bin/sh", "-c", script]) == [script] == strip_prefix(["sh", "-c", script])
+
+
+ENVGET ="/srv/My Projects/pact-plugin/bin/env-get"
 
 
 @pytest.mark.parametrize("command, deny", [
