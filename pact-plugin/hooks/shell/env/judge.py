@@ -5,7 +5,7 @@ Summary: command_verdict: the per-command walk (printing words, env-get, printed
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: _printing_words, _is_env_get, _PRINTF_SPEC, _ESCAPES, _unescape, _printed_text, _sub_paths, _sub_verdict, _sub_reads, _sub_names, _load, _uses_loaded, _ENV_READ, _prints_loaded, _inner_script, _SSH_VALUE_OPTIONS, _group_words, _trace_switch, _LOADED, _COMPUTED, _echoes_request, _glued_unknown, _AWK, _AWK_VALUE_OPTIONS, _AWK_GLUED_OPTION, _awk_program_word, command_verdict, _hand_keys, _program, _STDIN_ACTORS, _PAGERS, _DATA_CONSUMERS, _TEXT_COMMANDS, _NAMES_FROM_STDIN, _GIT_NAMES_FROM_STDIN, _BODY_WORD, _BODY_WORDS_READ, _COMPOUND_END, _STDIN_AS_FILE, _reads_script_from_stdin, _script_on_stdin, _stdin_role, _body_names, _body_as_script, _heredoc_verdict, _json_actor.
+Map: _printing_words, _is_env_get, _PRINTF_SPEC, _ESCAPES, _unescape, _printed_text, _sub_paths, _sub_verdict, _sub_reads, _STDOUT_TARGETS, _LONE_PRINTERS, _LONE_SEPARATORS, _NESTED, _prints_alone, _lone_steps, _sub_names, _load, _uses_loaded, _ENV_READ, _prints_loaded, _inner_script, _SSH_VALUE_OPTIONS, _group_words, _trace_switch, _LOADED, _COMPUTED, _echoes_request, _glued_unknown, _AWK, _AWK_VALUE_OPTIONS, _AWK_GLUED_OPTION, _awk_program_word, command_verdict, _hand_keys, _program, _STDIN_ACTORS, _PAGERS, _DATA_CONSUMERS, _TEXT_COMMANDS, _NAMES_FROM_STDIN, _GIT_NAMES_FROM_STDIN, _BODY_WORD, _BODY_WORDS_READ, _COMPOUND_END, _STDIN_AS_FILE, _reads_script_from_stdin, _script_on_stdin, _stdin_role, _body_names, _body_as_script, _heredoc_verdict, _json_actor.
 """
 
 from __future__ import annotations
@@ -135,11 +135,68 @@ def _sub_verdict(key: str, cwd: str | None, captured: bool, state: _State,
     return state.verdicts[slot]
 
 
-def _sub_reads(words: list[str], state: _State, cwd: str | None,
-               unscanned: bool | None = None) -> bool:
-    """True when a substitution these words carry reads a protected file's contents."""
-    return any(_sub_verdict(key, cwd, False, state, unscanned)
+def _sub_reads(words: list[str], state: _State, cwd: str | None, sent: bool = False) -> bool:
+    """True when a substitution these words carry reads a protected file's contents.
+    `sent`: the words go to a client that sends them without showing them, so a
+    substitution that only prints to that client (_prints_alone) is judged as under Bash."""
+    return any(_sub_verdict(key, cwd, False, state,
+                            False if sent and _prints_alone(state.subs.get(key, ""), state)
+                            else None)
                for word in words for key in _SUB_KEY.findall(word))
+
+
+# Where a lone printer may send output and still print only to its reader: /dev/null
+# (> /dev/null, 2>/dev/null). The parser keeps the target, not the operator or fd, so >&1
+# and `> 1` (a file named 1, which a later `cat 1` prints) read alike: both are refused,
+# and >&1 or 2>&1 in a sent substitution falls back to the Monitor check.
+_STDOUT_TARGETS = frozenset({"/dev/null"})
+_LONE_PRINTERS = frozenset({"printenv", "echo", "printf"})
+_LONE_SEPARATORS = frozenset({"", ";", "&&", "||", "\n"})
+_NESTED = ("$(", "`", "<(", ">(", _SUB_MARK)
+
+
+def _prints_alone(text: str | _Step, state: _State) -> bool:
+    """True when `text` (a substitution's text, or the one step of a `<(...)`) is a single
+    command that prints only to stdout: no pipe, no stdin, heredoc or here-string, no
+    redirect but to /dev/null, no substitution, and the program is printenv, echo or
+    printf, or `sh -c` with a script of only those joined by ; && ||, run directly or by
+    env-get FILE KEYS --. Only such a command is exempt when a sending client reads what it
+    prints: anything more can also put the value in a file or on stderr
+    (env-get .. -- printenv K > /tmp/x, | tee /tmp/x, python3 -c '..stderr.write(..)')."""
+    if isinstance(text, str):
+        steps = _lone_steps(text.strip())
+        if steps is None or len(steps) != 1:
+            return False
+        text = steps[0]
+    step = text
+    if step.stdin or step.bodies or step.strings or not set(step.redirects) <= _STDOUT_TARGETS \
+            or any(mark in word for word in step.words for mark in _NESTED):
+        return False
+    words = step.words
+    if words and _INTERPRETER.fullmatch(words[0].rsplit("/", 1)[-1]) and words[1:2] \
+            and _is_env_get(words[1], state):
+        words = words[1:]                               # python3 .../env-get is env-get
+    if words and words[0].rsplit("/", 1)[-1] == "env-get" and _is_env_get(words[0], state):
+        words = words[words.index("--") + 1:] if "--" in words else []
+    program = words[0].rsplit("/", 1)[-1] if words else ""
+    if program in _LONE_PRINTERS:
+        return True
+    if program not in SHELLS or words[1:2] != ["-c"] or len(words) < 3:
+        return False                                    # bash -xc traces to stderr
+    steps = _lone_steps(words[2])
+    return steps is not None and all(_prints_alone(each, state) for each in steps)
+
+
+def _lone_steps(script: str) -> list[_Step] | None:
+    """The steps of `script` when only ; && || or a newline joins them and nothing in it
+    nests a command, else None."""
+    if not script or any(mark in script for mark in _NESTED):
+        return None
+    steps, exact = _command_steps(script)
+    if not exact or not steps or steps[-1].after.strip(" \t") not in _LONE_SEPARATORS:
+        return None
+    return steps if all(step.before.strip(" \t") in _LONE_SEPARATORS for step in steps) \
+        else None
 
 
 def _sub_names(word: str, state: _State, cwd: str | None) -> list[str]:
@@ -185,7 +242,9 @@ _ENV_READ = re.compile(r"environ|getenv|\bENV\b|process\.env|\$_ENV|%ENV|Deno\.e
 def _prints_loaded(program: str, args: list[str], state: _State,
                    strings: list[str] = ()) -> bool:
     """True when this command shows a value loaded earlier in the same command: printed as
-    an argument or a here-string, printenv NAME, or a -c/-e script that reads it and prints."""
+    an argument or a here-string, printenv NAME, or a -c/-e script that reads it and prints.
+    Once env-get handed keys (state.handed, Monitor only), a script that reads the whole
+    environment and prints shows them whatever names it spells (ruby -e 'p ENV.to_h')."""
     if not (state.loaded or state.sourced):
         return False
     if program in PRINTERS and _uses_loaded(args, state) \
@@ -197,7 +256,8 @@ def _prints_loaded(program: str, args: list[str], state: _State,
     if _INTERPRETER.fullmatch(program):
         for script in _option_values(args, _SCRIPT_OPTIONS):
             names = set(re.findall(r"\w+", script))
-            if (names & state.loaded or state.sourced) and _ENV_READ.search(script) and (
+            if (names & state.loaded or state.sourced or state.handed) \
+                    and _ENV_READ.search(script) and (
                     _SCRIPT_PRINTS.search(script) or "-p" in args or "--print" in args):
                 return True
     return False
@@ -254,40 +314,86 @@ _COMPUTED = ("print the contents of {path} (a name the shell computes that can b
              "file) into the transcript")
 
 
-def _echoes_request(program: str, args: list[str]) -> bool:
+_CURL_VALUED, _WGET_VALUED = "oHduXAebcFTwxEKmrYyzCPQtUu", "OoaeitTwQPUlDXIRAB"
+# A -w/--write-out format that prints the URL (%{url}, %{url.query}, %{urle.*}, %{json}) or
+# the Referer sent, or reads its format from a file (@FILE).
+_WRITES_URL = re.compile(r"%\{(?:url|urle|json|referer)|^@")
+
+
+def _echoes_request(program: str, args: list[str], unscanned: bool = False) -> bool:
     """Whether an HTTP client prints the request it sends, headers included: curl -v,
     --verbose or --trace/--trace-ascii to stdout or stderr, wget -d/--debug, and httpie or xh
-    -v/--verbose/--offline or a --print/-p selecting request parts (H or B)."""
-    def flagged(arg: str, flag: str, valued: str) -> bool:
+    -v/--verbose/--offline or a --print/-p selecting request parts (H or B). `unscanned`
+    (Monitor, whose output no scan sees) adds what can show the request anywhere: curl
+    --trace, --trace-ascii or --trace-config to any file, --libcurl, a -w format that prints
+    the URL, a file:// target, any -K/--config file (it can turn on -v); wget -i (it prints
+    each URL it fetches) or a URL that carries a value, unless -q; httpie or xh -pH, -P or
+    --history-print, xh --curl, --curl-long or --debug; gh --verbose; and pbcopy, whose copy
+    a later pbpaste prints. Bash keeps the narrow set: its output is scanned."""
+    def short_value(arg: str, flag: str, valued: str, value: str) -> str | None:
         # -sSv holds -v; -ofilev does not (-o takes the rest of the word as its value).
         if not re.fullmatch(r"-[^-].*", arg):
-            return False
-        for char in arg[1:]:
+            return None
+        for at, char in enumerate(arg[1:], 2):
             if char == flag:
-                return True
+                return arg[at:] or value
             if char in valued:
-                return False
-        return False
+                return None
+        return None
 
+    def flagged(arg: str, flag: str, valued: str) -> bool:
+        return short_value(arg, flag, valued, "") is not None
+
+    def option(arg: str, value: str, long: str, short: str, valued: str) -> str | None:
+        # The value of --long V, --long=V, -s V or -sV (in a cluster), or None when absent.
+        if arg == long:
+            return value
+        if arg.startswith(long + "="):
+            return arg[len(long) + 1:]
+        return short_value(arg, short, valued.replace(short, ""), value) if short else None
+
+    if unscanned and program == "pbcopy":
+        return True
+    quiet = program == "wget" and any(
+        arg == "--quiet" or flagged(arg, "q", _WGET_VALUED) for arg in args)
     for index, arg in enumerate(args):
         value = args[index + 1] if index + 1 < len(args) else ""
         if program == "curl":
-            if arg == "--verbose" or flagged(arg, "v", "oHduXAebcFTwxEKmrYyzCPQtUu"):
+            if arg == "--verbose" or flagged(arg, "v", _CURL_VALUED):
                 return True
             if arg in ("--trace", "--trace-ascii") and value in ("-", "%"):
                 return True
             if re.fullmatch(r"--trace(-ascii)?=[-%]", arg):
                 return True
+            if unscanned and (
+                    re.fullmatch(r"--(?:trace(?:-ascii|-config)?|libcurl)(?:=.*)?", arg)
+                    or option(arg, value, "--config", "K", _CURL_VALUED) is not None
+                    or re.match(r"(?i)(?:--url=)?file:/", arg)
+                    or _WRITES_URL.search(option(arg, value, "--write-out", "w", _CURL_VALUED)
+                                          or "")):
+                return True
         elif program == "wget":
-            if arg == "--debug" or flagged(arg, "d", "OoaeitTwQPUlDXIRAB"):
+            if arg == "--debug" or flagged(arg, "d", _WGET_VALUED):
+                return True
+            if unscanned and not quiet and (
+                    option(arg, value, "--input-file", "i", _WGET_VALUED) is not None
+                    or "://" in arg and ("$" in arg or _SUB_MARK in arg)):
                 return True
         elif program in ("http", "https", "xh"):
             if arg in ("--verbose", "--offline") or flagged(arg, "v", "paoAs"):
                 return True
             printed = (value if arg in ("--print", "-p") else
                        arg.split("=", 1)[1] if arg.startswith("--print=") else "")
+            if unscanned:
+                printed += "".join(option(arg, value, name, short, "paoAsP") or ""
+                                   for name, short in (("--print", "p"),
+                                                       ("--history-print", "P")))
+                if program == "xh" and arg in ("--curl", "--curl-long", "--debug"):
+                    return True
             if re.search(r"[HB]", printed):
                 return True
+        elif program == "gh" and unscanned and arg == "--verbose":
+            return True
     return False
 
 
@@ -402,8 +508,9 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
     if not state.captured and _prints_loaded(program, args, state, strings):
         return _LOADED.format(what="print", path=state.loaded_from or "a .env-class file")
     # curl -H "Auth: $KEY" https://api sends the value where it belongs and passes (the
-    # design rule); a client that echoes its own request (curl -v) prints it.
-    if program in EGRESS_PROGRAMS and _echoes_request(program, args) \
+    # design rule); a client that echoes its own request (curl -v) prints it. Unscanned
+    # (Monitor), so does one that shows it anywhere (curl --trace-ascii FILE, --libcurl).
+    if program in EGRESS_PROGRAMS and _echoes_request(program, args, state.unscanned) \
             and _uses_loaded(args + list(strings), state):
         return _LOADED.format(what="print (the client echoes its request)",
                               path=state.loaded_from or "a .env-class file")
@@ -415,11 +522,13 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
     carried = [word for word in args + list(strings) if _SUB_MARK in word
                and not (assigns and "=" in word and word.split("=", 1)[0].isidentifier())]
     # A client sends what a substitution prints where it belongs (curl -H "..$(env-get ..)"),
-    # so there an env-get value is judged as under Bash, unless the client echoes its request.
-    sent = program in EGRESS_PROGRAMS and not _echoes_request(program, args)
+    # so there a lone printer's env-get value is judged as under Bash, unless the client
+    # shows its request. Bash judges every substitution with the flag off already.
+    sent = state.unscanned and program in EGRESS_PROGRAMS and not _echoes_request(
+        program, args, unscanned=True)
     if program not in SILENT_STDIN and carried and (
             program in EGRESS_PROGRAMS or not state.captured) and _sub_reads(
-            carried, state, cwd, False if sent else None):
+            carried, state, cwd, sent):
         found = _sub_paths(carried, state, cwd)
         return _named_message(found[0] if found else "a .env-class file")
     if reader and not state.captured and _sub_paths(args, state, cwd, shown=True):
@@ -531,10 +640,15 @@ def _hand_keys(path: str, keys: str, state: _State) -> None:
     the rest of the command, so a heredoc or here-string fed to cmd is read with them; a
     later `echo $KEY` of the shell's own KEY is refused too (Monitor only, and rare). Unlike
     a sourced key, a handed one also reaches the substitutions judged inside (_sub_verdict),
-    except one a sending client carries."""
+    except one a sending client carries. A key the guard cannot read ("$KN", $(..)) can be
+    any name, so it counts as an unread source (any $VARIABLE); handed keeps the word, so a
+    fork handed the keys again reads them the same way."""
     named = {key.strip() for key in keys.split(",") if key.strip()}
+    unread = {key for key in named   # a pulled $(..) is a word that looks like a name
+              if _SUB_MARK in key or not re.fullmatch(r"[A-Za-z_]\w*", key)}
     state.handed |= named
-    state.loaded |= named
+    state.loaded |= named - unread
+    state.sourced = state.sourced or bool(unread)
     state.loaded_from = state.loaded_from or path
 
 

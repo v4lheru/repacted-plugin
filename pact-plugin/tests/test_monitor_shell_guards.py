@@ -111,10 +111,16 @@ ENV_GET_PRINTS = [
     "env-get .env API_KEY -- sh -c 'echo $API_KEY'",
     "env-get .env API_KEY,OTHER -- printenv OTHER",
     'echo "$(env-get .env API_KEY -- printenv API_KEY)"',
+    f"curl -sS -o /dev/null -H {HEADER_FILE[:-1]} > /tmp/leak) {STATUS_URL}; cat /tmp/leak",
+    "env-get .env API_KEY -- bash -c 'curl -sS --trace-ascii /dev/stdout "
+    f"-H \"{HEADER} $API_KEY\" {STATUS_URL}'",
+    "env-get .env API_KEY -- ruby -e 'p ENV.to_h'",
+    "env-get .env \"$KN\" -- sh -c 'echo \"$API_KEY\"'",
 ]
 ENV_GET_KEEPS = [
     "env-get .env API_KEY -- sh -c 'echo \"len=${#API_KEY}\"'",
     f"curl -sS -H {HEADER_FILE} {STATUS_URL}",
+    f'curl -sS -o /dev/null -w "%{{http_code}}" -H {HEADER_FILE} {STATUS_URL}',
     f"while true; do curl -sS -H {HEADER_FILE} {STATUS_URL} || true; sleep 30; done",
     "env-get .env API_KEY -- ./watch.sh",
 ]

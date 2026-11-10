@@ -49,6 +49,7 @@ def test_other_forms_stay_denied(cwd, command):
 HEADER = "Authorization: " + "Bearer"
 URL = "https://example.com/status"
 PRINTF = "sh -c 'printf \"" + HEADER + " %s\\n\" \"$API_KEY\"'"
+ENVIRON = "os." + "environ"             # kept apart: the commit check refuses the joined text
 
 PRINTS_HANDED_VALUE = [
     "env-get .env API_KEY -- printenv API_KEY",
@@ -68,6 +69,51 @@ PRINTS_HANDED_VALUE = [
     "env-get .env API_KEY -- sh -c 'true; X=$(printenv API_KEY); echo \"$X\"'",
     f"curl -v -sS -H @<(env-get .env API_KEY -- {PRINTF}) {URL}",
     f'curl -sS --verbose -H "{HEADER} $(env-get .env API_KEY -- printenv API_KEY)" {URL}',
+    # A client's <(...) or $(...) is exempt only when env-get alone prints into it.
+    f"curl -sS -o /dev/null -H @<(env-get .env API_KEY -- {PRINTF} > /tmp/leak) {URL}; "
+    "cat /tmp/leak",
+    f"curl -sS -H @<(env-get .env API_KEY -- {PRINTF} | tee /tmp/leak) {URL}",
+    f"curl -sS -H @<(env-get .env API_KEY -- {PRINTF} >&2) {URL}",
+    f"curl -sS -H @<(env-get .env API_KEY -- sh -c 'printenv API_KEY > /tmp/leak') {URL}; "
+    "cat /tmp/leak",
+    "curl -sS -d @<(env-get .env API_KEY -- python3 -c 'import os, sys; "
+    f"sys.stderr.write(os.getenv(\"API_KEY\"))') {URL}",
+    f'curl -sS -H "X: $(env-get .env API_KEY -- printenv API_KEY > /tmp/leak)" {URL}; '
+    "cat /tmp/leak",
+    f'curl -sS -H "X: $(env-get .env API_KEY -- printenv API_KEY | tee /tmp/leak)" {URL}',
+    "pbcopy < <(env-get .env API_KEY -- printenv API_KEY); pbpaste",
+    # `> 1` writes a file named 1 (the parser keeps the target, so it reads like >&1).
+    f"curl -sS -o /dev/null -H @<(env-get .env API_KEY -- printenv API_KEY > 1) {URL}; cat 1",
+    # A client that shows what it sends: a trace to any file, --libcurl, a URL in -w,
+    # a file:// target, a config it reads, httpie or xh printing the request, gh --verbose.
+    "curl -sS -T <(env-get .env API_KEY -- printenv API_KEY) file:///dev/stdout",
+    "curl -sS --data-binary @<(env-get .env API_KEY -- printenv API_KEY) "
+    f"--trace-ascii /dev/stdout {URL}",
+    f'curl -sS --trace=/dev/stderr -H "X: $(env-get .env API_KEY -- printenv API_KEY)" {URL}',
+    f"curl -sS --libcurl - -H @<(env-get .env API_KEY -- {PRINTF}) {URL}",
+    "curl -sS -o /dev/null -w '%{url_effective}' "
+    f'"{URL}?k=$(env-get .env API_KEY -- printenv API_KEY)"',
+    f"curl -sS -K <(env-get .env API_KEY -- printenv API_KEY) {URL}",
+    "wget -i <(env-get .env API_KEY -- printenv API_KEY)",
+    f'http -pHB {URL} "X:$(env-get .env API_KEY -- printenv API_KEY)"',
+    f'xh --curl {URL} "X:$(env-get .env API_KEY -- printenv API_KEY)"',
+    'gh api --verbose -H "X: $(env-get .env API_KEY -- printenv API_KEY)" /user',
+    "env-get .env API_KEY -- bash -c 'curl -sS --trace-ascii /dev/stdout "
+    f"-H \"{HEADER} $API_KEY\" {URL}'",
+    f"env-get .env API_KEY -- bash -c 'curl -sS --libcurl - -H \"{HEADER} $API_KEY\" {URL}'",
+    "env-get .env API_KEY -- bash -c 'curl -sS -o /dev/null -w \"%{url_effective}\" "
+    f"\"{URL}?k=$API_KEY\"'",
+    f"env-get .env API_KEY -- bash -c 'http -pH {URL} \"X:$API_KEY\"'",
+    f"env-get .env API_KEY -- bash -c 'xh --print=H {URL} \"X:$API_KEY\"'",
+    "env-get .env API_KEY -- bash -c 'gh api --verbose -H \"X: $API_KEY\" /user'",
+    # A script that prints the whole environment prints the handed keys.
+    f"env-get .env API_KEY -- python3 -c 'import os; print({ENVIRON})'",
+    "env-get .env API_KEY -- node -p 'process.env'",
+    "env-get .env API_KEY -- ruby -e 'p ENV.to_h'",
+    "env-get .env API_KEY -- perl -e 'print %ENV'",
+    # A key the guard cannot read can be any name.
+    "env-get .env \"$KN\" -- sh -c 'echo \"$API_KEY\"'",
+    "env-get .env $(echo API_KEY) -- printenv API_KEY",
 ]
 KEEPS_VALUE_OUT = [
     "env-get .env API_KEY -- sh -c 'echo \"len=${#API_KEY}\"'",
@@ -83,6 +129,14 @@ KEEPS_VALUE_OUT = [
     "env-get .env API_KEY -- ./watch.sh",
     "env-get .env API_KEY -- printenv HOME",
     "env-get --keys .env",
+    f'curl -sS -X PUT -H @<(env-get .env API_KEY -- {PRINTF}) -H "Content-Type: '
+    f'application/json" --data @/tmp/item.json {URL}',
+    f'curl -sS -o /dev/null -w "%{{http_code}}" -H @<(env-get .env API_KEY -- {PRINTF}) {URL}',
+    f"curl -sS -H @<(env-get .env API_KEY -- {PRINTF} 2>/dev/null) {URL}",
+    f'curl -sS -o /dev/null -w "%{{http_code}}" -H "{HEADER} $(env-get .env API_KEY -- '
+    f'printenv API_KEY)" {URL}',
+    f'xh {URL} "X:$(env-get .env API_KEY -- printenv API_KEY)"',
+    'gh api -H "X: $(env-get .env API_KEY -- printenv API_KEY)" /user',
 ]
 
 

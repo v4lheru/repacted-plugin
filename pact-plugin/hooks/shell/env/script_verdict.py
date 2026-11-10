@@ -19,7 +19,7 @@ from shell.words import segments
 from shell.words import strip_prefix
 from shell.words import words as shell_words
 from shell.env.git_egress import (Notice, git_egress_pass, git_egress_verdict)
-from shell.env.judge import (_body_as_script, _echoes_request, _group_words, _heredoc_verdict, _printed_text, _prints_loaded, _program, _sub_verdict, command_verdict)
+from shell.env.judge import (_body_as_script, _echoes_request, _group_words, _heredoc_verdict, _printed_text, _prints_alone, _prints_loaded, _program, _sub_verdict, command_verdict)
 from shell.env.names import (GLOB_BUDGET_MESSAGE, _WRITE_REDIRECT, glob_budget_overspent,
                              mentions_class, reset_glob_budget, token_protected)
 from shell.env.places import (_Directory, _PIPE, _merge, _names_only_search, _search_skip, resolve_path_substitutions)
@@ -56,7 +56,7 @@ def judge(command: str, cwd: str | None, state: _State, captured: bool = False) 
     fed = {key for step in steps for key in step.bodies}
     for index, (step, places) in enumerate(placed):
         unscanned = state.unscanned
-        state.unscanned = unscanned and not _sent_procsub(steps, index)
+        state.unscanned = unscanned and not _sent_procsub(steps, index, state)
         try:
             for here in places if not _quiet_group(steps, index) else ():
                 reason = command_verdict(step.words, step.stdin, here, state, step.strings)
@@ -327,17 +327,20 @@ def _procsub_consumer(steps: list[_Step], index: int) -> int | None:
     return None
 
 
-def _sent_procsub(steps: list[_Step], index: int) -> bool:
-    """True when steps[index] is the first command of a `<(...)` an HTTP or copy client
-    reads without echoing its request (curl -H @<(env-get ...)): what it prints goes to the
-    client, which sends it where it belongs, not to the transcript."""
+def _sent_procsub(steps: list[_Step], index: int, state: _State) -> bool:
+    """True when steps[index] is the only command of a `<(...)` an HTTP client reads
+    without showing its request (curl -H @<(env-get ...)), and it prints only to that
+    client (_prints_alone): what it prints is sent where it belongs, not to the transcript.
+    The client is judged as under Monitor (judge calls this only there): a trace to any
+    file, --libcurl, -K or a file:// target shows what it sends."""
     consumer = _procsub_consumer(steps, index)
-    if consumer is None:
+    if consumer is None or not steps[index].after.startswith(")") \
+            or not _prints_alone(steps[index], state):
         return False
     command = strip_prefix(_group_words(steps[consumer].words))
     program = command[0].rsplit("/", 1)[-1] if command else ""
     return program in EGRESS_PROGRAMS and not _echoes_request(
-        program, command[1:] + _continued_words(steps, consumer))
+        program, command[1:] + _continued_words(steps, consumer), unscanned=True)
 
 
 def _continued_words(steps: list[_Step], consumer: int) -> list[str]:
