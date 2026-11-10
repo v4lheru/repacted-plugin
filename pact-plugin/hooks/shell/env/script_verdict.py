@@ -5,7 +5,7 @@ Summary: judge, bash_verdict and the filters around the walk: listed names, quie
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: judge, _pattern_words, _find_filters, _listed_names_verdict, _quiet_group, _procsub_consumer, _sent_procsub, _continued_words, _fed_texts, _fed_text_verdict, _PATH_VARIABLE, _expand_path_variables, _spell_pairs, _script_verdict, _loose_verdict, _ENV_GET_WRITE, bash_verdict.
+Map: judge, _pattern_words, _find_filters, _listed_names_verdict, _quiet_group, _procsub_consumer, _FED, _sent_procsub, _command_start, _own_words, _fed_texts, _fed_text_verdict, _PATH_VARIABLE, _expand_path_variables, _spell_pairs, _script_verdict, _loose_verdict, _ENV_GET_WRITE, bash_verdict.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from shell.words import segments
 from shell.words import strip_prefix
 from shell.words import words as shell_words
 from shell.env.git_egress import (Notice, git_egress_pass, git_egress_verdict)
-from shell.env.judge import (_body_as_script, _echoes_request, _group_words, _heredoc_verdict, _printed_text, _prints_alone, _prints_loaded, _program, _sub_verdict, command_verdict)
+from shell.env.judge import (_body_as_script, _echoes_request, _group_words, _heredoc_verdict, _printed_text, _prints_alone, _prints_loaded, _program, _sent_values, _shows_command, _sub_verdict, command_verdict)
 from shell.env.names import (GLOB_BUDGET_MESSAGE, _WRITE_REDIRECT, glob_budget_overspent,
                              mentions_class, reset_glob_budget, token_protected)
 from shell.env.places import (_Directory, _PIPE, _merge, _names_only_search, _search_skip, resolve_path_substitutions)
@@ -327,27 +327,58 @@ def _procsub_consumer(steps: list[_Step], index: int) -> int | None:
     return None
 
 
+_FED = "\x01"                                       # where the <(...) stands in its client's words
+
+
 def _sent_procsub(steps: list[_Step], index: int, state: _State) -> bool:
-    """True when steps[index] is the only command of a `<(...)` an HTTP client reads
-    without showing its request (curl -H @<(env-get ...)), and it prints only to that
-    client (_prints_alone): what it prints is sent where it belongs, not to the transcript.
-    The client is judged as under Monitor (judge calls this only there): a trace to any
-    file, --libcurl, -K or a file:// target shows what it sends."""
+    """True when steps[index] is the only command of a `<(...)` an HTTP client reads as the
+    value of a send option (curl -H @<(env-get ...), judge._sent_values) without showing
+    its request, and it prints only to that client (_prints_alone): what it prints is sent
+    where it belongs, not to the transcript. The client is judged as under Monitor (judge
+    calls this only there): a trace to any file, --libcurl, -K or a file:// target shows
+    what it sends, and so do the shell's trace (set -x) and a runner that prints the command
+    (env -v, xargs -t). A <(...) on stdin (`< <(..)`) or in any other option is not sent.
+    The parser does not keep the space before `<(`, so both readings are tried: glued to
+    the word before it (-H @<(..)) and on its own (-H <(..)); neither reads a file the
+    client would not send."""
     consumer = _procsub_consumer(steps, index)
-    if consumer is None or not steps[index].after.startswith(")") \
+    if consumer is None or state.traced or not steps[index].after.startswith(")") \
             or not _prints_alone(steps[index], state):
         return False
-    command = strip_prefix(_group_words(steps[consumer].words))
+    start = _command_start(steps, consumer)
+    words = _group_words(_own_words(steps, start))
+    command = strip_prefix(words)
+    lead = len(words) - len(command)
     program = command[0].rsplit("/", 1)[-1] if command else ""
-    return program in EGRESS_PROGRAMS and not _echoes_request(
-        program, command[1:] + _continued_words(steps, consumer), unscanned=True)
+    if program not in EGRESS_PROGRAMS or _shows_command(words[:lead]) \
+            or _echoes_request(program, command[1:], unscanned=True):
+        return False
+    before = _group_words(_own_words(steps, start, index))[lead + 1:]
+    readings = [before + [_FED]] + ([before[:-1] + [before[-1] + _FED]] if before else [])
+    return any(len(args) - 1 in _sent_values(program, args, fed=True) for args in readings)
 
 
-def _continued_words(steps: list[_Step], consumer: int) -> list[str]:
-    """The words of steps[consumer]'s own command that stand after a `<(...)` it holds
-    (`curl -H @<(..) -v URL`): each step that a `)` alone brings back to its level."""
-    words, level = [], 0
-    for step in steps[consumer + 1:]:
+def _command_start(steps: list[_Step], index: int) -> int:
+    """The first step of the command steps[index] is part of: a step with only `)` before
+    it resumes the command a `<(...)` interrupted (the `-d @` of `curl -H @<(..) -d @<(..)`),
+    so the walk goes back past that `<(...)`."""
+    while index > 0 and steps[index].before and set(steps[index].before) <= {")"}:
+        level = 0
+        for k in range(index, 0, -1):
+            level += steps[k].before.count(")") - steps[k].before.count("(")
+            if level <= 0:
+                break
+        else:
+            return index
+        index = k - 1
+    return index
+
+
+def _own_words(steps: list[_Step], start: int, stop: int | None = None) -> list[str]:
+    """The words of the command that begins at steps[start], before steps[stop]: its own
+    and those of each step a `)` alone brings back to its level (`curl -H @<(..) -v URL`)."""
+    words, level = list(steps[start].words), 0
+    for step in steps[start + 1:stop]:
         level += step.before.count("(") - step.before.count(")")
         if level < 0 or level == 0 and set(step.before) & set(";|&\n"):
             break

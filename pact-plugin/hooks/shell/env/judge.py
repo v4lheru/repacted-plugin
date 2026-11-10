@@ -5,7 +5,7 @@ Summary: command_verdict: the per-command walk (printing words, env-get, printed
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: _printing_words, _is_env_get, _PRINTF_SPEC, _ESCAPES, _unescape, _printed_text, _sub_paths, _sub_verdict, _sub_reads, _STDOUT_TARGETS, _LONE_PRINTERS, _LONE_SEPARATORS, _NESTED, _prints_alone, _lone_steps, _sub_names, _load, _uses_loaded, _ENV_READ, _prints_loaded, _inner_script, _SSH_VALUE_OPTIONS, _group_words, _trace_switch, _LOADED, _COMPUTED, _echoes_request, _glued_unknown, _AWK, _AWK_VALUE_OPTIONS, _AWK_GLUED_OPTION, _awk_program_word, command_verdict, _hand_keys, _program, _STDIN_ACTORS, _PAGERS, _DATA_CONSUMERS, _TEXT_COMMANDS, _NAMES_FROM_STDIN, _GIT_NAMES_FROM_STDIN, _BODY_WORD, _BODY_WORDS_READ, _COMPOUND_END, _STDIN_AS_FILE, _reads_script_from_stdin, _script_on_stdin, _stdin_role, _body_names, _body_as_script, _heredoc_verdict, _json_actor.
+Map: _printing_words, _is_env_get, _PRINTF_SPEC, _ESCAPES, _unescape, _printed_text, _sub_paths, _sub_verdict, _sub_reads, _STDOUT_TARGETS, _LONE_PRINTERS, _LONE_SEPARATORS, _NESTED, _prints_alone, _lone_steps, _sub_names, _load, _uses_loaded, _ENV_READ, _prints_loaded, _inner_script, _SSH_VALUE_OPTIONS, _group_words, _trace_switch, _LOADED, _COMPUTED, _echoes_request, _ANY, _NOT_A_FILE, _NAMED, _CURL_SENDS, _GH_SENDS, _SENDERS, _ITEM_CLIENTS, _ITEM_VALUED, _ITEM_FLAGS, _ITEM_SENT, _CLUSTER, _sent_values, _send_option, _ends_option, _request_items, _SHOWS_COMMAND, _shows_command, _sent_keys, _glued_unknown, _AWK, _AWK_VALUE_OPTIONS, _AWK_GLUED_OPTION, _awk_program_word, command_verdict, _hand_keys, _program, _STDIN_ACTORS, _PAGERS, _DATA_CONSUMERS, _TEXT_COMMANDS, _NAMES_FROM_STDIN, _GIT_NAMES_FROM_STDIN, _BODY_WORD, _BODY_WORDS_READ, _COMPOUND_END, _STDIN_AS_FILE, _reads_script_from_stdin, _script_on_stdin, _stdin_role, _body_names, _body_as_script, _heredoc_verdict, _json_actor.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 
+from shell.words import PREFIX_WORDS
 from shell.words import segments
 from shell.words import strip_prefix
 from shell.inline_code import code_option, runs_inline_code
@@ -135,12 +136,14 @@ def _sub_verdict(key: str, cwd: str | None, captured: bool, state: _State,
     return state.verdicts[slot]
 
 
-def _sub_reads(words: list[str], state: _State, cwd: str | None, sent: bool = False) -> bool:
+def _sub_reads(words: list[str], state: _State, cwd: str | None,
+               sent: set[str] | frozenset = frozenset()) -> bool:
     """True when a substitution these words carry reads a protected file's contents.
-    `sent`: the words go to a client that sends them without showing them, so a
-    substitution that only prints to that client (_prints_alone) is judged as under Bash."""
+    `sent`: the keys of those a client sends without showing them (_sent_keys), so one
+    that only prints to that client (_prints_alone) is judged as under Bash."""
     return any(_sub_verdict(key, cwd, False, state,
-                            False if sent and _prints_alone(state.subs.get(key, ""), state)
+                            False if key in sent and _prints_alone(state.subs.get(key, ""),
+                                                                   state)
                             else None)
                for word in words for key in _SUB_KEY.findall(word))
 
@@ -328,7 +331,7 @@ def _echoes_request(program: str, args: list[str], unscanned: bool = False) -> b
     --trace, --trace-ascii or --trace-config to any file, --libcurl, a -w format that prints
     the URL, a file:// target, any -K/--config file (it can turn on -v); wget -i (it prints
     each URL it fetches) or a URL that carries a value, unless -q; httpie or xh -pH, -P or
-    --history-print, xh --curl, --curl-long or --debug; gh --verbose; and pbcopy, whose copy
+    --history-print or --debug, xh --curl or --curl-long; gh --verbose; and pbcopy, whose copy
     a later pbpaste prints. Bash keeps the narrow set: its output is scanned."""
     def short_value(arg: str, flag: str, valued: str, value: str) -> str | None:
         # -sSv holds -v; -ofilev does not (-o takes the rest of the word as its value).
@@ -388,13 +391,182 @@ def _echoes_request(program: str, args: list[str], unscanned: bool = False) -> b
                 printed += "".join(option(arg, value, name, short, "paoAsP") or ""
                                    for name, short in (("--print", "p"),
                                                        ("--history-print", "P")))
-                if program == "xh" and arg in ("--curl", "--curl-long", "--debug"):
+                if arg == "--debug" or program == "xh" and arg in ("--curl", "--curl-long"):
                     return True
             if re.search(r"[HB]", printed):
                 return True
         elif program == "gh" and unscanned and arg == "--verbose":
             return True
     return False
+
+
+# Under Monitor a client's $(...) or <(...) is judged as under Bash only in the value of one
+# of its send options: anywhere else the client can print it back (a URL or proxy it cannot
+# reach, a --resolve entry, a --stderr file name). Per client: the subcommand it needs, the
+# short letters that take a value, the long options known to take none (any other can take
+# the next word as its value: curl --resolve -H ..), and each send option with a pattern its
+# value must match from the start, a $(...) in it written as \0: -d @FILE is a name curl
+# prints when it cannot read it, -u with no password prompts with the user name, a header
+# with no name is echoed. A <(...) needs no pattern: the client opens it only to send it.
+_ANY, _NOT_A_FILE, _NAMED = "", r"(?!@)", r"[^:\s\0]+:"
+_CURL_SENDS = {"-H": _NOT_A_FILE, "--header": _NOT_A_FILE, "-d": _NOT_A_FILE,
+               "--data": _NOT_A_FILE, "--data-binary": _NOT_A_FILE, "--json": _NOT_A_FILE,
+               "--data-raw": _ANY, "--data-urlencode": r"(?![^=]*[@\0])", "-u": r"[^:]*:",
+               "--user": r"[^:]*:", "-F": r"[^=\0]*=(?![@<])", "--form": r"[^=\0]*=(?![@<])",
+               "--form-string": _ANY, "--oauth2-bearer": _ANY}
+_GH_SENDS = {"-H": _NAMED, "--header": _NAMED, "-f": r"[^=\0]+=", "--raw-field": r"[^=\0]+=",
+             "-F": r"[^=\0]+=(?!@)", "--field": r"[^=\0]+=(?!@)", "--input": r"(?!)"}
+_SENDERS = {
+    "curl": ("", _CURL_VALUED, frozenset({
+        "--silent", "--show-error", "--fail", "--fail-with-body", "--fail-early", "--location",
+        "--location-trusted", "--compressed", "--insecure", "--include", "--globoff", "--get",
+        "--head", "--http1.0", "--http1.1", "--http2", "--http2-prior-knowledge", "--http3",
+        "--no-progress-meter", "--progress-bar", "--no-buffer", "--no-keepalive", "--raw",
+        "--remote-name", "--remote-name-all", "--remote-header-name", "--create-dirs",
+        "--path-as-is", "--ipv4", "--ipv6", "--ssl-reqd", "--tlsv1.2", "--tlsv1.3",
+        "--anyauth", "--basic", "--digest", "--negotiate", "--ntlm", "--proxytunnel",
+        "--netrc", "--netrc-optional", "--tcp-nodelay", "--disable", "--parallel",
+        "--retry-connrefused", "--retry-all-errors", "--show-headers", "--styled-output"}),
+        _CURL_SENDS),
+    "wget": ("", _WGET_VALUED, frozenset({
+        "--quiet", "--no-verbose", "--server-response", "--spider", "--no-check-certificate",
+        "--content-on-error", "--no-cache", "--continue", "--timestamping", "--no-clobber",
+        "--inet4-only", "--inet6-only", "--https-only", "--auth-no-challenge", "--no-hsts",
+        "--show-progress", "--no-dns-cache", "--ignore-length", "--save-headers",
+        "--content-disposition", "--no-proxy", "--keep-session-cookies", "--no-cookies"}),
+        {"--header": _NAMED, "--post-data": _ANY, "--body-data": _ANY, "--user": _ANY,
+         "--password": _ANY}),
+    "gh": ("api", "FHXfpqt", frozenset({"--include", "--paginate", "--silent", "--slurp"}),
+           _GH_SENDS),
+    "glab": ("api", "FHXf", frozenset({"--include", "--paginate", "--silent"}), _GH_SENDS),
+}
+# httpie and xh: a request item after METHOD and URL, Name:value or name=value with the name
+# typed out; never == (part of the URL), := (invalid JSON is echoed) or an @ file name.
+_ITEM_CLIENTS = frozenset({"http", "https", "xh"})
+_ITEM_VALUED = "paoAsP"
+_ITEM_FLAGS = frozenset({
+    "--json", "--form", "--multipart", "--ignore-stdin", "--follow", "--check-status",
+    "--quiet", "--headers", "--body", "--download", "--continue", "--stream", "--all",
+    "--path-as-is", "--chunked", "--compress", "--https", "--ignore-netrc", "--native-tls"})
+_ITEM_SENT = re.compile(r"(?:[^:=@\\\s\0]|\\.)+(?::(?![=@])|=(?![=@]))")
+_CLUSTER = re.compile(r"-[^-].*")
+
+
+def _sent_values(program: str, args: list[str], fed: bool = False) -> set[int]:
+    """The indices of the words of `args` that the client `program` sends as the value of
+    one of its send options (_SENDERS), or, for httpie and xh, as a request item. `fed`: the
+    word holds a <(...) path, which no pattern needs to pass. Other clients send none."""
+    if program in _ITEM_CLIENTS:
+        return {at for at in _request_items(args)
+                if fed or _ITEM_SENT.match(_SUB_KEY.sub("\0", args[at]))}
+    if program not in _SENDERS:
+        return set()
+    needs, valued, flags, sends = _SENDERS[program]
+    start = 1 if needs else 0
+    if needs and args[:1] != [needs]:
+        return set()
+    end = args.index("--") if "--" in args else len(args)
+    sent = set()
+    for index in range(start, end):
+        found = _send_option(args, index, valued, sends)
+        if found is None or index > start and not _ends_option(args[index - 1], valued, flags):
+            continue
+        option, at, value = found
+        if at < end and (fed or re.match(sends[option], _SUB_KEY.sub("\0", value))):
+            sent.add(at)
+    return sent
+
+
+def _send_option(args: list[str], index: int, valued: str,
+                 sends: dict) -> tuple[str, int, str] | None:
+    """(send option, index of the word holding its value, the value) when args[index] is one
+    of `sends`: --header V, --header=V, -H V, -HV or a cluster ending in one (-sSH V)."""
+    arg, following = args[index], args[index + 1] if index + 1 < len(args) else ""
+    if arg.startswith("--"):
+        name, equals, value = arg.partition("=")
+        if name not in sends:
+            return None
+        return (name, index, value) if equals else (name, index + 1, following)
+    if not _CLUSTER.fullmatch(arg):
+        return None
+    for at, char in enumerate(arg[1:], 2):
+        if "-" + char in sends:
+            return ("-" + char, index, arg[at:]) if arg[at:] else ("-" + char, index + 1,
+                                                                    following)
+        if char in valued:
+            return None
+    return None
+
+
+def _ends_option(word: str, valued: str, flags: frozenset) -> bool:
+    """False when `word` can take the next word as its value: a long option not known to
+    take none, or a cluster ending in a letter that takes one (-o in `-o -H ..`)."""
+    if word.startswith("--"):
+        return "=" in word or word in flags
+    if _CLUSTER.fullmatch(word):
+        for at, char in enumerate(word[1:], 2):
+            if char in valued:
+                return bool(word[at:])
+    return True
+
+
+def _request_items(args: list[str]) -> list[int]:
+    """The indices of httpie's or xh's request items: the words that are no option or
+    option value, past the URL and a METHOD before it. A long option not known to take no
+    value is taken to take the next word, so the URL is never read as an item."""
+    found, index = [], 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            found += range(index + 1, len(args))
+            break
+        index += 1
+        if arg.startswith("--"):
+            index += 0 if "=" in arg or arg in _ITEM_FLAGS else 1
+        elif _CLUSTER.fullmatch(arg):
+            letters = arg[1:]
+            cut = next((at for at, char in enumerate(letters) if char in _ITEM_VALUED), None)
+            index += 1 if cut == len(letters) - 1 else 0
+        else:
+            found.append(index - 1)
+    skip = 2 if found and re.fullmatch(r"[A-Za-z]+", args[found[0]]) else 1
+    return found[skip:]
+
+
+# Runner words that print the command line they run, its expanded arguments with it:
+# env -v or --debug, xargs -t, --verbose, -p or --interactive (letters, long options, and
+# the letters that take a value).
+_SHOWS_COMMAND = {"env": ("v", ("--debug",), "uCPLUS"),
+                  "xargs": ("tp", ("--verbose", "--interactive"), "adEIJLnPsRS")}
+
+
+def _shows_command(leading: list[str]) -> bool:
+    """True when a runner word in `leading` (the words before the program) prints the
+    command it runs: env -v, xargs -t and the like (_SHOWS_COMMAND)."""
+    runner = ""
+    for word in leading:
+        if word in PREFIX_WORDS:
+            runner = word
+            continue
+        letters, longs, valued = _SHOWS_COMMAND.get(runner, ("", (), ""))
+        if word.split("=", 1)[0] in longs:
+            return True
+        for char in word[1:] if _CLUSTER.fullmatch(word) else "":
+            if char in letters:
+                return True
+            if char in valued:
+                break
+    return False
+
+
+def _sent_keys(program: str, args: list[str], leading: list[str], state: _State) -> set[str]:
+    """Under Monitor, the keys of the substitutions a client sends without showing them: in
+    the value of a send option (_sent_values), unless the client prints its request, the
+    shell traces the command (set -x) or a runner before it prints it (_shows_command)."""
+    if not state.unscanned or program not in EGRESS_PROGRAMS or state.traced \
+            or _shows_command(leading) or _echoes_request(program, args, unscanned=True):
+        return set()
+    return {key for at in _sent_values(program, args) for key in _SUB_KEY.findall(args[at])}
 
 
 def _glued_unknown(word: str, cwd: str | None) -> str | None:
@@ -521,11 +693,11 @@ def command_verdict(words: list[str], stdin: list[str], cwd: str | None,
     assigns = program in ("local", "declare", "typeset", "readonly")
     carried = [word for word in args + list(strings) if _SUB_MARK in word
                and not (assigns and "=" in word and word.split("=", 1)[0].isidentifier())]
-    # A client sends what a substitution prints where it belongs (curl -H "..$(env-get ..)"),
-    # so there a lone printer's env-get value is judged as under Bash, unless the client
-    # shows its request. Bash judges every substitution with the flag off already.
-    sent = state.unscanned and program in EGRESS_PROGRAMS and not _echoes_request(
-        program, args, unscanned=True)
+    # A client sends what a substitution in a send option's value prints where it belongs
+    # (curl -H "..$(env-get ..)"), so there a lone printer's env-get value is judged as
+    # under Bash, unless the client, the shell's trace or a runner shows the request. Bash
+    # judges every substitution with the flag off already.
+    sent = _sent_keys(program, args, leading, state)
     if program not in SILENT_STDIN and carried and (
             program in EGRESS_PROGRAMS or not state.captured) and _sub_reads(
             carried, state, cwd, sent):

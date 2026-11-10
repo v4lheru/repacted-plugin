@@ -50,6 +50,8 @@ HEADER = "Authorization: " + "Bearer"
 URL = "https://example.com/status"
 PRINTF = "sh -c 'printf \"" + HEADER + " %s\\n\" \"$API_KEY\"'"
 ENVIRON = "os." + "environ"             # kept apart: the commit check refuses the joined text
+SUB = "$(env-get .env API_KEY -- printenv API_KEY)"
+FED = "<(env-get .env API_KEY -- printenv API_KEY)"
 
 PRINTS_HANDED_VALUE = [
     "env-get .env API_KEY -- printenv API_KEY",
@@ -114,6 +116,33 @@ PRINTS_HANDED_VALUE = [
     # A key the guard cannot read can be any name.
     "env-get .env \"$KN\" -- sh -c 'echo \"$API_KEY\"'",
     "env-get .env $(echo API_KEY) -- printenv API_KEY",
+    # A client is exempt only for the value of a send option: curl prints a URL, proxy or
+    # --resolve entry it cannot use and names its --stderr file; a file name it cannot
+    # read (-d @..) is in its warning; -u with no password prompts with the user name.
+    f'curl -sS "{SUB}" 2>&1',
+    f'curl -sS -x "{SUB}" {URL} 2>&1',
+    f'curl -sS --resolve "{SUB}" {URL} 2>&1',
+    f'curl -sS --stderr "/tmp/leak_{SUB}" {URL}; ls /tmp',
+    f'curl -sS -d "@{SUB}" {URL} 2>&1',
+    f'curl -sS -u "{SUB}" {URL} 2>&1',
+    f'curl -sS --resolve -H "{SUB}" {URL} 2>&1',        # -H is --resolve's value
+    f"curl -sS -c - -b {FED} {URL}",                    # the cookie jar it read, printed
+    f"curl -sS -d @- {URL} < {FED} 2>&1",               # stdin is no send option's value
+    f'wget -q --header="{SUB}" {URL}',                  # an invalid header is echoed
+    f'http {URL} "token:={SUB}"',                       # invalid JSON: the item is echoed
+    f'xh {URL} "k=={SUB}"',                             # a query item is part of the URL
+    f'http "X:{SUB}" {URL}',                            # the first word is the URL
+    f'gh api -H "{SUB}" /user',                         # a header with no colon is echoed
+    # Something outside the client prints its expanded arguments: the shell's trace,
+    # env -v or --debug, xargs -t, --verbose or -p.
+    f'exec 2>&1; set -x; curl -sS -o /dev/null -H "X: {SUB}" {URL}',
+    f'set -o xtrace; curl -sS -o /dev/null -H "X: {SUB}" {URL} 2>&1',
+    f"bash -x -c 'curl -sS -o /dev/null -H \"X: {SUB}\" {URL}' 2>&1",
+    f'env -v curl -sS -o /dev/null -H "X: {SUB}" {URL} 2>&1',
+    f'env --debug curl -sS -o /dev/null -H "X: {SUB}" {URL} 2>&1',
+    f"xargs -t -I{{}} curl -sS -o /dev/null -H 'X: {{}}' {URL} < {FED} 2>&1",
+    f'xargs --verbose curl -sS -o /dev/null -H "X: {SUB}" {URL} < /dev/null 2>&1',
+    f'xargs -p curl -sS -o /dev/null -H "X: {SUB}" {URL} < /dev/null 2>&1',
 ]
 KEEPS_VALUE_OUT = [
     "env-get .env API_KEY -- sh -c 'echo \"len=${#API_KEY}\"'",
@@ -137,6 +166,21 @@ KEEPS_VALUE_OUT = [
     f'printenv API_KEY)" {URL}',
     f'xh {URL} "X:$(env-get .env API_KEY -- printenv API_KEY)"',
     'gh api -H "X: $(env-get .env API_KEY -- printenv API_KEY)" /user',
+    # The value of each send option, in its long, glued and clustered spellings.
+    f'curl -sS -d "token={SUB}" {URL}',
+    f'curl -sS --data-urlencode "token={SUB}" {URL}',
+    f'curl -sS -u "user:{SUB}" {URL}',
+    f'curl -sS --oauth2-bearer "{SUB}" {URL}',
+    f'curl -sS --header="{HEADER} {SUB}" {URL}',
+    f'curl -sSH "{HEADER} {SUB}" {URL}',
+    f"curl -sS --json @{FED} {URL}",
+    f"curl -sS -F token=@{FED} {URL}",
+    f"curl -sS -H @<(env-get .env API_KEY -- {PRINTF}) -d @{FED} {URL}",
+    f'wget -q -O - --header="{HEADER} {SUB}" {URL}',
+    f'wget -q -O - --post-data="token={SUB}" {URL}',
+    f'http POST {URL} "token={SUB}"',
+    f'http {URL} "{HEADER} {SUB}"',
+    f'gh api -f "token={SUB}" /user',
 ]
 
 
