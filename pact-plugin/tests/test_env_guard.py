@@ -211,6 +211,97 @@ def test_env_gets_consumer_given_by_path_hands_over_its_script():
     assert strip_prefix(["/bin/sh", "-c", script]) == [script] == strip_prefix(["sh", "-c", script])
 
 
+# ── NAMED inside a script handed over by watch, flock -c, script -c or fish ─────────────
+# Only a shell's -c handed its script to the reader, so a read in the middle of a script
+# that watch, flock -c, script -c (or script -qc, fish --command) runs went unjudged; the
+# rows above pass only because the protected path ends the script.
+ENV_NAME = "." + "env"
+HANDED_DENY = [form for runner, tail in (
+    ("watch", ""), ("watch -n 5", ""), ("flock /tmp/l -c", ""), ("script -c", " /dev/null"),
+    ("script -qc", " /dev/null"), ("flock -nc", " /tmp/l"),
+) for lead in ("X=1; ", "") for form in (
+    f"{runner} '{lead}{READ_ENV} | tr a b'{tail}",
+    f"{runner} '{lead}{READ_ENV}; true'{tail}",
+    f"{runner} '{lead}source {ENV_NAME}; echo $DEMO_KEY'{tail}",
+)] + [form.replace("R", READ_ENV) for form in (
+    "script -c 'X=1; env' /dev/null",
+    "watch 'X=1; env'",
+    "fish --command 'X=1 R'",
+    "fish --command 'X=1; R; true'",
+    "fish -C 'X=1; R; true'",
+    "fish --init-command 'X=1; R; true'",
+    "watch echo 'x; R'",                      # watch joins its words: sh -c 'echo x; R'
+    "watch -n 5 echo 'X=1; R; true'",
+    # controls: denied before the fix and still
+    "fish --command 'R'",
+    "bash -c 'X=1; R; true'",
+    "flock /tmp/l -c 'X=1; R'",
+)]
+HANDED_ALLOW = [
+    "script -c 'X=1; ls' /dev/null",
+    "script -qc 'X=1; ls' /dev/null",
+    "flock /tmp/l -c 'X=1; cat notes.txt; true'",
+    "watch -n 5 'X=1; ls | wc -l'",
+    "fish --command 'X=1 ls'",
+    "watch git log -1 --format='%h %s'",
+    "eval ls -l",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", HANDED_DENY)
+def test_a_read_inside_a_script_a_runner_hands_over_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", HANDED_ALLOW)
+def test_a_handed_over_script_that_reads_nothing_protected_is_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+# ── a shell's script piped into a shell is built, not printed ──────────────────────────
+# The script word was read as a program by its last path part, so `bash -c '...; /bin/echo'`
+# looked like echo printing literal text, and its output ran in sh unread.
+PIPED_SCRIPT_DENY = [form.replace("R", READ_ENV) for form in (
+    "bash -c 'X=1; echo R; /bin/echo' | sh",
+    "bash -c 'X=1; echo R; /bin/echo' | bash",
+    "bash -c 'X=1; echo R; /usr/bin/head' | sh",
+    "bash -c 'X=1; echo R; /bin/cat' | sh",
+    "bash -c 'echo R; /bin/echo' | sh",
+    "flock /tmp/l -c 'X=1; echo R; /bin/echo' | sh",
+    "watch -t -n 1 'X=1; echo R; /bin/echo' | sh",
+    "script -q -c 'X=1; echo R; /bin/echo' /dev/null | sh",
+    "sh <(bash -c 'X=1; echo R; /bin/echo')",
+    # control: denied before the fix and still
+    "echo R | sh",
+)]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", PIPED_SCRIPT_DENY)
+def test_a_shells_script_piped_into_a_shell_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+# ── an environment dump behind a runner given by its absolute path ─────────────────────
+DUMP_DENY = ["/usr/bin/sudo env", "/usr/bin/nohup env", "/usr/bin/sudo printenv",
+             "/usr/bin/nohup /usr/bin/sudo env",
+             "sudo env", "nohup env"]                     # controls: denied before the fix
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", DUMP_DENY)
+def test_an_environment_dump_behind_a_runner_given_by_path_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+def test_a_runner_given_by_path_that_runs_a_command_is_no_dump(tree, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": "/usr/bin/sudo env ls"},
+                       "cwd": str(tree)})
+
+
 ENVGET ="/srv/My Projects/pact-plugin/bin/env-get"
 
 

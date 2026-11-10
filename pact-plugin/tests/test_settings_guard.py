@@ -512,6 +512,36 @@ def test_a_claude_cli_write_behind_an_assignment_in_a_shell_script_is_refused(ho
     assert _decision(guard.decide(_bash(command, home, agent_type=LEAD))) == "ask", command
 
 
+# The script was read only when it was the command's one word, so `script -c 'S' /dev/null`
+# and `bash -c 'S' sh` (words after the script) ran their write unread.
+SCRIPT_WRITE = "echo x > ~/.claude/settings.json"
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", [form.replace("W", SCRIPT_WRITE) for form in (
+    "script -c 'X=1; W' /dev/null",
+    "script -c 'W' /dev/null",
+    "script -qc 'X=1; W' /dev/null",
+    "script -qc 'W' /dev/null",
+    "bash -c 'X=1; W' sh",
+    "bash -c 'W' sh a",
+    "flock -nc 'X=1; W' /tmp/l",
+    "fish --command 'X=1; W'",
+    "eval 'X=1; W'",
+    "watch 'X=1; echo x >' ~/.claude/settings.json",                # watch joins its words
+    "watch echo 'x; W'",                                            # sh -c 'echo x; W'
+    # controls: refused before the fix and still
+    "bash -c 'W'",
+    "watch 'W'",
+)])
+def test_a_settings_write_in_a_script_with_words_after_it_is_refused(home, command, tool):
+    payload = dict(_bash(command, home, agent_id="a1b2c3", agent_type="Explore"), tool_name=tool)
+    output = guard.decide(payload)
+    assert _decision(output) == "deny", command
+    assert output["hookSpecificOutput"]["permissionDecisionReason"].endswith(
+        "[rule: settings.write]"), command
+
+
 @pytest.mark.parametrize("command", CLI_READS)
 def test_a_read_only_claude_cli_call_passes(home, command):
     assert guard.decide(_bash(command, home, agent_id="a1b2c3", agent_type="Explore")) is None

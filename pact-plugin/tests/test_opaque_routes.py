@@ -123,6 +123,36 @@ def test_commit_through_a_substituted_program_is_refused(world):
 
 
 # ── .env reads ──────────────────────────────────────────────────────────────
+def test_a_read_printed_by_a_shells_script_into_sh_is_refused(world):
+    """The script word of `bash -c '...; /bin/echo'` was read as echo printing literal text."""
+    read = "cat " + "." + "env"
+    _refused(world, f"bash -c 'X=1; echo {read}; /bin/echo' | sh", "secrets")
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c 'X=1; echo ls; /bin/echo' | sh",
+    "bash -c 'echo ls; /bin/echo' | sh",
+    "bash -c '1; echo ls; /usr/bin/printf x' | bash",
+    "bash -c 'X=1; echo ls; /usr/bin/head' | sh",
+    "bash -c 'X=1; echo ls; /bin/cat' | sh",
+    "bash -c 'X=1; echo ls; /usr/bin/curl' | sh",
+    "dash -c 'X=1; echo ls; /bin/base64' | sh",
+    "flock /tmp/l -c 'X=1; echo ls; /bin/echo' | sh",
+    "watch -t 'X=1; echo ls; /bin/echo' | sh",
+    "script -qc 'X=1; echo ls; /bin/echo' /dev/null | sh",
+    "sh <(bash -c 'X=1; echo ls; /bin/echo')",
+])
+def test_a_script_word_is_never_read_as_the_program_that_prints(command):
+    from shell.opaque import opaque_reason
+    reason = opaque_reason(command)
+    assert reason and "builds at run time" in reason, (command, reason)
+
+
+@pytest.mark.parametrize("command", ["echo ls | sh", "bash -c 'echo ls' > out.txt",
+                                     "bash -c 'X=1; ls' | wc -l"])
+def test_a_literal_script_or_a_script_not_fed_to_a_shell_passes(command):
+    from shell.opaque import opaque_reason
+    assert opaque_reason(command) is None
 
 
 # ── the lead's operations in a coder frame ──────────────────────────────────

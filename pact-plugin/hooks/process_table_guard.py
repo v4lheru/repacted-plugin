@@ -39,7 +39,8 @@ import sys
 
 from shell.tools import shell_command
 from shell_words import (HEREDOC_MARK, PREFIX_WORDS, Unreadable, quoted_words, read_script,
-                         runner_prefix, segments, strip_prefix, token_spans, tokens)
+                         runner_prefix, script_word, segments, strip_prefix, token_spans,
+                         tokens)
 
 _ALLOW_OUTPUT = json.dumps({"suppressOutput": True})
 RULE_ID = "process.listing"     # hooks/shared/rules.py holds its sentence and way through
@@ -312,8 +313,8 @@ def segment_is_listing(words: list[str]) -> bool:
 # an argument as a command. Not rg (its --pre value is a command).
 _DATA_PROGRAMS = frozenset({"grep", "egrep", "fgrep"})
 # Runner words that hand a later argument to a shell to parse again, or change who runs it.
-_REPARSING_PREFIXES = frozenset({"eval", "sh", "bash", "zsh", "watch", "xargs", "sudo", "env",
-                                 "exec"})
+_REPARSING_PREFIXES = frozenset({"eval", "sh", "bash", "zsh", "dash", "ksh", "fish", "watch",
+                                 "flock", "script", "xargs", "sudo", "env", "exec"})
 
 
 def _runs_data_program(piece: list[tuple[str, bool]]) -> bool:
@@ -325,7 +326,10 @@ def _runs_data_program(piece: list[tuple[str, bool]]) -> bool:
             break
         head.append(word)
     command = strip_prefix(head)
-    if not command or command[0].rsplit("/", 1)[-1] not in _DATA_PROGRAMS:
+    # a runner's whole script (escaped blanks keep it one unquoted word) is never grep,
+    # whatever its last path part says
+    if not command or script_word(command[0]) \
+            or command[0].rsplit("/", 1)[-1] not in _DATA_PROGRAMS:
         return False
     return not any(word in _REPARSING_PREFIXES or word not in PREFIX_WORDS
                    and not word.startswith("-") and not word[:1].isdigit() and "=" not in word

@@ -14,11 +14,11 @@ import os
 import re
 
 from shell import git_alias
-from shell.words import strip_prefix
+from shell.words import runner_script, strip_prefix
 from shell.env.names import (is_protected_name, is_template_name)
 from shell.env.places import (_Directory)
 from shell.env.programs import (EGRESS_PROGRAMS, _GIT_VALUE_OPTIONS)
-from shell.env.script import (SHELLS, _IGNORE_WRITE, _SUB_KEY, _State, _UNSEEN_IGNORE, _command_steps, _computed, _pull_substitutions, expand_literal_variables)
+from shell.env.script import (_IGNORE_WRITE, _SUB_KEY, _State, _UNSEEN_IGNORE, _command_steps, _computed, _pull_substitutions, expand_literal_variables)
 from shell.env.search import (_positionals)
 
 def git_egress_pass(command: str, cwd: str) -> str | None:
@@ -100,16 +100,13 @@ def _git_pass(command: str, cwd: str | None) -> str | None:
 
 
 def _shell_body(words: list[str], command: list[str]) -> str | None:
-    """The script a runner prefix hands to a shell: `bash -c S`, `eval S`."""
+    """The script a runner prefix hands to a shell: `bash -c S`, `watch S`, `flock F -c S`,
+    `script -c S F`, `eval S` (see shell.words.runner_script)."""
     leading = words[:len(words) - len(command)]
     names = [word.rsplit("/", 1)[-1] for word in leading]
     if "eval" in names:
         return " ".join(words[names.index("eval") + 1:])
-    if command and any(name in SHELLS for name in names) and any(
-            word.startswith("-") and not word.startswith("--") and "c" in word
-            for word in leading):
-        return command[0]
-    return None
+    return runner_script(words)
 
 
 def _gh_push(args: list[str], repo: str | None) -> str | None:

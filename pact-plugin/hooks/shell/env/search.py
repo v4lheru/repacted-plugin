@@ -18,6 +18,7 @@ import re
 from shell.env.names import (CLASS_SAMPLES, _POSIX_CLASSES, _absolute, _brace_expansions, _python_glob, file_is_protected, is_protected_name, mentions_class, token_protected)
 from shell.env.programs import (CLOUD_COPIES, CREDENTIAL_SUGGESTION, GIT_PATCH_OPTIONS, GIT_SAFE, GREP_PROGRAMS, IDENTITY_OPTIONS, LITERAL_FIELD_OPTIONS, RG_PROGRAMS, SUGGESTION, WALK_LIMIT, WALK_SKIP_DIRS, rule_of, _DUMP_RUNNERS, _GIT_VALUE_OPTIONS, _GREP_VALUE_OPTIONS, _RG_VALUE_OPTIONS)
 from shell.env.script import (_SUB_MARK)
+from shell.words import runner_name
 
 def _deny(reason: str) -> dict:
     """The deny envelope. The reason gains its rule-id tail `[rule: <id>]` here, the one
@@ -64,7 +65,7 @@ def _file_keys(path: str, cwd: str | None) -> set[str] | None:
 def dumps_environment(words: list[str]) -> bool:
     """env/printenv with nothing to run or name, export/declare/typeset listing, bare set."""
     i = 0
-    while i < len(words) and words[i] in _DUMP_RUNNERS:
+    while i < len(words) and runner_name(words[i]) in _DUMP_RUNNERS:   # /usr/bin/sudo env
         i += 1
     if i == len(words):
         return False

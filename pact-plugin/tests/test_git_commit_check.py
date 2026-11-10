@@ -762,6 +762,41 @@ class TestStagingInTheSameCommand:
         code, err = _commit_in(staging_repo, command, capsys)
         assert code == 2 and "aws-key" in err, (command, err)
 
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("wrap", [
+        "script -c 'X=1; {}' /dev/null",
+        "script -c '{}' /dev/null",
+        "script -qc 'X=1; {}' /dev/null",
+        "bash -c 'X=1; {}' sh",
+        "bash -c '{}' sh a",
+        "fish --command 'X=1; {}'",
+        "flock -nc 'X=1; {}' /tmp/l",
+        "eval 'X=1; {}'",
+        "script -qc'X=1; {}' /dev/null",                       # the script glued to -qc
+        "watch echo 'x; {}'",                                   # watch joins: sh -c 'echo x; S'
+    ])
+    def test_a_commit_in_a_script_with_words_after_it_is_denied(self, staging_repo, wrap, tool,
+                                                                capsys):
+        """`script -c 'S' /dev/null`: the script was read only as the command's one word, so a
+        trailing operand (the typescript file, a shell's $0) left its commit unread."""
+        name = "." + "env" + ".local"
+        (staging_repo / name).write_text("demo\n")
+        command = wrap.format(f"git add {name} && git -c a=b commit -m x")
+        code, err = _run_main({"tool_name": tool, "tool_input": {"command": command},
+                               "cwd": str(staging_repo)}, capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
+    @pytest.mark.parametrize("wrap", ["bash -c '{}' sh", "bash -c 'X=1; {}' sh a",
+                                      "script -c '{}' /dev/null", "script -qc 'X=1; {}' /dev/null",
+                                      "watch echo 'x; {}'", "eval 'X=1; {}'"])
+    def test_a_clean_commit_in_a_script_with_words_after_it_is_read_once(self, staging_repo, wrap,
+                                                                        capsys):
+        """resolved_command already adds a shell's script with words after it as its own line;
+        reading the word too would count its one commit twice."""
+        code, err = _commit_in(staging_repo, wrap.format("git add clean.py && git commit -m x"),
+                               capsys)
+        assert code == 0, (wrap, err)
+
     @pytest.mark.parametrize("wrap", [
         "{}",
         "bash -c '{}'",

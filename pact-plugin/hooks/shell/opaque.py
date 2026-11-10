@@ -32,8 +32,8 @@ from functools import lru_cache
 
 from shell.inline_code import INTERPRETER, code_option
 from shell.words import (Unreadable, expanding_text, is_double_quoted, is_single_quoted,
-                         quoted_inner, read_script, runner_prefix, spell, substitution_spans,
-                         token_spans, unquoted_text)
+                         quoted_inner, read_script, runner_prefix, script_word, spell,
+                         substitution_spans, token_spans, unquoted_text)
 
 MAX_DEPTH = 8
 # The marker env_guard's rule table (shell/env/programs.RULE_MARKS) keys env.opaque on.
@@ -556,8 +556,12 @@ class _Level:
     def _source(self, index: int) -> tuple[str, str | None]:
         """What steps[index] writes to its stdout, as _stdin reports it."""
         command = self.commands[index]
-        start = runner_prefix(command.words)[0]
+        start, seen = runner_prefix(command.words)
         words, typed = command.words[start:], command.typed[start:]
+        if words and script_word(words[0]):
+            # bash -c '..; /bin/echo': what a runner's script writes is built, whatever its
+            # last path part names
+            return "built", ([runner for runner, option, _ in seen if not option] or ["it"])[-1]
         program = _base(words[0]) if words else ""
         args = words[1:]
         if program in PRINTERS:

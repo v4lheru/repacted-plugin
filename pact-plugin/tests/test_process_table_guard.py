@@ -163,6 +163,41 @@ REVIEW_KEPT = [
 ]
 
 
+# A runner's script given with backslashes is one unquoted word: its last path part (grep)
+# was read as the program, so grep's data rule let the listing inside the script run.
+_LISTING = "p" + "s\\ aux"
+SCRIPT_GREP_DENY = [form.replace("L", _LISTING) for form in (
+    "dash -c X=1\\;L\\;/bin/grep",
+    "dash -c 1\\;L\\;/bin/grep",
+    "dash -c X=1\\;L\\;/usr/bin/egrep",
+    "ksh -c X=1\\;L\\;/bin/grep",
+    "fish -c X=1\\;L\\;/bin/grep",
+    "ksh -c X=1\\;pgrep\\ -af\\ x\\;/bin/grep",
+    "script -c X=1\\;L\\;/usr/bin/grep /dev/null",
+    "flock /tmp/l -c X=1\\;L\\;/bin/grep",
+    "dash -c L\\;/bin/grep",
+    "script -c L\\;/usr/bin/grep /dev/null",
+    # control: denied before the fix and still
+    "bash -c X=1\\;L\\;/bin/grep",
+)]
+SCRIPT_GREP_ALLOW = [
+    "dash -c grep\\ x\\ notes.md",
+    "flock /tmp/l -c X=1\\;grep\\ x\\ notes.md",
+]
+
+
+class TestScriptWordIsNoProgram:
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("command", SCRIPT_GREP_DENY)
+    def test_a_listing_in_a_script_ending_in_grep_is_denied(self, command, tool):
+        assert guard.decide({"tool_name": tool, "tool_input": {"command": command}}) is not None
+
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("command", SCRIPT_GREP_ALLOW)
+    def test_a_script_that_lists_nothing_is_allowed(self, command, tool):
+        assert guard.decide({"tool_name": tool, "tool_input": {"command": command}}) is None
+
+
 class TestGrepPatternIsData:
     @pytest.mark.parametrize("command", GREP_PATTERN_ALLOW + REVIEW_KEPT)
     def test_a_listing_named_inside_a_grep_pattern_is_allowed(self, command):

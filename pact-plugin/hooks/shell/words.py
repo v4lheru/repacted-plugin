@@ -515,20 +515,38 @@ RUNNER_VALUE_OPTIONS = {
 # Runners that take operands before the command: flock LOCKFILE command, taskset MASK
 # command, chrt PRIORITY command, and BSD script FILE command.
 RUNNER_OPERANDS = {"flock": 1, "taskset": 1, "chrt": 1, "script": 1}
-# Runner options whose value is a shell command line (flock -c 'curl ...', script -c '...'):
-# after one, the next word is the command and no operand is read.
+# Runner options whose value is a shell command line (flock -c 'curl ...', script -c '...',
+# fish --command '...'): after one, the next word is the command and no operand is read.
 RUNNER_COMMAND_OPTIONS = {"flock": frozenset({"-c", "--command"}),
-                          "script": frozenset({"-c", "--command"})}
+                          "script": frozenset({"-c", "--command"}),
+                          "fish": frozenset({"-c", "--command", "-C", "--init-command"})}
 # Shells whose -c (or a cluster holding c: -ec, -lc) makes the next word their script.
 SCRIPT_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
+# Runners that join all their words into one line and run it: watch through sh -c, eval.
+LINE_RUNNERS = frozenset({"watch", "eval"})
+
+
+def script_word(word: str) -> bool:
+    """True when `word` holds a blank or a SEGMENT_CUTS character: a script read with its
+    quotes kept (`bash -c 'X=1; cat f'`), never a program name, whatever its last path part."""
+    return any(char in SEGMENT_CUTS or char.isspace() for char in word)
+
+
+def runner_name(word: str) -> str:
+    """A runner word as the walk matches it: one given by its absolute path (/bin/sh,
+    /usr/bin/sudo) by its last part; any other word, and a keyword's path (/bin/if), as typed."""
+    tail = word.rsplit("/", 1)[-1]
+    return tail if word[:1] == "/" and tail not in SHELL_KEYWORDS else word
 
 
 def runner_option(runner: str, words: list[str], i: int) -> tuple[str, str | None, int]:
     """(option name, its value or None, words it spans) for the option words[i] given to
     `runner`: `-C dir`, `-Cdir`, `-iC dir`, `--chdir dir`, `--chdir=dir`. A short cluster
     takes a value at its first letter that takes one: the rest of the word, or the next word
-    when that letter ends it."""
+    when that letter ends it. A command option (script -qc, flock -nc) never spans the next
+    word: that word is the command line; only a rest of the cluster is returned as its value."""
     word, options = words[i], RUNNER_VALUE_OPTIONS.get(runner, frozenset())
+    commands = RUNNER_COMMAND_OPTIONS.get(runner, frozenset())
     following = words[i + 1] if i + 1 < len(words) else ""
     if word.startswith("--"):
         name, equals, value = word.partition("=")
@@ -536,6 +554,8 @@ def runner_option(runner: str, words: list[str], i: int) -> tuple[str, str | Non
             return name, value, 1
         return (name, following, 2) if name in options else (name, None, 1)
     for k, letter in enumerate(word[1:], start=1):
+        if "-" + letter in commands:
+            return "-" + letter, word[k + 1:] or None, 1
         if "-" + letter in options:
             if k == len(word) - 1:
                 return "-" + letter, following, 2
@@ -548,31 +568,36 @@ def runner_prefix(words: list[str], keep: frozenset = frozenset()
     """(index of the command word, [(runner, option, value)]) for the leading assignments and
     runner words of a simple command: one ("xargs", "", None) entry per runner word, then
     one per option it was given. A runner word in `keep` is returned as the command.
-    Once a runner takes a script (bash -c, flock -c, watch), a word segments() would have cut
+    Once a runner takes a script (bash -c, flock -c, watch, eval), a word segments() would cut
     is that script, read with its quotes kept: `bash -c 'X=1 cat f'` returns `X=1 cat f`,
     not the walk past an assignment. Without such a word the walk goes on as before."""
-    i, runner, operands, seen, script = 0, "", 0, [], False
+    i, seen, _taker = _runner_walk(words, keep)
+    return i, seen
+
+
+def _runner_walk(words: list[str], keep: frozenset
+                 ) -> tuple[int, list[tuple[str, str, str | None]], str]:
+    """runner_prefix's walk, with the runner that took a script ("" when none did)."""
+    i, runner, operands, seen, script = 0, "", 0, [], ""
     while i < len(words):
         word = words[i]
-        # /bin/sh, /usr/bin/env: a runner given by its absolute path; /bin/if is no keyword
-        tail = word.rsplit("/", 1)[-1]
-        base = tail if word[:1] == "/" and tail not in SHELL_KEYWORDS else word
-        if script and any(char in SEGMENT_CUTS or char.isspace() for char in word):
+        base = runner_name(word)                        # /bin/sh, /usr/bin/env
+        if script and script_word(word):
             break                                       # even `-n; cat f` after `bash -c --`
         if runner and word.startswith("-"):
             name, value, width = runner_option(runner, words, i)
             seen.append((runner, name, value))
             i += width
             if name in RUNNER_COMMAND_OPTIONS.get(runner, ()):
-                operands, script = 0, True
+                operands, script = 0, runner            # script -qc: the line, not the file
             elif runner in SCRIPT_SHELLS and not name.startswith("--") and "c" in name:
-                script = True
+                script = runner
         elif operands:                                  # flock's lock file, even one named sh
             operands -= 1
             i += 1
         elif base in PREFIX_WORDS and base not in keep:
             runner, operands = base, RUNNER_OPERANDS.get(base, 0)
-            script = base == "watch"                    # watch runs its line through sh -c
+            script = base if base in LINE_RUNNERS else ""   # watch runs its line through sh -c
             seen.append((base, "", None))
             i += 1
         elif "=" in word and word.split("=", 1)[0].isidentifier():
@@ -581,7 +606,36 @@ def runner_prefix(words: list[str], keep: frozenset = frozenset()
             i += 1                                      # timeout 5, nice 10, repeat 3
         else:
             break
-    return i, seen
+    return i, seen, script
+
+
+def runner_script(words: list[str]) -> str | None:
+    """The script the leading runners of `words` hand to a shell, or None. A shell's -c (or
+    fish --command) word, whatever it holds; a command option's value given in its own word
+    (script -qcS); else a script word (see script_word) given to flock -c or script -c. watch
+    and eval join all their words into one line once any of them is a script word
+    (watch echo 'a; b' runs `echo a; b`). None when no runner takes a script, or when its
+    words are the command itself (watch ls -l, eval cat f, flock F -c ls)."""
+    i, seen, taker = _runner_walk(words, frozenset())
+    if not taker:
+        return None
+    glued = [value for runner, name, value in seen
+             if runner == taker and name in RUNNER_COMMAND_OPTIONS.get(runner, ())]
+    if glued and glued[-1] is not None:
+        return glued[-1]
+    if i >= len(words):
+        return None
+    if taker in SCRIPT_SHELLS:
+        return words[i]
+    if taker in LINE_RUNNERS:
+        return " ".join(words[i:]) if any(script_word(word) for word in words[i:]) else None
+    return words[i] if script_word(words[i]) else None
+
+
+def script_runner(words: list[str]) -> str:
+    """The runner whose script runner_script returns (bash, fish, watch, eval, flock), or
+    "" when no leading runner takes a script."""
+    return _runner_walk(words, frozenset())[2]
 
 
 def segments(command: str) -> list[list[str]]:

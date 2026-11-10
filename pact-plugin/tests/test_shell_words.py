@@ -383,3 +383,89 @@ def test_a_kept_runner_given_by_path_is_returned_as_the_command(shell):
 ])
 def test_a_word_that_names_no_runner_by_path_stays_the_command(words):
     assert shell_words.strip_prefix(words) == words
+
+
+# ── a whole script is never a program name; the script a runner hands to a shell ──────────
+# Callers took the program from the command word (its last path part), so the script of
+# `bash -c 'X=1; ...; /bin/echo'` was read as echo and `dash -c 'X=1;...;/bin/grep'` as grep.
+# runner_script names the script itself, for watch, flock -c, script -c and fish's command
+# options too, so each reader hands it to its own script reader.
+@pytest.mark.parametrize("word", ["X=1; cat f", "cat f", "a\tb", "x;y", "a|b", "a>b", "a(b",
+                                  "a'b", 'a"b', "a\\b", "a`b", "{a"])
+def test_a_word_holding_a_blank_or_a_cut_character_is_a_script(word):
+    assert shell_words.script_word(word)
+
+
+@pytest.mark.parametrize("word", ["cat", "/bin/echo", "X=1", "-c", "", "/usr/bin/grep", "a.b"])
+def test_a_plain_word_is_no_script(word):
+    assert not shell_words.script_word(word)
+
+
+@pytest.mark.parametrize("word, name", [
+    ("/usr/bin/sudo", "sudo"), ("/bin/sh", "sh"), ("sudo", "sudo"), ("/bin/if", "/bin/if"),
+    ("./sudo", "./sudo"), ("bin/sudo", "bin/sudo"),
+])
+def test_a_runner_word_is_named_as_the_walk_names_it(word, name):
+    assert shell_words.runner_name(word) == name
+
+
+RUNNER_SCRIPTS = [
+    (["bash", "-c", S], S),
+    (["bash", "-c", S, "sh", "a"], S),                              # words after: positional
+    (["bash", "-c", "ls"], "ls"),
+    (["sudo", "/bin/sh", "-ec", S], S),
+    (["watch", S], S),
+    (["watch", "-n", "5", S], S),
+    (["watch", "X=1;", "cat", "f"], "X=1; cat f"),                  # watch joins its words
+    (["flock", "/tmp/l", "-c", S], S),
+    (["flock", "-nc", S, "/tmp/l"], S),                             # a cluster holding c
+    (["script", "-c", S, "/dev/null"], S),
+    (["script", "-qc", S, "/dev/null"], S),
+    (["script", "-q", "--command", S, "/dev/null"], S),
+    (["script", "-qc" + S, "/dev/null"], S),                        # the rest of the word
+    (["fish", "-c", S], S),
+    (["fish", "--command", "X=1 cat f"], "X=1 cat f"),
+    (["fish", "-C", S], S),
+    (["fish", "--init-command", S], S),
+    (["eval", S], S),                                               # eval joins its words too
+    (["eval", "X=1;", "cat", "f"], "X=1; cat f"),
+    (["watch", "echo", "a; cat f"], "echo a; cat f"),                # a script word later on
+    (["eval", "echo", "a; cat f"], "echo a; cat f"),
+]
+
+
+@pytest.mark.parametrize("words, script", RUNNER_SCRIPTS,
+                         ids=[" ".join(w)[:40] for w, _ in RUNNER_SCRIPTS])
+def test_runner_script_is_the_script_a_runner_hands_to_a_shell(words, script):
+    assert shell_words.runner_script(words) == script
+
+
+@pytest.mark.parametrize("words", [
+    ["cat", "f"],
+    ["X=1; cat f"],                                     # no runner hands it over
+    ["sudo", "cat", "f"],
+    ["watch", "ls", "-l"],                              # plain words: read as the command
+    ["eval", "cat", "f"],
+    ["flock", "/tmp/l", "-c", "ls"],
+    ["script", "-c", "ls", "/dev/null"],
+    ["script", "-Ec", "ls", "/dev/null"],               # c is -E's value, not -c
+    ["bash", "x.sh"],
+    ["bash", "-c"],
+    ["flock", "/tmp/l", S],                             # flock F CMD: no -c, no script
+])
+def test_runner_script_is_none_without_a_handed_script(words):
+    assert shell_words.runner_script(words) is None
+
+
+@pytest.mark.parametrize("words, command", [
+    (["fish", "--command", "X=1 cat f"], ["X=1 cat f"]),
+    (["fish", "-C", S], [S]),
+    (["fish", "--init-command", S], [S]),
+    (["script", "-qc", S, "/dev/null"], [S, "/dev/null"]),
+    (["flock", "-nc", S, "/tmp/l"], [S, "/tmp/l"]),
+    (["script", "-Ec", "/dev/null", "ls"], ["ls"]),                # -E takes c as its value
+    (["eval", "X=1 cat f"], ["X=1 cat f"]),                         # not the assignment X
+    (["eval", "X=1", "cat", "f"], ["cat", "f"]),                    # segments() form
+])
+def test_fish_command_options_and_c_clusters_take_the_script(words, command):
+    assert shell_words.strip_prefix(words) == command
