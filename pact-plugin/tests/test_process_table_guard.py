@@ -198,6 +198,36 @@ class TestScriptWordIsNoProgram:
         assert guard.decide({"tool_name": tool, "tool_input": {"command": command}}) is None
 
 
+# fish runs every -C and -c: with the quotes deleted, the second script read as words of the
+# first, so a listing in it never stood at command position.
+_PLAIN_LISTING = "p" + "s aux"
+FISH_LISTING_DENY = [form.replace("L", _PLAIN_LISTING) for form in (
+    "fish -C true -c 'L'",
+    "fish -c 'echo hi' -c 'L'",
+    "fish -c true -c 'X=1 L'",
+    "fish --init-command true --command 'L'",
+    "fish -C 'echo hi' -c 'pgrep -af x'",
+    "watch nice 'X=1 L'",
+    # controls: denied before the fix and still
+    "fish -c 'L'",
+    "fish -c 'L' -C true",
+)]
+FISH_LISTING_ALLOW = ["fish -C true -c 'echo hi'", "fish -c 'echo hi' -c 'ls -l'",
+                      "watch nice ls"]
+
+
+class TestEveryFishScript:
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("command", FISH_LISTING_DENY)
+    def test_a_listing_in_any_script_fish_runs_is_denied(self, command, tool):
+        assert guard.decide({"tool_name": tool, "tool_input": {"command": command}}) is not None
+
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("command", FISH_LISTING_ALLOW)
+    def test_fish_scripts_that_list_nothing_are_allowed(self, command, tool):
+        assert guard.decide({"tool_name": tool, "tool_input": {"command": command}}) is None
+
+
 class TestGrepPatternIsData:
     @pytest.mark.parametrize("command", GREP_PATTERN_ALLOW + REVIEW_KEPT)
     def test_a_listing_named_inside_a_grep_pattern_is_allowed(self, command):

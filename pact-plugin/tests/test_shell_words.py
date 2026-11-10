@@ -469,3 +469,67 @@ def test_runner_script_is_none_without_a_handed_script(words):
 ])
 def test_fish_command_options_and_c_clusters_take_the_script(words, command):
     assert shell_words.strip_prefix(words) == command
+
+
+# ── every script fish runs; watch keeps its line past a later runner word ──────────────────
+# fish runs every -C (first) and every -c, so the first alone left the rest unread; and a
+# runner word after watch cleared its script, so `watch nice 'X=1; ...'` skipped the script
+# as an assignment and nothing read it.
+FISH_SCRIPTS = [
+    (["fish", "-C", "echo hi", "-c", S], "echo hi\n" + S),
+    (["fish", "-c", "echo hi", "-c", S], "echo hi\n" + S),
+    (["fish", "-c", "true", "-c", S], "true\n" + S),                # a plain word first
+    (["fish", "-c", S, "-C", "echo hi"], "echo hi\n" + S),          # -C runs before -c
+    (["fish", "--init-command", "echo hi", "--command", S], "echo hi\n" + S),
+    (["fish", "--init-command=echo hi", "--command=" + S], "echo hi\n" + S),
+    (["fish", "-cecho hi", "-c", S], "echo hi\n" + S),              # glued to its option
+    (["fish", "-i", "-c", "true", "-o", "/tmp/log", "-c", S], "true\n" + S),  # -o's value
+    (["fish", "--comm", S], S),                                     # a long option's prefix
+    (["/usr/local/bin/fish", "-C", "true", "-c", S], "true\n" + S),
+    (["sudo", "fish", "-C", "true", "-c", S], "true\n" + S),
+    (["fish", "-c", "true", "a", "-c", S], "true"),                 # after `a`: $argv
+    (["fish", "-c", S, "f"], S),
+]
+
+
+@pytest.mark.parametrize("words, script", FISH_SCRIPTS,
+                         ids=[" ".join(w)[:40] for w, _ in FISH_SCRIPTS])
+def test_runner_script_holds_every_script_fish_runs_in_its_order(words, script):
+    assert shell_words.runner_script(words) == script
+
+
+LINE_KEPT = [
+    (["watch", "nice", S], "nice " + S),
+    (["watch", "nice", "-n", "5", S], "nice -n 5 " + S),
+    (["watch", "env", "X=1", "cat f | tr a b"], "env X=1 cat f | tr a b"),
+    (["watch", "-n", "5", "sudo", "-u", "root", S], "sudo -u root " + S),
+    (["watch", "time", "nohup", S], "time nohup " + S),
+    (["/usr/bin/watch", "/usr/bin/nice", S], "/usr/bin/nice " + S),
+    (["eval", "nice", S], "nice " + S),
+    (["watch", "nice", "bash", "-c", S], S),                        # a later shell -c takes it
+    (["watch", "flock", "/tmp/l", "-c", S], S),
+    (["watch", "-x", "sh", "-c", S], S),
+]
+
+
+@pytest.mark.parametrize("words, script", LINE_KEPT,
+                         ids=[" ".join(w)[:40] for w, _ in LINE_KEPT])
+def test_watch_keeps_its_line_past_a_later_runner_word(words, script):
+    assert shell_words.runner_script(words) == script
+
+
+@pytest.mark.parametrize("words, command", [
+    (["watch", "nice", S], [S]),                        # the script, not skipped as X=1
+    (["watch", "env", "X=1", S], [S]),
+    (["eval", "sudo", S], [S]),
+    (["watch", "nice", "ls"], ["ls"]),                  # plain words: still the command
+    (["watch", "nice", "X=1", "cat", "f"], ["cat", "f"]),  # segments() form, as before
+])
+def test_a_script_after_watch_and_a_runner_word_is_the_command(words, command):
+    assert shell_words.strip_prefix(words) == command
+
+
+@pytest.mark.parametrize("words", [["watch", "nice", "ls"], ["watch", "sudo", "cat", "f"],
+                                   ["fish", "x.fish", "-c", S], ["fish", "-c"]])
+def test_no_line_without_a_script_word_after_watch_and_a_runner(words):
+    assert shell_words.runner_script(words) is None

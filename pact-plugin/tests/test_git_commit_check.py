@@ -797,6 +797,56 @@ class TestStagingInTheSameCommand:
                                capsys)
         assert code == 0, (wrap, err)
 
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("wrap", [
+        "fish -C true -c 'X=1; {}'",                            # fish runs every -C and -c
+        "fish -c true -c '{}'",
+        "fish -c 'echo hi' -c 'X=1; {}'",
+        "fish -c '{}' -C true",
+        "watch nice 'X=1; {}'",                                 # a runner word after watch
+        "watch env X=1 '{}'",
+        "watch sudo -u root 'X=1; {}'",
+        "eval nice 'X=1; {}'",
+    ])
+    def test_a_commit_in_any_script_fish_or_watch_runs_is_denied(self, staging_repo, wrap, tool,
+                                                                capsys):
+        """Only fish's first script was read, and a runner word after watch made its script
+        look like an assignment, so the commit after the staging went unread."""
+        name = "." + "env" + ".local"
+        (staging_repo / name).write_text("demo\n")
+        command = wrap.format(f"git add {name} && git -c a=b commit -m x")
+        code, err = _run_main({"tool_name": tool, "tool_input": {"command": command},
+                               "cwd": str(staging_repo)}, capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("wrap", [
+        "watch '{}'", "watch -n 5 '{}'", "flock /tmp/l -c '{}'", "script -c '{}' /dev/null",
+        "watch nice '{}'", "fish --command '{}'", "fish -C true -c '{}'",
+        "bash -c '{}'",                                         # control: denied before the fix
+    ])
+    def test_a_commit_through_a_variable_in_a_handed_script_is_denied(self, staging_repo, wrap,
+                                                                     tool, capsys):
+        """Only a shell's -c script was spelled for the guards, so `$G` set to git inside the
+        script watch, flock -c or script -c runs hid its commit."""
+        name = "." + "env" + ".local"
+        (staging_repo / name).write_text("demo\n")
+        command = wrap.format(f"G=git; $G add {name} && $G -c a=b commit -m x")
+        code, err = _run_main({"tool_name": tool, "tool_input": {"command": command},
+                               "cwd": str(staging_repo)}, capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
+    @pytest.mark.parametrize("wrap", ["fish -C true -c '{}'", "fish -c true -c 'X=1; {}' a",
+                                      "fish -c '{}' a", "watch nice 'X=1; {}'",
+                                      "watch env X=1 '{}'", "watch -n 5 '{}'",
+                                      "flock /tmp/l -c '{}'"])
+    @pytest.mark.parametrize("inner", ["git add clean.py && git commit -m x",
+                                       "G=git; $G add clean.py && $G commit -m x"])
+    def test_a_clean_commit_in_a_fish_or_watch_script_is_read_once(self, staging_repo, wrap,
+                                                                  inner, capsys):
+        code, err = _commit_in(staging_repo, wrap.format(inner), capsys)
+        assert code == 0, (wrap, inner, err)
+
     @pytest.mark.parametrize("wrap", [
         "{}",
         "bash -c '{}'",

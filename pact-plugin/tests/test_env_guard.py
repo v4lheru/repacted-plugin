@@ -302,6 +302,80 @@ def test_a_runner_given_by_path_that_runs_a_command_is_no_dump(tree, tool):
                        "cwd": str(tree)})
 
 
+# ── every script fish runs, fish's $argv, watch past a later runner, nested handed scripts ──
+# fish runs every -C and -c but only the first was read; $argv was not spelled as `"$1"` is;
+# a runner word after watch made its script look like an assignment; and only a shell's -c
+# script was read for text built at run time (watch, flock -c, script -c were not).
+DECODED = "echo " + __import__("base64").b64encode(READ_ENV.encode()).decode() \
+    + " | base64 -d | sh"
+FISH_DENY = [form.replace("R", READ_ENV).replace("E", ENV_NAME).replace("D", DECODED)
+             for form in (
+    "fish -C 'echo hi' -c 'R | tr a b'",
+    "fish -c 'echo hi' -c 'R | tr a b'",
+    "fish -C true -c 'X=1 R | tr a b'",
+    "fish -c true -c 'X=1 R | tr a b'",
+    "fish --init-command 'echo hi' --command 'R | tr a b'",
+    "fish -c 'R | tr a b' -C true",
+    "fish -i -c true -o /tmp/log -c 'R | tr a b'",
+    "fish -C true -c 'X=1; env'",
+    "fish -c 'cat $argv | tr a b' E",
+    "fish -c 'X=1 cat $argv | tr a b' E",
+    "fish -c 'cat $argv[1] | tr a b' E",
+    "fish -c 'cat $argv[2] | tr a b' notes.txt E",
+    "fish -c 'cat $argv[-1] | tr a b' notes.txt E",
+    "fish -c true -c 'cat $argv[1] | tr a b' E",
+    "fish --command 'D'",
+    "fish -C true -c 'X=1; D'",
+    # controls: denied before the fix and still
+    "fish -c 'R | tr a b'",
+    "bash -c 'cat \"$1\" | tr a b' sh E",
+)]
+WATCH_RUNNER_DENY = [form.replace("R", READ_ENV).replace("D", DECODED) for second in (
+    "nice", "env", "sudo", "time", "nohup", "nice -n 5", "sudo -u root", "timeout 5",
+) for form in (
+    f"watch {second} 'X=1; R | tr a b'",
+    f"watch {second} 'R | tr a b'",
+    f"watch -n 5 {second} 'X=1; R; true'",
+)] + [form.replace("R", READ_ENV).replace("D", DECODED) for form in (
+    "watch env X=1 'R | tr a b'",
+    "watch nice 'X=1; env'",
+    "watch 'X=1; D'",
+    "watch 'D'",
+    "watch nice 'X=1; D'",
+    "flock /tmp/l -c 'X=1; D'",
+    "flock -nc 'D' /tmp/l",
+    "script -c 'X=1; D' /dev/null",
+    "script -qc 'D' /dev/null",
+    # controls: denied before the fix and still
+    "eval nice 'X=1; R | tr a b'",
+    "bash -c 'X=1; D'",
+)]
+FISH_WATCH_ALLOW = [
+    "fish -C 'set x 1' -c 'echo $x'",
+    "fish -c true -c 'ls | wc -l'",
+    "fish -c 'cat $argv | tr a b' notes.txt",
+    "fish -c 'cat $argv[1] | tr a b' notes.txt src/main.py",
+    "watch nice ls",
+    "watch nice 'X=1; ls | wc -l'",
+    "watch -n 5 sudo -u root 'X=1; cat notes.txt'",
+    "watch 'X=1; echo bHM= | base64 -d'",
+    "flock /tmp/l -c 'echo ls | sh'",
+    "script -qc 'X=1; ls' /dev/null",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", FISH_DENY + WATCH_RUNNER_DENY)
+def test_a_read_in_any_script_fish_or_watch_runs_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", FISH_WATCH_ALLOW)
+def test_fish_and_watch_scripts_that_read_nothing_protected_are_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
 ENVGET ="/srv/My Projects/pact-plugin/bin/env-get"
 
 

@@ -39,8 +39,8 @@ import sys
 
 from shell.tools import shell_command
 from shell_words import (HEREDOC_MARK, PREFIX_WORDS, Unreadable, quoted_words, read_script,
-                         runner_prefix, script_word, segments, strip_prefix, token_spans,
-                         tokens)
+                         runner_prefix, runner_script, script_word, segments, strip_prefix,
+                         token_spans, tokens)
 
 _ALLOW_OUTPUT = json.dumps({"suppressOutput": True})
 RULE_ID = "process.listing"     # hooks/shared/rules.py holds its sentence and way through
@@ -340,8 +340,10 @@ def piece_is_listing(piece: list[tuple[str, bool]]) -> bool:
     words = [word for word, _ in piece]
     if _runs_data_program(piece):
         return any(reads_process_argv_file(word) for word in words)
-    # Any other program may run its quoted text: read it with the quotes deleted.
-    return any(segment_is_listing(each) for each in segments(" ".join(words)))
+    # Any other program may run its quoted text: read it with the quotes deleted, and each
+    # script a runner hands over on lines of its own (fish's -C and -c ran into one command).
+    return any(segment_is_listing(each) for each in segments(
+        " ".join(words) + "\n" + (runner_script(words) or "")))
 
 
 # The heredoc writers whose body is data, and the programs that may name the written file

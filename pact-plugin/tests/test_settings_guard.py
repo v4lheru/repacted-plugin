@@ -542,6 +542,31 @@ def test_a_settings_write_in_a_script_with_words_after_it_is_refused(home, comma
         "[rule: settings.write]"), command
 
 
+# fish runs every -C and -c, but only the first was read; a runner word after watch made its
+# script look like an assignment, so neither write was read.
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", [form.replace("W", SCRIPT_WRITE) for form in (
+    "fish -C 'echo hi' -c 'W'",
+    "fish -c 'echo hi' -c 'W'",
+    "fish -c true -c 'X=1; W'",
+    "fish --init-command true --command 'W'",
+    "fish -c 'W' -C true",
+    "watch nice 'X=1; W'",
+    "watch env X=1 'W'",
+    "watch sudo -u root 'X=1; W'",
+    "watch -n 5 time 'X=1; W'",
+    "eval nice 'X=1; W'",
+    # control: refused before the fix and still
+    "fish -c 'W'",
+)])
+def test_a_settings_write_in_any_script_fish_or_watch_runs_is_refused(home, command, tool):
+    payload = dict(_bash(command, home, agent_id="a1b2c3", agent_type="Explore"), tool_name=tool)
+    output = guard.decide(payload)
+    assert _decision(output) == "deny", command
+    assert output["hookSpecificOutput"]["permissionDecisionReason"].endswith(
+        "[rule: settings.write]"), command
+
+
 @pytest.mark.parametrize("command", CLI_READS)
 def test_a_read_only_claude_cli_call_passes(home, command):
     assert guard.decide(_bash(command, home, agent_id="a1b2c3", agent_type="Explore")) is None

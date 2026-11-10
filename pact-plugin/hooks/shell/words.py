@@ -524,6 +524,16 @@ RUNNER_COMMAND_OPTIONS = {"flock": frozenset({"-c", "--command"}),
 SCRIPT_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
 # Runners that join all their words into one line and run it: watch through sh -c, eval.
 LINE_RUNNERS = frozenset({"watch", "eval"})
+# fish's own options (its getopt string "+hPilNnvc:C:p:d:f:D:o:"): the letters whose value is
+# the rest of the word or the next word, and each long name with its letter ("" for a flag).
+# A unique prefix of a long name is that name, as getopt_long reads it. fish runs every -C
+# value, then every -c value, in the order given.
+_FISH_VALUE_LETTERS = frozenset("cCpdfDo")
+_FISH_LONG = {"command": "c", "init-command": "C", "features": "f", "debug": "d",
+              "debug-output": "o", "debug-stack-frames": "D", "profile": "p",
+              "profile-startup": "p", "interactive": "", "login": "", "no-config": "",
+              "no-execute": "", "private": "", "help": "", "version": "",
+              "print-rusage-self": "", "print-debug-categories": ""}
 
 
 def script_word(word: str) -> bool:
@@ -571,14 +581,18 @@ def runner_prefix(words: list[str], keep: frozenset = frozenset()
     Once a runner takes a script (bash -c, flock -c, watch, eval), a word segments() would cut
     is that script, read with its quotes kept: `bash -c 'X=1 cat f'` returns `X=1 cat f`,
     not the walk past an assignment. Without such a word the walk goes on as before."""
-    i, seen, _taker = _runner_walk(words, keep)
+    i, seen, _taker, _start = _runner_walk(words, keep)
     return i, seen
 
 
 def _runner_walk(words: list[str], keep: frozenset
-                 ) -> tuple[int, list[tuple[str, str, str | None]], str]:
-    """runner_prefix's walk, with the runner that took a script ("" when none did)."""
-    i, runner, operands, seen, script = 0, "", 0, [], ""
+                 ) -> tuple[int, list[tuple[str, str, str | None]], str, int]:
+    """runner_prefix's walk, with the runner that took a script ("" when none did) and where
+    its words start: watch's or eval's line after their own options, fish's options. watch,
+    eval and fish keep the script past a later runner word: `watch nice S` runs `nice S`
+    through sh -c, and the word after fish -c is that option's value; only a later shell's -c,
+    flock -c or script -c takes over from watch or eval (its script is what runs)."""
+    i, runner, operands, seen, script, start, at, taker_at = 0, "", 0, [], "", 0, 0, -1
     while i < len(words):
         word = words[i]
         base = runner_name(word)                        # /bin/sh, /usr/bin/env
@@ -588,16 +602,24 @@ def _runner_walk(words: list[str], keep: frozenset
             name, value, width = runner_option(runner, words, i)
             seen.append((runner, name, value))
             i += width
+            if at == taker_at and script in LINE_RUNNERS:
+                start = i                               # watch -n 5 S: its line is S
+            takes = name in RUNNER_COMMAND_OPTIONS.get(runner, ()) or (
+                runner in SCRIPT_SHELLS and not name.startswith("--") and "c" in name) or (
+                runner == "fish" and name.startswith("--")
+                and _fish_letter(name[2:]) in ("c", "C"))   # fish --comm: a unique prefix
             if name in RUNNER_COMMAND_OPTIONS.get(runner, ()):
-                operands, script = 0, runner            # script -qc: the line, not the file
-            elif runner in SCRIPT_SHELLS and not name.startswith("--") and "c" in name:
-                script = runner
+                operands = 0                            # script -qc: the line, not the file
+            if takes and script != "fish":
+                script, start, taker_at = runner, at + 1, at
         elif operands:                                  # flock's lock file, even one named sh
             operands -= 1
             i += 1
         elif base in PREFIX_WORDS and base not in keep:
-            runner, operands = base, RUNNER_OPERANDS.get(base, 0)
-            script = base if base in LINE_RUNNERS else ""   # watch runs its line through sh -c
+            if script not in LINE_RUNNERS and script != "fish":
+                script = base if base in LINE_RUNNERS else ""   # watch runs its line in sh -c
+                start, taker_at = i + 1, i
+            runner, operands, at = base, RUNNER_OPERANDS.get(base, 0), i
             seen.append((base, "", None))
             i += 1
         elif "=" in word and word.split("=", 1)[0].isidentifier():
@@ -606,30 +628,88 @@ def _runner_walk(words: list[str], keep: frozenset
             i += 1                                      # timeout 5, nice 10, repeat 3
         else:
             break
-    return i, seen, script
+    return i, seen, script, start
 
 
-def runner_script(words: list[str]) -> str | None:
-    """The script the leading runners of `words` hand to a shell, or None. A shell's -c (or
-    fish --command) word, whatever it holds; a command option's value given in its own word
-    (script -qcS); else a script word (see script_word) given to flock -c or script -c. watch
-    and eval join all their words into one line once any of them is a script word
-    (watch echo 'a; b' runs `echo a; b`). None when no runner takes a script, or when its
-    words are the command itself (watch ls -l, eval cat f, flock F -c ls)."""
-    i, seen, taker = _runner_walk(words, frozenset())
+def _fish_letter(name: str) -> str:
+    """The letter of fish's long option `--name` (a unique prefix of one counts), "" for a
+    flag or a name fish does not take."""
+    names = [long for long in _FISH_LONG if long == name] \
+        or [long for long in _FISH_LONG if long.startswith(name)]
+    return _FISH_LONG[names[0]] if len(names) == 1 and name else ""
+
+
+def _fish_scripts(words: list[str], at: int) -> tuple[list[tuple[str, int | None]], int]:
+    """([(script, index of the word that is it, or None when it is glued to its option:
+    -cS, --command=S)], index of fish's first operand) for fish's options at words[at:]:
+    every -C / --init-command value, then every -c / --command value, in the order given, as
+    fish runs them. The options end at the first word that is none (fish's getopt stops
+    there: that word and the rest are $argv) or after `--`."""
+    init, run, i = [], [], at
+    while i < len(words) and words[i].startswith("-") and words[i] != "-":
+        word = words[i]
+        i += 1
+        if word == "--":
+            break
+        if word.startswith("--"):
+            name, equals, value = word[2:].partition("=")
+            letter = _fish_letter(name)                 # unknown or ambiguous: a flag
+            letters, word = (letter, "-" + letter + value) if equals else (letter, "-" + letter)
+        else:
+            letters = word[1:]
+        for k, letter in enumerate(letters, start=1):
+            if letter not in _FISH_VALUE_LETTERS:
+                continue
+            index = None
+            if k < len(word) - 1:
+                value = word[k + 1:]                    # -cS, --command=S
+            elif i < len(words):
+                value, index, i = words[i], i, i + 1
+            else:
+                break
+            (init if letter == "C" else run if letter == "c" else []).append((value, index))
+            break
+    return init + run, i
+
+
+def handed_scripts(words: list[str]
+                   ) -> tuple[str, list[tuple[str, int | None, int | None]], int]:
+    """(the runner that takes them, [(script, first word, end word)], index of the first word
+    after them) for every script the leading runners of `words` hand to a shell, in the order
+    it runs them; the word range is None when the script is glued to its option. See
+    runner_script, which joins them; ("", [], index of the command) when none does."""
+    i, seen, taker, start = _runner_walk(words, frozenset())
     if not taker:
-        return None
+        return "", [], i
+    if taker == "fish":
+        scripts, rest = _fish_scripts(words, start)
+        return taker, [(text, at, None if at is None else at + 1) for text, at in scripts], rest
     glued = [value for runner, name, value in seen
              if runner == taker and name in RUNNER_COMMAND_OPTIONS.get(runner, ())]
     if glued and glued[-1] is not None:
-        return glued[-1]
+        return taker, [(glued[-1], None, None)], i
     if i >= len(words):
-        return None
+        return taker, [], i
     if taker in SCRIPT_SHELLS:
-        return words[i]
-    if taker in LINE_RUNNERS:
-        return " ".join(words[i:]) if any(script_word(word) for word in words[i:]) else None
-    return words[i] if script_word(words[i]) else None
+        return taker, [(words[i], i, i + 1)], i + 1
+    if taker in LINE_RUNNERS:                           # every word after watch's options
+        line = words[start:]
+        return taker, [(" ".join(line), start, len(words))] if any(
+            script_word(word) for word in line) else [], len(words)
+    return taker, [(words[i], i, i + 1)] if script_word(words[i]) else [], i + 1
+
+
+def runner_script(words: list[str]) -> str | None:
+    """The script the leading runners of `words` hand to a shell, or None. A shell's -c word,
+    whatever it holds; fish's every -C, then every -c (or --init-command, --command) value,
+    one per line; a command option's value given in its own word (script -qcS); else a script
+    word (see script_word) given to flock -c or script -c. watch and eval join all their
+    words after their own options into one line once any of them is a script word
+    (watch echo 'a; b' runs `echo a; b`, watch nice 'X=1; S' runs `nice X=1; S`). None when
+    no runner takes a script, or when its words are the command itself (watch ls -l,
+    eval cat f, flock F -c ls)."""
+    scripts = handed_scripts(words)[1]
+    return "\n".join(text for text, _first, _end in scripts) if scripts else None
 
 
 def script_runner(words: list[str]) -> str:
