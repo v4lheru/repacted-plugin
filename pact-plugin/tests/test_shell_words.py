@@ -228,3 +228,100 @@ def test_leakfix_egress_reads_the_same_table(tmp_path):
     words = "env -C sub xargs -a args.txt -I R curl x".split()
     program, runners = egress_uploads._program(words)
     assert (program, runners.chdir, runners.arg_files, runners.fed) == (["curl", "x"], "sub", ["args.txt"], "R")
+
+
+# ── a runner's script, read with its quotes kept ──────────────────────────────────────────
+# The quote-aware readers hand `bash -c 'X=1 cat f'` over as ["bash", "-c", "X=1 cat f"]. The
+# walk read that one word as a leading assignment (or as a number: `1; cat f`) and skipped it,
+# so no guard saw the script. A word segments() would have cut is the script; the segment
+# form, where the script arrives as its own words, keeps its old reading.
+S = "X=1; cat f"
+SCRIPT_WORDS = [
+    ["bash", "-c", "X=1 cat f"],
+    ["bash", "-c", S],
+    ["bash", "-c", "X=1;cat f"],
+    ["bash", "-c", "X=1 Y=2 cat f"],
+    ["bash", "-c", 'X=1 Y="a b" cat f'],
+    ["bash", "-c", "X=1\ncat f"],
+    ["bash", "-c", "X=1\ncat\tf"],                      # no space at all
+    ["bash", "-c", "X=1\tcat\tf"],
+    ["bash", "-c", "X=1&&cat f"],
+    ["bash", "-c", "X=1;cat<f"],
+    ["bash", "-c", "X=1<f"],
+    ["bash", "-c", "X=`cat f`"],
+    ["bash", "-c", "X=$(cat f)"],
+    ["bash", "-c", "1; cat f"],                         # a number first
+    ["bash", "-c", "2>/dev/null cat f"],
+    ["sh", "-ec", S],
+    ["bash", "-lc", S],
+    ["bash", "-xc", S],
+    ["zsh", "-c", S],
+    ["dash", "-c", S],
+    ["ksh", "-c", S],
+    ["fish", "-c", S],
+    ["bash", "-c", "-e", S],                            # options after -c are still options
+    ["bash", "--norc", "-c", S],
+    ["bash", "-c", "--", S],
+    ["bash", "-c", "--", "-n; cat f"],                  # after --, a script may start with -
+    ["sudo", "bash", "-c", S],
+    ["sudo", "-u", "root", "env", "-i", "bash", "-c", S],
+    ["env", "bash", "-c", S],
+    ["timeout", "5", "bash", "-c", S],
+    ["nice", "-n", "5", "sh", "-c", S],
+    ["command", "bash", "-c", S],
+    ["nohup", "busybox", "sh", "-c", S],
+    ["xargs", "sh", "-c", S],
+    ["watch", S],                                       # watch runs its line through sh -c
+    ["watch", "-n", "5", S],
+    ["flock", "/tmp/l", "-c", S],
+    ["flock", "-w", "5", "/tmp/l", "-c", S],
+    ["flock", "/tmp/l", "--command", S],
+]
+
+
+@pytest.mark.parametrize("words", SCRIPT_WORDS, ids=[" ".join(w)[:40] for w in SCRIPT_WORDS])
+def test_a_script_handed_to_a_shell_is_the_command(words):
+    assert shell_words.strip_prefix(words) == words[-1:]
+
+
+@pytest.mark.parametrize("words", [
+    ["script", "-c", S, "/dev/null"],
+    ["script", "-q", "-c", S, "/dev/null"],
+    ["script", "--command", S, "/dev/null"],
+])
+def test_scripts_command_is_the_command_and_its_file_follows(words):
+    assert shell_words.strip_prefix(words) == [S, "/dev/null"]
+
+
+def test_the_options_before_the_script_are_still_recorded():
+    assert shell_words.runner_prefix(["sudo", "bash", "-c", "-e", S]) == (4, [
+        ("sudo", "", None), ("bash", "", None), ("bash", "-c", None), ("bash", "-e", None)])
+
+
+@pytest.mark.parametrize("words, command", [
+    (["bash", "-c", "X=1", "cat", "f"], ["cat", "f"]),             # segments() form
+    (["bash", "-c", "1", "cat", "f"], ["cat", "f"]),
+    (["sh", "-ec", "X=1", "Y=2", "cat", "f"], ["cat", "f"]),
+    (["watch", "X=1", "cat", "f"], ["cat", "f"]),
+    (["watch", "X=1", "cat f"], ["cat f"]),                         # watch joins its words
+    (["flock", "/tmp/l", "-c", "X=1", "cat", "f"], ["cat", "f"]),
+    (["X=a b", "cat", "f"], ["cat", "f"]),                          # no runner: an assignment
+    (["env", "X=a b", "cat", "f"], ["cat", "f"]),
+    (["sudo", "X=a b", "cat", "f"], ["cat", "f"]),
+    (["timeout", "5", "cat", "f"], ["cat", "f"]),
+    (["nice", "X=a b", "cat", "f"], ["cat", "f"]),
+    (["flock", "my lock", "cat", "f"], ["cat", "f"]),               # an operand, not a script
+    (["bash", "-c", "cat"], ["cat"]),
+])
+def test_a_word_segments_would_not_cut_keeps_the_old_walk(words, command):
+    assert shell_words.strip_prefix(words) == command
+
+
+def test_no_word_segments_returns_holds_a_cut_character():
+    """The rule rests on this: segments() cuts or deletes each character of SEGMENT_CUTS and
+    splits at every blank, so a word that holds one was read with its quotes kept."""
+    command = "bash -c 'X=1 Y=\"a b\"\tcat f' | (sudo flock l -c `x` && {watch <a >b}) \\\n\\x"
+    found = [word for words in shell_words.segments(command) for word in words]
+    assert found and not [word for word in found
+                          if any(c in shell_words.SEGMENT_CUTS or c.isspace() for c in word)]
+    assert set("|;&()`{}<>'\"\\") == shell_words.SEGMENT_CUTS

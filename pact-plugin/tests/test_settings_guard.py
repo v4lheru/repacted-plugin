@@ -495,6 +495,23 @@ def test_a_claude_cli_write_of_the_user_config_or_plugin_state_is_refused_to_an_
         assert _decision(guard.decide(_bash(command, home, agent_type=LEAD))) == "ask", command
 
 
+ADD_JSON = "claude mcp add-json evil '{\\\"command\\\":\\\"sh\\\"}'"     # recorded row 0039ba7e97
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c \"%s\"" % ADD_JSON,
+    "bash -c \"X=1; %s\"" % ADD_JSON,
+    "bash -c \"X=1 %s\"" % ADD_JSON,
+    "sh -ec \"X=1;%s\"" % ADD_JSON,
+])
+def test_a_claude_cli_write_behind_an_assignment_in_a_shell_script_is_refused(home, command):
+    """The script of `bash -c 'X=1; ...'` was read as the assignment X, so the write ran unread."""
+    output = guard.decide(_bash(command, home, agent_id="a1b2c3", agent_type="Explore"))
+    assert _decision(output) == "deny", command
+    assert "claude CLI" in output["hookSpecificOutput"]["permissionDecisionReason"], command
+    assert _decision(guard.decide(_bash(command, home, agent_type=LEAD))) == "ask", command
+
+
 @pytest.mark.parametrize("command", CLI_READS)
 def test_a_read_only_claude_cli_call_passes(home, command):
     assert guard.decide(_bash(command, home, agent_id="a1b2c3", agent_type="Explore")) is None

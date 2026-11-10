@@ -104,6 +104,70 @@ def test_named_allowlisted_or_unprotected_is_allowed(tree, command):
     assert not denied(bash(command, tree))
 
 
+# ── NAMED inside a runner's script ────────────────────────────────────────────────────
+# The script a runner hands to a shell (bash -c, flock -c, script -c, watch) was read as a
+# leading assignment or a number when it opened with one, so `bash -c 'X=1; cat .env'` ran
+# unjudged. Monitor's output is never scanned, so each row is checked under both tools.
+READ_ENV = "cat " + "." + "env"
+SCRIPT_DENY = [form.replace("R", READ_ENV) for form in (
+    "bash -c 'X=1 R'",
+    "bash -c 'X=$(R); echo \"$X\"'",
+    "bash -c 'X=1; R'",
+    "bash -c 'X=1;R'",
+    "bash -c 'X=1 Y=2 R'",
+    "bash -c 'X=1 && R'",
+    "sh -ec 'X=1; R'",
+    "bash -lc 'X=1; R'",
+    "zsh -c 'X=1; R'",
+    "bash -c -e 'X=1; R'",
+    "bash --norc -c 'X=1; R'",
+    "bash -c -- 'X=1; R'",
+    "bash -c -- '-n; R'",
+    "bash -c \"X=1; R\"",
+    "bash -c 'X=1\nR'",
+    "bash -c $'X=1\\tR'",
+    "bash -c '1; R'",
+    "bash -c '2>/dev/null R'",
+    "sudo bash -c 'X=1; R'",
+    "env bash -c 'X=1; R'",
+    "timeout 5 bash -c 'X=1; R'",
+    "nice -n 5 sh -c 'X=1; R'",
+    "command bash -c 'X=1; R'",
+    "flock /tmp/l -c 'X=1; R'",
+    "flock -w 5 /tmp/l -c 'X=1; R'",
+    "script -c 'X=1; R' /dev/null",
+    "watch 'X=1; R'",
+    "watch -n 5 'X=1; R'",
+    # controls: denied before the fix and still
+    "bash -c 'R'",
+    "bash -c 'echo hi; X=$(R); echo \"$X\"'",
+    "watch 'R'",
+    "flock /tmp/l -c 'R'",
+    "script -c 'R' /dev/null",
+    "X='a b' R",
+    "env X='a b' R",
+    "eval 'X=1; R'",
+    "xargs sh -c 'X=1; R'",
+)]
+SCRIPT_ALLOW = [
+    "bash -c 'X=1; echo hi'",
+    "bash -c 'X=1; cat notes.txt'",
+    "watch 'X=1; ls'",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", SCRIPT_DENY)
+def test_a_read_inside_a_runners_script_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", SCRIPT_ALLOW)
+def test_a_runners_script_that_reads_nothing_protected_is_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
 ENVGET = "/srv/My Projects/pact-plugin/bin/env-get"
 
 

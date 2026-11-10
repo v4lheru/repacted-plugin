@@ -762,6 +762,22 @@ class TestStagingInTheSameCommand:
         code, err = _commit_in(staging_repo, command, capsys)
         assert code == 2 and "aws-key" in err, (command, err)
 
+    @pytest.mark.parametrize("wrap", [
+        "{}",
+        "bash -c '{}'",
+        "bash -c 'X=1; {}'",
+        "bash -c 'X=1 {}'",
+        "sudo sh -ec 'X=1;{}'",
+    ])
+    def test_an_env_file_staged_inside_a_shell_script_is_denied(self, staging_repo, wrap, capsys):
+        """`bash -c 'X=1; ...'`: the script was read as the assignment X, so its staging and
+        commit went unread."""
+        name = "." + "env" + ".local"                  # not matched by the repo's ignore line
+        (staging_repo / name).write_text("demo\n")
+        code, err = _commit_in(staging_repo, wrap.format(f"git add {name} && git commit -m x"),
+                               capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
     def test_update_stages_a_key_added_to_a_tracked_file(self, staging_repo, capsys):
         with open(staging_repo / "tracked.py", "a") as handle:
             handle.write(_KEY_LINE)

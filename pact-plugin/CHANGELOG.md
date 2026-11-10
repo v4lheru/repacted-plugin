@@ -4,6 +4,10 @@ Release notes for rePACTed, newest first. Entries start at the first public rele
 
 `Unreleased` lists what has changed on the main line since the last release and becomes the next version's notes. Each entry says what changed in behaviour and, where it matters, the files involved. An entry marked **Fork action** needs a step from anyone running a clone with local changes (a setting, a migration, a file that moved).
 
+## Unreleased
+
+- The shell guards read the script a runner hands to a shell even when it starts with an assignment or a number. `bash -c 'X=1; cat .env'`, `bash -c 'X=$(cat .env); echo "$X"'` and the same script under `sh -ec`, `flock -c`, `script -c` or `watch` were allowed under Bash and Monitor, because the script was taken for a leading assignment and skipped. The .env, settings and commit checks now judge it (`hooks/shell/words.py`).
+
 ## 2.2.0 (2026-11-09)
 
 Unattended mode denies permission prompts instead of waiting on them, warns before your sign-in runs out, and the red-first check reads `node --test` and `cargo test`. Forks with their own `hooks/hooks.json` must merge in the new hook. Known limits in the release notes.
