@@ -16,6 +16,8 @@ import re
 from shell.words import PREFIX_WORDS
 from shell.words import segments
 from shell.words import strip_prefix
+from shell.words import quoted_matches
+from shell.words import without_quotes
 from shell.inline_code import code_option, runs_inline_code
 from shell.env.git_egress import (Notice, _git_split)
 from shell.env.names import (token_protected)
@@ -579,31 +581,10 @@ def _sent_keys(program: str, args: list[str], leading: list[str], state: _State)
 
 def _note_quoting(text: str, state: _State) -> None:
     """Note each substitution key in `text`, a command the judge splits into words, as
-    standing inside quotes (state.quoted) or outside them (state.bare). The walk follows
-    '..', $'..' (where a backslash escapes), ".." and backslash escapes; read_script has
-    taken the comments and heredoc bodies out. A key it never meets counts as bare."""
-    quote, index, dollar = "", 0, False
-    while index < len(text):
-        char, after_dollar, dollar = text[index], dollar, False
-        if quote in ("'", "$'"):
-            if char == "\\" and quote == "$'":
-                index += 1
-            elif char == "'":
-                quote = ""
-        elif char == "\\":
-            index += 1
-        elif char == '"':
-            quote = "" if quote else '"'
-        elif char == "'" and not quote:
-            quote = "$'" if after_dollar else "'"
-        elif char == "$":
-            dollar = not quote
-        elif char == "_" and _SUB_KEY.match(text, index):
-            key = _SUB_KEY.match(text, index).group()
-            (state.quoted if quote else state.bare).add(key)
-            index += len(key)
-            continue
-        index += 1
+    standing inside quotes (state.quoted) or outside them (state.bare), as
+    shell.words.quoted_matches reads it. A key it never meets counts as bare."""
+    for key, inside in quoted_matches(text, _SUB_KEY):
+        (state.quoted if inside else state.bare).add(key)
 
 
 # A trace switch anywhere in a Monitor command turns the send pass off for all of it: set -x
@@ -622,7 +603,7 @@ def _traces_anywhere(command: str) -> bool:
     """True when a trace switch stands anywhere in `command` (_TRACE_OPTIONS, _TRACE_WORDS,
     a trap and DEBUG), read with its quotes and backslashes taken out. Over-reading only
     refuses more under Monitor; Bash never asks."""
-    text = re.sub(r"['\"\\]", "", command)
+    text = without_quotes(command)
     if _TRACE_WORDS.search(text) or all(part.search(text) for part in _TRACE_TRAP):
         return True
     return any(re.fullmatch(r"-[a-zA-Z]*[xv][a-zA-Z]*|--verbose", option)
