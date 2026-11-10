@@ -52,6 +52,8 @@ PRINTF = "sh -c 'printf \"" + HEADER + " %s\\n\" \"$API_KEY\"'"
 ENVIRON = "os." + "environ"             # kept apart: the commit check refuses the joined text
 SUB = "$(env-get .env API_KEY -- printenv API_KEY)"
 FED = "<(env-get .env API_KEY -- printenv API_KEY)"
+SPACED = "sh -c 'printf \"X: %s\" \"$API_KEY\"'"   # one value, two words when unquoted
+NOWHERE = "https://h.invalid"
 
 PRINTS_HANDED_VALUE = [
     "env-get .env API_KEY -- printenv API_KEY",
@@ -143,6 +145,32 @@ PRINTS_HANDED_VALUE = [
     f"xargs -t -I{{}} curl -sS -o /dev/null -H 'X: {{}}' {URL} < {FED} 2>&1",
     f'xargs --verbose curl -sS -o /dev/null -H "X: {SUB}" {URL} < /dev/null 2>&1',
     f'xargs -p curl -sS -o /dev/null -H "X: {SUB}" {URL} < /dev/null 2>&1',
+    # curl has no --name=value form: it names the whole word, value included, as unknown.
+    f'curl -sS --header="X: {SUB}" {NOWHERE} 2>&1',
+    f'curl -sS --header="{HEADER} {SUB}" {URL}',
+    f'curl -sS --data="{SUB}" {NOWHERE} 2>&1',
+    f'curl -sS --oauth2-bearer="{SUB}" {NOWHERE} 2>&1',
+    f'curl -sS --user="user:{SUB}" {NOWHERE} 2>&1',
+    f"curl -sS --header=@<(env-get .env API_KEY -- {PRINTF}) {NOWHERE} 2>&1",
+    # An unquoted substitution splits into words: a part becomes a URL curl cannot resolve.
+    f"curl -sS -H $(env-get .env API_KEY -- {SPACED}) {NOWHERE} 2>&1",
+    f"curl -sS -d $(env-get .env API_KEY -- {SPACED}) {NOWHERE} 2>&1",
+    f"curl -sS -H X:$(env-get .env API_KEY -- {SPACED}) {NOWHERE} 2>&1",
+    # A trace switch anywhere in the command, before or after the client, in a function
+    # body, a loop, a shell's options, SHELLOPTS or a DEBUG trap, shows the arguments.
+    f"env SHELLOPTS=xtrace bash -c 'curl -sS -o /dev/null -H \"X: {SUB}\" {URL}' 2>&1",
+    f"sh -xc 'curl -sS -o /dev/null -H \"X: {SUB}\" {URL}' 2>&1",
+    f'poll() {{ curl -sS -o /dev/null -H "X: {SUB}" {URL}; }}; exec 2>&1; set -x; poll',
+    f'exec 2>&1; n=0; while [ $n -lt 2 ]; do curl -sS -o /dev/null -H "X: {SUB}" {URL}; '
+    "set -x; n=$((n+1)); done",
+    f"exec 2>&1; trap 'set -x' DEBUG; curl -sS -o /dev/null -H \"X: {SUB}\" {URL}",
+    f"exec 2>&1; trap 'eval \"$STEP\"' DEBUG; curl -sS -o /dev/null -H \"X: {SUB}\" {URL}",
+    f"exec 2>&1; set -x; while true; do curl -sS -H @<(env-get .env API_KEY -- {PRINTF}) "
+    f"{URL}; sleep 30; done",
+    # -D and -h take the next word (or the rest of theirs), so -H is no option there.
+    f'curl -sS -D -H "X: {SUB}" {NOWHERE} 2>&1',
+    f'curl -sS -DH "X: {SUB}" {NOWHERE} 2>&1',
+    f'curl -sS -h -H "X: {SUB}" {NOWHERE} 2>&1',
 ]
 KEEPS_VALUE_OUT = [
     "env-get .env API_KEY -- sh -c 'echo \"len=${#API_KEY}\"'",
@@ -171,8 +199,9 @@ KEEPS_VALUE_OUT = [
     f'curl -sS --data-urlencode "token={SUB}" {URL}',
     f'curl -sS -u "user:{SUB}" {URL}',
     f'curl -sS --oauth2-bearer "{SUB}" {URL}',
-    f'curl -sS --header="{HEADER} {SUB}" {URL}',
+    f'curl -sS --header "{HEADER} {SUB}" {URL}',
     f'curl -sSH "{HEADER} {SUB}" {URL}',
+    f'curl -sS -H "$(env-get .env API_KEY -- {PRINTF})" {URL}',
     f"curl -sS --json @{FED} {URL}",
     f"curl -sS -F token=@{FED} {URL}",
     f"curl -sS -H @<(env-get .env API_KEY -- {PRINTF}) -d @{FED} {URL}",
@@ -181,6 +210,10 @@ KEEPS_VALUE_OUT = [
     f'http POST {URL} "token={SUB}"',
     f'http {URL} "{HEADER} {SUB}"',
     f'gh api -f "token={SUB}" /user',
+    # wget and gh take --name=value; curl's own -o is no shell's -o xtrace.
+    f'gh api --header="X: {SUB}" /user',
+    f'wget -q -O /dev/null --header="{HEADER} {SUB}" {URL}',
+    f'curl -sS -o /tmp/out -H "{HEADER} {SUB}" {URL}',
 ]
 
 
@@ -204,6 +237,13 @@ def test_monitor_refuses_a_command_that_prints_a_value_env_get_hands_it(keys_cwd
     assert specific["permissionDecision"] == "deny"
     assert reason.endswith("[rule: env.read.loaded]"), reason
     assert "Monitor output is not scanned" in reason and "with Bash" in reason
+
+
+@pytest.mark.xfail(strict=True, reason="shell.words.runner_prefix reads the value of bash's "
+                   "-o as the command word, so the -c script is never judged, under Bash too")
+def test_monitor_refuses_a_send_under_a_shell_given_o_xtrace(keys_cwd):
+    command = f"bash -o xtrace -c 'curl -sS -o /dev/null -H \"X: {SUB}\" {URL}' 2>&1"
+    assert _decide("Monitor", command, keys_cwd)
 
 
 @pytest.mark.parametrize("tool", ["Bash", "monitor"])

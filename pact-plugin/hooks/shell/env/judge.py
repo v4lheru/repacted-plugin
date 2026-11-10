@@ -5,7 +5,7 @@ Summary: command_verdict: the per-command walk (printing words, env-get, printed
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: _printing_words, _is_env_get, _PRINTF_SPEC, _ESCAPES, _unescape, _printed_text, _sub_paths, _sub_verdict, _sub_reads, _STDOUT_TARGETS, _LONE_PRINTERS, _LONE_SEPARATORS, _NESTED, _prints_alone, _lone_steps, _sub_names, _load, _uses_loaded, _ENV_READ, _prints_loaded, _inner_script, _SSH_VALUE_OPTIONS, _group_words, _trace_switch, _LOADED, _COMPUTED, _echoes_request, _ANY, _NOT_A_FILE, _NAMED, _CURL_SENDS, _GH_SENDS, _SENDERS, _ITEM_CLIENTS, _ITEM_VALUED, _ITEM_FLAGS, _ITEM_SENT, _CLUSTER, _sent_values, _send_option, _ends_option, _request_items, _SHOWS_COMMAND, _shows_command, _sent_keys, _glued_unknown, _AWK, _AWK_VALUE_OPTIONS, _AWK_GLUED_OPTION, _awk_program_word, command_verdict, _hand_keys, _program, _STDIN_ACTORS, _PAGERS, _DATA_CONSUMERS, _TEXT_COMMANDS, _NAMES_FROM_STDIN, _GIT_NAMES_FROM_STDIN, _BODY_WORD, _BODY_WORDS_READ, _COMPOUND_END, _STDIN_AS_FILE, _reads_script_from_stdin, _script_on_stdin, _stdin_role, _body_names, _body_as_script, _heredoc_verdict, _json_actor.
+Map: _printing_words, _is_env_get, _PRINTF_SPEC, _ESCAPES, _unescape, _printed_text, _sub_paths, _sub_verdict, _sub_reads, _STDOUT_TARGETS, _LONE_PRINTERS, _LONE_SEPARATORS, _NESTED, _prints_alone, _lone_steps, _sub_names, _load, _uses_loaded, _ENV_READ, _prints_loaded, _inner_script, _SSH_VALUE_OPTIONS, _group_words, _trace_switch, _LOADED, _COMPUTED, _echoes_request, _ANY, _NOT_A_FILE, _NAMED, _CURL_SENDS, _GH_SENDS, _SENDERS, _ITEM_CLIENTS, _ITEM_VALUED, _ITEM_FLAGS, _ITEM_SENT, _CLUSTER, _sent_values, _send_option, _ends_option, _request_items, _SHOWS_COMMAND, _shows_command, _sent_keys, _note_quoting, _TRACE_OPTIONS, _TRACE_WORDS, _TRACE_TRAP, _traces_anywhere, _glued_unknown, _AWK, _AWK_VALUE_OPTIONS, _AWK_GLUED_OPTION, _awk_program_word, command_verdict, _hand_keys, _program, _STDIN_ACTORS, _PAGERS, _DATA_CONSUMERS, _TEXT_COMMANDS, _NAMES_FROM_STDIN, _GIT_NAMES_FROM_STDIN, _BODY_WORD, _BODY_WORDS_READ, _COMPOUND_END, _STDIN_AS_FILE, _reads_script_from_stdin, _script_on_stdin, _stdin_role, _body_names, _body_as_script, _heredoc_verdict, _json_actor.
 """
 
 from __future__ import annotations
@@ -416,8 +416,10 @@ _CURL_SENDS = {"-H": _NOT_A_FILE, "--header": _NOT_A_FILE, "-d": _NOT_A_FILE,
                "--form-string": _ANY, "--oauth2-bearer": _ANY}
 _GH_SENDS = {"-H": _NAMED, "--header": _NAMED, "-f": r"[^=\0]+=", "--raw-field": r"[^=\0]+=",
              "-F": r"[^=\0]+=(?!@)", "--field": r"[^=\0]+=(?!@)", "--input": r"(?!)"}
+# curl's -D (a file name) and -h (a help category) take a value too: `-D -H ..` and `-DH ..`
+# hold no -H. They join here only, so the echo checks, Bash's among them, read as before.
 _SENDERS = {
-    "curl": ("", _CURL_VALUED, frozenset({
+    "curl": ("", _CURL_VALUED + "Dh", frozenset({
         "--silent", "--show-error", "--fail", "--fail-with-body", "--fail-early", "--location",
         "--location-trusted", "--compressed", "--insecure", "--include", "--globoff", "--get",
         "--head", "--http1.0", "--http1.1", "--http2", "--http2-prior-knowledge", "--http3",
@@ -468,7 +470,7 @@ def _sent_values(program: str, args: list[str], fed: bool = False) -> set[int]:
     end = args.index("--") if "--" in args else len(args)
     sent = set()
     for index in range(start, end):
-        found = _send_option(args, index, valued, sends)
+        found = _send_option(args, index, valued, sends, equals=program != "curl")
         if found is None or index > start and not _ends_option(args[index - 1], valued, flags):
             continue
         option, at, value = found
@@ -477,16 +479,18 @@ def _sent_values(program: str, args: list[str], fed: bool = False) -> set[int]:
     return sent
 
 
-def _send_option(args: list[str], index: int, valued: str,
-                 sends: dict) -> tuple[str, int, str] | None:
+def _send_option(args: list[str], index: int, valued: str, sends: dict,
+                 equals: bool = True) -> tuple[str, int, str] | None:
     """(send option, index of the word holding its value, the value) when args[index] is one
-    of `sends`: --header V, --header=V, -H V, -HV or a cluster ending in one (-sSH V)."""
+    of `sends`: --header V, --header=V, -H V, -HV or a cluster ending in one (-sSH V).
+    `equals` False: the client has no --name=value form (curl names that word, value and
+    all, as an unknown option), so such a word is none."""
     arg, following = args[index], args[index + 1] if index + 1 < len(args) else ""
     if arg.startswith("--"):
-        name, equals, value = arg.partition("=")
-        if name not in sends:
+        name, glued, value = arg.partition("=")
+        if name not in sends or glued and not equals:
             return None
-        return (name, index, value) if equals else (name, index + 1, following)
+        return (name, index, value) if glued else (name, index + 1, following)
     if not _CLUSTER.fullmatch(arg):
         return None
     for at, char in enumerate(arg[1:], 2):
@@ -561,12 +565,68 @@ def _shows_command(leading: list[str]) -> bool:
 
 def _sent_keys(program: str, args: list[str], leading: list[str], state: _State) -> set[str]:
     """Under Monitor, the keys of the substitutions a client sends without showing them: in
-    the value of a send option (_sent_values), unless the client prints its request, the
-    shell traces the command (set -x) or a runner before it prints it (_shows_command)."""
+    the value of a send option (_sent_values) and inside quotes wherever the key stood
+    (_note_quoting: unquoted, its output splits into words that can become a URL), unless
+    the client prints its request, a trace switch stands anywhere in the command
+    (_traces_anywhere) or a runner before the client prints it (_shows_command)."""
     if not state.unscanned or program not in EGRESS_PROGRAMS or state.traced \
-            or _shows_command(leading) or _echoes_request(program, args, unscanned=True):
+            or state.traces or _shows_command(leading) \
+            or _echoes_request(program, args, unscanned=True):
         return set()
-    return {key for at in _sent_values(program, args) for key in _SUB_KEY.findall(args[at])}
+    return {key for at in _sent_values(program, args) for key in _SUB_KEY.findall(args[at])
+            if key in state.quoted and key not in state.bare}
+
+
+def _note_quoting(text: str, state: _State) -> None:
+    """Note each substitution key in `text`, a command the judge splits into words, as
+    standing inside quotes (state.quoted) or outside them (state.bare). The walk follows
+    '..', $'..' (where a backslash escapes), ".." and backslash escapes; read_script has
+    taken the comments and heredoc bodies out. A key it never meets counts as bare."""
+    quote, index, dollar = "", 0, False
+    while index < len(text):
+        char, after_dollar, dollar = text[index], dollar, False
+        if quote in ("'", "$'"):
+            if char == "\\" and quote == "$'":
+                index += 1
+            elif char == "'":
+                quote = ""
+        elif char == "\\":
+            index += 1
+        elif char == '"':
+            quote = "" if quote else '"'
+        elif char == "'" and not quote:
+            quote = "$'" if after_dollar else "'"
+        elif char == "$":
+            dollar = not quote
+        elif char == "_" and _SUB_KEY.match(text, index):
+            key = _SUB_KEY.match(text, index).group()
+            (state.quoted if quote else state.bare).add(key)
+            index += len(key)
+            continue
+        index += 1
+
+
+# A trace switch anywhere in a Monitor command turns the send pass off for all of it: set -x
+# or -o xtrace in a function body or a loop, after the client as well as before it, a shell
+# given -x, -v or -o xtrace, SHELLOPTS naming xtrace or verbose, setopt, a DEBUG trap. The
+# text is read with quotes and backslashes taken out (trap 'set -x' DEBUG, "bash" -x).
+_TRACE_OPTIONS = re.compile(
+    r"(?:^|(?<=[\s;&|(){}`=]))(?:[^\s;&|(){}`]*/)?(?:set|" + "|".join(sorted(SHELLS))
+    + r")((?:[ \t]+[-+][^\s;&|(){}`]*)+)")
+_TRACE_WORDS = re.compile(r"(?i)\bx_?trace\b|(?<![\w-])[-+][a-z]*o[ \t]*verbose\b"
+                          r"|\bSHELLOPTS=\S*\bverbose\b|\bsetopt\b[^;&|\n]*\bverbose\b")
+_TRACE_TRAP = (re.compile(r"\btrap\b"), re.compile(r"(?i)\bdebug\b"))
+
+
+def _traces_anywhere(command: str) -> bool:
+    """True when a trace switch stands anywhere in `command` (_TRACE_OPTIONS, _TRACE_WORDS,
+    a trap and DEBUG), read with its quotes and backslashes taken out. Over-reading only
+    refuses more under Monitor; Bash never asks."""
+    text = re.sub(r"['\"\\]", "", command)
+    if _TRACE_WORDS.search(text) or all(part.search(text) for part in _TRACE_TRAP):
+        return True
+    return any(re.fullmatch(r"-[a-zA-Z]*[xv][a-zA-Z]*|--verbose", option)
+               for found in _TRACE_OPTIONS.finditer(text) for option in found.group(1).split())
 
 
 def _glued_unknown(word: str, cwd: str | None) -> str | None:

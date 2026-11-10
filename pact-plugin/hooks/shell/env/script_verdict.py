@@ -19,7 +19,7 @@ from shell.words import segments
 from shell.words import strip_prefix
 from shell.words import words as shell_words
 from shell.env.git_egress import (Notice, git_egress_pass, git_egress_verdict)
-from shell.env.judge import (_body_as_script, _echoes_request, _group_words, _heredoc_verdict, _printed_text, _prints_alone, _prints_loaded, _program, _sent_values, _shows_command, _sub_verdict, command_verdict)
+from shell.env.judge import (_body_as_script, _echoes_request, _group_words, _heredoc_verdict, _note_quoting, _printed_text, _prints_alone, _prints_loaded, _program, _sent_values, _shows_command, _sub_verdict, _traces_anywhere, command_verdict)
 from shell.env.names import (GLOB_BUDGET_MESSAGE, _WRITE_REDIRECT, glob_budget_overspent,
                              mentions_class, reset_glob_budget, token_protected)
 from shell.env.places import (_Directory, _PIPE, _merge, _names_only_search, _search_skip, resolve_path_substitutions)
@@ -39,6 +39,8 @@ def judge(command: str, cwd: str | None, state: _State, captured: bool = False) 
     _Directory); a substitution runs where the commands carrying it do. `command` has been
     through _read."""
     command = _pull_substitutions(command, state)
+    if state.unscanned:                                 # quoted or split: judge._sent_keys
+        _note_quoting(command, state)
     steps, exact = _command_steps(command)
     where = _Directory(cwd, exact)
     placed = [(step, where.step(step)) for step in steps]
@@ -336,13 +338,15 @@ def _sent_procsub(steps: list[_Step], index: int, state: _State) -> bool:
     its request, and it prints only to that client (_prints_alone): what it prints is sent
     where it belongs, not to the transcript. The client is judged as under Monitor (judge
     calls this only there): a trace to any file, --libcurl, -K or a file:// target shows
-    what it sends, and so do the shell's trace (set -x) and a runner that prints the command
-    (env -v, xargs -t). A <(...) on stdin (`< <(..)`) or in any other option is not sent.
+    what it sends, and so do the shell's trace (set -x, or a switch anywhere in the command:
+    judge._traces_anywhere) and a runner that prints the command (env -v, xargs -t). A
+    <(...) on stdin (`< <(..)`) or in any other option is not sent.
     The parser does not keep the space before `<(`, so both readings are tried: glued to
     the word before it (-H @<(..)) and on its own (-H <(..)); neither reads a file the
     client would not send."""
     consumer = _procsub_consumer(steps, index)
-    if consumer is None or state.traced or not steps[index].after.startswith(")") \
+    if consumer is None or state.traced or state.traces \
+            or not steps[index].after.startswith(")") \
             or not _prints_alone(steps[index], state):
         return False
     start = _command_start(steps, consumer)
@@ -549,6 +553,7 @@ def bash_verdict(command: str, cwd: str, unscanned: bool = False) -> str | None:
 def _bash_verdict(command: str, cwd: str, unscanned: bool = False) -> str | None:
     state = _State()
     state.unscanned = unscanned
+    state.traces = unscanned and _traces_anywhere(command)    # no send pass: judge._sent_keys
     state.env_get_written = _writes_env_get(command)
     reset_glob_budget()
     try:
@@ -561,7 +566,7 @@ def _bash_verdict(command: str, cwd: str, unscanned: bool = False) -> str | None
         if mentions_class(command):
             return PARSE_MESSAGE
         loose = _State()
-        loose.unscanned = unscanned
+        loose.unscanned, loose.traces = unscanned, state.traces
         return _loose_verdict(command, (cwd, None), loose)
     except RecursionError:
         return UNREADABLE_MESSAGE.format(what="commands nested too deep to follow",

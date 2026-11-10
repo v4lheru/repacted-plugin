@@ -109,6 +109,12 @@ class _State:
         self.spell = parent.spell if parent else (lambda body: body)
         self.env_get_written = parent.env_get_written if parent else False
         self.unscanned = parent.unscanned if parent else False
+        # Unscanned only (judge._sent_keys): the substitution keys seen inside quotes and
+        # those seen outside them, where the shell splits their output into words, in any
+        # text judged; and whether a trace switch stands anywhere in the command.
+        self.quoted: set[str] = parent.quoted if parent else set()
+        self.bare: set[str] = parent.bare if parent else set()
+        self.traces = parent.traces if parent else False
         self.captured = False
         self.sourced = False                            # loaded keys unknown: any $VARIABLE
         self.loaded: set[str] = set()
