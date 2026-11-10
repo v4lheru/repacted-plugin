@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import datetime
 import itertools
-import json
 from pathlib import Path
 
 import pytest
@@ -22,10 +21,8 @@ import pytest
 from fixtures.ops_env import World, git, handoff, ops_env, teachback  # noqa: F401  # fixture
 from shared import content_tree as ct
 from shared import evidence_check as ec
-from shared.ops import accept, frame, integrate, receipt, submit
+from shared.ops import accept, receipt, submit
 from shared.ops import evidence as EV
-from shared.task_log import features
-from shared.task_log import write as W
 from shared.task_store import TaskRef
 
 # Slow tier: deselected by the default full run, included by `run-tests --full --all`.

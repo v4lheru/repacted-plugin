@@ -4,9 +4,8 @@ Summary: Pins carry_clock_shift, which carries only the three clock-shift values
          into a built child env and changes nothing when the run is not shifted.
 Used by: the suite.
 """
-import os
 
-from clock_shift.clock_shift_env import LEDGER_ENV, SHIFT_ENV, SHIM_DIR, carry_clock_shift
+from clock_shift.clock_shift_env import SHIFT_ENV, carry_clock_shift
 
 
 def test_an_unshifted_run_returns_the_env_untouched(monkeypatch):

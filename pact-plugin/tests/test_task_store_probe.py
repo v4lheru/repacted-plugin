@@ -8,10 +8,7 @@ Hostile: an id that cannot name a file (`../x`) probes nothing and counts nothin
 
 from __future__ import annotations
 
-import io
 import json
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 

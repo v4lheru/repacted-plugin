@@ -36,7 +36,6 @@ import io
 import json
 import subprocess
 import sys
-from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 

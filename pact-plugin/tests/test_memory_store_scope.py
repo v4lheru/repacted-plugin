@@ -40,7 +40,6 @@ isolation arms and `TestTheScopeIsARedirectAndNotARefusal` carries them.
 from __future__ import annotations
 
 import ast
-import json
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4

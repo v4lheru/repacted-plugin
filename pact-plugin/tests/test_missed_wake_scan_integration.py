@@ -57,12 +57,10 @@ import pytest
 
 import missed_wake_scan as mw  # noqa: E402
 import teammate_idle  # noqa: E402
-from shared import prompt_kind as pk, session_journal, task_utils  # noqa: E402
+from shared import task_utils  # noqa: E402
 from shared.session_journal import read_events  # noqa: E402
 from fixtures.role_frames import (  # noqa: E402
     captured_lead_userpromptsubmit_qualified,
-    captured_plain_userpromptsubmit,
-    captured_teammate_sessionstart,
 )
 
 # A valid Agent-Teams team name (pact-<slug>; lowercased by get_team_name,

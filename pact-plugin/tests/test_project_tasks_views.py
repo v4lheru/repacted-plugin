@@ -7,7 +7,6 @@ path-limited `repact-task commit`. Every repo is a temp git repo; nothing touche
 from __future__ import annotations
 
 import json
-import types
 from pathlib import Path
 
 import pytest

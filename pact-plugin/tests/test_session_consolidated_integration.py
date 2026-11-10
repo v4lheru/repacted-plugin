@@ -38,7 +38,6 @@ AC#3 true-positive preservation:
 12. Legacy pause-covers-review path still works with no session_consolidated event
 """
 
-import re
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch

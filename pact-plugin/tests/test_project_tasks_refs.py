@@ -18,7 +18,6 @@ title, two writers at once. Everything runs in temp dirs through the World of th
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 

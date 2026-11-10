@@ -8,7 +8,6 @@ Used by: the plugin suite.
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 from shared import plugin_paths
 

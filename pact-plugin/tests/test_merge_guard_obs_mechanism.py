@@ -23,10 +23,8 @@ Summary: GOOD-FAITH over-block sweep certification (PR #1195 OBS). Certifies aga
 
          Destructive verbs assembled at runtime so this file stays inert to the live guard.
 """
-import ast
 import io
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -34,7 +32,6 @@ import pytest
 import merge_guard_post as mgpost  # noqa: E402
 import merge_guard_pre as mgpre  # noqa: E402
 import shared.merge_guard_common as mgc  # noqa: E402
-from merge_guard_baseline_loader import load_baseline  # noqa: E402
 from merge_guard_post import main as post_main  # noqa: E402
 from merge_guard_pre import main as pre_main  # noqa: E402
 from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)

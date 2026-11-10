@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-from fixtures.role_frames import plain_frame, teammate_frame
+from fixtures.role_frames import plain_frame
 
 import session_init
 from session_init import format_pact_runtime_config

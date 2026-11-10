@@ -26,8 +26,6 @@ SITES THIS FILE DOES NOT DRIVE ARE NAMED WITH THEIR REASON, in
 `test_the_undriven_sites_are_named_with_a_reason` below. A coverage report
 that names its misses is worth more than a higher count that does not.
 """
-import ast
-from collections import Counter
 from pathlib import Path
 
 _MANAGED_START = (

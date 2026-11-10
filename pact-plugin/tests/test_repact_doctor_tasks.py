@@ -17,8 +17,7 @@ import json
 
 import pytest
 
-from project_tasks_support import PLUGIN_ROOT, load, writer
-from test_repact_doctor import World, git
+from test_repact_doctor import World
 
 # Slow tier: deselected by the default full run, included by `run-tests --full --all`.
 pytestmark = pytest.mark.slow

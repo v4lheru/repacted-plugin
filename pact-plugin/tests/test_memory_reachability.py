@@ -7,9 +7,7 @@ assert a number that moves between sessions.
 """
 import subprocess
 import sys
-from pathlib import Path
 
-import pytest
 
 import memory_reachability as mr  # noqa: E402
 

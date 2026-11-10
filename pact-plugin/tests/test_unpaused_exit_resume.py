@@ -14,7 +14,6 @@ import os
 import subprocess
 import sys
 import time
-import unicodedata
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch

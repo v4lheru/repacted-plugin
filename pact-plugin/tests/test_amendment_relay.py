@@ -10,13 +10,10 @@ the identity values in the shape the run ledger recorded on 2026-10-01.
 from __future__ import annotations
 
 import ast
-import io
 import json
 import os
-import statistics
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest

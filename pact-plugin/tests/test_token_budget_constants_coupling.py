@@ -29,8 +29,6 @@ sum to the rounded whole, so each number comes from one call on one joined
 string.
 """
 
-import re
-from pathlib import Path
 
 import pytest
 

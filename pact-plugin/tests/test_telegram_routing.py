@@ -15,21 +15,14 @@ import fcntl
 import json
 import os
 import time
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from telegram.config import get_or_create_session_id
 from telegram.routing import (
-    MAX_ROUTING_TABLE_ENTRIES,
-    READER_POLL_INTERVAL,
-    STALE_SESSION_TTL,
     DirectRouter,
     FileBasedRouter,
-    count_active_sessions,
     register_session,
-    unregister_session,
 )
 
 

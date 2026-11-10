@@ -10,17 +10,13 @@ Tests cover:
 6. Security: temp file always deleted, no credentials in errors, size limits
 """
 
-import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 from telegram.voice import (
     VoiceTranscriber,
-    VoiceTranscriptionError,
-    MAX_VOICE_FILE_SIZE,
 )
 
 

@@ -38,7 +38,6 @@ Summary: BIDIRECTIONAL certification for the cross-auth recognition fix (detect 
 
 import merge_guard_pre  # noqa: E402
 import merge_guard_post  # noqa: E402
-from merge_guard_baseline_loader import load_baseline  # noqa: E402
 from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
 
 

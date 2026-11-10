@@ -6,7 +6,6 @@ one line), examples/demo_setup.py (the scratch copy and its refusal) and command
 plugin path, command, agent and link it names resolves; plugin.json lists it). The toy is
 skipped by the suite (examples/conftest.py), so its tests run here in a copy, in a subprocess.
 """
-import json
 import os
 import re
 import shutil

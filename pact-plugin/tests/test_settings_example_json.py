@@ -8,10 +8,7 @@ copy from. This test guards the shape so the example stays canonical
 through future changes.
 
 """
-import json
 from pathlib import Path
-
-import pytest
 
 
 SETTINGS_EXAMPLE_PATH = (

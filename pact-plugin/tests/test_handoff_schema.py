@@ -24,10 +24,8 @@ from fixtures.emitter import VALID_HANDOFF  # noqa: E402
 
 from shared.handoff_schema import (  # noqa: E402
     HANDOFF_CANONICAL_FIELDS,
-    HANDOFF_LEGACY_ALIASES,
     HANDOFF_RECOMMENDED_FIELDS,
     HANDOFF_REQUIRED_FIELDS,
-    HANDOFF_SCHEMA_ECHO,
     resolve_handoff_field,
     validate_handoff_schema,
 )

@@ -34,14 +34,9 @@ parents[] index would leave every other arm in this file green while production
 raised ModuleNotFoundError on each cli.py invocation. Only a subprocess without
 conftest's help can tell those apart.
 """
-import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 from scripts import pact_session
-from clock_shift.clock_shift_env import carry_clock_shift
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "skills" / "pact-memory" / "scripts"
 

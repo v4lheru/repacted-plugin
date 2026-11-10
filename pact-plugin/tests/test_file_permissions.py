@@ -14,7 +14,6 @@ import stat
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 # Add the pact-memory scripts to path for direct imports
 SCRIPTS_DIR = Path(__file__).parent.parent / "skills" / "pact-memory" / "scripts"

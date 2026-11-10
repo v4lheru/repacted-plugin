@@ -14,11 +14,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import missed_wake_scan  # noqa: E402
-from shared import prompt_kind as pk  # noqa: E402
 from shared.session_journal import get_journal_path, read_events  # noqa: E402
 from fixtures.role_frames import (  # noqa: E402
     captured_lead_userpromptsubmit_qualified,
-    teammate_frame,
 )
 
 TEAM = "pact-testteam"

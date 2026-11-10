@@ -54,8 +54,6 @@ import pytest
 _HOOKS_DIR = Path(__file__).parent.parent / "hooks"
 
 import shared.pact_context as pact_context  # noqa: E402
-from shared.journal_reader import normalize_trailing_z as _normalize_trailing_z  # noqa: E402
-from shared.pact_harvest import _resolve_session_dir  # noqa: E402
 from shared.session_journal import (  # noqa: E402
     _parse_ts,
     append_event,

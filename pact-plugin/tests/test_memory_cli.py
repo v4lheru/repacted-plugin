@@ -21,7 +21,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -36,7 +35,7 @@ from helpers import create_test_schema, make_cli_memory_dict
 # the display resolver treats "no CLAUDE.md here" as "keep looking".
 from test_working_memory_concurrency_comprehensive import _seed_claude_md
 
-from scripts.cli import build_parser, cmd_save, cmd_search, cmd_list, cmd_get, cmd_status, cmd_setup, cmd_update, cmd_delete, main, _COMMANDS, _refuse_live_db_under_pytest
+from scripts.cli import build_parser, cmd_save, cmd_search, cmd_list, cmd_get, cmd_status, cmd_setup, cmd_update, cmd_delete, main, _refuse_live_db_under_pytest
 from scripts.memory_api import PACTMemory
 
 

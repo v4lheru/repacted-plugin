@@ -40,7 +40,7 @@ from pathlib import Path
 import pytest
 
 
-from scripts.config import STORE_ORIGIN_ENV, STORE_ORIGIN_HOME  # noqa: E402
+from scripts.config import STORE_ORIGIN_ENV  # noqa: E402
 from scripts.working_memory import (  # noqa: E402
     AmbientSyncRefused,
     SyncResult,

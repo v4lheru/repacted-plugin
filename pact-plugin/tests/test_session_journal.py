@@ -99,12 +99,10 @@ CLI (main()):
 49. read-last with no matching events outputs "null"
 """
 import json
-import multiprocessing
 import os
 import subprocess
 import sys
 import threading
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 

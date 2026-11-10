@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from project_tasks_support import (GIT_ENV, PLUGIN_ROOT, git, kb_profile, load, new_repo, reader,
-                                   run_cli, writer)
+                                   writer)
 
 SESSION_LEDGER = PLUGIN_ROOT / "hooks" / "session_ledger.py"
 BRIDGE_PATH = PLUGIN_ROOT / "hooks" / "shared" / "task_log" / "bridge.py"

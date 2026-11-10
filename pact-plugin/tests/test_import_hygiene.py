@@ -44,12 +44,9 @@ Strictness contract (why the non-vacuity fixtures exist):
 
 import ast
 import importlib.util
-import inspect
 import io
 import os
 import re
-import subprocess
-import sys
 import tokenize
 import uuid
 from pathlib import Path

@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import json
 
-from project_tasks_support import git, run_cli
+from project_tasks_support import run_cli
 from test_project_tasks_bridge import _journal_accept, world  # noqa: F401  # re-export: pytest fixture
-import pytest
 
 VIEWS = {"backlog": "docs/backlog.md", "progress": "docs/progress.md",
          "release_gates": "docs/release-gates.json"}

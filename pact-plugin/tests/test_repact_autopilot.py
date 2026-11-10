@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from shared import autopilot_run, session_journal, unattended, workflow_state
+from shared import session_journal, unattended, workflow_state
 
 # Slow tier: deselected by the default full run, included by `run-tests --full --all`.
 pytestmark = pytest.mark.slow

@@ -19,7 +19,6 @@ Every file in the fixture is inert (MARKER). No real env or credential file is o
 from __future__ import annotations
 
 import subprocess
-from collections import Counter
 from pathlib import Path
 from typing import Callable, NamedTuple
 

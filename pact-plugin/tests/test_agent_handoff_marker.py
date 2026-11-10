@@ -33,8 +33,6 @@ delete-the-fix counter-tests. See the docstring on TestOccupantKeyedDedup.
 """
 import hashlib
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -44,8 +42,6 @@ from shared.agent_handoff_marker import (
     handoff_already_emitted,
     is_signal_task,
     occupant_hash,
-    sanitize_path_component,
-    unclaim,
 )
 
 HOOKS_DIR = Path(__file__).parent.parent / "hooks"

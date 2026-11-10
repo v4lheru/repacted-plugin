@@ -9,12 +9,10 @@ Used by: pytest.
 """
 import ast
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
 
-import scripts.memory_api as memory_api  # noqa: E402
 import scripts.working_memory as wm  # noqa: E402
 
 _PLUGIN = Path(__file__).resolve().parent.parent

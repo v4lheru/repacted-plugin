@@ -16,13 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import site
-import subprocess
-import sys
-from pathlib import Path
-
-from fixtures import plugin_data
-from project_tasks_support import CLI, GIT_ENV, PLUGIN_ROOT, kb_profile, new_repo
 
 
 def test_every_test_gets_its_own_plugin_data_dir(tmp_path):

@@ -29,8 +29,6 @@ Cross-module backcompat (#453 DC3 alias path):
 import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # check_pr_state() -- happy path

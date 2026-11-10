@@ -12,8 +12,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import pwd
-import re
 import sqlite3
 import subprocess
 import sys
