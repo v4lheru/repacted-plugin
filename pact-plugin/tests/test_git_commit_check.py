@@ -862,6 +862,12 @@ class TestStagingInTheSameCommand:
         "/bin/bash -o pipefail -c '{}' sh",
         "bash --rcfile /dev/null -c '{}'",
         "fish -o /tmp/log -c '{}'",
+        "ksh -o -c '{}' a0",                                    # ksh's -o takes no -c
+        "ksh -xo -c '{}' a0",
+        "ksh +o -c '{}' a0",
+        "ksh -o +c '{}' a0",
+        "ksh -T '' -c '{}' a0",                                 # -T takes '' whatever it holds
+        "zsh --emulate foo -c '{}' a0",                         # --emulate takes foo
         "bash -e -c '{}'",                                      # control: denied before the fix
     ])
     def test_a_commit_behind_a_shells_options_is_denied(self, staging_repo, wrap, tool, capsys):
@@ -875,7 +881,8 @@ class TestStagingInTheSameCommand:
         assert code == 2 and "environment file" in err, (wrap, err)
 
     @pytest.mark.parametrize("wrap", ["bash -o pipefail -c '{}'", "sh +x -c 'X=1; {}'",
-                                      "bash -oc pipefail '{}' sh", "bash -o pipefail script.sh"])
+                                      "bash -oc pipefail '{}' sh", "bash -o pipefail script.sh",
+                                      "ksh -o -c '{}' a0", "zsh --emulate sh -c '{}' a0"])
     def test_a_clean_commit_behind_a_shells_options_is_read_once(self, staging_repo, wrap,
                                                                capsys):
         code, err = _commit_in(staging_repo, wrap.format("git add clean.py && git commit -m x"),

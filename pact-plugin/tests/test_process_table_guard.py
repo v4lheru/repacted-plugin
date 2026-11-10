@@ -244,6 +244,8 @@ SHELL_OPTION_LISTING_DENY = [form.replace("L", _PLAIN_LISTING) for form in (
     "/bin/bash -o pipefail -c 'L'",
     "bash --rcfile /dev/null -c 'L'",
     "fish -o /tmp/log -c 'L'",
+    "ksh -T '' -c 'L'",                     # -T and --emulate take the next word as a value
+    "zsh --emulate foo -c 'L'",
     # controls: denied before the fix and still
     "bash -c 'L'",
     "bash -e -c 'L'",

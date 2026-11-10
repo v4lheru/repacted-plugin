@@ -179,12 +179,25 @@ def test_text_decoded_into_a_shell_inside_a_handed_script_is_refused(command):
     "bash -eo pipefail -c 'D'", "bash -oc pipefail 'D'", "bash +c 'D'", "dash +c 'D'",
     "zsh -o pipefail -c 'D'", "ksh -o c 'D'", "/bin/bash -o pipefail -c 'D'",
     "bash --rcfile /dev/null -c 'D'", "fish -o /tmp/log -c 'D'",
+    "ksh -o -c 'D'", "ksh -xo -c 'D'", "ksh +o -c 'D'", "ksh -o +c 'D'",   # -o takes no -c
+    "ksh -T '' -c 'D'", "zsh --emulate foo -c 'D'",
     "bash -e -c 'D'",                                       # control: refused before the fix
 )])
 def test_text_decoded_into_a_shell_behind_a_shells_options_is_refused(command):
     """The walk stopped at the value of a shell's -o / -O and at its + options, and only a
     cluster that starts with "-" counted as -c, so the script after them went unread."""
     from shell.opaque import opaque_reason
+    reason = opaque_reason(command)
+    assert reason and "decodes text" in reason, (command, reason)
+
+
+@pytest.mark.parametrize("shell", ["ksh -o -s a0", "ksh -xo -s a0", "ksh +o -s a0",
+                                   "bash -s a0"])                     # control
+def test_text_decoded_into_ksh_reading_stdin_after_a_bare_o_is_refused(shell):
+    """ksh's -o takes no value from -s, so ksh reads its script from stdin; the walk took -s
+    for -o's value and the decoded text it ran went unread."""
+    from shell.opaque import opaque_reason
+    command = _DECODED.replace("| sh", "| " + shell)
     reason = opaque_reason(command)
     assert reason and "decodes text" in reason, (command, reason)
 

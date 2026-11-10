@@ -486,8 +486,8 @@ RUNNER_VALUE_OPTIONS = {
     "bash": frozenset({"-o", "-O", "--rcfile", "--init-file"}),
     "sh": frozenset({"-o", "-O", "--rcfile", "--init-file"}),
     "dash": frozenset({"-o"}),
-    "zsh": frozenset({"-o"}),
-    "ksh": frozenset({"-o", "-R"}),
+    "zsh": frozenset({"-o", "--emulate"}),
+    "ksh": frozenset({"-o", "-R", "-T"}),
     "env": frozenset({"-u", "--unset", "-C", "--chdir", "-P", "-L", "-U"}),
     "sudo": frozenset({"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C",
                        "--close-from", "-D", "--chdir", "-r", "--role", "-t", "--type", "-U",
@@ -550,6 +550,15 @@ _PLUS_SHELLS = SCRIPT_SHELLS - {"fish"}
 # turn and read the rest of the cluster on: bash -oc pipefail S runs S, dash -oo errexit
 # nounset -c S too. zsh and ksh take the rest of the cluster, else the next word (getopt).
 _EACH_VALUE_NEXT = frozenset({"bash", "sh", "dash"})
+# Value options whose value is optional: ksh takes the next word for -o / +o only when it does
+# not start with - or + (`ksh -o -c S` lists the options, then runs S); a value glued to the
+# cluster (-opipefail) is its value as before. ksh's -R and -T take the next word whatever it
+# holds ('', ' 5', -5).
+_OPTIONAL_VALUE = {"ksh": frozenset({"-o"})}
+# Long value options a shell reads only before its other options: zsh reads --emulate NAME
+# there (--emulate sh --emulate ksh too) and refuses the line after one. Its value is read
+# while no short option stands before it (`longs`); after a long one, on a line zsh refuses.
+_FIRST_LONG = {"zsh": frozenset({"--emulate"})}
 # bash's long option names, read with one dash or two (the value ones are in its table above),
 # but only before its first short option: after one, -rcfile is -r -c -f -i -l -e. dash
 # refuses every one of them, so sh reads them as bash does.
@@ -610,7 +619,9 @@ def _shell_option(runner: str, words: list[str], i: int, longs: bool
     its letters in its name, so takes_script sees its c: bash, sh and dash take each value
     letter's value from the next word in turn (`-oc pipefail`: name -oc, value pipefail, two
     words); zsh and ksh take the rest of the cluster, else the next word (`-xopipefail`: name
-    -xo, value pipefail). A value missing at the end of the words is None."""
+    -xo, value pipefail), but ksh's -o takes no next word that starts with - or + (`-xo -c`:
+    name -xo, no value). zsh's --emulate takes its value only while `longs`. A value missing at
+    the end of the words is None."""
     word, options = words[i], RUNNER_VALUE_OPTIONS.get(runner, frozenset())
     long = word[2:] if word.startswith("--") else word[1:] if (
         longs and runner in _BASH_LONG_SHELLS and word[:1] == "-" and word[1:] in _BASH_LONG
@@ -619,8 +630,8 @@ def _shell_option(runner: str, words: list[str], i: int, longs: bool
         name, equals, value = ("--" + long).partition("=")
         if equals:
             return name, value, 1
-        return (name, words[i + 1], 2) if name in options and i + 1 < len(words) \
-            else (name, None, 1)
+        takes = name in options and (longs or name not in _FIRST_LONG.get(runner, ()))
+        return (name, words[i + 1], 2) if takes and i + 1 < len(words) else (name, None, 1)
     if runner in _EACH_VALUE_NEXT:
         taken = words[i + 1:i + 1 + sum("-" + letter in options for letter in word[1:])]
         return word, taken[0] if taken else None, 1 + len(taken)
@@ -628,7 +639,11 @@ def _shell_option(runner: str, words: list[str], i: int, longs: bool
         if "-" + letter in options:
             if k < len(word) - 1:
                 return word[:k + 1], word[k + 1:], 1
-            return (word, words[i + 1], 2) if i + 1 < len(words) else (word, None, 1)
+            following = words[i + 1] if i + 1 < len(words) else None
+            if following is None or "-" + letter in _OPTIONAL_VALUE.get(runner, ()) \
+                    and following.startswith(("-", "+")):
+                return word, None, 1                    # ksh -o -c S: -o lists, -c is read
+            return word, following, 2
     return word, None, 1
 
 

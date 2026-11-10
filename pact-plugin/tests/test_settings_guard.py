@@ -584,6 +584,15 @@ def test_a_settings_write_in_any_script_fish_or_watch_runs_is_refused(home, comm
     "/bin/bash -o pipefail -c 'W' sh",
     "bash --rcfile /dev/null -c 'W'",
     "fish -o /tmp/log -c 'W'",
+    # ksh's -o takes no value from a word that starts with - or +, so the -c after it was
+    # taken for that value
+    "ksh -o -c 'W' a0",
+    "ksh -xo -c 'W' a0",
+    "ksh +o -c 'W' a0",
+    "ksh -o +c 'W' a0",
+    # -T and zsh's --emulate take the next word: refused before through the line's own words
+    "ksh -T '' -c 'W' a0",
+    "zsh --emulate foo -c 'W' a0",
     # controls: refused before the fix and still
     "bash -c 'W'",
     "bash -e -c 'W'",

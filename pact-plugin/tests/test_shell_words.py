@@ -646,3 +646,81 @@ def test_a_shells_plain_script_is_read_as_before(words, script):
 def test_a_shell_option_missing_its_value_ends_the_words(words):
     assert shell_words.strip_prefix(words) == []
     assert shell_words.runner_script(words) is None
+
+
+# ── ksh's optional -o value, ksh's -T, zsh's --emulate ──────────────────────────────────────
+# ksh93 takes the next word for the value of -o or +o only when that word does not start with
+# - or + (-o alone lists the options and ksh reads on), so `ksh -o -c S` runs S while the walk
+# took -c for -o's value and never read S. ksh's -T takes the next word whatever it holds
+# ('', ' 5', -5), and zsh's --emulate the next word, read only before zsh's other options
+# (one --emulate after another too); the walk read both with no value and took that value for
+# the command. As ksh 93u+ and zsh 5.9 read them.
+KSH_ZSH_OPTION_SCRIPTS = [
+    ["ksh", "-o", "-c", S],
+    ["ksh", "-xo", "-c", S],                            # a cluster that ends in o
+    ["ksh", "-eo", "-c", S],
+    ["ksh", "-o", "-xc", S],
+    ["ksh", "-o", "-ec", S],
+    ["ksh", "-o", "-o", "-c", S],
+    ["ksh", "-o", "-e", "-c", S],
+    ["ksh", "-co", "-x", S],                            # -c, then -o with no value
+    ["ksh", "+o", "-c", S],
+    ["ksh", "-o", "+c", S],
+    ["ksh", "+o", "+c", S],
+    ["ksh", "+o", "-xc", S],
+    ["ksh", "-o", "pipefail", "+o", "-c", S],
+    ["ksh", "-o", "", "-c", S],                         # an empty word is -o's value
+    ["/bin/ksh", "-o", "-c", S],
+    ["sudo", "ksh", "-o", "-c", S],
+    ["env", "ksh", "-o", "-c", S],
+    ["nice", "ksh", "-o", "-c", S],
+    ["xargs", "ksh", "-o", "-c", S],
+    ["timeout", "5", "ksh", "-o", "-c", S],
+    ["flock", "/tmp/l", "ksh", "-o", "-c", S],
+    ["ksh", "-T", "", "-c", S],
+    ["ksh", "-T", " 5", "-c", S],
+    ["ksh", "-T", "+5", "-c", S],
+    ["ksh", "-T", "-5", "-c", S],                       # -T takes the next word whatever
+    ["ksh", "-xT", "0", "-c", S],
+    ["ksh", "-o", "-T", "0", "-c", S],
+    ["zsh", "--emulate", "foo", "-c", S],
+    ["zsh", "--emulate", "foo", "+c", S],
+    ["zsh", "--emulate", "foo", "-xc", S],
+    ["zsh", "--emulate", "foo", "-o", "pipefail", "-c", S],
+    ["zsh", "--emulate", "foo", "--emulate", "bar", "-c", S],
+    ["/bin/zsh", "--emulate", "foo", "-c", S],
+    ["sudo", "zsh", "--emulate", "foo", "-c", S],
+]
+
+
+@pytest.mark.parametrize("words", KSH_ZSH_OPTION_SCRIPTS,
+                         ids=[" ".join(w)[:40] for w in KSH_ZSH_OPTION_SCRIPTS])
+def test_kshs_bare_o_its_t_and_zshs_emulate_lead_to_the_script(words):
+    assert shell_words.strip_prefix(words) == [S]
+    assert shell_words.runner_script(words) == S
+
+
+@pytest.mark.parametrize("words, record", [
+    (["ksh", "-o", "-c", S], [("ksh", "", None), ("ksh", "-o", None), ("ksh", "-c", None)]),
+    (["ksh", "-xo", "+c", S], [("ksh", "", None), ("ksh", "-xo", None), ("ksh", "+c", None)]),
+    (["ksh", "-T", "", "-c", S], [("ksh", "", None), ("ksh", "-T", ""), ("ksh", "-c", None)]),
+    (["zsh", "--emulate", "sh", "-c", S],
+     [("zsh", "", None), ("zsh", "--emulate", "sh"), ("zsh", "-c", None)]),
+])
+def test_kshs_bare_o_its_t_and_zshs_emulate_are_recorded(words, record):
+    assert shell_words.runner_prefix(words) == (len(words) - 1, record)
+
+
+@pytest.mark.parametrize("words, command", [
+    (["ksh", "-o", "-x", "script.sh"], ["script.sh"]),             # -o lists, -x, a file
+    (["ksh", "-o", "pipefail", "script.sh"], ["script.sh"]),
+    (["ksh", "-xo", "pipefail", "script.sh"], ["script.sh"]),
+    (["ksh", "-opipefail", "script.sh"], ["script.sh"]),           # glued: the value as before
+    (["ksh", "-T", "5", "script.sh"], ["script.sh"]),
+    (["ksh", "-R", "-c", "script.sh"], ["script.sh"]),             # -R takes the next word
+    (["zsh", "--emulate", "sh", "script.sh"], ["script.sh"]),
+    (["zsh", "-o", "-c", "script.sh"], ["script.sh"]),             # zsh's -o takes -c: no -c
+])
+def test_kshs_bare_o_its_t_and_zshs_emulate_before_a_file_run_no_script(words, command):
+    assert shell_words.strip_prefix(words) == command
+    assert shell_words.runner_script(words) is None

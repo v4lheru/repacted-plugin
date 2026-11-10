@@ -388,6 +388,24 @@ SHELL_OPTION_FORMS = (
     "sudo sh +x -c 'S'", "bash +c 'S'", "ksh -o c 'S'", "bash --rcfile /dev/null -c 'S'",
     "bash -rcfile /dev/null -c 'S'", "fish -o /tmp/log -c 'S'", "fish --debug-o /tmp/log -c 'S'",
 )
+# ksh takes -o's value only from a word that does not start with - or +, so the walk took the
+# -c after a bare -o for that value; ksh's -T and zsh's --emulate were read with no value, so
+# their value was taken for the command. A bare read was still caught as that command's
+# words; a read piped on was not.
+KSH_ZSH_OPTION_FORMS = (
+    "ksh -o -c 'S'", "ksh -xo -c 'S'", "ksh -eo -c 'S'", "ksh -o -xc 'S'", "ksh -o -ec 'S'",
+    "ksh -o -c 'S' a0", "/bin/ksh -o -c 'S'", "sudo ksh -o -c 'S'", "env ksh -o -c 'S'",
+    "nice ksh -o -c 'S'", "xargs ksh -o -c 'S'", "timeout 5 ksh -o -c 'S'",
+    "flock /tmp/l ksh -o -c 'S'", "bash -c \"ksh -o -c 'S'\"", "ksh +o -c 'S'", "ksh -o +c 'S'",
+    "ksh +o +c 'S'", "ksh -o pipefail +o -c 'S'", "ksh -T '' -c 'S'", "ksh -T ' 5' -c 'S'",
+    "zsh --emulate foo -c 'S'", "zsh --emulate foo +c 'S'", "zsh --emulate foo -xc 'S'",
+    "/bin/zsh --emulate foo -c 'S'", "sudo zsh --emulate foo -c 'S'",
+)
+LEAK_ENV = READ_ENV + " | tr a b"
+KSH_ZSH_OPTION_DENY = [form.replace("S", script) for form in KSH_ZSH_OPTION_FORMS + (
+    # controls: denied before the fix and still
+    "ksh -o pipefail -c 'S'", "zsh -o pipefail -c 'S'",
+) for script in (LEAK_ENV, "X=1; " + LEAK_ENV, READ_ENV)]
 SHELL_OPTION_DENY = [form.replace("S", READ_ENV) for form in SHELL_OPTION_FORMS + (
     # controls: denied before the fix and still
     "bash -c 'S'", "bash -e -c 'S'",
@@ -398,6 +416,11 @@ SHELL_OPTION_ALLOW = [
     "bash -o pipefail script.sh",
     "bash script.sh",
     "sh -c 'echo hi' arg0 arg1",
+    "ksh -o -x script.sh",
+    "ksh -o pipefail script.sh",
+    "zsh --emulate sh script.sh",
+    "ksh -o -c 'cat notes.txt'",
+    "zsh --emulate sh -c 'ls | wc -l'",
 ]
 
 
@@ -408,13 +431,19 @@ def test_a_read_behind_a_shells_options_is_denied(tree, command, tool):
 
 
 @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", KSH_ZSH_OPTION_DENY)
+def test_a_read_behind_kshs_bare_o_its_t_or_zshs_emulate_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
 @pytest.mark.parametrize("command", SHELL_OPTION_ALLOW)
 def test_a_shells_options_before_a_harmless_script_are_allowed(tree, command, tool):
     assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
 
 
 @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
-@pytest.mark.parametrize("form", SHELL_OPTION_FORMS)
+@pytest.mark.parametrize("form", SHELL_OPTION_FORMS + KSH_ZSH_OPTION_FORMS)
 def test_an_env_get_run_behind_a_shells_options_is_judged_as_under_bash_c(tree, form, tool):
     """The script is judged as `bash -c 'S'` judges it, whatever that verdict is."""
     script = f"env-get {ENV_NAME} DEMO_KEY -- printenv DEMO_KEY"
