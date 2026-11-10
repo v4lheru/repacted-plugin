@@ -30,10 +30,8 @@ writer needs to verify):
 12. _BLOCKED_TOOLS in bootstrap_gate.py does NOT contain TeamCreate
 """
 
-import hashlib
 
 from shared.marker_schema import (
-    MARKER_MAX_BYTES,
     MARKER_SCHEMA_VERSION,
     expected_marker_signature,
 )

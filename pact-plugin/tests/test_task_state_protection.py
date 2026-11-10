@@ -18,19 +18,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import unicodedata
 from pathlib import Path
 
 import pytest
 
 import settings_guard as guard
-import task_write_guard as TWG
 from fixtures.ops_env import TEAM, World, handoff, ops_env, teachback  # noqa: F401 - fixture
 from shared.ops import accept, submit
 from shared.ops import evidence as EV
-from shared.ops import records
-from shared.task_log import close_gate as CG
 from shared.task_log import write as W
 from shared.task_store import TaskRef
 

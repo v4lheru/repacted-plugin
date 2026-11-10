@@ -28,11 +28,9 @@ Determinism across environments:
     no real rung can run and the fail-open degradation path is forced.
 """
 
-import os
 import stat
 import subprocess
 from pathlib import Path
-import pytest
 
 _SCRIPT = (
     Path(__file__).parent.parent

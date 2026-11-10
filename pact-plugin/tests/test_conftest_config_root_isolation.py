@@ -15,7 +15,6 @@ Used by: pytest.
 """
 import os
 
-import pytest
 
 from shared.paths import get_claude_config_dir
 

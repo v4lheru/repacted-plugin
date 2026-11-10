@@ -61,8 +61,6 @@ except ImportError:
 
 import sqlite_vec  # noqa: E402
 
-from scripts import cli  # noqa: E402
-from scripts.config import _STORE_DB_PATH, resolve_db_path  # noqa: E402
 from scripts.embeddings import (  # noqa: E402
     EMBEDDING_DIM,
     EMBEDDING_MAX_TOKENS,

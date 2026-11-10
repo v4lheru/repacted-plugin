@@ -10,7 +10,6 @@ Used by: pytest test suite to validate CT field implementation across
 database.py, models.py, and working_memory.py.
 """
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -23,7 +22,6 @@ from scripts.database import (
     get_memory,
     update_memory,
     delete_memory,
-    search_memories_by_text,
     ensure_initialized,
     _migrate_ct_fields,
     JSON_FIELDS,

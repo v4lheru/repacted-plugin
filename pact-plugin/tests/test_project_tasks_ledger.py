@@ -17,7 +17,7 @@ import re
 
 import pytest
 
-from project_tasks_support import INERT_MARKER, PLUGIN_ROOT, load, run_cli
+from project_tasks_support import PLUGIN_ROOT, load, run_cli
 from test_project_tasks_bridge import TEAM, TASK_B, World, lead_accepts, run_hook
 
 LEDGER_PATH = PLUGIN_ROOT / "hooks" / "shared" / "task_log" / "ledger.py"

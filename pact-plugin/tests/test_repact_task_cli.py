@@ -5,16 +5,11 @@ runs the CLI as a subprocess inside a temp git repo.
 """
 from __future__ import annotations
 
-import datetime
-import json
-import os
 import re
-import importlib.util
-from importlib.machinery import SourceFileLoader
 
 import pytest
 
-from project_tasks_support import CLI, INERT_MARKER, git, kb_profile, new_repo, reader, run_cli
+from project_tasks_support import git, kb_profile, new_repo, run_cli
 
 LINE = re.compile(r"^T-[0-9a-f]{8}  \S+  P[0-3]  \S+  .+$")
 SUBCOMMANDS = ("init", "add", "set", "dep", "link", "start", "done", "reopen", "drop", "next",

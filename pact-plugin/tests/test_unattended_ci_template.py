@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from workflow_runner_fixture import calls, load, run_job, write_stubs
+from workflow_runner_fixture import load, run_job, write_stubs
 
 PLUGIN = Path(__file__).resolve().parent.parent
 TEMPLATE = PLUGIN / "templates" / "ci" / "unattended-compact.yml"

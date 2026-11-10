@@ -37,7 +37,6 @@ import pytest
 
 from shared.background_work import (
     ANCHOR_CLASS_ABSENT,
-    ANCHOR_CLASS_MALFORMED,
     WAIT_ANCHOR_KEY,
     wait_anchor_class,
     wait_covers_record,

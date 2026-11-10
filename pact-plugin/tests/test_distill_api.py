@@ -19,7 +19,6 @@ from _distill import backend_api as A  # noqa: E402
 from _distill import batchrun as BR  # noqa: E402
 from _distill import ledger as L  # noqa: E402
 from _distill import schema as SC  # noqa: E402
-from _distill.backend import BackendError  # noqa: E402
 
 KEY = "fake-test-key-QX7vT2mL9pR4wZ"     # not key-shaped; the scan below looks for it verbatim
 pytestmark = pytest.mark.usefixtures("notes")   # a config dir with notes, distill enabled

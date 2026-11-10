@@ -11,16 +11,11 @@ from __future__ import annotations
 
 import json
 import sys
-import threading
-import time
 from pathlib import Path
 
 import pytest
 
-import dispatch
-import docker_lock_gate
-from shared import frame, session_registry
-from shared.task_utils import update_task_file
+from shared import frame
 
 TEAM = "session-u5frame"
 LEAD_SID = "sid-lead"

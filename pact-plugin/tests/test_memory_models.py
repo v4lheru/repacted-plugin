@@ -11,7 +11,6 @@ Tests cover:
    get_searchable_text, __repr__, JSON string handling
 7. memory_from_db_row: basic conversion, file injection
 """
-import json
 from datetime import datetime, timezone
 
 import pytest

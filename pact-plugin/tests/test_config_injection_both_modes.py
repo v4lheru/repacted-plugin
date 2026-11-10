@@ -39,10 +39,6 @@ import pytest
 
 from fixtures.role_frames import (
     captured_lead_sessionstart_qualified,
-    captured_lead_sessionstart_unqualified,
-    captured_plain_sessionstart,
-    captured_teammate_sessionstart,
-    lead_frame_qualified,
     teammate_frame,
 )
 

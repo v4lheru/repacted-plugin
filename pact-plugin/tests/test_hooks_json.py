@@ -13,7 +13,6 @@ Tests cover:
 8. SubagentStart registration selects every spawnable PACT agent type
 """
 import json
-import re
 from pathlib import Path
 
 import pytest

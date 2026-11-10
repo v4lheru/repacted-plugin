@@ -15,7 +15,6 @@ Used by: the suite.
 from __future__ import annotations
 
 import errno
-import fcntl
 import json
 import os
 import threading

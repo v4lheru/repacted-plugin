@@ -17,8 +17,8 @@ import json
 
 import pytest
 
-from project_tasks_support import git, new_repo, run_cli, writer
-from test_project_tasks_bridge import SID, TASK_B, TEAM, World, lead_accepts, run_hook
+from project_tasks_support import git, new_repo, run_cli
+from test_project_tasks_bridge import SID, TEAM, World
 
 DRIFT = "views drifted from the log"
 HANDOFF = {"rev": 1, "amendments": {}, "produced": ["x"], "decisions": [], "uncertainty": [],

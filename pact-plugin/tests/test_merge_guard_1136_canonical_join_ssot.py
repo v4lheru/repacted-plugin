@@ -41,7 +41,6 @@ import pytest  # noqa: E402
 import merge_guard_post  # noqa: E402
 import merge_guard_pre  # noqa: E402
 import shared.merge_guard_common as mgc  # noqa: E402
-from merge_guard_repo_fixture import take_out_typed  # noqa: E402
 from merge_guard_post import main as post_main  # noqa: E402
 from merge_guard_pre import main as pre_main  # noqa: E402
 

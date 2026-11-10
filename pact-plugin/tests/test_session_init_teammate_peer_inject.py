@@ -37,8 +37,6 @@ import pytest
 
 from fixtures.role_frames import (
     lead_frame_qualified,
-    lead_frame_unqualified,
-    plain_frame,
     teammate_frame,
 )
 

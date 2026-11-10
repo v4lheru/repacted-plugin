@@ -29,10 +29,6 @@ def _load_cli():
 
 
 CLI = _load_cli()
-from _distill import discover as D  # noqa: E402  # bin/ is on sys.path once the CLI loaded
-from _distill import redact as R  # noqa: E402
-from _distill import segment as G  # noqa: E402
-from _distill import sources as S  # noqa: E402
 from _distill import view as V  # noqa: E402
 from shared import scrub  # noqa: E402
 

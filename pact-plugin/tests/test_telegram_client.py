@@ -14,14 +14,13 @@ Tests cover:
 9. Security: unauthorized chat_id rejection, inbound sanitization
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 from telegram.telegram_client import (
     TelegramClient,
-    TelegramAPIError,
 )
 
 

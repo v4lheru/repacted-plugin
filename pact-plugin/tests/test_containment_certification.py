@@ -72,8 +72,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import textwrap
-import unicodedata
 from pathlib import Path
 
 import pytest

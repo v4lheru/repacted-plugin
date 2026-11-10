@@ -9,10 +9,8 @@ the private tests/user_layer/test_kb_gate.py, next to the gate's KB fixture.
 from __future__ import annotations
 
 import json
-import os
 import sys
 import textwrap
-import time
 import types
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -37,8 +35,6 @@ from _distill import estimate as E  # noqa: E402
 from _distill import prompts as PR  # noqa: E402
 from _distill import schema as SC  # noqa: E402
 from _distill import sources as S  # noqa: E402
-from _recall import merge as RM  # noqa: E402
-from _recall import vault as RV  # noqa: E402
 from shared import scrub  # noqa: E402
 
 # A prompt, frame or schema change must come with an EXTRACTOR_VERSION bump: add a row, keep

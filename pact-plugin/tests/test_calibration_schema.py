@@ -9,11 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from shared.variety_scorer import (
-    MAX_SCORE,
-    MIN_SCORE,
-)
-
 
 # CalibrationRecord schema fields (from architecture doc lines 170-195)
 REQUIRED_FIELDS = {

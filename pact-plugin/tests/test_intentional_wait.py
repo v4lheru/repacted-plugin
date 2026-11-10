@@ -16,7 +16,7 @@ Coverage targets:
   team_name) and surface 2 (signal-task pattern, independent of team_name).
 """
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest

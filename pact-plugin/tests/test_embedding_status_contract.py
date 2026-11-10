@@ -23,12 +23,7 @@ numbers would re-introduce the list that section 4.1 exists to remove:
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

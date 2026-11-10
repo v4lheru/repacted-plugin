@@ -59,7 +59,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from helpers import effective_hooks_config  # noqa: E402
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
 HOOK = HOOKS_DIR / "stop_background_gate.py"

@@ -28,9 +28,7 @@ path must be extended to cover that module.
 
 from __future__ import annotations
 
-import ast
 import json
-from pathlib import Path
 
 from shared.intentional_wait import TEACHBACK_EXEMPT_AGENT_TYPES
 from shared.teachback_schema import (

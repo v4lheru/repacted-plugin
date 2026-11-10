@@ -23,8 +23,6 @@ import sys
 from pathlib import Path
 
 from fixtures.role_frames import (
-    captured_compaction_lead_postcompact,
-    captured_compaction_lead_sessionstart,
     captured_compaction_teammate_postcompact,
     captured_compaction_teammate_sessionstart,
 )

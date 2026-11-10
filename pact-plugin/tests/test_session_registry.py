@@ -9,9 +9,6 @@ tests live in commit G's test files; this file is the module's own unit suite.)
 """
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest

@@ -10,7 +10,6 @@ turns it red.
 import json
 from pathlib import Path
 
-import pytest
 
 from shared.plugin_identity import (
     LEGACY_NAMESPACES,

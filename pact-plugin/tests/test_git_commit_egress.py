@@ -11,13 +11,11 @@ Used by: the plugin suite. The older compliance rules are in tests/test_git_comm
 """
 from __future__ import annotations
 
-import gc
 import io
 import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 from unittest.mock import patch
 

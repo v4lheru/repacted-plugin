@@ -18,8 +18,6 @@ import sys
 import pytest
 
 from shared import autopilot_run as R
-from shared import unattended
-from shared.team_name import session_team_name
 from test_project_tasks_bridge import (  # noqa: F401 - fixture
     GIT_ENV, PLUGIN_ROOT, SID, TASK_B, TEAM, bind_ref, frame, lead_accepts, run_hook, world,
 )

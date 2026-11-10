@@ -13,10 +13,8 @@ from pathlib import Path
 
 import pytest
 
-import dispatch_registry as registry
-import docker_lock_gate
 from shared import session_registry
-from shared.actor import UNKNOWN, resolve_actor
+from shared.actor import resolve_actor
 
 TEAM = "session-u5actor"
 LEAD_SID = "sid-lead"

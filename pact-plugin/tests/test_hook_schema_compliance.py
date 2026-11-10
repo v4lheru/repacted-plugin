@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import ast
 import pathlib
-import textwrap
 
 HOOKS_DIR = pathlib.Path(__file__).parent.parent / "hooks"
 

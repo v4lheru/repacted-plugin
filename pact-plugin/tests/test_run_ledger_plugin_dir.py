@@ -16,12 +16,10 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import stat
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from shared import plugin_paths
 from test_session_init_env_file import _run_main

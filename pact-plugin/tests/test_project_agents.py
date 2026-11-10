@@ -11,14 +11,10 @@ Summary: Specialists a project brings itself (hooks/shared/project_agents.py, th
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from shared.plugin_identity import NAMESPACE
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 CLI = PLUGIN_ROOT / "bin" / "repact-agent"

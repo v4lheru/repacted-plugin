@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from shared import cost_cap, pact_config, session_spend, team_policy
+from shared import pact_config, session_spend, team_policy
 
 import dispatch_gate
 

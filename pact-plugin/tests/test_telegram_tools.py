@@ -11,35 +11,23 @@ Tests cover:
 """
 
 import asyncio
-import os
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from telegram.tools import (
     ToolContext,
-    QueuedReply,
     get_context,
     tool_telegram_notify,
     tool_telegram_ask,
-    tool_telegram_check_replies,
     tool_telegram_status,
     _get_project_name,
-    _prepend_session_prefix,
-    ASK_REPLY_HINT,
     DEFAULT_ASK_TIMEOUT,
-    MAX_BUTTONS,
     NOTIFY_RATE_LIMIT,
-    NOTIFY_RATE_WINDOW,
     MAX_PENDING_REPLIES,
     STALE_FUTURE_BUFFER,
-    REPLY_QUEUE_MAX_SIZE,
-    REPLY_QUEUE_TTL,
-    MAX_SENT_NOTIFICATIONS,
-    NOTIFICATION_SNIPPET_LENGTH,
 )
-from telegram.telegram_client import TelegramAPIError
 
 
 # =============================================================================

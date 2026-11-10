@@ -15,7 +15,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -27,7 +27,6 @@ from scripts.working_memory import (  # noqa: E402
     MAX_WORKING_MEMORIES,
     WORKING_MEMORY_TOKEN_BUDGET,
     SyncResult,
-    _estimate_tokens,
     _format_memory_entry,
     _record_timestamp,
     project_memories_to_claude_md,

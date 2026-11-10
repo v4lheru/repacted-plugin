@@ -7,7 +7,6 @@ callers change; these are its direct tests. It is what turns a lost emit into
 a `journal_emit_skipped` record instead of silence. An emit lost without
 leaving that record is invisible here too.
 """
-import sys
 
 import pytest
 

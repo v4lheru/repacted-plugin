@@ -44,7 +44,6 @@ from pathlib import Path
 import pytest
 
 from shared.dispatch_helpers import has_task_assigned
-import shared.session_registry as sr
 from shared.plugin_manifest import _resolve_plugin_root
 
 

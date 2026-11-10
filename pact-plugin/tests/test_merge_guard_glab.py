@@ -33,7 +33,6 @@ from merge_guard_pre import (
 )
 from shared.merge_guard_common import (
     TOKEN_PREFIX,
-    detect_command_operation_type,
     extract_command_context,
     is_compound_destructive_command,
     is_dangerous_command,

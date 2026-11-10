@@ -76,7 +76,6 @@ both would be unusual here and neither is worth the complexity today.
 import ast
 from pathlib import Path
 
-import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "pact-memory" / "scripts"
 
