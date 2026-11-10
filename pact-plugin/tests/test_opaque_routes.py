@@ -173,6 +173,30 @@ def test_text_decoded_into_a_shell_inside_a_handed_script_is_refused(command):
     assert reason and "decodes text" in reason, (command, reason)
 
 
+@pytest.mark.parametrize("command", [form.replace("D", _DECODED) for form in (
+    "bash -o pipefail -c 'D'", "bash -O extglob -c 'X=1; D'", "sh -o errexit -c 'D'",
+    "bash -c -o pipefail 'D'", "bash +o posix -c 'D'", "sh +x -c 'D'",
+    "bash -eo pipefail -c 'D'", "bash -oc pipefail 'D'", "bash +c 'D'", "dash +c 'D'",
+    "zsh -o pipefail -c 'D'", "ksh -o c 'D'", "/bin/bash -o pipefail -c 'D'",
+    "bash --rcfile /dev/null -c 'D'", "fish -o /tmp/log -c 'D'",
+    "bash -e -c 'D'",                                       # control: refused before the fix
+)])
+def test_text_decoded_into_a_shell_behind_a_shells_options_is_refused(command):
+    """The walk stopped at the value of a shell's -o / -O and at its + options, and only a
+    cluster that starts with "-" counted as -c, so the script after them went unread."""
+    from shell.opaque import opaque_reason
+    reason = opaque_reason(command)
+    assert reason and "decodes text" in reason, (command, reason)
+
+
+@pytest.mark.parametrize("command", ["bash -o pipefail -c 'echo ls | sh'",
+                                     "sh +x -c 'X=1; echo bHM= | base64 -d'",
+                                     "bash -o pipefail script.sh", "bash +x script.sh"])
+def test_a_shells_options_before_a_script_that_builds_nothing_pass(command):
+    from shell.opaque import opaque_reason
+    assert opaque_reason(command) is None
+
+
 @pytest.mark.parametrize("command", ["watch 'echo ls | sh'", "flock /tmp/l -c 'echo ls | sh'",
                                      "watch 'X=1; echo bHM= | base64 -d'", "watch echo \"it's\"",
                                      "fish -C 'set x 1' -c 'echo $x'", "watch nice ls"])

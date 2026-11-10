@@ -228,6 +228,43 @@ class TestEveryFishScript:
         assert guard.decide({"tool_name": tool, "tool_input": {"command": command}}) is None
 
 
+# The walk stopped at the value of a shell's -o / -O and at its + options, so the listing in
+# the -c script after them never stood at command position.
+SHELL_OPTION_LISTING_DENY = [form.replace("L", _PLAIN_LISTING) for form in (
+    "bash -o pipefail -c 'L'",
+    "bash -O extglob -c 'X=1 L'",
+    "sh -o errexit -c 'L'",
+    "bash -c -o pipefail 'L'",
+    "bash +o posix -c 'L'",
+    "sh +x -c 'L'",
+    "bash -eo pipefail -c 'L'",
+    "bash -oc pipefail 'L'",
+    "zsh -o pipefail -c 'L'",
+    "ksh -o c 'L'",
+    "/bin/bash -o pipefail -c 'L'",
+    "bash --rcfile /dev/null -c 'L'",
+    "fish -o /tmp/log -c 'L'",
+    # controls: denied before the fix and still
+    "bash -c 'L'",
+    "bash -e -c 'L'",
+)]
+SHELL_OPTION_LISTING_ALLOW = ["bash -o pipefail -c 'ls -l'", "sh +x -c 'echo hi'",
+                              "bash -o pipefail script.sh"]
+
+
+class TestShellOptions:
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("command", SHELL_OPTION_LISTING_DENY)
+    def test_a_listing_behind_a_shells_options_is_denied(self, command, tool):
+        assert guard.decide({"tool_name": tool, "tool_input": {"command": command}}) is not None
+
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("command", SHELL_OPTION_LISTING_ALLOW)
+    def test_a_shells_options_before_a_script_that_lists_nothing_are_allowed(self, command,
+                                                                            tool):
+        assert guard.decide({"tool_name": tool, "tool_input": {"command": command}}) is None
+
+
 class TestGrepPatternIsData:
     @pytest.mark.parametrize("command", GREP_PATTERN_ALLOW + REVIEW_KEPT)
     def test_a_listing_named_inside_a_grep_pattern_is_allowed(self, command):

@@ -376,6 +376,55 @@ def test_fish_and_watch_scripts_that_read_nothing_protected_are_allowed(tree, co
     assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
 
 
+# ── NAMED behind a shell's options with their values ──────────────────────────────────
+# The walk stopped at the value of -o / -O (`pipefail`) and at a + option, so the -c script
+# after them was never judged under either tool.
+SHELL_OPTION_FORMS = (
+    "bash -o pipefail -c 'S'", "bash -O extglob -c 'S'", "sh -o errexit -c 'S'",
+    "bash -o xtrace -c 'S'", "bash -c -o pipefail 'S'", "bash +o posix -c 'S'",
+    "bash +O extglob -c 'S'", "sh +x -c 'S'", "bash -eo pipefail -c 'S'",
+    "zsh -o pipefail -c 'S'", "dash -o errexit -c 'S'", "ksh -o pipefail -c 'S'",
+    "/bin/bash -o pipefail -c 'S'", "bash -o pipefail -c 'X=1; S'", "bash -oc pipefail 'S'",
+    "sudo sh +x -c 'S'", "bash +c 'S'", "ksh -o c 'S'", "bash --rcfile /dev/null -c 'S'",
+    "bash -rcfile /dev/null -c 'S'", "fish -o /tmp/log -c 'S'", "fish --debug-o /tmp/log -c 'S'",
+)
+SHELL_OPTION_DENY = [form.replace("S", READ_ENV) for form in SHELL_OPTION_FORMS + (
+    # controls: denied before the fix and still
+    "bash -c 'S'", "bash -e -c 'S'",
+)]
+SHELL_OPTION_ALLOW = [
+    "bash -o pipefail -c 'X=1; cat notes.txt'",
+    "sh +x -c 'ls | wc -l'",
+    "bash -o pipefail script.sh",
+    "bash script.sh",
+    "sh -c 'echo hi' arg0 arg1",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", SHELL_OPTION_DENY)
+def test_a_read_behind_a_shells_options_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", SHELL_OPTION_ALLOW)
+def test_a_shells_options_before_a_harmless_script_are_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("form", SHELL_OPTION_FORMS)
+def test_an_env_get_run_behind_a_shells_options_is_judged_as_under_bash_c(tree, form, tool):
+    """The script is judged as `bash -c 'S'` judges it, whatever that verdict is."""
+    script = f"env-get {ENV_NAME} DEMO_KEY -- printenv DEMO_KEY"
+
+    def verdict(command):
+        return denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+    assert verdict(form.replace("S", script)) == verdict(f"bash -c '{script}'")
+
+
 ENVGET ="/srv/My Projects/pact-plugin/bin/env-get"
 
 

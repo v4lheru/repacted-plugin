@@ -533,3 +533,116 @@ def test_a_script_after_watch_and_a_runner_word_is_the_command(words, command):
                                    ["fish", "x.fish", "-c", S], ["fish", "-c"]])
 def test_no_line_without_a_script_word_after_watch_and_a_runner(words):
     assert shell_words.runner_script(words) is None
+
+
+# ── a shell's options with their values, and its + options ────────────────────────────────
+# The shells had no value options and a word that starts with "+" was no option, so the walk
+# stopped at the value of -o or -O (`pipefail` of bash -o pipefail -c S was taken for the
+# command) or at +x, and the -c script was never read. As bash 3.2, /bin/sh, dash, zsh 5.9
+# and ksh93 read them: bash, sh and dash take each o of a cluster (bash's O too) from the next
+# word in turn and read the rest of the cluster on; zsh and ksh take the rest of the cluster
+# or the next word; all five read + options and +c as -c; ksh reads -o c as -c; bash reads
+# its long options (one dash or two, --rcfile F) only before its first short option. fish's
+# value letters are its getopt string's; fish reads no + option.
+SHELL_OPTION_SCRIPTS = [
+    ["bash", "-o", "pipefail", "-c", S],
+    ["bash", "-O", "extglob", "-c", S],
+    ["sh", "-o", "errexit", "-c", S],
+    ["bash", "-o", "xtrace", "-c", S],
+    ["bash", "-c", "-o", "pipefail", S],                # after -c, before the script
+    ["bash", "+o", "posix", "-c", S],
+    ["bash", "+O", "extglob", "-c", S],
+    ["sh", "+x", "-c", S],
+    ["bash", "-eo", "pipefail", "-c", S],               # a cluster that ends in o
+    ["zsh", "-o", "pipefail", "-c", S],
+    ["dash", "-o", "errexit", "-c", S],
+    ["ksh", "-o", "pipefail", "-c", S],
+    ["/bin/bash", "-o", "pipefail", "-c", S],
+    ["sudo", "bash", "-o", "pipefail", "-c", S],
+    ["env", "sh", "+x", "-c", S],
+    ["bash", "-o", "errexit", "-o", "nounset", "-c", S],
+    ["bash", "-oc", "pipefail", S],                     # o's value is the next word, c is -c
+    ["bash", "-Oc", "extglob", S],
+    ["dash", "-oo", "errexit", "nounset", "-c", S],     # each o takes the next word in turn
+    ["zsh", "-co", "pipefail", S],
+    ["ksh", "-co", "pipefail", S],
+    ["zsh", "-opipefail", "-c", S],                     # the rest of the cluster
+    ["bash", "+c", S], ["sh", "+xc", S], ["dash", "+c", S], ["zsh", "+c", S], ["ksh", "+c", S],
+    ["ksh", "-o", "c", S], ["ksh", "+o", "c", S], ["ksh", "-oc", S],
+    ["bash", "--rcfile", "/dev/null", "-c", S],
+    ["bash", "--init-file", "/dev/null", "-c", S],
+    ["bash", "-rcfile", "/dev/null", "-c", S],           # a long option with one dash
+    ["sh", "-init-file", "/dev/null", "-c", S],
+    ["bash", "--norc", "-rcfile", "/dev/null", "-c", S],
+    ["bash", "-norc", "-o", "errexit", "-c", S],         # -norc: a long option, not -n -o
+    ["bash", "-x", "-posix", "errexit", "-c", S],        # after a short option: a cluster
+    ["bash", "-x", "-rcfile", S],                        # -r -c -f -i -l -e
+    ["fish", "-o", "/tmp/log", "-c", S],
+    ["fish", "-p", "/tmp/prof", "-c", S],
+    ["fish", "-f", "qmark-noglob", "-c", S],
+    ["fish", "-io", "/tmp/log", "-c", S],                # a cluster that ends in a value letter
+    ["fish", "--debug-output", "/tmp/log", "-c", S],
+    ["fish", "--debug-o", "/tmp/log", "-c", S],          # a unique prefix of a long name
+    ["fish", "--profile", "/tmp/prof", "--command", S],
+    ["fish", "--features", "qmark-noglob", "-c", S],
+]
+
+
+@pytest.mark.parametrize("words", SHELL_OPTION_SCRIPTS,
+                         ids=[" ".join(w)[:40] for w in SHELL_OPTION_SCRIPTS])
+def test_a_shells_options_and_their_values_lead_to_its_script(words):
+    assert shell_words.strip_prefix(words) == [S]
+    assert shell_words.runner_script(words) == S
+
+
+@pytest.mark.parametrize("words, record", [
+    (["bash", "-eo", "pipefail", "-c", S],
+     [("bash", "", None), ("bash", "-eo", "pipefail"), ("bash", "-c", None)]),
+    (["bash", "+O", "extglob", "-c", S],
+     [("bash", "", None), ("bash", "+O", "extglob"), ("bash", "-c", None)]),
+    (["zsh", "-xopipefail", "-c", S],
+     [("zsh", "", None), ("zsh", "-xo", "pipefail"), ("zsh", "-c", None)]),
+    (["bash", "--rcfile", "/dev/null", "-c", S],
+     [("bash", "", None), ("bash", "--rcfile", "/dev/null"), ("bash", "-c", None)]),
+    (["bash", "-rcfile", "/dev/null", "-c", S],
+     [("bash", "", None), ("bash", "--rcfile", "/dev/null"), ("bash", "-c", None)]),
+])
+def test_a_shells_option_is_recorded_with_its_value(words, record):
+    assert shell_words.runner_prefix(words) == (len(words) - 1, record)
+
+
+@pytest.mark.parametrize("words, command", [
+    (["bash", "script.sh"], ["script.sh"]),
+    (["bash", "-o", "pipefail", "script.sh"], ["script.sh"]),       # a file operand, no -c
+    (["bash", "+x", "script.sh"], ["script.sh"]),
+    (["bash", "-O", "nocaseglob", "script.sh"], ["script.sh"]),     # a value holding c
+    (["bash", "-o", "noclobber", "script.sh"], ["script.sh"]),
+    (["zsh", "-onoclobber", "script.sh"], ["script.sh"]),           # glued: the value's c
+    (["zsh", "-oc", "script.sh"], ["script.sh"]),                   # zsh: option c, no -c
+    (["bash", "-norc", "script.sh"], ["script.sh"]),                # as --norc reads
+    (["bash", "-rcfile", "/dev/null", "script.sh"], ["script.sh"]),
+    (["fish", "+x", "-c", S], ["+x", "-c", S]),                     # fish: +x is its file
+    (["env", "+x", "cat", "f"], ["+x", "cat", "f"]),                # + is a shell's alone
+    (["nice", "+5", "cat", "f"], ["+5", "cat", "f"]),
+])
+def test_a_shell_given_options_and_a_file_runs_no_script(words, command):
+    assert shell_words.strip_prefix(words) == command
+    assert shell_words.runner_script(words) is None
+
+
+@pytest.mark.parametrize("words, script", [
+    (["bash", "-c", S], S),
+    (["bash", "-e", "-c", S], S),
+    (["sh", "-c", S, "arg0", "arg1"], S),
+    (["bash", "-c", "--", S], S),
+    (["bash", "--norc", "-c", S], S),
+])
+def test_a_shells_plain_script_is_read_as_before(words, script):
+    assert shell_words.runner_script(words) == script
+
+
+@pytest.mark.parametrize("words", [["bash", "-o"], ["bash", "-oo", "errexit"], ["zsh", "-o"],
+                                   ["bash", "--rcfile"], ["fish", "-o"], ["bash", "+"]])
+def test_a_shell_option_missing_its_value_ends_the_words(words):
+    assert shell_words.strip_prefix(words) == []
+    assert shell_words.runner_script(words) is None

@@ -33,7 +33,7 @@ from functools import lru_cache
 from shell.inline_code import INTERPRETER, code_option
 from shell.words import (Unreadable, expanding_text, handed_scripts, is_double_quoted,
                          is_single_quoted, quoted_inner, read_script, runner_prefix, script_word,
-                         spell, substitution_spans, token_spans, unquoted_text)
+                         spell, substitution_spans, takes_script, token_spans, unquoted_text)
 
 MAX_DEPTH = 8
 # The marker env_guard's rule table (shell/env/programs.RULE_MARKS) keys env.opaque on.
@@ -346,8 +346,8 @@ class _Level:
         if "eval" in leading and self._eval(command):
             return                                      # eval "$(brew shellenv)": nothing more
         shell_options = [option for runner, option, _ in seen if runner in SHELLS and option]
-        dash_c = any(option.startswith("-") and not option.startswith("--") and "c" in option
-                     for option in shell_options)
+        dash_c = any(takes_script(runner, option, value)       # -c, -oc pipefail, +c, -o c
+                     for runner, option, value in seen if runner in SHELLS and option)
         taker, scripts, rest = handed_scripts(command.words)
         if taker == "fish":                             # every -C and -c, with fish's $argv
             for text, first, _end in scripts:

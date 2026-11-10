@@ -567,6 +567,35 @@ def test_a_settings_write_in_any_script_fish_or_watch_runs_is_refused(home, comm
         "[rule: settings.write]"), command
 
 
+# The walk stopped at the value of a shell's -o / -O and at its + options, so the write in
+# the -c script after them was never read.
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", [form.replace("W", SCRIPT_WRITE) for form in (
+    "bash -o pipefail -c 'W'",
+    "bash -O extglob -c 'X=1; W'",
+    "sh -o errexit -c 'W'",
+    "bash -c -o pipefail 'W'",
+    "bash +o posix -c 'W'",
+    "sh +x -c 'X=1; W'",
+    "bash -eo pipefail -c 'W'",
+    "bash -oc pipefail 'W'",
+    "zsh -o pipefail -c 'W'",
+    "ksh -o c 'W'",
+    "/bin/bash -o pipefail -c 'W' sh",
+    "bash --rcfile /dev/null -c 'W'",
+    "fish -o /tmp/log -c 'W'",
+    # controls: refused before the fix and still
+    "bash -c 'W'",
+    "bash -e -c 'W'",
+)])
+def test_a_settings_write_behind_a_shells_options_is_refused(home, command, tool):
+    payload = dict(_bash(command, home, agent_id="a1b2c3", agent_type="Explore"), tool_name=tool)
+    output = guard.decide(payload)
+    assert _decision(output) == "deny", command
+    assert output["hookSpecificOutput"]["permissionDecisionReason"].endswith(
+        "[rule: settings.write]"), command
+
+
 @pytest.mark.parametrize("command", CLI_READS)
 def test_a_read_only_claude_cli_call_passes(home, command):
     assert guard.decide(_bash(command, home, agent_id="a1b2c3", agent_type="Explore")) is None

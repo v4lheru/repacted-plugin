@@ -847,6 +847,41 @@ class TestStagingInTheSameCommand:
         code, err = _commit_in(staging_repo, wrap.format(inner), capsys)
         assert code == 0, (wrap, inner, err)
 
+    @pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+    @pytest.mark.parametrize("wrap", [
+        "bash -o pipefail -c '{}'",
+        "bash -O extglob -c 'X=1; {}'",
+        "sh -o errexit -c '{}'",
+        "bash -c -o pipefail '{}'",
+        "bash +o posix -c '{}'",
+        "sh +x -c 'X=1; {}'",
+        "bash -eo pipefail -c '{}'",
+        "bash -oc pipefail '{}'",
+        "zsh -o pipefail -c '{}'",
+        "ksh -o c '{}'",
+        "/bin/bash -o pipefail -c '{}' sh",
+        "bash --rcfile /dev/null -c '{}'",
+        "fish -o /tmp/log -c '{}'",
+        "bash -e -c '{}'",                                      # control: denied before the fix
+    ])
+    def test_a_commit_behind_a_shells_options_is_denied(self, staging_repo, wrap, tool, capsys):
+        """The walk stopped at the value of a shell's -o / -O and at its + options, so the
+        staging and commit in the -c script after them went unread."""
+        name = "." + "env" + ".local"
+        (staging_repo / name).write_text("demo\n")
+        command = wrap.format(f"git add {name} && git -c a=b commit -m x")
+        code, err = _run_main({"tool_name": tool, "tool_input": {"command": command},
+                               "cwd": str(staging_repo)}, capsys)
+        assert code == 2 and "environment file" in err, (wrap, err)
+
+    @pytest.mark.parametrize("wrap", ["bash -o pipefail -c '{}'", "sh +x -c 'X=1; {}'",
+                                      "bash -oc pipefail '{}' sh", "bash -o pipefail script.sh"])
+    def test_a_clean_commit_behind_a_shells_options_is_read_once(self, staging_repo, wrap,
+                                                               capsys):
+        code, err = _commit_in(staging_repo, wrap.format("git add clean.py && git commit -m x"),
+                               capsys)
+        assert code == 0, (wrap, err)
+
     @pytest.mark.parametrize("wrap", [
         "{}",
         "bash -c '{}'",
