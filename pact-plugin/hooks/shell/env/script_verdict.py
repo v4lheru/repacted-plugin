@@ -195,7 +195,7 @@ _FIND_EXEC_READERS = READERS | OPERAND_READERS | EGRESS_PROGRAMS
 
 
 def _find_exec_verdict(placed: list) -> str | None:
-    """`find . -type f -exec cat {} \;`: the program -exec runs prints every file the find
+    r"""`find . -type f -exec cat {} \;`: the program -exec runs prints every file the find
     lists, so the find is walked as the search it amounts to (its -name filters honoured)."""
     for step, places in placed:
         command = strip_prefix(step.words)
