@@ -216,3 +216,68 @@ class TestSelection:
         assert "does not run" in why and "expired_token" in why
 
 
+
+
+class TestUnittestSelection:
+    """`python -m unittest` reads as runner `unittest` with its targets and selecting options, python
+    bare, versioned or by path and behind the wrappers; a bare `unittest` is no command. A selection
+    stays exact: another file, another selecting option or pytest of the same file is another
+    selection."""
+
+    @staticmethod
+    def picked(command):
+        from shared import acceptance as AC
+        return AC.selection(command)
+
+    @pytest.mark.parametrize("command", [
+        "python3 -m unittest scripts/tests/test_core_ui_kit_spec.py",
+        "python -m unittest scripts/tests/test_core_ui_kit_spec.py",
+        "python3.12 -m unittest scripts/tests/test_core_ui_kit_spec.py",
+        "/usr/bin/python3 -m unittest scripts/tests/test_core_ui_kit_spec.py",
+        "tcount python3 -m unittest scripts/tests/test_core_ui_kit_spec.py",
+        "/opt/x/bin/tcount nice -n 19 python3 -m unittest -v scripts/tests/test_core_ui_kit_spec.py",
+        "uv run python -m unittest --buffer scripts/tests/test_core_ui_kit_spec.py --locals",
+        "python3 -m unittest -vbf scripts/tests/test_core_ui_kit_spec.py --durations 5",
+    ])
+    def test_python_m_unittest_reads_as_a_unittest_selection(self, command):
+        assert self.picked(command) == ("unittest", [], ["scripts/tests/test_core_ui_kit_spec.py"])
+
+    def test_dotted_module_targets_and_selecting_options_are_kept(self):
+        assert self.picked("python3 -m unittest -k parse -q tests.test_a tests.test_b.Case") == \
+            ("unittest", [("-k", "parse")], ["tests.test_a", "tests.test_b.Case"])
+
+    @pytest.mark.parametrize("command, options, targets", [
+        ("python3 -m unittest discover -s tests -p 'test_*.py'",
+         [("--pattern", "test_*.py"), ("--start-directory", "tests")], ["discover"]),
+        ("python3 -m unittest discover --start-directory=tests --pattern test_*.py -t .",
+         [("--pattern", "test_*.py"), ("--start-directory", "tests"), ("--top-level-directory", ".")], ["discover"]),
+        ("python3 -m unittest discover -vstests", [("--start-directory", "tests")], ["discover"]),
+        ("python3 -m unittest discover --start=tests", [("--start-directory", "tests")], ["discover"]),
+        ("python3 -m unittest discover tests 'test_*.py'", [], ["discover", "tests", "test_*.py"]),
+    ])
+    def test_discover_options_are_read_the_way_unittest_reads_them(self, command, options, targets):
+        assert self.picked(command) == ("unittest", options, targets)
+
+    @pytest.mark.parametrize("command", [
+        "unittest scripts/tests/test_a.py",
+        "tcount unittest scripts/tests/test_a.py",
+        "env PYTHONPATH=/elsewhere python3 -m unittest scripts/tests/test_a.py",
+        "PYTHONPATH=/elsewhere python3 -m unittest scripts/tests/test_a.py",
+        "uv run --directory /elsewhere python -m unittest scripts/tests/test_a.py",
+        "python3 -I -m unittest scripts/tests/test_a.py",
+    ])
+    def test_bare_unittest_and_wrappers_that_change_what_runs_stay_unreadable(self, command):
+        assert self.picked(command) is None
+
+    @pytest.mark.parametrize("pinned, ran, closes", [
+        ("python3 -m unittest scripts/tests/test_a.py", "tcount python3 -m unittest -v scripts/tests/test_a.py", True),
+        ("python3 -m unittest scripts/tests/test_a.py", "python3 -m unittest scripts/tests/test_b.py", False),
+        ("python3 -m unittest scripts/tests/test_a.py", "pytest scripts/tests/test_a.py", False),
+        ("pytest scripts/tests/test_a.py", "python3 -m pytest scripts/tests/test_a.py", True),
+        ("pytest scripts/tests/test_a.py", "python3 -m unittest scripts/tests/test_a.py", False),
+        ("python3 -m unittest scripts/tests/test_a.py", "python3 -m unittest -k parse scripts/tests/test_a.py", False),
+        ("python3 -m unittest discover -s tests", "python3 -m unittest discover -s other", False),
+    ])
+    def test_unittest_selections_compare_exactly(self, pinned, ran, closes, tmp_path):
+        why = TestSelection.judged(pinned, ran, tmp_path)
+        assert (why == "") is closes, why
