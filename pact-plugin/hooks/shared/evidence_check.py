@@ -65,7 +65,9 @@ TCOUNT_HINT = "run `nice -n 19 tcount <test command>` in the worktree after the 
 COMMIT_HINT = "commit your work, then rerun tcount"
 # Options whose value is a directory or file the runner loads from; `-C dir` or
 # `--prefix dir` as two words leave the directory a target, which is checked the same way.
-ROOT_OPTIONS = ("-c", "--rootdir", "--confcutdir", "--config", "--prefix", "--dir", "--directory", "--cwd")
+# unittest's -s and -t reach here under their long names (acceptance._unittest_selection).
+ROOT_OPTIONS = ("-c", "--rootdir", "--confcutdir", "--config", "--prefix", "--dir", "--directory", "--cwd",
+                "--start-directory", "--top-level-directory")
 INI_PATH_KEYS = ("pythonpath", "rootdir", "testpaths")   # an ini key whose value is a loaded path
 BARRED_ENV = ("PYTEST_ADDOPTS", "NODE_OPTIONS")   # a run under either (or a VSTest* one) selects other tests
 NOTES_SHOWN = 5
@@ -117,21 +119,29 @@ def _inside(path: Optional[str], root: str) -> bool:
 
 def task_runs(runs: list, dispatch: dict, now: str, since: float, notes: Optional[list] = None) -> list:
     """The task's runs, oldest first: a tree id, stamped at or after dispatch, run in the worktree
-    or on a tree the task held (its base tree or the current one), and not `excluded`. Each
-    excluded run adds a line to `notes`, when given."""
+    or on a tree the task held (its base tree or the current one), and not `excluded`. The
+    newest excluded runs, up to NOTES_SHOWN lines in `notes` all told, add a line each to
+    `notes` when given, newest first (accept prints the first few); one more line counts the
+    older ones left out."""
     root = os.path.realpath(str(dispatch.get("worktree")))
     held = {now, dispatch.get("base_tree")}
     picked = [run for run in runs if isinstance(run, dict) and run_tree(run)
               and (_record_time(run) or 0.0) >= since
               and (_inside(_where(run), root) or run_tree(run) in held)]
     roots: dict = {}
-    kept = []
+    kept, dropped = [], []
     for run in picked:
         why = excluded(run, roots)
-        if not why:
+        if why:
+            dropped.append((run, why))
+        else:
             kept.append(run)
-        elif notes is not None and len(notes) < NOTES_SHOWN:
-            notes.append(f"run {AC.stem(run)} does not count: {why}")
+    if notes is not None and dropped:
+        newest = sorted(dropped, key=lambda item: _run_end(item[0]) or 0.0, reverse=True)
+        room = max(NOTES_SHOWN - len(notes), 0)
+        notes.extend(f"run {AC.stem(run)} does not count: {why}" for run, why in newest[:room])
+        if len(newest) > room:
+            notes.append(f"{len(newest) - room} older run(s) that do not count are not listed")
     return sorted(kept, key=lambda run: _run_end(run) or 0.0)
 
 

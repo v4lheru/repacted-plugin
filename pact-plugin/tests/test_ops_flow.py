@@ -77,3 +77,17 @@ def test_submit_handoff_stores_rev_one_and_repairs_a_relative_path(ops_env: Worl
     assert stored["produced"][0].startswith(str(Path(ops_env.worktree(task_id)).resolve()))
 
 
+
+
+def test_a_rejection_prints_the_verdict_notes(ops_env: World, monkeypatch):
+    """Why each run was skipped reaches the lead's screen on a rejection too, not only on a pass."""
+    task_id = _submitted(ops_env)
+    notes = [f"run 2026-11-17T10000{n}Z-1 does not count: why {n}" for n in range(5)]
+    monkeypatch.setattr(EV, "verdict", lambda *a, **k: {"problems": ["no passing run [rule: evidence.no_run]"],
+                                                        "notes": list(notes)})
+    result = accept.run(ops_env.ctx(), task_id)
+    assert result.exit_code == 1 and result.lines[0].startswith("Not accepted")
+    shown = [line for line in result.lines if line.startswith("  note: ")]
+    assert shown == [f"  note: {note}" for note in notes[:accept.SHOWN]], result.lines
+    stored = ops_env.task(task_id)["metadata"]["handoff_rejection"]
+    assert stored["notes"] == notes

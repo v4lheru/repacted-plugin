@@ -34,7 +34,8 @@ LINE = re.compile(r"\s*(?:[-*+]\s+)?(?:\*\*)?(AC-\S*?)(?:\*\*)?\s*[:.)]\s+(.*)")
 CODE = re.compile(r"`([^`\n]+)`")
 MAX_TEXT = 1 << 20
 # The wrappers `_unwrap` sets aside run the command after them as it is: `tcount`, `rtk [proxy]`,
-# `nice [-n N]`, `taskpolicy [options]`, `env NAME=value`, `uv run [uv options]`, `python[3[.N]] -m`. `uv run --with PKG`
+# `nice [-n N]`, `taskpolicy [options]`, `env NAME=value`, `uv run [uv options]`, `python[3[.N]] -m`
+# (but `python -m unittest` is kept whole: it is the runner, and a bare `unittest` is no command). `uv run --with PKG`
 # and `--no-project` only set up the environment and are set aside too (this repo's own test
 # recipe). A wrapper option that moves what runs or where (another directory or
 # project, an editable or requirements install, an env file; an env option, or an env
@@ -56,6 +57,14 @@ VSTEST_ENV = re.compile(r"VSTest", re.I)
 OUTPUT_ONLY = re.compile(r"-[qvsxl]+\Z|--(?:quiet|verbose|no-header|exitfirst|showlocals)\Z"
                          r"|--(?:tb|color|durations|maxfail|numprocesses)=")
 OUTPUT_VALUE = ("--tb", "--color", "--durations", "--maxfail", "--numprocesses", "-n")
+# `python -m unittest` (its own argparse, read by _unittest_selection). Output-only: -v/--verbose,
+# -q/--quiet, -b/--buffer (hold output), -c/--catch (Ctrl-C handling), -f/--failfast (stop at the
+# first failure, as pytest's -x), --locals and --durations N. Selecting: -k, -p/--pattern,
+# -s/--start-directory, -t/--top-level-directory, and any option unittest does not know.
+UNITTEST_SHORT_OUTPUT = "vqbcf"
+UNITTEST_SHORT_VALUE = {"k": "-k", "p": "--pattern", "s": "--start-directory", "t": "--top-level-directory"}
+UNITTEST_LONG_OUTPUT = ("--verbose", "--quiet", "--buffer", "--catch", "--failfast", "--locals")
+UNITTEST_LONG_VALUE = ("--pattern", "--start-directory", "--top-level-directory", "--durations")
 # pytest's report option: `-rfE` or `-r fE`. For node and mocha `-r` loads a module.
 _PYTEST_REPORT = re.compile(r"-r[fEsxXpPaAN]+\Z")
 _PYTEST = ("pytest", "py.test")
@@ -129,6 +138,8 @@ def _unwrap(words: list[str]) -> Optional[list[str]]:
                     return None
                 words = words[2:] if words[0] in _UV_VALUE else words[1:]
         elif _PYTHON.match(head) and words[1:2] == ["-m"]:
+            if words[2:3] == ["unittest"]:
+                return words     # the runner is `python -m unittest` itself: a bare `unittest` is no command
             words = words[2:]
         else:
             return words
@@ -156,13 +167,74 @@ def test_words(command: str) -> Optional[list[str]]:
     return words if words and _runs_tests(words) else None
 
 
+def _is_unittest(words: list[str]) -> bool:
+    """The words (as _unwrap leaves them) run `python[3[.N]] -m unittest`."""
+    return bool(_PYTHON.match(os.path.basename(words[0]))) and words[1:3] == ["-m", "unittest"]
+
+
+def _target(word: str) -> str:
+    word = word[2:] if word.startswith("./") else word
+    return word.rstrip("/") or word
+
+
+def _unittest_long(word: str) -> tuple[str, Optional[str]]:
+    """(the long option a `--name[=value]` word names, its attached value or None). unittest's
+    argparse takes a unique prefix of a long option (`--start` is --start-directory), so a
+    prefix is expanded the same way; anything else stays as written."""
+    name, equals, value = word.partition("=")
+    known = [option for option in (*UNITTEST_LONG_OUTPUT, *UNITTEST_LONG_VALUE) if option.startswith(name)]
+    name = name if name in known else known[0] if len(known) == 1 else name
+    return name, value if equals else None
+
+
+def _unittest_selection(args: list[str]) -> tuple:
+    """("unittest", sorted (option, value) pairs, targets) of the arguments after `python -m
+    unittest`, read the way its argparse reads them: short flags may cluster (`-vb`), a value
+    may be attached (`-stests`, `-vstests`, `--pattern=x`) or the next word, a long option may
+    be a unique prefix. Output-only options (UNITTEST_SHORT_OUTPUT, UNITTEST_LONG_OUTPUT,
+    --durations N) are set aside; -k, -p, -s and -t select and are kept, under their long
+    names for -p, -s and -t (a start or top directory is a path evidence_check checks stays in
+    the repository). An option unittest does not know stays as written, a selecting one.
+    `discover` and its positional start, pattern and top are targets."""
+    options, targets, rest = [], [], iter(args)
+    for word in rest:
+        if word == "--":
+            targets.extend(_target(each) for each in rest)
+        elif word.startswith("--"):
+            name, value = _unittest_long(word)
+            if name in UNITTEST_LONG_OUTPUT:
+                continue
+            if name in UNITTEST_LONG_VALUE:
+                value = next(rest, "") if value is None else value
+                if name != "--durations":
+                    options.append((name, value))
+            else:
+                options.append((name, value or ""))
+        elif word.startswith("-") and len(word) > 1:
+            for index, letter in enumerate(word[1:], 1):
+                if letter in UNITTEST_SHORT_OUTPUT:
+                    continue
+                if letter in UNITTEST_SHORT_VALUE:
+                    value = word[index + 1:] or next(rest, "")
+                    options.append((UNITTEST_SHORT_VALUE[letter], value))
+                else:
+                    options.append((word, ""))
+                break
+        else:
+            targets.append(_target(word))
+    return "unittest", sorted(options), targets
+
+
 def selection(command: str) -> Optional[tuple]:
     """(runner, sorted (option, value) pairs, targets) of a test command, or None when it cannot be
     split (an open quote) or names nothing. Wrappers and OUTPUT_ONLY options are set aside; a
-    target loses a leading `./` and a trailing `/`."""
+    target loses a leading `./` and a trailing `/`. `python -m unittest` reads as runner
+    `unittest` with its own options (_unittest_selection)."""
     words = test_words(command)
     if words is None:
         return None
+    if _is_unittest(words):
+        return _unittest_selection(words[3:])
     pytest = os.path.basename(words[0]) in _PYTEST
     options, targets, rest = [], [], iter(words[1:])
     for word in rest:

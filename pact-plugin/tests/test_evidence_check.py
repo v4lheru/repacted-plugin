@@ -900,3 +900,60 @@ def test_review11_s4_tcount_records_vstest_variables(tmp_path, monkeypatch):
     monkeypatch.setenv("VSTestTestCaseFilter", "FullyQualifiedName~Other")
     tcount.record_run(["dotnet", "test"], "dotnet", None, 0, tmp_path / "x.log")
     assert rows[0]["env"] == {"VSTestTestCaseFilter": "FullyQualifiedName~Other"}
+
+
+# --- python -m unittest runs, and which exclusion notes are kept ---
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -m unittest tests/test_app.py",
+    "/opt/bin/tcount nice -n 19 python3 -m unittest -v tests/test_app.py",
+])
+def test_a_python_m_unittest_red_then_green_is_accepted(worktree, cmd):
+    dispatched = task(worktree)
+    red = row(worktree, 9, cmd, passed=0, failed=1)
+    edit(worktree)
+    verdict = ec.check(dispatched, [red, row(worktree, 5, cmd)])
+    assert verdict["problems"] == [], verdict
+    assert not any("does not count" in note for note in verdict["notes"]), verdict["notes"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "unittest tests/test_app.py",
+    "env PYTHONPATH={other} python3 -m unittest tests/test_app.py",
+    "uv run --directory {other} python -m unittest tests/test_app.py",
+    "python3 -m unittest discover -s {other}",
+    "python3 -m unittest discover --start-directory={other}/tests",
+    "python3 -m unittest discover -vs{other}",
+    "python3 -m unittest discover -s tests -t {other}",
+    "python3 -m unittest discover {other}",
+    "python3 -m unittest {other}/tests/test_app.py",
+])
+def test_a_unittest_run_that_cannot_be_read_or_loads_from_outside_backs_nothing(worktree, tmp_path, cmd):
+    dispatched = task(worktree, kind="refactor")
+    edit(worktree)
+    verdict = ec.check(dispatched, [row(worktree, 2, cmd.format(other=tmp_path / "other"))])
+    assert rules(verdict) == [ec.NO_RUN], verdict
+    assert any("does not count" in note for note in verdict["notes"]), verdict["notes"]
+
+
+def test_a_unittest_discover_inside_the_worktree_counts(worktree):
+    dispatched = task(worktree, kind="refactor")
+    edit(worktree)
+    run = row(worktree, 2, f"python3 -m unittest discover -s {worktree}/tests -t {worktree}")
+    assert ec.check(dispatched, [run])["problems"] == []
+
+
+def test_the_newest_excluded_runs_are_the_ones_noted(worktree):
+    """Seven skipped runs: the notes name the newest NOTES_SHOWN of them, newest first, and count the
+    older ones."""
+    dispatched = task(worktree, kind="refactor")
+    edit(worktree)
+    skipped = [row(worktree, 30 - minute, "env PYTEST_ADDOPTS=-x pytest -q") for minute in range(7)]
+    notes: list = []
+    ec.task_runs(skipped, dispatched["metadata"]["dispatch"], ct.content_tree(str(worktree)), 0.0, notes)
+    shown = [note for note in notes if "does not count" in note]
+    assert len(shown) == ec.NOTES_SHOWN, notes
+    from shared import acceptance as AC
+    assert [AC.stem(run) for run in reversed(skipped[-ec.NOTES_SHOWN:])] == \
+        [note.split()[1] for note in shown], notes
+    assert any("2 older" in note for note in notes), notes

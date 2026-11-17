@@ -6,7 +6,8 @@ check (ops.evidence.verdict: shared/evidence_check, which also runs the acceptan
 pinned at dispatch), an AC disposition per pinned criterion, and the amendment dispositions.
 All pass: ONE write of status completed plus metadata.acceptance (the check's statuses, runs
 and tree), then the task log, journal and workflow state. Any fails:
-the same write path stores a rejection (shared/ops/reject.rejection) and accept exits 1.
+the same write path stores a rejection (shared/ops/reject.rejection, with the check's notes,
+such as why a run did not count) and accept exits 1. Both print the first notes.
 Used by: bin/_repact_ops.py (run); shared/ops/submit.py (ac_problems, for its preview).
 
 Waivers and park: `--waive "<why>"` over failing facts completes the task with
@@ -81,7 +82,16 @@ def _record(op_id: str, handoff: dict, checked: dict) -> dict:
     return {"op_id": op_id, "at": records.now(), "by": "lead", "rev": AM.handoff_rev(handoff),
             "digest": records.digest(handoff), "statuses": checked.get("statuses") or {},
             "runs": list(checked.get("runs") or [])[:20], "tree": checked.get("tree"),
-            "notes": [str(note)[:300] for note in checked.get("notes") or []][:20]}
+            "notes": _notes(checked)}
+
+
+def _notes(checked: dict) -> list:
+    """The check's notes as a record keeps them (both the acceptance and the rejection)."""
+    return [str(note)[:300] for note in checked.get("notes") or []][:20]
+
+
+def _note_lines(record: dict) -> list:
+    return [f"  note: {note[:160]}" for note in (record.get("notes") or [])[:SHOWN]]
 
 
 def status_line(statuses: dict) -> str:
@@ -109,7 +119,7 @@ def _pass_sides(ctx, task_id: str, dispatched: dict, handoff: dict) -> list:
 def _accepted(task_id: str, op_id: str, handoff: dict, record: dict) -> Result:
     lines = [f"Accepted #{task_id} rev {AM.handoff_rev(handoff)} ({op_id}): "
              f"{status_line(record.get('statuses') or {})}."]
-    lines += [f"  note: {note[:160]}" for note in (record.get("notes") or [])[:SHOWN]]
+    lines += _note_lines(record)
     lines += [line for line in [_task_log_line(task_id)] if line]
     return Result(task_id=task_id, lines=lines + [f"Next: merge the branch, or dispatch the next step; "
                                                   f"`repact inspect {task_id}` shows the receipt."])
@@ -126,7 +136,7 @@ def _rejected(task_id: str, dispatched: dict, record: dict) -> Result:
     shown = [f"  {line[:200]}" for line in record["corrections"][:SHOWN]]
     return Result(task_id=task_id, exit_code=1, lines=[
         f"Not accepted: #{task_id} rev {record['rev']} fails {len(record['corrections'])} check(s); "
-        "stored as a rejection.", *shown,
+        "stored as a rejection.", *shown, *_note_lines(record),
         reject.resume_line(dispatched, task_id, "accept found problems.")])
 
 
@@ -277,6 +287,7 @@ def run(ctx: records.Context, task_id: str, waive=None) -> Result:
     if problems:
         record = reject.rejection(meta, AM.handoff_rev(handoff), "accept", op_id,
                                   "accept found problems: " + "; ".join(problems)[:1500], problems)
+        record["notes"] = _notes(checked)
         records.execute(ctx, "accept", task_id, args, lambda current: reject.apply_rejection(current, record),
                         reject.rejection_sides(ctx, task_id, dispatched, record))
         return _rejected(task_id, dispatched, record)
