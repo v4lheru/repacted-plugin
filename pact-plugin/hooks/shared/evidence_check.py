@@ -211,17 +211,32 @@ def _unittest_modules(picked: tuple, where: str) -> tuple:
     return (picked[0], options, targets), modules
 
 
+def _named(path: str) -> bool:
+    """The last part of `path` is an entry of its parent directory spelled exactly, case included.
+    os.path.isfile/isdir match case-insensitively on a case-insensitive disk (macOS default), so a
+    committed `Certifi/` would answer `certifi` there, while Python's import compares the exact
+    name and loads site-packages certifi instead."""
+    parent, name = os.path.split(path)
+    try:
+        return name in os.listdir(parent or ".")
+    except OSError:
+        return False
+
+
 def _package(path: str, top: str) -> bool:
-    """`path` is a regular package directory inside the git root `top`: it holds an __init__.py."""
+    """`path` is a regular package directory inside the git root `top`: it holds an __init__.py,
+    and both the directory and that file are named in exact case (_named)."""
     init = os.path.join(path, "__init__.py")
-    return os.path.isfile(init) and _inside(os.path.realpath(init), top)
+    return (os.path.isfile(init) and _named(path) and _named(init)
+            and _inside(os.path.realpath(init), top))
 
 
 def _module_inside(where: str, name: str, trailing: int, top: str) -> bool:
     """A regular module or package under `where`, inside the git root `top`, answers the dotted
     `name` (dots read as slashes), with up to `trailing` final parts (a class, a method) left off:
     a file `<x>.py` or a directory `<x>/`, where that directory and every package directory above
-    it on the dotted path, from `where` down, holds an __init__.py (_package).
+    it on the dotted path, from `where` down, holds an __init__.py (_package). Every part matches
+    its file or directory name in exact case (_named), as Python's import does.
 
     A directory without __init__.py is only a namespace portion: Python imports a regular package
     of the same name from anywhere on sys.path (site-packages) before it, so it proves nothing
@@ -235,7 +250,8 @@ def _module_inside(where: str, name: str, trailing: int, top: str) -> bool:
         if not all(_package(path, top) for path in packages):
             continue
         base = os.path.join(where, *parts[:keep])
-        if os.path.isfile(base + ".py") and _inside(os.path.realpath(base + ".py"), top):
+        if (os.path.isfile(base + ".py") and _named(base + ".py")
+                and _inside(os.path.realpath(base + ".py"), top)):
             return True
         if os.path.isdir(base) and _package(base, top):
             return True

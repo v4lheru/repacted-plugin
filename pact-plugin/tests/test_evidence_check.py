@@ -1081,3 +1081,62 @@ def test_review_fix2_l2_a_non_empty_pythonsafepath_excludes_the_run(unit, value,
     run = dict(row(unit, 2, "python3 -m unittest tests.test_fix"), env={"PYTHONSAFEPATH": value})
     verdict = ec.check(dispatched, [run])
     assert (verdict["problems"] == []) is counts, verdict
+
+
+# --- review-fix #6: a unittest name matches the repository's file names by exact case ---
+
+def _case_insensitive(folder) -> bool:
+    probe = folder / "case_probe"
+    probe.write_text("")
+    try:
+        return (folder / "CASE_PROBE").exists()
+    finally:
+        probe.unlink()
+
+
+TWIN = ["Certifi/__init__.py", "Certifi/tests/__init__.py", "Certifi/tests/test_certify.py"]
+EXACT = ["certifi/__init__.py", "certifi/tests/__init__.py", "certifi/tests/test_certify.py"]
+
+
+@pytest.mark.parametrize("files, cmd", [
+    (TWIN, "python3 -m unittest certifi.tests.test_certify"),
+    (TWIN, "python3 -m unittest discover -s certifi.tests"),
+    (TWIN, "python3 -m unittest certifi"),
+    (TWIN, "python3 -m unittest discover -s tests -t certifi"),
+    # an exact-case package above a case twin still answers the name (the rest read as attributes),
+    # so a twin is only tested where no exact-case package answers any leading part
+    (["certifi/__INIT__.py", "certifi/tests/__init__.py", "certifi/tests/test_certify.py"],
+     "python3 -m unittest certifi.tests.test_certify"),
+    ([], "python3 -m unittest Tests.test_fix"),
+])
+def test_review_fix3_a_name_answered_only_by_a_case_twin_backs_nothing(unit, files, cmd):
+    """LOW: on a case-insensitive disk (macOS default) a committed Certifi/ twin passes isfile/isdir
+    for certifi.tests.test_certify, while Python's import (exact case) loads site-packages certifi."""
+    if not _case_insensitive(unit):
+        pytest.skip("the disk is case-sensitive: a case twin cannot answer the name there")
+    for name in files:
+        (unit / name).parent.mkdir(parents=True, exist_ok=True)
+        (unit / name).write_text("import unittest\n")
+    commit(unit, "twin")
+    dispatched = task(unit, kind="refactor")
+    edit(unit)
+    verdict = ec.check(dispatched, [row(unit, 2, cmd)])
+    assert rules(verdict) == [ec.NO_RUN], verdict
+    assert any("does not count" in note for note in verdict["notes"]), verdict["notes"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -m unittest certifi.tests.test_certify",
+    "python3 -m unittest certifi.tests.test_certify.T.test_ok",
+    "python3 -m unittest discover -s certifi.tests",
+    "python3 -m unittest certifi",
+])
+def test_review_fix3_an_exact_case_package_still_counts(unit, cmd):
+    for name in EXACT:
+        (unit / name).parent.mkdir(parents=True, exist_ok=True)
+        (unit / name).write_text("import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): pass\n")
+    commit(unit, "exact")
+    dispatched = task(unit, kind="refactor")
+    edit(unit)
+    verdict = ec.check(dispatched, [row(unit, 2, cmd)])
+    assert verdict["problems"] == [], verdict
