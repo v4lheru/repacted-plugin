@@ -25,8 +25,8 @@ Summary: The slim evidence check `repact accept` runs on a dispatched task: is t
          inside the worktree or on a tree the task held (base_tree or now), and it loaded what
          the tree id covers (`excluded`): a readable command whose targets and
          root/config options lie inside the git root of its directory, no PYTEST_ADDOPTS,
-         NODE_OPTIONS or VSTest* variable, every PYTHONPATH entry inside that root, and for
-         `python -m unittest` a file or package inside it for each dotted module name. Tree equality is the whole
+         NODE_OPTIONS, non-empty PYTHONSAFEPATH or VSTest* variable, every PYTHONPATH entry inside that root, and for
+         `python -m unittest` a regular module or package inside it for each dotted module name. Tree equality is the whole
          freshness rule: the tree id covers every input file (content_tree.is_input_path),
          named in produced or not, and a commit does not change it.
 Used by: shared/ops/evidence.py (the adapter accept and submit call).
@@ -67,15 +67,19 @@ COMMIT_HINT = "commit your work, then rerun tcount"
 # Options whose value is a directory or file the runner loads from; `-C dir` or
 # `--prefix dir` as two words leave the directory a target, which is checked the same way.
 # unittest's -s and -t (and discover's positional start and top) reach here under their long
-# names (acceptance._unittest_selection); one that is no existing directory is a module name
-# (_unittest_modules).
+# names (acceptance._unittest_selection); one under which git tracks no file is a module name
+# (_unittest_modules, _tracked_dir).
 UNITTEST_DIRS = ("--start-directory", "--top-level-directory")
 ROOT_OPTIONS = ("-c", "--rootdir", "--confcutdir", "--config", "--prefix", "--dir", "--directory", "--cwd",
                 *UNITTEST_DIRS)
 # A dotted unittest target may end in a TestCase class and a method after its module.
 UNITTEST_TRAILING = 2
 INI_PATH_KEYS = ("pythonpath", "rootdir", "testpaths")   # an ini key whose value is a loaded path
-BARRED_ENV = ("PYTEST_ADDOPTS", "NODE_OPTIONS")   # a run under either (or a VSTest* one) selects other tests
+# A run under any of these (or a VSTest* one) selects or imports other tests. PYTHONSAFEPATH (3.11+)
+# drops the run's directory from sys.path, so a dotted unittest name loads from site-packages; Python
+# reads it only when non-empty (NONEMPTY_ENV), so an empty value excludes nothing.
+BARRED_ENV = ("PYTEST_ADDOPTS", "NODE_OPTIONS", "PYTHONSAFEPATH")
+NONEMPTY_ENV = ("PYTHONSAFEPATH",)
 NOTES_SHOWN = 5
 uncommitted_inputs = ct.uncommitted_inputs        # a module name the tests can stand in for
 
@@ -179,51 +183,79 @@ def _plain_path(word: str) -> bool:
     return "/" in word or os.sep in word or word.lower().endswith(".py")
 
 
+def _tracked_dir(where: str, value: str) -> bool:
+    """git tracks at least one file under `value` (read against `where`). A start or top directory
+    is judged by what the repository holds, not by what is on disk at accept time: a `mkdir` after
+    the run must not turn the module name unittest imported into a repository directory."""
+    if not value:
+        return False
+    listed = ct._git(where, "--literal-pathspecs", "ls-files", "-z", "--", os.path.expanduser(value))
+    return bool(listed and listed.strip(b"\0"))
+
+
 def _unittest_modules(picked: tuple, where: str) -> tuple:
     """(the selection less its module names, [(module name, trailing parts allowed)]) of a
     `python -m unittest` selection run in `where`. unittest imports a target that is not a file
-    path (_plain_path) by its dotted name, and a start or top directory that is not an existing
-    directory too; sys.path holds the run's directory first, so such a name loads from the
-    repository only when a file or package there answers it (_module_inside)."""
+    path (_plain_path) by its dotted name, and a start or top value too unless it is a directory
+    (taken as one only when git tracks a file under it, _tracked_dir); sys.path holds the run's
+    directory first, so such a name loads from the repository only when a regular module or
+    package there answers it (_module_inside)."""
     modules = [(target, UNITTEST_TRAILING) for target in picked[2] if not _plain_path(target)]
     targets = [target for target in picked[2] if _plain_path(target)]
     options = []
     for option, value in picked[1]:
-        if option in UNITTEST_DIRS and not (value and os.path.isdir(os.path.join(where, os.path.expanduser(value)))):
+        if option in UNITTEST_DIRS and not _tracked_dir(where, value):
             modules.append((value, 0))
         else:
             options.append((option, value))
     return (picked[0], options, targets), modules
 
 
+def _package(path: str, top: str) -> bool:
+    """`path` is a regular package directory inside the git root `top`: it holds an __init__.py."""
+    init = os.path.join(path, "__init__.py")
+    return os.path.isfile(init) and _inside(os.path.realpath(init), top)
+
+
 def _module_inside(where: str, name: str, trailing: int, top: str) -> bool:
-    """Some file `<x>.py` or package directory `<x>/` under `where` answers the dotted `name`
-    (dots read as slashes), with up to `trailing` final parts (a class, a method) left off, and
-    lies inside the git root `top`."""
+    """A regular module or package under `where`, inside the git root `top`, answers the dotted
+    `name` (dots read as slashes), with up to `trailing` final parts (a class, a method) left off:
+    a file `<x>.py` or a directory `<x>/`, where that directory and every package directory above
+    it on the dotted path, from `where` down, holds an __init__.py (_package).
+
+    A directory without __init__.py is only a namespace portion: Python imports a regular package
+    of the same name from anywhere on sys.path (site-packages) before it, so it proves nothing
+    about what ran. A repository whose tests live in namespace packages is therefore refused; that
+    is the intended safe side (run them by file path, `python -m unittest tests/test_x.py`)."""
     parts = name.split(".")
-    if not all(parts):
+    if not all(parts) or any("/" in part or os.sep in part for part in parts):
         return False
     for keep in range(len(parts), max(len(parts) - trailing, 1) - 1, -1):
+        packages = [os.path.join(where, *parts[:depth]) for depth in range(1, keep)]
+        if not all(_package(path, top) for path in packages):
+            continue
         base = os.path.join(where, *parts[:keep])
-        for candidate, present in ((base + ".py", os.path.isfile), (base, os.path.isdir)):
-            if present(candidate) and _inside(os.path.realpath(candidate), top):
-                return True
+        if os.path.isfile(base + ".py") and _inside(os.path.realpath(base + ".py"), top):
+            return True
+        if os.path.isdir(base) and _package(base, top):
+            return True
     return False
 
 
 def excluded(run: dict, roots: dict) -> str:
     """Why a run counts for nothing, "" when it counts: its command cannot be read
     (acceptance.selection: a wrapper that changes what runs), it ran under PYTEST_ADDOPTS,
-    NODE_OPTIONS or a VSTest* variable, or it loads a target, a root or config option value or a PYTHONPATH entry from
+    NODE_OPTIONS, a non-empty PYTHONSAFEPATH or a VSTest* variable, or it loads a target, a root or config option value or a PYTHONPATH entry from
     outside the git root of its directory (the tree id covers that root only), or, for `python -m
-    unittest`, it imports a dotted target or start/top module no file or package inside that root
-    answers (_unittest_modules: it would load from site-packages). `roots` caches the git root
+    unittest`, it imports a dotted target or start/top module no regular module or package inside
+    that root answers (_unittest_modules, _module_inside: it would load from site-packages). `roots` caches the git root
     per directory."""
     picked = AC.selection(_command(run))
     if picked is None:
         return "its command cannot be read as a test selection (a wrapper option that changes what runs)"
     env = run_env(run)
-    barred = [name for name in BARRED_ENV if name in env] + sorted(n for n in env if AC.VSTEST_ENV.match(n))
+    barred = [name for name in BARRED_ENV if name in env and (env[name] or name not in NONEMPTY_ENV)]
+    barred += sorted(n for n in env if AC.VSTEST_ENV.match(n))
     if barred:
         return f"it ran with {' and '.join(barred)} set, which changes the tests it selects"
     where = _where(run)
@@ -238,8 +270,8 @@ def excluded(run: dict, roots: dict) -> str:
         picked, modules = _unittest_modules(picked, where)
     for name, trailing in modules:
         if not _module_inside(where, name, trailing, top):
-            return (f"it imports {name[:120] or 'an empty name'} as a module, and no file or package of "
-                    f"that name is inside its repository {top}")
+            return (f"it imports {name[:120] or 'an empty name'} as a module, and no regular module or "
+                    f"package (__init__.py on every level) of that name is inside its repository {top}")
     entries = env["PYTHONPATH"].split(os.pathsep) if "PYTHONPATH" in env else []
     for path in _loaded_paths(picked) + [entry or "." for entry in entries]:
         if not _inside(os.path.realpath(os.path.join(where, os.path.expanduser(path))), top):
