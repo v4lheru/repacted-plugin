@@ -957,3 +957,77 @@ def test_the_newest_excluded_runs_are_the_ones_noted(worktree):
     assert [AC.stem(run) for run in reversed(skipped[-ec.NOTES_SHOWN:])] == \
         [note.split()[1] for note in shown], notes
     assert any("2 older" in note for note in notes), notes
+
+
+# --- review-fix #4: unittest discover by role, dotted targets resolved in the repository ---
+
+@pytest.fixture
+def unit(worktree):
+    """The worktree with a unittest package: tests/test_fix.py (the red's file) and test_trivial.py."""
+    (worktree / "tests" / "__init__.py").write_text("")
+    for name in ("test_fix", "test_trivial"):
+        (worktree / "tests" / f"{name}.py").write_text("import unittest\nclass T(unittest.TestCase):\n"
+                                                         "    def test_ok(self): pass\n")
+    return worktree
+
+
+@pytest.mark.parametrize("red_cmd", ["python3 -m unittest tests/test_fix.py", "python3 -m unittest tests.test_fix"])
+@pytest.mark.parametrize("green", [
+    "python3 -m unittest discover tests test_trivial.py",
+    "python3 -m unittest discover . test_trivial.py",
+    "python3 -m unittest discover tests 'nomatch*.py'",
+    "python3 -m unittest tests.test_trivial",
+])
+def test_review_fix_f1_a_discover_pattern_green_does_not_cover_the_red_file(unit, red_cmd, green):
+    """F1: discover's second positional is its pattern, so the green never ran tests/test_fix.py."""
+    red = row(unit, 9, red_cmd, passed=0, failed=1)
+    assert not any(ec.covers(row(unit, 5, green), target, os.path.realpath(unit), {}, red_run=red)
+                   for target in ec.red_targets(red)), ec.red_targets(red)
+    dispatched = task(unit)
+    edit(unit)
+    verdict = ec.check(dispatched, [red, row(unit, 5, green)])
+    assert ec.RED_FIRST in rules(verdict), verdict
+
+
+def test_review_fix_f1_the_red_file_run_again_still_covers_it(unit):
+    dispatched = task(unit)
+    red = row(unit, 9, "python3 -m unittest tests/test_fix.py", passed=0, failed=1)
+    edit(unit)
+    verdict = ec.check(dispatched, [red, row(unit, 5, "python3 -m unittest -v tests/test_fix.py")])
+    assert verdict["problems"] == [], verdict
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -m unittest certifi.tests.test_certify",
+    "python3 -m unittest discover -s certifi.tests",
+    "python3 -m unittest discover certifi.tests",
+    "python3 -m unittest discover -s tests -t certifi",
+    "python3 -m unittest certifi",
+    "python3 -m unittest tests.test_fix certifi.tests",
+    "python3 -m unittest -v discover",
+])
+def test_review_fix_f2_a_dotted_target_with_no_module_in_the_repository_backs_nothing(unit, cmd):
+    """F2: a dotted name no file or package of the repository answers imports from site-packages."""
+    dispatched = task(unit, kind="refactor")
+    edit(unit)
+    verdict = ec.check(dispatched, [row(unit, 2, cmd)])
+    assert rules(verdict) == [ec.NO_RUN], verdict
+    assert any("does not count" in note for note in verdict["notes"]), verdict["notes"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -m unittest tests.test_fix",
+    "python3 -m unittest tests.test_fix.T",
+    "python3 -m unittest tests.test_fix.T.test_ok",
+    "python3 -m unittest tests",
+    "python3 -m unittest discover -s tests",
+    "python3 -m unittest discover tests",
+    "python3 -m unittest discover -s tests -t .",
+    "python3 -m unittest discover",
+    "python3 -m unittest tests/test_fix.py",
+])
+def test_review_fix_f2_a_dotted_target_the_repository_holds_counts(unit, cmd):
+    dispatched = task(unit, kind="refactor")
+    edit(unit)
+    verdict = ec.check(dispatched, [row(unit, 2, cmd)])
+    assert verdict["problems"] == [], verdict

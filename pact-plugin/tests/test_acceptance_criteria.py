@@ -246,16 +246,38 @@ class TestUnittestSelection:
         assert self.picked("python3 -m unittest -k parse -q tests.test_a tests.test_b.Case") == \
             ("unittest", [("-k", "parse")], ["tests.test_a", "tests.test_b.Case"])
 
-    @pytest.mark.parametrize("command, options, targets", [
+    @pytest.mark.parametrize("command, options", [
         ("python3 -m unittest discover -s tests -p 'test_*.py'",
-         [("--pattern", "test_*.py"), ("--start-directory", "tests")], ["discover"]),
+         [("--pattern", "test_*.py"), ("--start-directory", "tests")]),
         ("python3 -m unittest discover --start-directory=tests --pattern test_*.py -t .",
-         [("--pattern", "test_*.py"), ("--start-directory", "tests"), ("--top-level-directory", ".")], ["discover"]),
-        ("python3 -m unittest discover -vstests", [("--start-directory", "tests")], ["discover"]),
-        ("python3 -m unittest discover --start=tests", [("--start-directory", "tests")], ["discover"]),
-        ("python3 -m unittest discover tests 'test_*.py'", [], ["discover", "tests", "test_*.py"]),
+         [("--pattern", "test_*.py"), ("--start-directory", "tests"), ("--top-level-directory", ".")]),
+        ("python3 -m unittest discover -vstests", [("--start-directory", "tests")]),
+        ("python3 -m unittest discover --start=tests", [("--start-directory", "tests")]),
+        ("python3 -m unittest discover", []),
+        ("python3 -m unittest DISCOVER -s tests", [("--start-directory", "tests")]),
+        # Fix review-fix #4 F1: discover's positionals are start, pattern and top, in that order, the
+        # same options as -s, -p and -t (the reviewer's command strings).
+        ("python3 -m unittest discover tests 'test_*.py'", [("--pattern", "test_*.py"), ("--start-directory", "tests")]),
+        ("python3 -m unittest discover tests test_trivial.py",
+         [("--pattern", "test_trivial.py"), ("--start-directory", "tests")]),
+        ("python3 -m unittest discover . test_trivial.py", [("--pattern", "test_trivial.py"), ("--start-directory", ".")]),
+        ("python -m unittest discover tests nomatch_*.py", [("--pattern", "nomatch_*.py"), ("--start-directory", "tests")]),
+        ("python3 -m unittest discover -v tests 'test_*.py' .",
+         [("--pattern", "test_*.py"), ("--start-directory", "tests"), ("--top-level-directory", ".")]),
+        ("python3 -m unittest discover -- tests", [("--start-directory", "tests")]),
     ])
-    def test_discover_options_are_read_the_way_unittest_reads_them(self, command, options, targets):
+    def test_discover_options_are_read_the_way_unittest_reads_them(self, command, options):
+        """Discovery is a mode, ("discover", "") among the options, never a target: no word of a
+        discover run is a module or file target."""
+        assert self.picked(command) == ("unittest", sorted(options + [("discover", "")]), [])
+
+    @pytest.mark.parametrize("command, options, targets", [
+        # Fix review-fix #4 F1/F3: `discover` is the mode only as the first word after `-m unittest`.
+        ("python -m unittest tests discover", [], ["tests", "discover"]),
+        ("python -m unittest -v discover -s tests", [("-s", "")], ["discover", "tests"]),
+        ("python3 -m unittest -p x tests.test_a", [("-p", "")], ["x", "tests.test_a"]),
+    ])
+    def test_discover_after_another_word_is_a_module_target(self, command, options, targets):
         assert self.picked(command) == ("unittest", options, targets)
 
     @pytest.mark.parametrize("command", [
@@ -265,6 +287,9 @@ class TestUnittestSelection:
         "PYTHONPATH=/elsewhere python3 -m unittest scripts/tests/test_a.py",
         "uv run --directory /elsewhere python -m unittest scripts/tests/test_a.py",
         "python3 -I -m unittest scripts/tests/test_a.py",
+        # Fix review-fix #4 F4: PYTHONSAFEPATH drops the run's directory from sys.path.
+        "env PYTHONSAFEPATH=1 python -m unittest tests.test_a",
+        "env PYTHONSAFEPATH=1 python3 -m unittest scripts/tests/test_a.py",
     ])
     def test_bare_unittest_and_wrappers_that_change_what_runs_stay_unreadable(self, command):
         assert self.picked(command) is None
@@ -277,6 +302,12 @@ class TestUnittestSelection:
         ("pytest scripts/tests/test_a.py", "python3 -m unittest scripts/tests/test_a.py", False),
         ("python3 -m unittest scripts/tests/test_a.py", "python3 -m unittest -k parse scripts/tests/test_a.py", False),
         ("python3 -m unittest discover -s tests", "python3 -m unittest discover -s other", False),
+        # Fix review-fix #4 F3: `tests discover` loads two modules, it is no discovery.
+        ("python -m unittest discover tests", "python -m unittest tests discover", False),
+        ("python -m unittest discover tests", "python -m unittest discover --start-directory tests", True),
+        ("python -m unittest discover tests", "python -m unittest discover tests -p 'test*.py'", False),
+        ("python -m unittest discover", "python -m unittest -v discover", False),
+        ("python3 -m unittest tests.test_a", "env PYTHONSAFEPATH=1 python3 -m unittest tests.test_a", False),
     ])
     def test_unittest_selections_compare_exactly(self, pinned, ran, closes, tmp_path):
         why = TestSelection.judged(pinned, ran, tmp_path)

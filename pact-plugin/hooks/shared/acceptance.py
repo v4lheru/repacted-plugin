@@ -48,7 +48,9 @@ _ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=.*", re.DOTALL)
 _TASKPOLICY_VALUE = ("-c", "-d", "-g", "-t", "-l", "-p")   # macOS taskpolicy: QoS and I/O tiers
 # Environment variables that change which tests run or what they import: tcount
 # records them, and a run under the first two never counts (shared/evidence_check.py).
-SELECTING_ENV = ("PYTEST_ADDOPTS", "NODE_OPTIONS", "PYTHONPATH")
+# PYTHONSAFEPATH (3.11+) drops the run's directory from sys.path, so a dotted unittest target
+# imports from site-packages instead of the repository.
+SELECTING_ENV = ("PYTEST_ADDOPTS", "NODE_OPTIONS", "PYTHONPATH", "PYTHONSAFEPATH")
 # MSBuild reads every environment variable as a property, names in any case: a VSTest* one
 # (VSTestTestCaseFilter) selects the tests of a `dotnet test`.
 VSTEST_ENV = re.compile(r"VSTest", re.I)
@@ -59,12 +61,19 @@ OUTPUT_ONLY = re.compile(r"-[qvsxl]+\Z|--(?:quiet|verbose|no-header|exitfirst|sh
 OUTPUT_VALUE = ("--tb", "--color", "--durations", "--maxfail", "--numprocesses", "-n")
 # `python -m unittest` (its own argparse, read by _unittest_selection). Output-only: -v/--verbose,
 # -q/--quiet, -b/--buffer (hold output), -c/--catch (Ctrl-C handling), -f/--failfast (stop at the
-# first failure, as pytest's -x), --locals and --durations N. Selecting: -k, -p/--pattern,
-# -s/--start-directory, -t/--top-level-directory, and any option unittest does not know.
+# first failure, as pytest's -x), --locals and --durations N. Selecting: -k, and in discovery only
+# -p/--pattern, -s/--start-directory, -t/--top-level-directory; any option unittest does not know.
 UNITTEST_SHORT_OUTPUT = "vqbcf"
-UNITTEST_SHORT_VALUE = {"k": "-k", "p": "--pattern", "s": "--start-directory", "t": "--top-level-directory"}
+UNITTEST_SHORT_VALUE = {"k": "-k"}
+UNITTEST_DISCOVER_SHORT = {"p": "--pattern", "s": "--start-directory", "t": "--top-level-directory"}
 UNITTEST_LONG_OUTPUT = ("--verbose", "--quiet", "--buffer", "--catch", "--failfast", "--locals")
-UNITTEST_LONG_VALUE = ("--pattern", "--start-directory", "--top-level-directory", "--durations")
+UNITTEST_LONG_VALUE = ("--durations",)
+UNITTEST_DISCOVER_LONG = ("--pattern", "--start-directory", "--top-level-directory")
+# Discovery is unittest's mode when the first word after `-m unittest` is `discover`, in any case
+# (unittest.main compares argv[1].lower()); its positionals are, in order, the start directory, the
+# pattern and the top-level directory. The mode reads as this option pair, never as a target.
+UNITTEST_DISCOVER = ("discover", "")
+UNITTEST_POSITIONALS = ("--start-directory", "--pattern", "--top-level-directory")
 # pytest's report option: `-rfE` or `-r fE`. For node and mocha `-r` loads a module.
 _PYTEST_REPORT = re.compile(r"-r[fEsxXpPaAN]+\Z")
 _PYTEST = ("pytest", "py.test")
@@ -177,34 +186,44 @@ def _target(word: str) -> str:
     return word.rstrip("/") or word
 
 
-def _unittest_long(word: str) -> tuple[str, Optional[str]]:
+def _unittest_long(word: str, discovery: bool) -> tuple[str, Optional[str]]:
     """(the long option a `--name[=value]` word names, its attached value or None). unittest's
     argparse takes a unique prefix of a long option (`--start` is --start-directory), so a
-    prefix is expanded the same way; anything else stays as written."""
+    prefix is expanded the same way, among the options of the mode (`discovery`: -p, -s and -t
+    exist there only); anything else stays as written."""
     name, equals, value = word.partition("=")
-    known = [option for option in (*UNITTEST_LONG_OUTPUT, *UNITTEST_LONG_VALUE) if option.startswith(name)]
+    longs = (*UNITTEST_LONG_OUTPUT, *UNITTEST_LONG_VALUE, *(UNITTEST_DISCOVER_LONG if discovery else ()))
+    known = [option for option in longs if option.startswith(name)]
     name = name if name in known else known[0] if len(known) == 1 else name
     return name, value if equals else None
 
 
 def _unittest_selection(args: list[str]) -> tuple:
     """("unittest", sorted (option, value) pairs, targets) of the arguments after `python -m
-    unittest`, read the way its argparse reads them: short flags may cluster (`-vb`), a value
-    may be attached (`-stests`, `-vstests`, `--pattern=x`) or the next word, a long option may
-    be a unique prefix. Output-only options (UNITTEST_SHORT_OUTPUT, UNITTEST_LONG_OUTPUT,
-    --durations N) are set aside; -k, -p, -s and -t select and are kept, under their long
-    names for -p, -s and -t (a start or top directory is a path evidence_check checks stays in
-    the repository). An option unittest does not know stays as written, a selecting one.
-    `discover` and its positional start, pattern and top are targets."""
-    options, targets, rest = [], [], iter(args)
+    unittest`, read by role the way unittest.main reads them. A first word `discover` (any case)
+    is discovery: UNITTEST_DISCOVER joins the options, -p, -s and -t select there under their
+    long names, and the positionals map in order to --start-directory, --pattern and
+    --top-level-directory (UNITTEST_POSITIONALS), so `discover tests x.py` carries the pattern
+    x.py as an option, never as a target; a fourth positional stays a ("discover", word) pair.
+    Otherwise every positional is a module or file target, and -p, -s and -t are options unittest
+    does not know there (argparse refuses them), kept as written. Either way short flags may
+    cluster (`-vb`), a value may be attached (`-stests`, `-vstests`, `--pattern=x`) or the next
+    word, a long option may be a unique prefix; output-only options (UNITTEST_SHORT_OUTPUT,
+    UNITTEST_LONG_OUTPUT, --durations N) are set aside, -k selects and is kept, and any other
+    option stays as written, a selecting one. A start or top directory is a path or module
+    evidence_check checks stays in the repository."""
+    discovery = bool(args) and args[0].lower() == "discover"
+    options, targets, positionals = [], [], []
+    rest = iter(args[1:] if discovery else args)
+    shorts = {**UNITTEST_SHORT_VALUE, **(UNITTEST_DISCOVER_SHORT if discovery else {})}
     for word in rest:
         if word == "--":
-            targets.extend(_target(each) for each in rest)
+            positionals.extend(rest)
         elif word.startswith("--"):
-            name, value = _unittest_long(word)
+            name, value = _unittest_long(word, discovery)
             if name in UNITTEST_LONG_OUTPUT:
                 continue
-            if name in UNITTEST_LONG_VALUE:
+            if name in UNITTEST_LONG_VALUE or (discovery and name in UNITTEST_DISCOVER_LONG):
                 value = next(rest, "") if value is None else value
                 if name != "--durations":
                     options.append((name, value))
@@ -214,22 +233,29 @@ def _unittest_selection(args: list[str]) -> tuple:
             for index, letter in enumerate(word[1:], 1):
                 if letter in UNITTEST_SHORT_OUTPUT:
                     continue
-                if letter in UNITTEST_SHORT_VALUE:
+                if letter in shorts:
                     value = word[index + 1:] or next(rest, "")
-                    options.append((UNITTEST_SHORT_VALUE[letter], value))
+                    options.append((shorts[letter], value))
                 else:
                     options.append((word, ""))
                 break
         else:
-            targets.append(_target(word))
-    return "unittest", sorted(options), targets
+            positionals.append(word)
+    if not discovery:
+        return "unittest", sorted(options), [_target(word) for word in positionals]
+    options.append(UNITTEST_DISCOVER)
+    for index, word in enumerate(positionals):
+        role = UNITTEST_POSITIONALS[index] if index < len(UNITTEST_POSITIONALS) else UNITTEST_DISCOVER[0]
+        options.append((role, word))
+    return "unittest", sorted(options), []
 
 
 def selection(command: str) -> Optional[tuple]:
     """(runner, sorted (option, value) pairs, targets) of a test command, or None when it cannot be
     split (an open quote) or names nothing. Wrappers and OUTPUT_ONLY options are set aside; a
     target loses a leading `./` and a trailing `/`. `python -m unittest` reads as runner
-    `unittest` with its own options (_unittest_selection)."""
+    `unittest` with its own options (_unittest_selection): discovery is the ("discover", "") option
+    pair and its start, pattern and top are options, never targets."""
     words = test_words(command)
     if words is None:
         return None
