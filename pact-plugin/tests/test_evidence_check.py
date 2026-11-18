@@ -1031,3 +1031,53 @@ def test_review_fix_f2_a_dotted_target_the_repository_holds_counts(unit, cmd):
     edit(unit)
     verdict = ec.check(dispatched, [row(unit, 2, cmd)])
     assert verdict["problems"] == [], verdict
+
+
+# --- review-fix #5: only regular packages and tracked directories answer a unittest name ---
+
+@pytest.mark.parametrize("dirs, files, cmd", [
+    # an empty directory is a namespace portion at most: a regular certifi in site-packages wins
+    (["certifi"], [], "python3 -m unittest certifi.tests.test_certify"),
+    (["certifi/tests"], [], "python3 -m unittest certifi.tests.test_certify"),
+    (["certifi"], [], "python3 -m unittest discover -s certifi.tests"),
+    # a package directory above the module, or the named directory itself, with no __init__.py
+    (["ns"], ["ns/test_y.py"], "python3 -m unittest ns.test_y"),
+    (["ns/sub"], ["ns/sub/__init__.py", "ns/sub/test_y.py"], "python3 -m unittest ns.sub.test_y"),
+    (["ns"], ["ns/test_y.py"], "python3 -m unittest ns"),
+])
+def test_review_fix2_m1_a_name_answered_only_by_a_namespace_directory_backs_nothing(unit, dirs, files, cmd):
+    """M1: unittest imports a dotted name from sys.path; a directory without __init__.py on the way
+    loses to a regular package of that name elsewhere (site-packages), so it is no repo evidence."""
+    for folder in dirs:
+        (unit / folder).mkdir(parents=True, exist_ok=True)
+    for name in files:
+        (unit / name).write_text("import unittest\n")
+    dispatched = task(unit, kind="refactor")
+    edit(unit)
+    verdict = ec.check(dispatched, [row(unit, 2, cmd)])
+    assert rules(verdict) == [ec.NO_RUN], verdict
+    assert any("does not count" in note for note in verdict["notes"]), verdict["notes"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -m unittest discover -s certifi.tests",
+    "python3 -m unittest discover certifi.tests",
+    "python3 -m unittest discover -s tests -t certifi.tests",
+])
+def test_review_fix2_l1_a_start_or_top_directory_git_does_not_track_is_read_as_a_module(unit, cmd):
+    """L1: `mkdir certifi.tests` after the run must not turn the module name into a repo directory."""
+    (unit / "certifi.tests").mkdir()
+    dispatched = task(unit, kind="refactor")
+    edit(unit)
+    verdict = ec.check(dispatched, [row(unit, 2, cmd)])
+    assert rules(verdict) == [ec.NO_RUN], verdict
+
+
+@pytest.mark.parametrize("value, counts", [("1", False), ("x", False), ("", True)])
+def test_review_fix2_l2_a_non_empty_pythonsafepath_excludes_the_run(unit, value, counts):
+    """L2: a non-empty PYTHONSAFEPATH drops the run's directory from sys.path; an empty one does nothing."""
+    dispatched = task(unit, kind="refactor")
+    edit(unit)
+    run = dict(row(unit, 2, "python3 -m unittest tests.test_fix"), env={"PYTHONSAFEPATH": value})
+    verdict = ec.check(dispatched, [run])
+    assert (verdict["problems"] == []) is counts, verdict
