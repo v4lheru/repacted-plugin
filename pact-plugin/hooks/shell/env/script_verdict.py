@@ -5,7 +5,7 @@ Summary: judge, bash_verdict and the filters around the walk: listed names, quie
 Used by: hooks/env_guard.py (the entry hook and façade) and the other shell.env
          modules per the imports below. Carved from env_guard.py at M2; every
          decision is pinned by tests/fixtures/shell/decisions/live.jsonl.
-Map: judge, _pattern_words, _find_filters, _listed_names_verdict, _quiet_group, _procsub_consumer, _fed_texts, _fed_text_verdict, _PATH_VARIABLE, _expand_path_variables, _spell_pairs, _script_verdict, _loose_verdict, _ENV_GET_WRITE, bash_verdict.
+Map: judge, _pattern_words, _find_filters, _listed_names_verdict, _quiet_group, _procsub_consumer, _FED, _sent_procsub, _command_start, _own_words, _fed_texts, _fed_text_verdict, _PATH_VARIABLE, _expand_path_variables, _spell_pairs, _script_verdict, _loose_verdict, _ENV_GET_WRITE, bash_verdict.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from shell.words import segments
 from shell.words import strip_prefix
 from shell.words import words as shell_words
 from shell.env.git_egress import (Notice, git_egress_pass, git_egress_verdict)
-from shell.env.judge import (_body_as_script, _heredoc_verdict, _printed_text, _prints_loaded, _program, _sub_verdict, command_verdict)
+from shell.env.judge import (_body_as_script, _echoes_request, _group_words, _heredoc_verdict, _note_quoting, _printed_text, _prints_alone, _prints_loaded, _program, _sent_values, _shows_command, _sub_verdict, _traces_anywhere, command_verdict)
 from shell.env.names import (GLOB_BUDGET_MESSAGE, _WRITE_REDIRECT, glob_budget_overspent,
                              mentions_class, reset_glob_budget, token_protected)
 from shell.env.places import (_Directory, _PIPE, _merge, _names_only_search, _search_skip, resolve_path_substitutions)
@@ -39,6 +39,8 @@ def judge(command: str, cwd: str | None, state: _State, captured: bool = False) 
     _Directory); a substitution runs where the commands carrying it do. `command` has been
     through _read."""
     command = _pull_substitutions(command, state)
+    if state.unscanned:                                 # quoted or split: judge._sent_keys
+        _note_quoting(command, state)
     steps, exact = _command_steps(command)
     where = _Directory(cwd, exact)
     placed = [(step, where.step(step)) for step in steps]
@@ -55,10 +57,15 @@ def judge(command: str, cwd: str | None, state: _State, captured: bool = False) 
     state.captured = captured
     fed = {key for step in steps for key in step.bodies}
     for index, (step, places) in enumerate(placed):
-        for here in places if not _quiet_group(steps, index) else ():
-            reason = command_verdict(step.words, step.stdin, here, state, step.strings)
-            if reason:
-                return reason
+        unscanned = state.unscanned
+        state.unscanned = unscanned and not _sent_procsub(steps, index, state)
+        try:
+            for here in places if not _quiet_group(steps, index) else ():
+                reason = command_verdict(step.words, step.stdin, here, state, step.strings)
+                if reason:
+                    return reason
+        finally:
+            state.unscanned = unscanned
         for key in step.bodies:
             reason = _heredoc_verdict(key, index, steps, command, places, state)
             if reason:
@@ -322,6 +329,68 @@ def _procsub_consumer(steps: list[_Step], index: int) -> int | None:
     return None
 
 
+_FED = "\x01"                                       # where the <(...) stands in its client's words
+
+
+def _sent_procsub(steps: list[_Step], index: int, state: _State) -> bool:
+    """True when steps[index] is the only command of a `<(...)` an HTTP client reads as the
+    value of a send option (curl -H @<(env-get ...), judge._sent_values) without showing
+    its request, and it prints only to that client (_prints_alone): what it prints is sent
+    where it belongs, not to the transcript. The client is judged as under Monitor (judge
+    calls this only there): a trace to any file, --libcurl, -K or a file:// target shows
+    what it sends, and so do the shell's trace (set -x, or a switch anywhere in the command:
+    judge._traces_anywhere) and a runner that prints the command (env -v, xargs -t). A
+    <(...) on stdin (`< <(..)`) or in any other option is not sent.
+    The parser does not keep the space before `<(`, so both readings are tried: glued to
+    the word before it (-H @<(..)) and on its own (-H <(..)); neither reads a file the
+    client would not send."""
+    consumer = _procsub_consumer(steps, index)
+    if consumer is None or state.traced or state.traces \
+            or not steps[index].after.startswith(")") \
+            or not _prints_alone(steps[index], state):
+        return False
+    start = _command_start(steps, consumer)
+    words = _group_words(_own_words(steps, start))
+    command = strip_prefix(words)
+    lead = len(words) - len(command)
+    program = command[0].rsplit("/", 1)[-1] if command else ""
+    if program not in EGRESS_PROGRAMS or _shows_command(words[:lead]) \
+            or _echoes_request(program, command[1:], unscanned=True):
+        return False
+    before = _group_words(_own_words(steps, start, index))[lead + 1:]
+    readings = [before + [_FED]] + ([before[:-1] + [before[-1] + _FED]] if before else [])
+    return any(len(args) - 1 in _sent_values(program, args, fed=True) for args in readings)
+
+
+def _command_start(steps: list[_Step], index: int) -> int:
+    """The first step of the command steps[index] is part of: a step with only `)` before
+    it resumes the command a `<(...)` interrupted (the `-d @` of `curl -H @<(..) -d @<(..)`),
+    so the walk goes back past that `<(...)`."""
+    while index > 0 and steps[index].before and set(steps[index].before) <= {")"}:
+        level = 0
+        for k in range(index, 0, -1):
+            level += steps[k].before.count(")") - steps[k].before.count("(")
+            if level <= 0:
+                break
+        else:
+            return index
+        index = k - 1
+    return index
+
+
+def _own_words(steps: list[_Step], start: int, stop: int | None = None) -> list[str]:
+    """The words of the command that begins at steps[start], before steps[stop]: its own
+    and those of each step a `)` alone brings back to its level (`curl -H @<(..) -v URL`)."""
+    words, level = list(steps[start].words), 0
+    for step in steps[start + 1:stop]:
+        level += step.before.count("(") - step.before.count(")")
+        if level < 0 or level == 0 and set(step.before) & set(";|&\n"):
+            break
+        if level == 0:
+            words += step.words
+    return words
+
+
 def _fed_texts(steps: list[_Step], index: int, state: _State) -> list[tuple[str, int]]:
     """(text, index of the step that reads it) for what steps[index] hands to another
     program as input without a heredoc: its here-strings (to itself), what echo or printf
@@ -473,15 +542,18 @@ def _writes_env_get(command: str) -> bool:
     return False
 
 
-def bash_verdict(command: str, cwd: str) -> str | None:
+def bash_verdict(command: str, cwd: str, unscanned: bool = False) -> str | None:
     """Why `command` is blocked, or None. A command with more globs than names.GLOB_BUDGET is
-    blocked whatever else it holds: past the budget no glob is judged."""
-    verdict = _bash_verdict(command, cwd)
+    blocked whatever else it holds: past the budget no glob is judged. `unscanned`: no scan
+    sees the output (Monitor), so a value env-get hands a command it prints counts too."""
+    verdict = _bash_verdict(command, cwd, unscanned)
     return GLOB_BUDGET_MESSAGE if glob_budget_overspent() else verdict
 
 
-def _bash_verdict(command: str, cwd: str) -> str | None:
+def _bash_verdict(command: str, cwd: str, unscanned: bool = False) -> str | None:
     state = _State()
+    state.unscanned = unscanned
+    state.traces = unscanned and _traces_anywhere(command)    # no send pass: judge._sent_keys
     state.env_get_written = _writes_env_get(command)
     reset_glob_budget()
     try:
@@ -493,7 +565,9 @@ def _bash_verdict(command: str, cwd: str) -> str | None:
         # Something is left open: the shell stops there too, after the commands before it.
         if mentions_class(command):
             return PARSE_MESSAGE
-        return _loose_verdict(command, (cwd, None), _State())
+        loose = _State()
+        loose.unscanned, loose.traces = unscanned, state.traces
+        return _loose_verdict(command, (cwd, None), loose)
     except RecursionError:
         return UNREADABLE_MESSAGE.format(what="commands nested too deep to follow",
                                          instead="run the inner command on its own")

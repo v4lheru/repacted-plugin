@@ -34,7 +34,10 @@ stdout carries only the redacted output and the notice; stderr stays empty.
 Limits: a value wrapped across lines is named in the notice but not replaced (no single span
 holds it); a value cut by other characters, or encoded in another way (hex, inside a longer
 base64 blob, a multi-line quoted value), is not seen; strings past MAX_SCAN_CHARS are left as
-they are. Only Bash output is scanned: env_guard keeps .env files out of Read and Grep.
+they are. Only Bash output is scanned: env_guard keeps .env files out of Read and Grep. Monitor
+output arrives as task notifications no hook sees, so there env_guard refuses a command that
+prints a value env-get hands it (printenv KEY, echo $KEY, curl -v); an opaque program env-get
+runs under Monitor (env-get .env KEY -- ./watch.sh) can still print one, unredacted.
 
 Fail-open: any error, odd stdin or a timeout prints nothing, so the original output stands.
 """
