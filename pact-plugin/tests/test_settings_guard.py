@@ -495,6 +495,116 @@ def test_a_claude_cli_write_of_the_user_config_or_plugin_state_is_refused_to_an_
         assert _decision(guard.decide(_bash(command, home, agent_type=LEAD))) == "ask", command
 
 
+ADD_JSON = "claude mcp add-json evil '{\\\"command\\\":\\\"sh\\\"}'"     # recorded row 0039ba7e97
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c \"%s\"" % ADD_JSON,
+    "bash -c \"X=1; %s\"" % ADD_JSON,
+    "bash -c \"X=1 %s\"" % ADD_JSON,
+    "sh -ec \"X=1;%s\"" % ADD_JSON,
+])
+def test_a_claude_cli_write_behind_an_assignment_in_a_shell_script_is_refused(home, command):
+    """The script of `bash -c 'X=1; ...'` was read as the assignment X, so the write ran unread."""
+    output = guard.decide(_bash(command, home, agent_id="a1b2c3", agent_type="Explore"))
+    assert _decision(output) == "deny", command
+    assert "claude CLI" in output["hookSpecificOutput"]["permissionDecisionReason"], command
+    assert _decision(guard.decide(_bash(command, home, agent_type=LEAD))) == "ask", command
+
+
+# The script was read only when it was the command's one word, so `script -c 'S' /dev/null`
+# and `bash -c 'S' sh` (words after the script) ran their write unread.
+SCRIPT_WRITE = "echo x > ~/.claude/settings.json"
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", [form.replace("W", SCRIPT_WRITE) for form in (
+    "script -c 'X=1; W' /dev/null",
+    "script -c 'W' /dev/null",
+    "script -qc 'X=1; W' /dev/null",
+    "script -qc 'W' /dev/null",
+    "bash -c 'X=1; W' sh",
+    "bash -c 'W' sh a",
+    "flock -nc 'X=1; W' /tmp/l",
+    "fish --command 'X=1; W'",
+    "eval 'X=1; W'",
+    "watch 'X=1; echo x >' ~/.claude/settings.json",                # watch joins its words
+    "watch echo 'x; W'",                                            # sh -c 'echo x; W'
+    # controls: refused before the fix and still
+    "bash -c 'W'",
+    "watch 'W'",
+)])
+def test_a_settings_write_in_a_script_with_words_after_it_is_refused(home, command, tool):
+    payload = dict(_bash(command, home, agent_id="a1b2c3", agent_type="Explore"), tool_name=tool)
+    output = guard.decide(payload)
+    assert _decision(output) == "deny", command
+    assert output["hookSpecificOutput"]["permissionDecisionReason"].endswith(
+        "[rule: settings.write]"), command
+
+
+# fish runs every -C and -c, but only the first was read; a runner word after watch made its
+# script look like an assignment, so neither write was read.
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", [form.replace("W", SCRIPT_WRITE) for form in (
+    "fish -C 'echo hi' -c 'W'",
+    "fish -c 'echo hi' -c 'W'",
+    "fish -c true -c 'X=1; W'",
+    "fish --init-command true --command 'W'",
+    "fish -c 'W' -C true",
+    "watch nice 'X=1; W'",
+    "watch env X=1 'W'",
+    "watch sudo -u root 'X=1; W'",
+    "watch -n 5 time 'X=1; W'",
+    "eval nice 'X=1; W'",
+    # control: refused before the fix and still
+    "fish -c 'W'",
+)])
+def test_a_settings_write_in_any_script_fish_or_watch_runs_is_refused(home, command, tool):
+    payload = dict(_bash(command, home, agent_id="a1b2c3", agent_type="Explore"), tool_name=tool)
+    output = guard.decide(payload)
+    assert _decision(output) == "deny", command
+    assert output["hookSpecificOutput"]["permissionDecisionReason"].endswith(
+        "[rule: settings.write]"), command
+
+
+# The walk stopped at the value of a shell's -o / -O and at its + options, so the write in
+# the -c script after them was never read.
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", [form.replace("W", SCRIPT_WRITE) for form in (
+    "bash -o pipefail -c 'W'",
+    "bash -O extglob -c 'X=1; W'",
+    "sh -o errexit -c 'W'",
+    "bash -c -o pipefail 'W'",
+    "bash +o posix -c 'W'",
+    "sh +x -c 'X=1; W'",
+    "bash -eo pipefail -c 'W'",
+    "bash -oc pipefail 'W'",
+    "zsh -o pipefail -c 'W'",
+    "ksh -o c 'W'",
+    "/bin/bash -o pipefail -c 'W' sh",
+    "bash --rcfile /dev/null -c 'W'",
+    "fish -o /tmp/log -c 'W'",
+    # ksh's -o takes no value from a word that starts with - or +, so the -c after it was
+    # taken for that value
+    "ksh -o -c 'W' a0",
+    "ksh -xo -c 'W' a0",
+    "ksh +o -c 'W' a0",
+    "ksh -o +c 'W' a0",
+    # -T and zsh's --emulate take the next word: refused before through the line's own words
+    "ksh -T '' -c 'W' a0",
+    "zsh --emulate foo -c 'W' a0",
+    # controls: refused before the fix and still
+    "bash -c 'W'",
+    "bash -e -c 'W'",
+)])
+def test_a_settings_write_behind_a_shells_options_is_refused(home, command, tool):
+    payload = dict(_bash(command, home, agent_id="a1b2c3", agent_type="Explore"), tool_name=tool)
+    output = guard.decide(payload)
+    assert _decision(output) == "deny", command
+    assert output["hookSpecificOutput"]["permissionDecisionReason"].endswith(
+        "[rule: settings.write]"), command
+
+
 @pytest.mark.parametrize("command", CLI_READS)
 def test_a_read_only_claude_cli_call_passes(home, command):
     assert guard.decide(_bash(command, home, agent_id="a1b2c3", agent_type="Explore")) is None

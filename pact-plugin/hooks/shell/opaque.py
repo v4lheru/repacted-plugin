@@ -31,9 +31,9 @@ import re
 from functools import lru_cache
 
 from shell.inline_code import INTERPRETER, code_option
-from shell.words import (Unreadable, expanding_text, is_double_quoted, is_single_quoted,
-                         quoted_inner, read_script, runner_prefix, spell, substitution_spans,
-                         token_spans, unquoted_text)
+from shell.words import (Unreadable, expanding_text, handed_scripts, is_double_quoted,
+                         is_single_quoted, quoted_inner, read_script, runner_prefix, script_word,
+                         spell, substitution_spans, takes_script, token_spans, unquoted_text)
 
 MAX_DEPTH = 8
 # The marker env_guard's rule table (shell/env/programs.RULE_MARKS) keys env.opaque on.
@@ -88,6 +88,9 @@ _DEFAULTED = re.compile(r"\$\{([A-Za-z_]\w*):?-([A-Za-z0-9_./+@%,:=~-]+)\}")
 _GLOB_CHARS = frozenset("*?[")
 _TEST_WORDS = frozenset({"[", "[["})
 _REDIRECT_FD = re.compile(r"(?:^|(?<=[\s;&|(]))\d+(?=[<>])")
+# fish's $argv[N]: written ${argv_N} for spell(); any other index ($argv[-1], $argv[1..2])
+# as $argv, all of the words, never fewer than fish reads.
+_FISH_INDEX = re.compile(r"\$argv\[([^\]\n]*)\]")
 _SET = "#set"                       # the assignments key that records a `set` with operands
 
 # Setup commands whose output the tool itself writes: `eval "$(X)"`, `source <(X)` and
@@ -343,12 +346,23 @@ class _Level:
         if "eval" in leading and self._eval(command):
             return                                      # eval "$(brew shellenv)": nothing more
         shell_options = [option for runner, option, _ in seen if runner in SHELLS and option]
-        dash_c = any(option.startswith("-") and not option.startswith("--") and "c" in option
-                     for option in shell_options)
-        if dash_c and words:
+        dash_c = any(takes_script(runner, option, value)       # -c, -oc pipefail, +c, -o c
+                     for runner, option, value in seen if runner in SHELLS and option)
+        taker, scripts, rest = handed_scripts(command.words)
+        if taker == "fish":                             # every -C and -c, with fish's $argv
+            for text, first, _end in scripts:
+                try:                                    # an unreadable one: as _handed
+                    self._dash_c([text, *command.words[rest:]],
+                                 [text if first is None else command.typed[first],
+                                  *command.typed[rest:]], leading, seen, True, len(scripts) > 1)
+                except Unreadable:
+                    continue
+        elif dash_c and words:
             self._dash_c(words, typed, leading, seen)
         elif words:
             self._program(typed[0])
+        if taker not in SHELLS and "eval" not in leading:     # watch, flock -c, script -c
+            self._handed(command, scripts)                    # (eval's is _eval's)
         if leading and set(leading) & ARG_FEEDERS and words:
             self._fed_words(leading, seen, words)
         if self._reads_script(command, words, leading, shell_options, dash_c):
@@ -382,6 +396,8 @@ class _Level:
                 else:
                     return self._set(OPERATOR)
             if name is not None:
+                if (self.positional or {}).get(name, "") is None:     # fish's $argv, built
+                    return self._set(POSITIONAL)
                 if name in self.assigned and name not in self.values:
                     return self._set(UNRESOLVED.format(name=name))
             elif special is not None and (special.isdigit() or special in "@*"):
@@ -445,19 +461,15 @@ class _Level:
         """True when a substitution only prints literal words: $(echo ls -la)."""
         return self._printed_sub(key) is not None
 
-    def _dash_c(self, words: list, typed: list, leading: list, seen: list) -> None:
+    def _dash_c(self, words: list, typed: list, leading: list, seen: list, fish: bool = False,
+                more: bool = False) -> None:
         """`sh -c BODY a0 a1`: the outer shell expands BODY first; what it cannot spell
-        becomes an unknown word, an opaque program wherever it stands as one."""
-        body = checked = words[0]
-        spelled_sub = False
-        if not is_single_quoted(typed[0]):
-            body = _EXPANSION.sub(lambda found: self._spelled(found) or found.group(), body)
-            printed = _KEY_MARK.sub(lambda key: _or(self._printed_sub(key.group()), key.group()),
-                                    body)
-            body, spelled_sub = printed, printed != body
-            checked = _KEY_MARK.sub(lambda key: _or(self._printed_sub(key.group()), _UNKNOWN),
-                                    _EXPANSION.sub(
-                                        lambda found: self._spelled(found) or _UNKNOWN, words[0]))
+        becomes an unknown word, an opaque program wherever it stands as one. fish names
+        the words after its scripts $argv ($argv[1] the first); `more`: one of several
+        scripts, each added as a line of its own."""
+        body, checked, spelled_sub = self._outer(words[0], typed[0])
+        if fish:
+            body, checked = _fish_argv(body), _fish_argv(checked)
         replaces = {value or "{}" for runner, option, value in seen
                     if runner in ARG_FEEDERS and option in ("-I", "-i", "-J", "--replace")}
         if set(leading) & ARG_FEEDERS and any(mark in body for mark in replaces | {"{}"}):
@@ -466,8 +478,43 @@ class _Level:
         for number, (each_typed, word) in enumerate(zip(typed[1:], words[1:])):
             positional[str(number)] = None if self._built(each_typed) else word
         rest = [positional[key] for key in sorted(positional, key=int) if key != "0"]
+        argv = [positional[key] for key in sorted(positional, key=int)]
         positional["@"] = positional["*"] = None if None in rest else " ".join(rest)
-        self._nested(body, positional, add=bool(words[1:]) or spelled_sub, checked=checked)
+        if fish:
+            positional["argv"] = None if None in argv else " ".join(argv)
+            positional.update({f"argv_{n}": word for n, word in enumerate(argv, start=1)})
+        self._nested(body, positional, add=bool(words[1:]) or spelled_sub or more,
+                     checked=checked)
+
+    def _outer(self, word: str, typed: str) -> tuple[str, str, bool]:
+        """(text, checked, spelled) of a script word the outer shell expands before the inner
+        shell reads it: its expansions spelled where this command fixes them; `checked` with
+        each one it does not as an unknown word; `spelled` True when a substitution's literal
+        output was filled in. A single-quoted word is taken as it stands."""
+        if is_single_quoted(typed):
+            return word, word, False
+        body = _EXPANSION.sub(lambda found: self._spelled(found) or found.group(), word)
+        printed = _KEY_MARK.sub(lambda key: _or(self._printed_sub(key.group()), key.group()), body)
+        checked = _KEY_MARK.sub(lambda key: _or(self._printed_sub(key.group()), _UNKNOWN),
+                                _EXPANSION.sub(lambda found: self._spelled(found) or _UNKNOWN,
+                                               word))
+        return printed, checked, printed != body
+
+    def _handed(self, command: _Command, scripts: list) -> None:
+        """The script watch, flock -c or script -c hands to sh -c (watch: every word after its
+        own options, joined), read as _dash_c reads a shell's, with no positional words.
+        These scripts were not read before: one this reader cannot read is left to each
+        guard's own reader rather than dropping what the rest of the command earns."""
+        for text, first, end in scripts:
+            pieces = [(text, text)] if first is None else list(
+                zip(command.words[first:end], command.typed[first:end]))
+            outer = [self._outer(word, typed) for word, typed in pieces]
+            try:
+                self._nested(" ".join(body for body, _, _ in outer), None,
+                             add=any(spelled for _, _, spelled in outer),
+                             checked=" ".join(checked for _, checked, _ in outer))
+            except Unreadable:
+                continue
 
     def _spelled(self, found) -> str | None:
         braced, name, _special = found.groups()
@@ -556,8 +603,12 @@ class _Level:
     def _source(self, index: int) -> tuple[str, str | None]:
         """What steps[index] writes to its stdout, as _stdin reports it."""
         command = self.commands[index]
-        start = runner_prefix(command.words)[0]
+        start, seen = runner_prefix(command.words)
         words, typed = command.words[start:], command.typed[start:]
+        if words and script_word(words[0]):
+            # bash -c '..; /bin/echo': what a runner's script writes is built, whatever its
+            # last path part names
+            return "built", ([runner for runner, option, _ in seen if not option] or ["it"])[-1]
         program = _base(words[0]) if words else ""
         args = words[1:]
         if program in PRINTERS:
@@ -577,6 +628,13 @@ class _Level:
 
 def _or(value: str | None, default: str) -> str:
     return default if value is None else value
+
+
+def _fish_argv(text: str) -> str:
+    """fish's `$argv[N]` written `${argv_N}`, the name _dash_c gives the Nth word after the
+    scripts; any other index form written `$argv`, every word (see _FISH_INDEX)."""
+    return _FISH_INDEX.sub(lambda found: "${argv_%s}" % found.group(1)
+                           if found.group(1).isdigit() else "$argv", text)
 
 
 _PRINTF_SPEC = re.compile(r"%[-#0 +]*\d*(?:\.\d+)?[sbqdiouxXcfeEgG%]")

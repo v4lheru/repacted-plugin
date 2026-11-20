@@ -92,8 +92,8 @@ import unicodedata
 from pathlib import Path
 
 from shell.env.script import expand_literal_variables
-from shell.words import (Unreadable, quote_spans, read_script, runner_prefix, strip_prefix,
-                         substitution_spans, tokens)
+from shell.words import (Unreadable, quote_spans, read_script, runner_prefix, runner_script,
+                         strip_prefix, substitution_spans, tokens)
 
 SETTINGS_NAMES = ("settings.json", "settings.local.json")
 _OPERATORS = "<>|;&()\n"
@@ -1052,7 +1052,11 @@ def _scan(text: str, cwd: str, places: dict, environ, depth: int = 0) -> str | N
         if command:
             places["unspelled"] |= _unspelled(" ".join(args) if program == "eval" else command[0],
                                               places, dirs[0], environ)
-        line = " ".join(args) if program == "eval" else command[0] if len(command) == 1 else ""
+        # the script a runner hands over, words after it or not (script -c S FILE, bash -c S
+        # sh, watch S joined with its words); else a lone word. These words carry no quotes,
+        # so a word holding a cut char may be an operator (`<(` of `diff <(ls) <(ls -a)`)
+        line = " ".join(args) if program == "eval" else runner_script(words) or (
+            command[0] if len(command) == 1 else "")
         if line and any(c in line for c in " \t\n;|&<>"):
             what = _scan(line, dirs[0], places, environ, depth + 1)   # bash -c 'LINE', eval
             if what:

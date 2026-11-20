@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 import env_guard as guard
+from shell.words import strip_prefix
 
 HOOK = Path(__file__).resolve().parent.parent / "hooks" / "env_guard.py"
 MARKER = "inert-marker-5e1d"
@@ -104,7 +105,356 @@ def test_named_allowlisted_or_unprotected_is_allowed(tree, command):
     assert not denied(bash(command, tree))
 
 
-ENVGET = "/srv/My Projects/pact-plugin/bin/env-get"
+# ── NAMED inside a runner's script ────────────────────────────────────────────────────
+# The script a runner hands to a shell (bash -c, flock -c, script -c, watch) was read as a
+# leading assignment or a number when it opened with one, so `bash -c 'X=1; cat .env'` ran
+# unjudged. Monitor's output is never scanned, so each row is checked under both tools.
+READ_ENV = "cat " + "." + "env"
+SCRIPT_DENY = [form.replace("R", READ_ENV) for form in (
+    "bash -c 'X=1 R'",
+    "bash -c 'X=$(R); echo \"$X\"'",
+    "bash -c 'X=1; R'",
+    "bash -c 'X=1;R'",
+    "bash -c 'X=1 Y=2 R'",
+    "bash -c 'X=1 && R'",
+    "sh -ec 'X=1; R'",
+    "bash -lc 'X=1; R'",
+    "zsh -c 'X=1; R'",
+    "bash -c -e 'X=1; R'",
+    "bash --norc -c 'X=1; R'",
+    "bash -c -- 'X=1; R'",
+    "bash -c -- '-n; R'",
+    "bash -c \"X=1; R\"",
+    "bash -c 'X=1\nR'",
+    "bash -c $'X=1\\tR'",
+    "bash -c '1; R'",
+    "bash -c '2>/dev/null R'",
+    "sudo bash -c 'X=1; R'",
+    "env bash -c 'X=1; R'",
+    "timeout 5 bash -c 'X=1; R'",
+    "nice -n 5 sh -c 'X=1; R'",
+    "command bash -c 'X=1; R'",
+    "flock /tmp/l -c 'X=1; R'",
+    "flock -w 5 /tmp/l -c 'X=1; R'",
+    "script -c 'X=1; R' /dev/null",
+    "watch 'X=1; R'",
+    "watch -n 5 'X=1; R'",
+    # controls: denied before the fix and still
+    "bash -c 'R'",
+    "bash -c 'echo hi; X=$(R); echo \"$X\"'",
+    "watch 'R'",
+    "flock /tmp/l -c 'R'",
+    "script -c 'R' /dev/null",
+    "X='a b' R",
+    "env X='a b' R",
+    "eval 'X=1; R'",
+    "xargs sh -c 'X=1; R'",
+)]
+SCRIPT_ALLOW = [
+    "bash -c 'X=1; echo hi'",
+    "bash -c 'X=1; cat notes.txt'",
+    "watch 'X=1; ls'",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", SCRIPT_DENY)
+def test_a_read_inside_a_runners_script_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", SCRIPT_ALLOW)
+def test_a_runners_script_that_reads_nothing_protected_is_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+# ── NAMED behind a runner given by its absolute path ──────────────────────────────────
+# A runner word was matched exactly, so /bin/sh -c, /usr/bin/env and /usr/bin/sudo hid the
+# read behind them under both tools.
+PATH_RUNNER_DENY = [form.replace("R", READ_ENV) for form in (
+    "/bin/bash -c 'R'",
+    "/bin/sh -c 'X=1; R'",
+    "/usr/bin/env bash -c 'R'",
+    "/usr/bin/env R",
+    "/usr/bin/sudo R",
+    "/usr/bin/sudo -u root R",
+    "/usr/bin/env -i /bin/sh -c 'R'",
+    "/usr/bin/timeout 5 /bin/bash -c 'X=1; R'",
+    "/usr/bin/nohup /usr/bin/sudo R",
+    # control: denied before the fix and still
+    "bash -c 'R'",
+)]
+PATH_RUNNER_ALLOW = [
+    "/bin/bash -c 'X=1; echo hi'",
+    "/usr/bin/env cat notes.txt",
+    "/usr/bin/sudo -u root ls",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", PATH_RUNNER_DENY)
+def test_a_read_behind_a_runner_given_by_path_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", PATH_RUNNER_ALLOW)
+def test_a_runner_given_by_path_that_reads_nothing_protected_is_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+def test_env_gets_consumer_given_by_path_hands_over_its_script():
+    """env-get FILE K -- /bin/sh -c 'echo "$K"': the consumer is read through strip_prefix, so
+    the path form must reach the same script as `sh -c` does."""
+    script = 'echo "$K"'
+    assert strip_prefix(["/bin/sh", "-c", script]) == [script] == strip_prefix(["sh", "-c", script])
+
+
+# ── NAMED inside a script handed over by watch, flock -c, script -c or fish ─────────────
+# Only a shell's -c handed its script to the reader, so a read in the middle of a script
+# that watch, flock -c, script -c (or script -qc, fish --command) runs went unjudged; the
+# rows above pass only because the protected path ends the script.
+ENV_NAME = "." + "env"
+HANDED_DENY = [form for runner, tail in (
+    ("watch", ""), ("watch -n 5", ""), ("flock /tmp/l -c", ""), ("script -c", " /dev/null"),
+    ("script -qc", " /dev/null"), ("flock -nc", " /tmp/l"),
+) for lead in ("X=1; ", "") for form in (
+    f"{runner} '{lead}{READ_ENV} | tr a b'{tail}",
+    f"{runner} '{lead}{READ_ENV}; true'{tail}",
+    f"{runner} '{lead}source {ENV_NAME}; echo $DEMO_KEY'{tail}",
+)] + [form.replace("R", READ_ENV) for form in (
+    "script -c 'X=1; env' /dev/null",
+    "watch 'X=1; env'",
+    "fish --command 'X=1 R'",
+    "fish --command 'X=1; R; true'",
+    "fish -C 'X=1; R; true'",
+    "fish --init-command 'X=1; R; true'",
+    "watch echo 'x; R'",                      # watch joins its words: sh -c 'echo x; R'
+    "watch -n 5 echo 'X=1; R; true'",
+    # controls: denied before the fix and still
+    "fish --command 'R'",
+    "bash -c 'X=1; R; true'",
+    "flock /tmp/l -c 'X=1; R'",
+)]
+HANDED_ALLOW = [
+    "script -c 'X=1; ls' /dev/null",
+    "script -qc 'X=1; ls' /dev/null",
+    "flock /tmp/l -c 'X=1; cat notes.txt; true'",
+    "watch -n 5 'X=1; ls | wc -l'",
+    "fish --command 'X=1 ls'",
+    "watch git log -1 --format='%h %s'",
+    "eval ls -l",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", HANDED_DENY)
+def test_a_read_inside_a_script_a_runner_hands_over_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", HANDED_ALLOW)
+def test_a_handed_over_script_that_reads_nothing_protected_is_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+# ── a shell's script piped into a shell is built, not printed ──────────────────────────
+# The script word was read as a program by its last path part, so `bash -c '...; /bin/echo'`
+# looked like echo printing literal text, and its output ran in sh unread.
+PIPED_SCRIPT_DENY = [form.replace("R", READ_ENV) for form in (
+    "bash -c 'X=1; echo R; /bin/echo' | sh",
+    "bash -c 'X=1; echo R; /bin/echo' | bash",
+    "bash -c 'X=1; echo R; /usr/bin/head' | sh",
+    "bash -c 'X=1; echo R; /bin/cat' | sh",
+    "bash -c 'echo R; /bin/echo' | sh",
+    "flock /tmp/l -c 'X=1; echo R; /bin/echo' | sh",
+    "watch -t -n 1 'X=1; echo R; /bin/echo' | sh",
+    "script -q -c 'X=1; echo R; /bin/echo' /dev/null | sh",
+    "sh <(bash -c 'X=1; echo R; /bin/echo')",
+    # control: denied before the fix and still
+    "echo R | sh",
+)]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", PIPED_SCRIPT_DENY)
+def test_a_shells_script_piped_into_a_shell_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+# ── an environment dump behind a runner given by its absolute path ─────────────────────
+DUMP_DENY = ["/usr/bin/sudo env", "/usr/bin/nohup env", "/usr/bin/sudo printenv",
+             "/usr/bin/nohup /usr/bin/sudo env",
+             "sudo env", "nohup env"]                     # controls: denied before the fix
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", DUMP_DENY)
+def test_an_environment_dump_behind_a_runner_given_by_path_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+def test_a_runner_given_by_path_that_runs_a_command_is_no_dump(tree, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": "/usr/bin/sudo env ls"},
+                       "cwd": str(tree)})
+
+
+# ── every script fish runs, fish's $argv, watch past a later runner, nested handed scripts ──
+# fish runs every -C and -c but only the first was read; $argv was not spelled as `"$1"` is;
+# a runner word after watch made its script look like an assignment; and only a shell's -c
+# script was read for text built at run time (watch, flock -c, script -c were not).
+DECODED = "echo " + __import__("base64").b64encode(READ_ENV.encode()).decode() \
+    + " | base64 -d | sh"
+FISH_DENY = [form.replace("R", READ_ENV).replace("E", ENV_NAME).replace("D", DECODED)
+             for form in (
+    "fish -C 'echo hi' -c 'R | tr a b'",
+    "fish -c 'echo hi' -c 'R | tr a b'",
+    "fish -C true -c 'X=1 R | tr a b'",
+    "fish -c true -c 'X=1 R | tr a b'",
+    "fish --init-command 'echo hi' --command 'R | tr a b'",
+    "fish -c 'R | tr a b' -C true",
+    "fish -i -c true -o /tmp/log -c 'R | tr a b'",
+    "fish -C true -c 'X=1; env'",
+    "fish -c 'cat $argv | tr a b' E",
+    "fish -c 'X=1 cat $argv | tr a b' E",
+    "fish -c 'cat $argv[1] | tr a b' E",
+    "fish -c 'cat $argv[2] | tr a b' notes.txt E",
+    "fish -c 'cat $argv[-1] | tr a b' notes.txt E",
+    "fish -c true -c 'cat $argv[1] | tr a b' E",
+    "fish --command 'D'",
+    "fish -C true -c 'X=1; D'",
+    # controls: denied before the fix and still
+    "fish -c 'R | tr a b'",
+    "bash -c 'cat \"$1\" | tr a b' sh E",
+)]
+WATCH_RUNNER_DENY = [form.replace("R", READ_ENV).replace("D", DECODED) for second in (
+    "nice", "env", "sudo", "time", "nohup", "nice -n 5", "sudo -u root", "timeout 5",
+) for form in (
+    f"watch {second} 'X=1; R | tr a b'",
+    f"watch {second} 'R | tr a b'",
+    f"watch -n 5 {second} 'X=1; R; true'",
+)] + [form.replace("R", READ_ENV).replace("D", DECODED) for form in (
+    "watch env X=1 'R | tr a b'",
+    "watch nice 'X=1; env'",
+    "watch 'X=1; D'",
+    "watch 'D'",
+    "watch nice 'X=1; D'",
+    "flock /tmp/l -c 'X=1; D'",
+    "flock -nc 'D' /tmp/l",
+    "script -c 'X=1; D' /dev/null",
+    "script -qc 'D' /dev/null",
+    # controls: denied before the fix and still
+    "eval nice 'X=1; R | tr a b'",
+    "bash -c 'X=1; D'",
+)]
+FISH_WATCH_ALLOW = [
+    "fish -C 'set x 1' -c 'echo $x'",
+    "fish -c true -c 'ls | wc -l'",
+    "fish -c 'cat $argv | tr a b' notes.txt",
+    "fish -c 'cat $argv[1] | tr a b' notes.txt src/main.py",
+    "watch nice ls",
+    "watch nice 'X=1; ls | wc -l'",
+    "watch -n 5 sudo -u root 'X=1; cat notes.txt'",
+    "watch 'X=1; echo bHM= | base64 -d'",
+    "flock /tmp/l -c 'echo ls | sh'",
+    "script -qc 'X=1; ls' /dev/null",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", FISH_DENY + WATCH_RUNNER_DENY)
+def test_a_read_in_any_script_fish_or_watch_runs_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", FISH_WATCH_ALLOW)
+def test_fish_and_watch_scripts_that_read_nothing_protected_are_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+# ── NAMED behind a shell's options with their values ──────────────────────────────────
+# The walk stopped at the value of -o / -O (`pipefail`) and at a + option, so the -c script
+# after them was never judged under either tool.
+SHELL_OPTION_FORMS = (
+    "bash -o pipefail -c 'S'", "bash -O extglob -c 'S'", "sh -o errexit -c 'S'",
+    "bash -o xtrace -c 'S'", "bash -c -o pipefail 'S'", "bash +o posix -c 'S'",
+    "bash +O extglob -c 'S'", "sh +x -c 'S'", "bash -eo pipefail -c 'S'",
+    "zsh -o pipefail -c 'S'", "dash -o errexit -c 'S'", "ksh -o pipefail -c 'S'",
+    "/bin/bash -o pipefail -c 'S'", "bash -o pipefail -c 'X=1; S'", "bash -oc pipefail 'S'",
+    "sudo sh +x -c 'S'", "bash +c 'S'", "ksh -o c 'S'", "bash --rcfile /dev/null -c 'S'",
+    "bash -rcfile /dev/null -c 'S'", "fish -o /tmp/log -c 'S'", "fish --debug-o /tmp/log -c 'S'",
+)
+# ksh takes -o's value only from a word that does not start with - or +, so the walk took the
+# -c after a bare -o for that value; ksh's -T and zsh's --emulate were read with no value, so
+# their value was taken for the command. A bare read was still caught as that command's
+# words; a read piped on was not.
+KSH_ZSH_OPTION_FORMS = (
+    "ksh -o -c 'S'", "ksh -xo -c 'S'", "ksh -eo -c 'S'", "ksh -o -xc 'S'", "ksh -o -ec 'S'",
+    "ksh -o -c 'S' a0", "/bin/ksh -o -c 'S'", "sudo ksh -o -c 'S'", "env ksh -o -c 'S'",
+    "nice ksh -o -c 'S'", "xargs ksh -o -c 'S'", "timeout 5 ksh -o -c 'S'",
+    "flock /tmp/l ksh -o -c 'S'", "bash -c \"ksh -o -c 'S'\"", "ksh +o -c 'S'", "ksh -o +c 'S'",
+    "ksh +o +c 'S'", "ksh -o pipefail +o -c 'S'", "ksh -T '' -c 'S'", "ksh -T ' 5' -c 'S'",
+    "zsh --emulate foo -c 'S'", "zsh --emulate foo +c 'S'", "zsh --emulate foo -xc 'S'",
+    "/bin/zsh --emulate foo -c 'S'", "sudo zsh --emulate foo -c 'S'",
+)
+LEAK_ENV = READ_ENV + " | tr a b"
+KSH_ZSH_OPTION_DENY = [form.replace("S", script) for form in KSH_ZSH_OPTION_FORMS + (
+    # controls: denied before the fix and still
+    "ksh -o pipefail -c 'S'", "zsh -o pipefail -c 'S'",
+) for script in (LEAK_ENV, "X=1; " + LEAK_ENV, READ_ENV)]
+SHELL_OPTION_DENY = [form.replace("S", READ_ENV) for form in SHELL_OPTION_FORMS + (
+    # controls: denied before the fix and still
+    "bash -c 'S'", "bash -e -c 'S'",
+)]
+SHELL_OPTION_ALLOW = [
+    "bash -o pipefail -c 'X=1; cat notes.txt'",
+    "sh +x -c 'ls | wc -l'",
+    "bash -o pipefail script.sh",
+    "bash script.sh",
+    "sh -c 'echo hi' arg0 arg1",
+    "ksh -o -x script.sh",
+    "ksh -o pipefail script.sh",
+    "zsh --emulate sh script.sh",
+    "ksh -o -c 'cat notes.txt'",
+    "zsh --emulate sh -c 'ls | wc -l'",
+]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", SHELL_OPTION_DENY)
+def test_a_read_behind_a_shells_options_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", KSH_ZSH_OPTION_DENY)
+def test_a_read_behind_kshs_bare_o_its_t_or_zshs_emulate_is_denied(tree, command, tool):
+    assert denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("command", SHELL_OPTION_ALLOW)
+def test_a_shells_options_before_a_harmless_script_are_allowed(tree, command, tool):
+    assert not denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Monitor"])
+@pytest.mark.parametrize("form", SHELL_OPTION_FORMS + KSH_ZSH_OPTION_FORMS)
+def test_an_env_get_run_behind_a_shells_options_is_judged_as_under_bash_c(tree, form, tool):
+    """The script is judged as `bash -c 'S'` judges it, whatever that verdict is."""
+    script = f"env-get {ENV_NAME} DEMO_KEY -- printenv DEMO_KEY"
+
+    def verdict(command):
+        return denied({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(tree)})
+
+    assert verdict(form.replace("S", script)) == verdict(f"bash -c '{script}'")
+
+
+ENVGET ="/srv/My Projects/pact-plugin/bin/env-get"
 
 
 @pytest.mark.parametrize("command, deny", [

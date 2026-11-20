@@ -14,13 +14,13 @@ import os
 import re
 
 from shell.words import segments
-from shell.words import strip_prefix
+from shell.words import runner_script, strip_prefix
 from shell.inline_code import code_option, runs_inline_code
 from shell.env.git_egress import (Notice, _git_split)
 from shell.env.names import (token_protected)
 from shell.env.places import (_PIPE, _names_only_search, _search_skip)
 from shell.env.programs import (DUMP_MESSAGE, EGRESS_PROGRAMS, FIND_ACTIONS, GREP_PROGRAMS, LOADERS, OPERAND_READERS, PRINTERS, READERS, RG_PROGRAMS, SILENT_STDIN, SUGGESTION, UNREADABLE_MESSAGE, _GIT_VALUE_OPTIONS)
-from shell.env.script import (json_literal, _sub_program, SHELLS, _BODY_RUNNERS, _INTERPRETER, _SCRIPT_OPTIONS, _SCRIPT_PRINTS, _STDIN_PRINTERS, _SUB_KEY, _SUB_MARK, _State, _Step, _command_steps, _heredoc_expansions, _pull_substitutions, _read, _script_prints_file)
+from shell.env.script import (json_literal, _sub_program, _BODY_RUNNERS, _INTERPRETER, _SCRIPT_OPTIONS, _SCRIPT_PRINTS, _STDIN_PRINTERS, _SUB_KEY, _SUB_MARK, _State, _Step, _command_steps, _heredoc_expansions, _pull_substitutions, _read, _script_prints_file)
 from shell.env.search import (_cut_lists_names_only, _file_keys, _git_verdict, _named_message, _option_values, _positionals, _recurse_verdict, _SENDS, _sent_words, dumps_environment)
 
 def _printing_words(words: list[str], state: "_State | None" = None) -> list[str]:
@@ -196,16 +196,13 @@ def _prints_loaded(program: str, args: list[str], state: _State,
 
 
 def _inner_script(words: list[str], command: list[str]) -> str | None:
-    """The script a runner prefix hands to a shell: `bash -c S`, `eval S`."""
+    """The script a runner prefix hands to a shell: `bash -c S`, `watch S`, `flock F -c S`,
+    `script -c S F`, `eval S` (see shell.words.runner_script)."""
     leading = words[:len(words) - len(command)]
     names = [word.rsplit("/", 1)[-1] for word in leading]
     if "eval" in names:                     # eval 'X=$(..)': its words, assignments included
         return " ".join(words[names.index("eval") + 1:])
-    if command and any(name in SHELLS for name in names) and any(
-            word.startswith("-") and not word.startswith("--") and "c" in word
-            for word in leading):
-        return command[0]
-    return None
+    return runner_script(words)
 
 
 _SSH_VALUE_OPTIONS = frozenset({"-i", "-p", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-b", "-c",

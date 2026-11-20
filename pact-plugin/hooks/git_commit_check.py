@@ -58,7 +58,8 @@ try:
     from shared.git_helpers import run_git
     from shared import commit_routes as routes
     from shared.log_values import logs_secret_value, logs_token_value  # noqa: F401
-    from shell_words import PREFIX_WORDS, strip_prefix, tokens as shell_tokens
+    from shell_words import (PREFIX_WORDS, SCRIPT_SHELLS, runner_script, script_runner,
+                             script_word, strip_prefix, tokens as shell_tokens)
     from shell.opaque import resolved_command
 except BaseException as _module_load_error:  # noqa: BLE001 — fail-closed catch-all
     _emit_load_failure_deny("module imports", _module_load_error)
@@ -215,6 +216,20 @@ def _is_git(word: str) -> bool:
     return os.path.basename(word).lower() == "git"       # GIT runs git on a case-blind disk
 
 
+def _handed_script(segment: list[str], command_words: list[str]) -> Optional[str]:
+    """The script `segment` runs that read_commit reads as a nested command: the one flock -c,
+    script -c (glued or with its file after it), watch or eval hands over, words after it or
+    not (watch and eval join them into one line); else a lone script word (sh -c 'S'). A
+    shell's script with words after it (bash -c S sh) is a line of its own in
+    resolved_command already, so it is not read twice."""
+    taker = script_runner(segment)
+    handed = runner_script(segment) if taker and taker not in SCRIPT_SHELLS else None
+    if handed:
+        return handed
+    head = command_words[0]
+    return head if len(command_words) == 1 and script_word(head) else None
+
+
 def read_commit(command: str, cwd: Optional[str], depth: int = 0,
                 _before: Optional[list] = None) -> Optional[Commit]:
     """The first git commit `command` runs, carrying the other commit-creating calls (`routes`);
@@ -286,12 +301,12 @@ def read_commit(command: str, cwd: Optional[str], depth: int = 0,
                                             "same command defines")
                 before.append(f"`git {sub}` runs before the commit and what it stages cannot "
                               "be read ahead")
-        elif len(command_words) == 1 and depth < MAX_NESTING and re.search(r"\s", head):
-            mark = len(before)
-            try:                                                 # the script of sh -c / eval
-                read_commit(head.lstrip(routes.BODY), base, depth + 1, before)
+        elif depth < MAX_NESTING and (script := _handed_script(segment, command_words)):
+            mark = len(before)                                   # sh -c 'S', watch S, eval S
+            try:
+                read_commit(script.lstrip(routes.BODY), base, depth + 1, before)
             except Unread:
-                if head[0] != routes.BODY or _UNREAD_ROUTE(head):
+                if script[0] != routes.BODY or _UNREAD_ROUTE(script):
                     raise
                 # a heredoc body that names only `git commit`: prose, or a script; scan widest
                 before.append(Commit(repo=base, args=None))
