@@ -34,8 +34,8 @@ if [ -L "$deny" ]; then deny=$(readlink "$deny"); elif [ -e "$deny" ]; then deny
 printf '%s|%s|%s|%s|%s|%s\\n' "$here" "$last" "${REPACT_SOURCE_MANIFEST-<unset>}" "$deny" \
   "${REPACT_PURITY_DENYLIST_DIR-<unset>}" "$*" >> "$CALLS_FILE"
 case "$last|$here" in
-  tools/public-export/tests\|*) code="${EXPORT_EXIT:-0}"; fails=""; extra=0; n=7 ;;
-  *\|*/pact-plugin) code="${PLUGIN_EXIT:-0}"; fails="$PLUGIN_FAILS"; extra="${PLUGIN_EXTRA_FAILED:-0}"; n=3
+  tools/public-export/tests\\|*) code="${EXPORT_EXIT:-0}"; fails=""; extra=0; n=7 ;;
+  *\\|*/pact-plugin) code="${PLUGIN_EXIT:-0}"; fails="$PLUGIN_FAILS"; extra="${PLUGIN_EXTRA_FAILED:-0}"; n=3
                  [ -n "$PLUGIN_SLEEP" ] && sleep "$PLUGIN_SLEEP" ;;
   *) code="${ROOT_EXIT:-0}"; fails="$ROOT_FAILS"; extra=0; n=5 ;;
 esac
