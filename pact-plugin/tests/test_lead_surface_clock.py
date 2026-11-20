@@ -16,7 +16,6 @@ so an empty output cannot pass it by accident.
 
 from __future__ import annotations
 
-import ast
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

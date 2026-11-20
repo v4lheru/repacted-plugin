@@ -10,8 +10,8 @@ Used by: the plugin suite. The importer is bin/_tasks/importers.py (P4a); the ol
 """
 from __future__ import annotations
 
-from project_tasks_support import INERT_MARKER, git, load, new_repo
-from test_project_tasks_importers import IMPORTERS_PATH, _write
+from project_tasks_support import load, new_repo
+from test_project_tasks_importers import IMPORTERS_PATH
 
 import pytest
 

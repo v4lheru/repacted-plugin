@@ -18,10 +18,7 @@ import pytest
 
 from telegram import content_filter
 from telegram.content_filter import (
-    OUTBOUND_SCAN_CAP,
     TELEGRAM_MAX_MESSAGE_LENGTH,
-    MAX_INBOUND_LENGTH,
-    OutboundFilterError,
     filter_outbound,
     truncate_message,
     sanitize_inbound,

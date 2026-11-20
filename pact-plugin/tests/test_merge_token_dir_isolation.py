@@ -11,8 +11,6 @@ results. A new holder that conftest does not patch fails here.
 import sys
 from pathlib import Path
 
-import merge_guard_pre as pre
-
 
 def test_every_loaded_token_dir_is_this_tests_own(tmp_path):
     expected = tmp_path / ".claude"

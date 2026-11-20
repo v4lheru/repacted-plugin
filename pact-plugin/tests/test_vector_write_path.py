@@ -37,7 +37,6 @@ that holds that reasoning up.
 """
 from __future__ import annotations
 
-import logging
 import struct
 from unittest.mock import patch
 

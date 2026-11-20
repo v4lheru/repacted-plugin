@@ -6,15 +6,10 @@ conftest.py guarantees in EVERY invocation shape (hooks/ on sys.path, so
 asserted conditionally so this file passes STANDALONE as well as in the gate.
 """
 
-import json
-import sys
 import textwrap
 
 from import_identity_map import (
-    capture_map,
-    diff_maps,
     imported_names,
-    resolve_origins,
 )
 
 

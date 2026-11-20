@@ -15,8 +15,7 @@ from pathlib import Path
 import pytest
 
 from fixtures.ops_env import CODER, REAL_VERDICT, World, handoff, ops_env, teachback  # noqa: F401  # fixture
-from shared.ops import OpError, accept, amend, brief, frame, reject, submit
-from shared.ops import evidence as EV
+from shared.ops import OpError, accept, brief, submit
 
 
 def _submitted(world: World, **extra) -> str:

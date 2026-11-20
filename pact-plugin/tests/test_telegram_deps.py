@@ -8,15 +8,11 @@ Tests cover:
 4. get_optional_dependency_status: voice transcription availability
 """
 
-import subprocess
 from unittest.mock import MagicMock, patch
 
 from telegram.deps import (
     check_dependencies,
     install_dependencies,
-    get_dependency_status,
-    get_optional_dependency_status,
-    REQUIRED_PACKAGES,
 )
 
 

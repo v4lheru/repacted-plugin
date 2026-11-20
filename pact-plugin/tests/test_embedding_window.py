@@ -37,7 +37,6 @@ SCRIPTS_PARENT = Path(__file__).parent.parent / "skills" / "pact-memory"
 
 from scripts.embeddings import (  # noqa: E402
     EMBEDDING_MAX_TOKENS,
-    MEASURED_MEDIAN_TOKENS,
     EmbeddingService,
 )
 

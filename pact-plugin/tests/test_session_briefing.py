@@ -19,9 +19,7 @@ from pathlib import Path
 import pytest
 
 from shared import session_resume as sr
-from scripts import config as memory_config  # noqa: E402
 from scripts.database import create_memory, ensure_initialized, get_connection  # noqa: E402
-from scripts.memory_api import PACTMemory  # noqa: E402
 
 
 def _store(tmp_path: Path, rows: list[dict]) -> Path:

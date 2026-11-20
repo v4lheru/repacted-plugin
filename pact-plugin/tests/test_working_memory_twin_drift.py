@@ -8,7 +8,6 @@ CLAUDE.md pin gates (staleness.py among them) were retired in 1.5.0.
 """
 import ast
 import inspect
-import tempfile
 import textwrap
 from pathlib import Path
 

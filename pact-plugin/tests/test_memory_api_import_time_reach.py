@@ -59,7 +59,6 @@ Treat a pass as evidence about the code as written, not as a proof of absence.
 from __future__ import annotations
 
 import ast
-import sys
 from pathlib import Path
 import pytest
 

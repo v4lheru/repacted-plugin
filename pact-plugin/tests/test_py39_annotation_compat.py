@@ -39,7 +39,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Tuple
 
-import pytest
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 

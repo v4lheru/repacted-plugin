@@ -9,10 +9,8 @@ import json
 from pathlib import Path
 
 from shared import parts_ledger
-from shared.pact_context import reconstruct_session_dir
-from shared.session_init_common import NOTICE_MARKER, _INPROCESS_MODE_NOTICE
 from shared.session_init_lead import SNAPSHOT_MAX_BYTES, cap_snapshot
-from tests.test_session_init import TestInprocessModeNoticeIntegration, _run_session_init_for_path
+from tests.test_session_init import _run_session_init_for_path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 

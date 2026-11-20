@@ -24,16 +24,12 @@ import pytest
 
 from shared.teachback_schema import (
     TEACHBACK_OBJECT_FIELDS,
-    TEACHBACK_REASONING_RECONSTRUCTION_REQUIRED_MIN,
     TEACHBACK_REQUIRED_FIELDS,
-    TEACHBACK_REQUIRED_SUBKEYS,
     TEACHBACK_SCHEMA_ECHO,
-    TEACHBACK_VARIETY_ACK_VALID_VALUES,
     resolve_variety_total,
     validate_reasoning_reconstruction,
 )
 from shared.variety_scorer import (
-    MAX_DIMENSION,
     MAX_SCORE,
     MIN_DIMENSION,
     MIN_SCORE,

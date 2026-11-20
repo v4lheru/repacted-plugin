@@ -45,14 +45,11 @@ if "mcp" not in sys.modules:
 from telegram.routing import DirectRouter
 from telegram.server import (
     _process_update,
-    _extract_message_id,
     _polling_loop,
     create_server,
     lifespan,
-    ERROR_BACKOFF,
 )
 from telegram.tools import ToolContext
-from telegram.voice import VoiceTranscriptionError
 
 
 # =============================================================================

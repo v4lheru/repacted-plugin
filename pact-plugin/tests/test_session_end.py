@@ -328,7 +328,6 @@ class TestCleanupOldSessions:
         (session_dir / "pact-session-context.json").write_text("{}")
         if age_days > 0:
             old_time = _time.time() - (age_days * 86400)
-            import os as _os
             _backdate(session_dir, old_time)
         return session_dir
 
@@ -340,7 +339,6 @@ class TestCleanupOldSessions:
         every child write, or the entry looks fresh and the age test skips
         it before the carrier guard is ever reached.
         """
-        import os as _os
         import time as _time
         old_time = _time.time() - (age_days * 86400)
         _backdate(session_dir, old_time)
@@ -411,7 +409,6 @@ class TestCleanupOldSessionsBoundary:
 
     def _create_session_dir(self, slug_dir, session_id, age_days=0):
         """Helper: create a session directory with controlled mtime."""
-        import os as _os
         import time as _time
         session_dir = slug_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -428,7 +425,6 @@ class TestCleanupOldSessionsBoundary:
         We use 6.9 days (safely under 7) to avoid flakiness from time
         elapsing between utime() and the stat() call inside cleanup.
         """
-        import os as _os
         import time as _time
         from session_end import cleanup_old_sessions
 
@@ -586,7 +582,6 @@ class TestCleanupRefreshedPreservation:
         return session_dir
 
     def _set_age(self, session_dir, age_days):
-        import os as _os
         import time as _time
         old_time = _time.time() - (age_days * 86400)
         _backdate(session_dir, old_time)
@@ -652,7 +647,6 @@ class TestCleanupPausedPreservation:
 
     def _set_age(self, session_dir, age_days):
         """Set directory mtime to simulate age. Call AFTER writing all files."""
-        import os as _os
         import time as _time
         old_time = _time.time() - (age_days * 86400)
         _backdate(session_dir, old_time)
@@ -1025,7 +1019,6 @@ class TestCleanupOldSessionsUnchangedRegression:
 
     def test_parent_reaper_still_reaps_uuid_sibling(self, tmp_path):
         """Smoke regression: basic UUID reap behavior intact."""
-        import os as _os
         import time as _time
         from session_end import cleanup_old_sessions
 

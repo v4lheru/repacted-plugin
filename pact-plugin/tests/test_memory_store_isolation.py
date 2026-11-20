@@ -36,7 +36,6 @@ SCRIPTS_PARENT = Path(__file__).parent.parent / "skills" / "pact-memory"
 from scripts.config import (  # noqa: E402
     MEMORY_DIR_ENV,
     compute_db_path,
-    get_memory_dir,
 )
 
 REAL_STORE_SUFFIX = os.path.join(".claude", "pact-memory")

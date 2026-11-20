@@ -63,15 +63,12 @@ import os
 import re
 from pathlib import Path
 
-import pytest
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
 from shared.claude_md_manager import (  # noqa: E402
-    _build_migrated_content,
     ensure_project_memory_md,
 )
-from shared.session_resume import update_session_info  # noqa: E402
 
 from scripts import working_memory as _ssot  # noqa: E402
 

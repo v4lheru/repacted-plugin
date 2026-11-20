@@ -36,7 +36,6 @@ paraphrasing rather than copying, which is exactly how the original seven arose.
 import re
 from pathlib import Path
 
-import pytest
 
 # Surfaces that are loaded into an LLM's context as shipped instructions.
 _LLM_LOADED_DIRS = ("agents", "skills", "commands", "protocols")

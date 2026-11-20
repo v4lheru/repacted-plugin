@@ -10,8 +10,6 @@ Used by: pytest suite. The suite-level import-hygiene gate over the shipped
 """
 
 import importlib.util
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest

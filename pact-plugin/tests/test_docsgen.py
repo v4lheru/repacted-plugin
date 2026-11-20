@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 
 from shared.rules import RULES, anchor
-import pytest
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 GEN = PLUGIN_ROOT / "bin" / "repact-docs-gen"

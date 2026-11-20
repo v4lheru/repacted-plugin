@@ -9,15 +9,12 @@ Run: tcount pytest -q tests/test_run_place.py (from the plugin root)
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from shared import evidence_check as ec
-from shared.ledger import read_runs
 from shared.run_place import run_dir
 
 PLUGIN = Path(__file__).resolve().parent.parent

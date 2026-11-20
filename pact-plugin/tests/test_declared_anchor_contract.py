@@ -18,7 +18,6 @@ Summary: The declared containment anchor: that it is CONSULTED rather than
          independence is gone. Every arm below asserts what the write DID.
 Used by: pytest.
 """
-import ast
 import json
 import os
 import subprocess

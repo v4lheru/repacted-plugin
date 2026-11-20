@@ -17,22 +17,7 @@ import pytest
 
 from shared import protocol_descriptor as pd
 from shared.amendments import WAKE_VERBS, wake_line
-from shared.handoff_schema import (
-    HANDOFF_CANONICAL_FIELDS,
-    HANDOFF_RECOMMENDED_FIELDS,
-    HANDOFF_SCHEMA_ECHO,
-    REV_MAX,
-)
-from shared.intentional_wait import KNOWN_REASONS, KNOWN_RESOLVERS
-from shared.marked_regions import RegionError, find_regions, replace_region
-from shared.stored_line import REV_MAX as STORED_REV_MAX
-from shared.teachback_schema import (
-    TEACHBACK_REASONING_RECONSTRUCTION_REQUIRED_MIN,
-    TEACHBACK_REQUIRED_FIELDS,
-    TEACHBACK_REQUIRED_SUBKEYS,
-    TEACHBACK_SCHEMA_ECHO,
-    TEACHBACK_VARIETY_ACK_VALID_VALUES,
-)
+from shared.marked_regions import find_regions
 
 from tests.contract._surfaces import PLUGIN_ROOT, read
 

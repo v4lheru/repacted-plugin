@@ -16,9 +16,7 @@ package dependencies.
 """
 
 import inspect
-import subprocess
 import sys
-from io import StringIO
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch

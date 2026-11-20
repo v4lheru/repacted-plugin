@@ -15,7 +15,6 @@ Tests cover all 7 fixes across 4 files:
 Risk tier: STANDARD — well-understood pattern fix.
 """
 
-import json
 import struct
 import tempfile
 from pathlib import Path

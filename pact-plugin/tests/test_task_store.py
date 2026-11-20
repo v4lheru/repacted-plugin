@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from shared.task_store import TaskRef, TaskStore, read_task_json
+from shared.task_store import TaskRef, TaskStore
 
 
 @pytest.fixture

@@ -10,7 +10,6 @@ tests/clock_shift through pytest's `pythonpath` option, so the arms drive the
 same module tests/conftest.py installs. The shift is ten years, far outside the
 day a sweep puts on this process's own clock.
 """
-import ast
 import os
 import shlex
 import subprocess

@@ -24,7 +24,6 @@ read_failures():
 15. Skips malformed lines silently
 16. Returns [] on outer exception (fail-open)
 """
-import json
 import threading
 from pathlib import Path
 

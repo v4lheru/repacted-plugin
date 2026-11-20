@@ -10,7 +10,6 @@ import pytest
 
 from shared.claude_md_manager import migrate_to_managed_structure
 from shared.session_init_resume import _extract_prev_session_dir
-from shared.session_resume import update_session_info
 
 NOT_UTF8 = b"# My notes\n\nna\xefve caf\xe9\n"
 

@@ -21,13 +21,10 @@ natural failure reaches that handler. A later reader must not read one as the
 other.
 """
 
-import ast
 import errno
 import os
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 # A path fragment no rendering may carry. Distinctive so a partial leak is
 # still caught by the `/` assertion below.

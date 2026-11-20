@@ -28,11 +28,8 @@ TWO TRAPS THIS FILE HANDLES, both live in the files it guards:
     no line-oriented grep could pin these messages.
 """
 import ast
-import io
-import json
 import re
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 

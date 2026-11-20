@@ -10,8 +10,7 @@ from __future__ import annotations
 import pytest
 
 from fixtures.ops_env import World, handoff, ops_env, teachback  # noqa: F401  # fixture
-from shared.ops import accept, amend, reject, sides, submit
-from shared.ops import evidence as EV
+from shared.ops import sides, submit
 
 
 class Crash(RuntimeError):

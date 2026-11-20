@@ -44,7 +44,6 @@ than papered over with an arm that would test its own fixture.
 """
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
 
 import pytest

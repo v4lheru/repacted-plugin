@@ -42,7 +42,6 @@ asserted on THAT -- which would have passed with the production code deleted,
 since it was testing the test's own arithmetic. ``main_repo_root`` is patched so
 no git subprocess runs and results do not depend on the invocation directory.
 """
-import logging
 from pathlib import Path
 from unittest.mock import patch
 

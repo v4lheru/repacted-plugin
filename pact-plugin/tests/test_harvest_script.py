@@ -7,7 +7,6 @@ tasks/<team>/) and every verb runs against them. Nothing here touches the live c
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 

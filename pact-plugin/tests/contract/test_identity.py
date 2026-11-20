@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import re
 
-import pytest
 
 from shared import claude_md_manager as cmm
 from shared.plugin_identity import PLUGIN_NAME

@@ -26,13 +26,11 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 
 
 from scripts.working_memory import (
-    _project_root_of,
     _resolve_display_claude_md_path,
     SyncResult,
     project_memories_to_claude_md,

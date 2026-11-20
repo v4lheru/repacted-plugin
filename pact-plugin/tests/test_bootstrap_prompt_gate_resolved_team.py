@@ -10,7 +10,6 @@ claim, and does not ask for a second bootstrap. An unresolved team keeps the old
 import json
 from pathlib import Path
 
-import pytest
 
 _SESSION_ID = "advisory-session-0001"
 _SLUG = "advisory-project"

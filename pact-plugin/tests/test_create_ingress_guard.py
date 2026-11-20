@@ -32,7 +32,6 @@ mutant, at the same cost. Assert the REFUSAL, not the INTEGRITY OF THE DATA.
 """
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
 
 import pytest

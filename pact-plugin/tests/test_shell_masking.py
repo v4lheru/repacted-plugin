@@ -16,7 +16,7 @@ import pytest
 
 import env_guard as guard
 import merge_guard_pre as mg
-from shell.merge import arms, strip
+from shell.merge import strip
 
 TAIL = re.compile(r" \[rule: ([a-z_]+(?:\.[a-z_]+)+)\]$")
 MARKER = "inert-marker-5e1d"

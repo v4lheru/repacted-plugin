@@ -28,13 +28,10 @@ no store and no CLAUDE.md is reachable from here. ``main_repo_root`` is patched
 rather than invoked, so no git subprocess runs and the result does not depend on
 where the suite is executed from.
 """
-import logging
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
-from scripts import memory_api
 from scripts.memory_api import PACTMemory
 
 

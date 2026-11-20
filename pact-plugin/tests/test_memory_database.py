@@ -12,8 +12,6 @@ Tests cover:
 8. TOCTOU mitigation: atomic file pre-creation, race handling, WAL sidecar chmod
 """
 import json
-import os
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

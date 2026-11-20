@@ -52,8 +52,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from shared.constants import COMPACT_SUMMARY_ORPHAN_NAME  # noqa: E402
-
 
 # #877: session_init's Class-A writes (write_context disk-write, session_start
 # journal anchor, CLAUDE.md Current Session block, paused-state surface) are now

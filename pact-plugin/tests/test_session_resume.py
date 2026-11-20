@@ -48,7 +48,6 @@ _build_journal_resume() -- truncation boundary:
 from __future__ import annotations
 
 import datetime as _dt
-import errno
 import os
 from pathlib import Path
 

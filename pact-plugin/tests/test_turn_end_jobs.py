@@ -5,7 +5,6 @@ Summary: Which running background_tasks entries count as jobs for each role
 Used by: the pact-plugin test suite.
 """
 
-import ast
 from pathlib import Path
 
 import pytest

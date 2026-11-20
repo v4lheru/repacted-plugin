@@ -8,12 +8,7 @@ idempotent (no needless rewrite when nothing is stale), and is fail-safe
 rewrite.
 """
 
-import inspect
 import json
-import os
-import re
-import stat
-import sys
 from pathlib import Path
 
 import pytest

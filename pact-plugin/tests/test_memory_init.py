@@ -8,14 +8,9 @@ Tests cover:
 4. Edge cases - graceful degradation, already-installed dependencies
 """
 
-import os
 import re
-import json
-import shutil
 import subprocess
 import sys
-import tempfile
-import uuid
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed

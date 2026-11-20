@@ -13,16 +13,12 @@ are written by hand, never generated from the parser. The marker constants
 come from their shipped module, not from the parser.
 """
 
-import ast
 import json
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from shared import claude_md_markers
 from shared.claude_md_manager import (
     MANAGED_END_MARKER,
     MANAGED_START_MARKER,
@@ -31,7 +27,7 @@ from shared.claude_md_manager import (
     SESSION_END_MARKER,
     SESSION_START_MARKER,
 )
-from shared.claude_md_markers import Cause, Kind, State, parse
+from shared.claude_md_markers import Cause, State, parse
 
 _CORPUS = Path(__file__).parent / "fixtures" / "claude_md_corpus"
 _EXPECTED = json.loads((_CORPUS / "expected.json").read_text(encoding="utf-8"))

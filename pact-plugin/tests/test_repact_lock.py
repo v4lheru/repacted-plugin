@@ -9,11 +9,9 @@ Used by: the plugin suite. Every test runs the CLI as a subprocess against a tem
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest

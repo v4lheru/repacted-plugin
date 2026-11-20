@@ -9,14 +9,11 @@ Each server start runs in a subprocess with `python3 -S` (no site-packages), so
 mcp/httpx are absent whatever the machine has installed.
 """
 
-import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from telegram import deps
 

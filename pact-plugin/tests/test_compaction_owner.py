@@ -10,11 +10,8 @@ is fixed, `monotonic` advances only when `sleep` is called, and a callback can
 append records on the Nth sleep.
 """
 
-import ast
 import json
 import os
-import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -23,14 +20,6 @@ from pathlib import Path
 
 import pytest
 
-from fixtures.role_frames import (
-    captured_compaction_lead_postcompact,
-    captured_compaction_lead_precompact,
-    captured_compaction_lead_sessionstart,
-    captured_compaction_teammate_postcompact,
-    captured_compaction_teammate_precompact,
-    captured_compaction_teammate_sessionstart,
-)
 from shared import compaction_owner as co
 
 HOOKS = Path(__file__).resolve().parents[1] / "hooks"

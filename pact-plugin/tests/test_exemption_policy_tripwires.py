@@ -25,12 +25,9 @@ from pathlib import Path
 
 import pytest
 
-from shared import intentional_wait  # noqa: E402
 from shared.intentional_wait import (  # noqa: E402
     SELF_COMPLETE_EXEMPT_AGENT_TYPES,
     TEACHBACK_EXEMPT_AGENT_TYPES,
-    is_self_complete_exempt,
-    is_teachback_exempt,
 )
 
 

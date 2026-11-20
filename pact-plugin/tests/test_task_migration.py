@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from shared import task_migration as tm
-from shared.task_store import TaskRef, TaskStore
+from shared.task_store import TaskStore
 
 OLD, NEW, NOW = "session-old00001", "session-new00002", "2026-10-11T10:00:00+00:00"
 

@@ -27,7 +27,6 @@ import pytest
 
 from shared.stale_session import (
     detect_stale_session_block,
-    _RESUME_LINE_RE,
 )
 
 _LIVE_ID = "11111111-2222-4000-8000-000000000000"

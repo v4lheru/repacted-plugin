@@ -40,11 +40,8 @@ python3 invocation) exits non-blocking, does not emit a systemMessage,
 and does not propagate a blocking exit-2. This subsumes plan R1b.
 """
 import ast
-import json
-import subprocess
 from pathlib import Path
 
-import pytest
 
 # F2: the single shared writable-journal sentinel (SSOT in fixtures.emitter),
 # imported rather than re-literalled. tests/ is on sys.path via conftest.

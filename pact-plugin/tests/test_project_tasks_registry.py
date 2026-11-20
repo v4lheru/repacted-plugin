@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from project_tasks_support import PLUGIN_ROOT, git, load, new_repo, run_cli
+from project_tasks_support import new_repo, run_cli
 
 
 @pytest.fixture

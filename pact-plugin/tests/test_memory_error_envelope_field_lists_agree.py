@@ -30,9 +30,7 @@ import pytest
 
 from scripts.database import (
     ALLOWED_CREATE_COLUMNS,
-    ALLOWED_UPDATE_COLUMNS,
     CALLER_FACING_CREATE_FIELDS,
-    CALLER_FACING_UPDATE_FIELDS,
     _STRIPPED_ON_INGRESS,
     _reject_unknown_columns,
 )

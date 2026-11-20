@@ -33,7 +33,6 @@ prunes-by-failing if a residual ever vanishes, which is what dropped it here.)
 import ast
 from pathlib import Path
 
-import pytest
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
 

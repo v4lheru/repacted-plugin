@@ -39,8 +39,6 @@ from __future__ import annotations
 import ast
 import pathlib
 
-from scripts.memory_api import PACTMemory  # noqa: E402
-
 
 _MEMORY_API_PY = (
     pathlib.Path(__file__).parent.parent

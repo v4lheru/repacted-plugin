@@ -21,13 +21,6 @@ when the decline breaks, and the leg asserted first names the defect. The
 coarse fact goes first, the finer discrimination second.
 """
 
-import json
-import os
-from pathlib import Path
-from unittest.mock import patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # The one-axis document family

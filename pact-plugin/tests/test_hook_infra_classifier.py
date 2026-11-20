@@ -38,16 +38,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
 
 HOOKS = (Path(__file__).parent.parent / "hooks").resolve()
 
 from shared.hook_infra_classifier import (  # noqa: E402
     SEAM_DEPENDENT_HOOKS,
-    SEAM_READING_HELPERS,
-    L3_LIVE_PROBE_HOOKS,
     _SEAM_HOOK_HELPER_CLOSURE,
-    classify_diff,
 )
 
 # ── Resolver symbols that an L2 seam integration test MUST NOT monkeypatch ──

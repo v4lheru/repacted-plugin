@@ -35,7 +35,6 @@ import pytest
 
 from fixtures.role_frames import (
     captured_posttooluse_teammate_inprocess_bash_background,
-    captured_pretooluse_lead_inprocess,
     captured_pretooluse_teammate_inprocess_subagent,
     captured_pretooluse_teammate_tmux,
 )

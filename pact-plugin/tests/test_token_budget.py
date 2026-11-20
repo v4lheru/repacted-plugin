@@ -11,7 +11,7 @@ Tests cover:
 
 import os
 import re
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestEstimateTokens:

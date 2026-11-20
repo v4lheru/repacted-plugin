@@ -23,7 +23,6 @@ Core invariants under test:
 
 import pytest
 
-import shared.pact_config as pact_config
 from shared.pact_config import get_bool, get_enum, llm_options
 
 

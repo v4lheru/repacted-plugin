@@ -5,7 +5,6 @@ Every test points REPACTED_LOCK_DIR at tmp_path, so it never touches the real /p
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys

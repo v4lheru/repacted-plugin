@@ -28,7 +28,6 @@ HOOKS_DIR = PLUGIN_ROOT / "hooks"
 
 import dispatch  # noqa: E402  (hooks/ is on the path: tests/conftest.py)
 import dispatch_registry as registry  # noqa: E402
-from helpers import effective_hooks_config  # noqa: E402
 
 # Every registration hooks.json had before the dispatcher (event, matcher, command, async).
 REGISTRATIONS_BEFORE = [

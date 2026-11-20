@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
-from fixtures.role_frames import lead_frame_qualified, teammate_frame
+from fixtures.role_frames import lead_frame_qualified
 
 import session_init
 from session_init import check_settings_well_formed

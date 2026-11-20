@@ -40,7 +40,6 @@ import pytest
 from merge_guard_repo_fixture import cli_repo_is_o_r  # noqa: F401  # re-export: autouse fixture (amend_3 on #141)
 from merge_guard_repo_fixture import minted_context  # noqa: E402  (amend_3 on #141: mint-side repo binding)
 from merge_guard_repo_fixture import git_bound  # noqa: E402  (1.4.1 U13: git checkout/remote binding)
-from helpers import effective_hooks_config  # noqa: E402
 
 
 # =============================================================================

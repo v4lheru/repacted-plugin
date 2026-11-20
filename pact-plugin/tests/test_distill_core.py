@@ -29,7 +29,6 @@ def _load_cli():
 CLI = _load_cli()
 from _distill import estimate as E  # noqa: E402  # bin/ is on sys.path once the CLI loaded
 from _distill import ledger as L  # noqa: E402
-from _distill import sources as S  # noqa: E402
 
 MEMORY_ROWS = [{"id": "m1", "lessons_learned": ["alice: pin the CLI version in CI"],
                 "decisions": [{"decision": "keep the queue file append-only"}],

@@ -19,11 +19,8 @@ from pathlib import Path
 import pytest
 
 from fixtures.ops_env import TEAM, World, handoff, ops_env, teachback  # noqa: F401  # fixture
-from shared import autopilot_run as R
-from shared import rules
-from shared.ops import OpError, accept, reject, submit
+from shared.ops import accept, submit
 from shared.ops import evidence as EV
-from shared.task_log import bridge
 from shared.task_log import write as W
 
 BIN = Path(__file__).resolve().parent.parent / "bin"

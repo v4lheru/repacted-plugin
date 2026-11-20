@@ -14,8 +14,6 @@ import pytest
 from shared.variety_scorer import (
     COMPACT_MAX,
     DIMENSION_COUNT,
-    LEARNING_II_MAX_BUMP,
-    LEARNING_II_MIN_MATCHES,
     MAX_DIMENSION,
     MAX_SCORE,
     MIN_DIMENSION,

@@ -14,10 +14,7 @@ test pins that binding statically; the others drive the path end to end.
 
 from __future__ import annotations
 
-import ast
-import builtins
 import subprocess
-from pathlib import Path
 
 import pytest
 

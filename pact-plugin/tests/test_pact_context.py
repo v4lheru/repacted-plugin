@@ -133,7 +133,6 @@ Library module init() contract:
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest

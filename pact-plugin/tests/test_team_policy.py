@@ -10,14 +10,12 @@ Summary: The tighten-only team policy (hooks/shared/team_policy.py) at its bound
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
 import pytest
 
 from shared import team_policy
-from shared import check_modes as ledger
 
 PLUGIN = Path(__file__).resolve().parents[1]
 

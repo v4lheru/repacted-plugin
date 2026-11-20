@@ -23,11 +23,9 @@ from pathlib import Path
 
 import pytest
 
-import ops_frame_guard
 import settings_guard as guard
 from fixtures.ops_env import SESSION_ID, TEAM, World, handoff, ops_env, teachback  # noqa: F401
 from shared import unattended
-from shared.ops import evidence as EV
 from shared.ops import submit
 from shared.task_log import write as W
 

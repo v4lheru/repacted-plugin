@@ -37,7 +37,6 @@ def _load_cli():
 
 
 CLI = _load_cli()
-import _doctor_state as DS  # noqa: E402  # bin/ is on sys.path once the CLI loaded
 import distill_enqueue as hook  # noqa: E402
 from _distill import estimate as E  # noqa: E402
 from shared import distill_queue as Q  # noqa: E402

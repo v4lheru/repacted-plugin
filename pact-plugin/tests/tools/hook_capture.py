@@ -251,7 +251,6 @@ def _env_diff(env: dict) -> dict:
 
 
 def _seen(check_name: str, event: str, raw: bytes, env=None, cwd=None) -> dict:
-    import dispatch
     import dispatch_registry as registry
     checks = {c.name: c for c in registry.REGISTRY.get(event, ())}
     check = checks.get(check_name)

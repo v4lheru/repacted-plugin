@@ -29,7 +29,7 @@ RELATED
                                                the workflow/package parity guard
 """
 import builtins
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
